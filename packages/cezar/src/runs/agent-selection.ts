@@ -17,6 +17,7 @@ export function taskAgentSelection(run: RunRecord, defaultRunner: RunnerId = 'cl
     runner,
     agentProfile: live?.profileId ?? (usesTaskAgent ? run.agentProfile : undefined),
     model: live?.model ?? definition?.model ?? (usesTaskAgent ? run.model : undefined),
+    reasoningEffort: live?.reasoningEffort ?? definition?.reasoningEffort ?? (usesTaskAgent ? run.reasoningEffort : undefined),
     actualModel: live?.actualModel ?? (usesTaskAgent ? run.actualModel : undefined),
   };
 }

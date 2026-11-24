@@ -208,6 +208,13 @@ import { currentUsage, currentTimedUsage, onUsage } from '../core/process-usage.
 import { DashboardReader } from '../workspace/dashboard.ts';
 import { dashboardRoutes } from './dashboard.ts';
 import { planUsageRoutes } from './plan-usage.ts';
+import { managerAccountLimit } from '../managers/account-limit.ts';
+
+/** Authenticates the manager engine's in-process calls that assign or switch a task's agent. */
+const MANAGER_AGENT_HEADER = 'x-cezar-manager-agent';
+const MANAGER_AGENT_TOKEN = randomUUID();
+// Byte lengths, not string lengths: a non-ASCII header must be a 403, never a timingSafeEqual throw.
+const managerAgentTokenMatches = (value: string | undefined): boolean => matchesPrivateToken(value, MANAGER_AGENT_TOKEN);
 import {
   createManagedAccountDir,
   isManagedAccountDir,
@@ -401,6 +408,7 @@ import {
   FallbackPolicyInputError,
   getAgentFallbackPolicy,
   putAgentFallbackPolicy,
+  setManagerTaskAccountsLookup,
 } from '../workspace/agent-fallback.ts';
 import { mergeWriteWorkspaceUiState, readWorkspaceUiState } from '../workspace/ui-state.ts';
 import { checkoutRepo, type CloneRunner } from './checkout.ts';
@@ -1755,6 +1763,8 @@ export function createApp(deps: ServerDeps) {
   // count against the same workspace semaphore as the boot manager (step 2.5).
   // Workspace-level, shared by the managers family and the automation report link.
   const managerStore = new ManagerStore();
+  // A manager task's fallback follows the manager's list as it is now (deleted or Automatic = withdrawn).
+  setManagerTaskAccountsLookup((managerId) => managerStore.get(managerId)?.taskAgents ?? null);
   const contextProjects = async () => {
     const selector = capabilities().singleProject
       ? { projectId: await resolveBootProject() }
@@ -5542,6 +5552,11 @@ export function createApp(deps: ServerDeps) {
     .post('/runs', jsonZodValidator(createRunInputSchema), async (c) => {
       const { root: repoRoot, dataDir, manager, store } = c.get('project');
       const parsed = { data: c.req.valid('json') };
+      // A manager fallback policy bypasses the project's Automatic fallback setting: only the
+      // manager engine's in-process request, which carries this process's token, may set one.
+      if (parsed.data.managerAgent && !managerAgentTokenMatches(c.req.header(MANAGER_AGENT_HEADER))) {
+        return c.json({ error: 'managerAgent is set only by a cezar manager' }, 403);
+      }
       if (agentModelsLocked(repoRoot) && (parsed.data.model?.trim() || parsed.data.reasoningEffort?.trim())) {
         return c.json({ error: AGENT_MODELS_LOCKED_ERROR }, 409);
       }
@@ -5599,6 +5614,7 @@ export function createApp(deps: ServerDeps) {
         images,
         systemPrompt: parsed.data.systemPrompt,
         ...(parsed.data.startedByManager ? { startedByManager: parsed.data.startedByManager } : {}),
+        ...(parsed.data.startedByManager && parsed.data.managerAgent ? { managerAgent: parsed.data.managerAgent } : {}),
         worktree: parsed.data.worktree,
         newBranch: parsed.data.newBranch,
         branch: parsed.data.branch,
@@ -5897,6 +5913,9 @@ export function createApp(deps: ServerDeps) {
     })
 
     .post('/runs/:id/switch-agent', paramZodValidator(runIdParamSchema), jsonZodValidator(switchRunAgentInputSchema), async (c) => {
+      if (!managerAgentTokenMatches(c.req.header(MANAGER_AGENT_HEADER))) {
+        return c.json({ error: 'switch-agent is available only to a cezar manager' }, 403);
+      }
       const { root: repoRoot, store, manager } = c.get('project');
       const { id } = c.req.valid('param');
       const run = store.getRun(id);
@@ -9214,9 +9233,13 @@ export function createApp(deps: ServerDeps) {
       const account = await resolveWorkspaceProfile(runner, agentProfile);
       return 'error' in account ? account.error : null;
     },
+    // The same holds the queue enforces (spec 2026-08-03-auto-resume-after-usage-limit).
+    accountLimit: (runner, agentProfile, repoRoot) => managerAccountLimit(() => deps.semaphore?.accountHolds(), runner, agentProfile, repoRoot),
     request: (path, init) => {
       if (!managerLoopback.request) throw new Error('the cockpit is not ready');
-      return managerLoopback.request(path, init);
+      const headers = new Headers(init?.headers);
+      headers.set(MANAGER_AGENT_HEADER, MANAGER_AGENT_TOKEN);
+      return managerLoopback.request(path, { ...init, headers });
     },
     costVisible: () => capabilities().costMetrics,
     autoResume: () => deps.semaphore?.autoResumeOnUsageLimit() ?? true,

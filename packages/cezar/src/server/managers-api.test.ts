@@ -10,6 +10,7 @@ import { agentProfileResponseSchema, runnerSchema } from '@open-mercato/cezar-co
 import { ClaudeCliRunner } from '../core/claude-cli-runner.ts';
 import type { AgentEvent } from '../core/agent-runner.ts';
 import type { ManagerEngine } from '../managers/engine.ts';
+import { eligibleFallbackCandidates, fallbackConsentCurrent, managerFallbackPolicy } from '../workspace/agent-fallback.ts';
 import { ManagerStore } from '../managers/store.ts';
 import { RunStore } from '../runs/store.ts';
 import { track } from '../telemetry.ts';
@@ -182,9 +183,80 @@ describe('the managers routes', () => {
     const [projectId] = ((await (await request(`${BASE}/${id}`)).json()) as { connectedProjectIds: string[] }).connectedProjectIds;
     const response = await request(`${BASE}/${id}/tasks`, { method: 'POST', body: { projectId, task: 'Fix the login' } });
     expect(response.status).toBe(201);
-    expect(await response.json()).toEqual({ projectId, runId: 'run-1' });
+    expect(await response.json()).toMatchObject({ projectId, runId: 'run-1', agent: { runner: 'claude', reason: expect.stringContaining('automatic selection') } });
     expect(startRun).toHaveBeenCalledOnce();
-    expect(startRun.mock.calls[0]?.[1]).toMatchObject({ task: 'Fix the login' });
+    // The choice reaches the run's timeline through the real route.
+    expect(startRun.mock.calls[0]?.[1]).toMatchObject({ task: 'Fix the login', managerAgent: { note: expect.stringContaining('Agent chosen by manager') } });
+  });
+
+  it('POST /runs refuses a manager fallback policy from anyone but the manager engine', async () => {
+    const { id } = await createManager();
+    const body = {
+      workflow: 'quick-task', task: 'Sneak a fallback', runner: 'claude',
+      startedByManager: { id, name: 'Manager' },
+      managerAgent: { note: 'forged', fallback: [{ provider: 'claude', profileId: 'other' }] },
+    };
+    const forged = await request('/api/v1/runs', { method: 'POST', body });
+    expect(forged.status).toBe(403);
+    expect(await forged.json()).toEqual({ error: 'managerAgent is set only by a cezar manager' });
+    // A guessed token is no better.
+    const guessed = await app.request('/api/v1/runs', {
+      method: 'POST', headers: { ...JSON_HEADERS, 'x-cezar-manager-agent': '00000000-0000-4000-8000-000000000000' }, body: JSON.stringify(body),
+    });
+    expect(guessed.status).toBe(403);
+    expect(await guessed.json()).toEqual({ error: 'managerAgent is set only by a cezar manager' });
+    expect(startRun).not.toHaveBeenCalled();
+    // Without managerAgent the same request starts a task as before.
+    const { managerAgent: _managerAgent, ...plain } = body;
+    expect((await request('/api/v1/runs', { method: 'POST', body: plain })).status).toBe(201);
+  });
+
+  it('POST /runs answers a non-ASCII token of the right length with a 403, not a 500', async () => {
+    const response = await app.request('/api/v1/runs', {
+      method: 'POST',
+      headers: { ...JSON_HEADERS, 'x-cezar-manager-agent': `é${'a'.repeat(35)}` },
+      body: JSON.stringify({ workflow: 'quick-task', task: 'x', startedByManager: { id: 'm', name: 'M' }, managerAgent: { note: 'n', fallback: [] } }),
+    });
+    expect(await response.clone().text()).toContain('managerAgent is set only by a cezar manager');
+    expect(response.status).toBe(403);
+    expect(startRun).not.toHaveBeenCalled();
+  });
+
+  it('the server’s manager task-accounts lookup reads the manager’s current list by id', async () => {
+    const created = await createManager({
+      instructions: 'Watch', projects: 'all',
+      taskAgents: [{ runner: 'claude', agentProfile: 'default' }, { runner: 'codex', agentProfile: 'default' }],
+    });
+    const policy = managerFallbackPolicy([{ provider: 'claude', profileId: 'default' }, { provider: 'codex', profileId: 'default' }], created.id);
+    const live = { enabled: false, candidates: [], revision: 0, incarnation: null, revocation: null };
+    const eligible = () => eligibleFallbackCandidates(policy, new Set(), new Set(), null).eligible.map((c) => c.provider);
+    expect(fallbackConsentCurrent(policy, live)).toBe(true);
+    expect(eligible()).toEqual(['claude', 'codex']);
+    // An edit is read at fallback time, not snapshotted.
+    expect((await request(`${BASE}/${created.id}`, { method: 'PATCH', body: { taskAgents: [{ runner: 'codex', agentProfile: 'default' }] } })).status).toBe(200);
+    expect(eligible()).toEqual(['codex']);
+    // Back to Automatic: no list to fall back within.
+    expect((await request(`${BASE}/${created.id}`, { method: 'PATCH', body: { taskAgents: null } })).status).toBe(200);
+    expect(fallbackConsentCurrent(policy, live)).toBe(false);
+    // Another manager's id never reads this one's list, and a deleted manager withdraws its policy.
+    const other = await createManager({ instructions: 'Other', projects: 'all', taskAgents: [{ runner: 'claude', agentProfile: 'default' }] });
+    const otherPolicy = managerFallbackPolicy([{ provider: 'claude', profileId: 'default' }], other.id);
+    expect(fallbackConsentCurrent(otherPolicy, live)).toBe(true);
+    expect((await request(`${BASE}/${other.id}`, { method: 'DELETE' })).status).toBeLessThan(300);
+    expect(fallbackConsentCurrent(otherPolicy, live)).toBe(false);
+  });
+
+  it('rejects direct switches without the in-process manager token', async () => {
+    const record = store.createRun({ title: 'Review', workflow: 'quick-task', task: 'Review it', runner: 'claude', steps: [] });
+    for (const headers of [JSON_HEADERS, { ...JSON_HEADERS, 'x-cezar-manager-agent': '00000000-0000-4000-8000-000000000000' }]) {
+      const response = await app.request(`/api/v1/runs/${record.id}/switch-agent`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ runner: 'codex', agentProfile: 'default', changedBy: 'Release Manager' }),
+      });
+      expect(response.status).toBe(403);
+    }
+    expect(switchAgent).not.toHaveBeenCalled();
   });
 
   it('validates switches and forwards the resolved account and manager identity to the run engine', async () => {

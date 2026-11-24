@@ -223,6 +223,42 @@ describe('cez manager', () => {
     expect(logs).toContain('[[task:alpha/new]]');
   });
 
+  it('task create names the chosen account, why, a queue wait and an out-of-limits warning; status lists account limits', async () => {
+    const reply = {
+      projectId: 'alpha', runId: 'new',
+      agent: { runner: 'claude', agentProfile: 'first', account: 'first', label: 'Work', reason: 'explicit --account; claude Work is out of limits', queuedUntil: '2099-01-01T05:00:00.000Z' },
+      warning: 'claude Work is out of usage limits until 2099-01-01T05:00:00.000Z; claude Home has capacity (--runner claude --account second)',
+    };
+    const accounts = [
+      { runner: 'claude', agentProfile: 'first', account: 'first', label: 'Work', outOfLimitsUntil: '2099-01-01T05:00:00.000Z' },
+      { runner: 'claude', agentProfile: 'second', account: 'second', label: 'Home' },
+    ];
+    const fetchStub = vi.fn(async (url: string | URL | Request) => String(url).endsWith('/tasks')
+      ? Response.json(reply, { status: 201 })
+      : Response.json({ ...snapshot, accounts })) as unknown as typeof fetch;
+    const { run, logs } = harness({}, {}, [], { fetch: fetchStub });
+    expect(await run('task', 'create', '--project', 'alpha', '--account', 'first', 'Do it')).toBe(0);
+    expect(logs).toEqual([
+      '[[task:alpha/new]]',
+      'agent: --runner claude --account first — Work; explicit --account; claude Work is out of limits',
+      'queued: Work is out of usage limits; the task starts when it resets at 2099-01-01T05:00:00.000Z',
+      `warning: ${reply.warning}`,
+    ]);
+    // Without a free alternative there is no warning, and the queue line says so.
+    const { warning: _warning, ...exhausted } = reply;
+    const allHeld = vi.fn(async (url: string | URL | Request) => String(url).endsWith('/tasks')
+      ? Response.json(exhausted, { status: 201 })
+      : Response.json(snapshot)) as unknown as typeof fetch;
+    const second = harness({}, {}, [], { fetch: allHeld });
+    expect(await second.run('task', 'create', '--project', 'alpha', 'Do it')).toBe(0);
+    expect(second.logs).toContain('queued: no allowed account has capacity; the task starts when Work resets at 2099-01-01T05:00:00.000Z');
+    expect(second.logs.some((line) => line.startsWith('warning:'))).toBe(false);
+    logs.length = 0;
+    expect(await run('status')).toBe(0);
+    expect(logs).toContain('account  --runner claude --account first  Work  out of usage limits until 2099-01-01T05:00:00.000Z');
+    expect(logs).toContain('account  --runner claude --account second  Home  has capacity');
+  });
+
   it('task create says when the project ignored --dispatch', async () => {
     const { run, logs } = harness();
     expect(await run('task', 'create', '--dispatch', 'Do', 'it')).toBe(0);

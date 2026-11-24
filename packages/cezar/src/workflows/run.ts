@@ -162,11 +162,12 @@ import { autoNamingActive, generateRunName, liveTitleUpdatesEnabled, NAMER_TIMEO
 import { assessedWithoutChanges, diffHasChanges, reviewGateEnabled } from '../runs/review-gate.ts';
 import { resolveAccountId, resolveProfileEnvForRoot } from '../workspace/agent-profiles.ts';
 import { recordedProfileFor } from '../server/recorded-profile.ts';
-import { DEFAULT_AGENT_ACCOUNT_ID, loadAgentAccounts, type AgentAccountStore } from '../workspace/agent-accounts.ts';
+import { DEFAULT_AGENT_ACCOUNT_ID, defaultAgentAccountStore, loadAgentAccounts, type AgentAccountStore } from '../workspace/agent-accounts.ts';
 import {
   candidateKey,
   eligibleFallbackCandidates,
   fallbackConsentCurrent,
+  managerFallbackPolicy,
   getAgentFallbackPolicySync,
   loadFallbackAccounts,
   type AgentFallbackPolicy,
@@ -1072,6 +1073,18 @@ function autoResumeCap(reason: AutoResumeReason | undefined, error?: string): nu
  * copy lives on `RunRecord.autoResumeAt`. Server-side formatting is honest here because cezar is
  * local-first: the process and the browser reading it are the same machine.
  */
+/** A dispatched child's copy of its parent's manager policy: on the child's runner a fallback keeps
+ *  the CHILD's model (or the runner default), never the parent's. */
+function childFallbackPolicy(policy: NonNullable<RunRecord['fallbackPolicy']>, runner: RunnerId, model: string | undefined): NonNullable<RunRecord['fallbackPolicy']> {
+  return {
+    ...policy,
+    candidates: policy.candidates.map(({ model: parentModel, ...candidate }) => ({
+      ...candidate,
+      ...(candidate.provider === runner ? (model ? { model } : {}) : parentModel ? { model: parentModel } : {}),
+    })),
+  };
+}
+
 function formatWakeInstant(at: Date): string {
   return new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'long' }).format(at);
 }
@@ -1105,6 +1118,11 @@ export interface StartRunInput {
   systemPrompt?: string;
   /** Manager provenance also carries the task's restrictions to descendants and continuations. */
   startedByManager?: RunRecord['startedByManager'];
+  /** A dispatched child of a manager's task keeps its parent's manager fallback policy. */
+  inheritedFallbackPolicy?: RunRecord['fallbackPolicy'];
+  /** The manager's agent choice: a timeline note, and its other allowed accounts for a usage limit
+   *  (absent: the project's own fallback policy). */
+  managerAgent?: { note: string; fallback?: Array<{ provider: RunnerId; profileId: string; model?: string }> };
   /** Composer opt-out (#worktree-toggle): `false` runs the task in the repo
    *  working tree instead of an isolated worktree. Undefined/`true` keeps the
    *  default per-task worktree. Ignored for variants (they always isolate). */
@@ -2139,7 +2157,12 @@ export class RunManager {
       // so a queued run picks it up at dequeue and every later resume reads the same answer.
       agentProfile: input.agentProfile,
       // Snapshotted only when on: an absent snapshot already means "this task never uses fallback".
-      fallbackPolicy: ((policy) => (policy.enabled ? policy : undefined))(getAgentFallbackPolicySync(this.repoRoot)),
+      // A manager's task falls back within the manager's own allowed accounts (spec 2026-10-31-managers).
+      // An allowed-accounts list never falls back outside itself, so `[]` means no fallback at all.
+      fallbackPolicy: input.startedByManager && input.inheritedFallbackPolicy?.source === 'manager' ? input.inheritedFallbackPolicy
+        : input.startedByManager && input.managerAgent?.fallback
+        ? managerFallbackPolicy(input.managerAgent.fallback, input.startedByManager.id)
+        : ((policy) => (policy.enabled ? policy : undefined))(getAgentFallbackPolicySync(this.repoRoot)),
       // The global inbox is the ceiling on the per-run flag (#471). Enforced here rather than
       // at the HTTP route because `cezar run`, the inbox's own "▶ Run" and variants all reach
       // startRun directly — a route-level gate would leave those writing todos.json.
@@ -2172,6 +2195,9 @@ export class RunManager {
       this.store.updateRun(run.id, { readOnly: true, ...(input.enforceReadOnly ? { enforceReadOnly: true as const } : {}) });
     }
     if (input.subject) this.store.updateRun(run.id, { subject: input.subject });
+    if (input.startedByManager && input.managerAgent) {
+      this.store.appendEvent(run.id, { type: 'lifecycle', tone: 'info', message: input.managerAgent.note });
+    }
     // A pull-request head run (spec 2026-10-06-agentic-e2e-checks Phase 3): the fetched sha is
     // recorded as the fork point BEFORE the run is queued, so `execute` — and a restart that
     // revives the queued run — forks from it through the "recorded fork point wins" rule rather
@@ -3646,6 +3672,9 @@ export class RunManager {
       // mints it, so the envelope is finished below once it exists.
       task: childTaskEnvelope(input, { id: parentId, branch: parent.branch }, ['{{TREE_PATHS}}']),
       ...(parent.startedByManager ? { startedByManager: parent.startedByManager } : {}),
+      // Never the project's policy: that could move the child to an account outside the manager's list.
+      ...(parent.startedByManager && parent.fallbackPolicy?.source === 'manager'
+        ? { inheritedFallbackPolicy: childFallbackPolicy(parent.fallbackPolicy, childRunner ?? 'claude', childModel) } : {}),
       ...(deferredBindingActive(parent, runs) ? { deferredBinding: parent.deferredBinding } : {}),
       runner: childRunner,
       ...(childModel ? { model: childModel } : {}),
@@ -3993,6 +4022,7 @@ export class RunManager {
       const index = defined.findIndex((step) => step.id === failed.id);
       if (index !== -1 && index < defined.length - 1) return undefined;
     }
+    if (snapshot.source === 'manager' && !successorFailedToStart && !this.managerFallbackHasCapacity(run, failed)) return undefined;
     const live = getAgentFallbackPolicySync(this.repoRoot);
     if (!fallbackConsentCurrent(snapshot as AgentFallbackPolicy, live)) return undefined;
     return { failed, successorFailedToStart };
@@ -4101,6 +4131,26 @@ export class RunManager {
     return true;
   }
 
+  /**
+   * A manager's task moves only to an allowed account with capacity now. With every one waiting out
+   * a limit it keeps the reset-time auto-resume instead of failing (manager task agents, #5).
+   */
+  private managerFallbackHasCapacity(run: RunRecord, failed: RunRecord['steps'][number]): boolean {
+    const origin = `${failed.backend ?? run.runner ?? 'claude'}:${failed.profileId ?? run.agentProfile ?? DEFAULT_AGENT_ACCOUNT_ID}`;
+    const attempted = new Set([...(run.fallbackEpisode?.attempted ?? []), origin]);
+    const held = this.semaphore.accountHolds().deadline;
+    const policy = run.fallbackPolicy as AgentFallbackPolicy | undefined;
+    if (!policy) return false;
+    // Admission's own filter (held, removed, out of the manager's list). An unread accounts file
+    // cannot prove removal here; admission re-checks it, plus disabled providers and sign-in, and
+    // arms the reset-time resume when nothing is left.
+    const accounts = this.accountStore ?? {
+      ...defaultAgentAccountStore(),
+      accounts: policy.candidates.map((c) => ({ id: c.profileId, provider: c.provider, configDir: '', label: '', addedAt: '' })),
+    } as AgentAccountStore;
+    return eligibleFallbackCandidates(policy, attempted, held, accounts, this.repoRoot).eligible.length > 0;
+  }
+
   private finishFallbackAdmission(runId: string, message: string): void {
     const run = this.store.getRun(runId);
     if (!run) return;
@@ -4153,7 +4203,7 @@ export class RunManager {
     if (startFailure === undefined && snapshot.candidates.some((candidate) => candidateKey(candidate) === fromKey)) {
       this.store.appendEvent(runId, { type: 'note', message: `fallback skipped ${label(fromKey)} — it is the agent that just reached its limit` });
     }
-    const { eligible, skipped } = eligibleFallbackCandidates(snapshot, attempted, this.semaphore.accountHolds().deadline, accounts);
+    const { eligible, skipped } = eligibleFallbackCandidates(snapshot, attempted, this.semaphore.accountHolds().deadline, accounts, this.repoRoot);
     for (const skip of skipped) {
       attempted.add(candidateKey(skip.candidate));
       this.store.appendEvent(runId, { type: 'note', message: `fallback skipped ${label(candidateKey(skip.candidate))} — ${skip.reason}` });
@@ -4195,12 +4245,21 @@ export class RunManager {
       return;
     }
     this.store.updateRun(runId, { status: 'failed', finishedAt: new Date().toISOString(), fallbackEpisode: { attempted: [...attempted], done: true } });
+    // A manager's list ran out (signed out, removed, disabled): wait for the reset as without fallback.
+    if (snapshot.source === 'manager' && startFailure === undefined) {
+      const failed = this.store.getRun(runId);
+      if (failed && parseUsageLimit(failed.error)) {
+        this.store.appendEvent(runId, { type: 'note', message: 'no other account in the manager’s settings for new tasks can continue now' });
+        this.armUsageLimitResume(failed);
+        if (this.store.getRun(runId)?.autoResumeAt) return;
+      }
+    }
     const resets = (run.usageLimitHolds ?? []).filter((hold) => Date.parse(hold.until) > Date.now())
       .map((hold) => `${label(hold.account)} resets at ${formatWakeInstant(new Date(hold.until))}`).join('; ');
     this.store.appendEvent(runId, {
       type: 'lifecycle',
       tone: 'danger',
-      message: `no fallback agent could continue — every agent in Settings → Agents → Automatic fallback was tried or unavailable${resets ? `; ${resets}` : ''}. Continue this task manually.`,
+      message: `no fallback agent could continue — every ${snapshot.source === 'manager' ? 'account in the manager’s settings for new tasks' : 'agent in Settings → Agents → Automatic fallback'} was tried or unavailable${resets ? `; ${resets}` : ''}. Continue this task manually.`,
     });
   }
 

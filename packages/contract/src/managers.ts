@@ -675,10 +675,25 @@ export const managerSnapshotProjectSchema = z.object({
 });
 export type ManagerSnapshotProject = z.infer<typeof managerSnapshotProjectSchema>;
 
+/** An agent account this manager may start tasks on, with its usage-limit state. */
+export const managerAccountStateSchema = z.object({
+  runner: z.string(),
+  /** Absent: the project's automatic account. */
+  agentProfile: z.string().optional(),
+  /** The resolved account id the limit is keyed on. */
+  account: z.string(),
+  label: z.string(),
+  /** Set while the account waits out a usage limit, until this instant. */
+  outOfLimitsUntil: z.string().optional(),
+});
+export type ManagerAccountState = z.infer<typeof managerAccountStateSchema>;
+
 export const managerSnapshotSchema = z.object({
   generatedAt: z.string(),
   projects: z.array(managerSnapshotProjectSchema),
   attention: z.array(managerAttentionItemSchema),
+  /** The accounts new tasks may use and whether each has capacity now. */
+  accounts: z.array(managerAccountStateSchema).optional(),
 });
 export type ManagerSnapshot = z.infer<typeof managerSnapshotSchema>;
 
@@ -733,6 +748,18 @@ export const managerCreateTaskResponseSchema = z.object({
   forwarded: managerForwardedSchema.optional(),
   /** A flag the project's own settings overrode, said in one line (e.g. `--dispatch` in a trunk-based project). */
   notice: z.string().optional(),
+  /** The agent the task runs on and why it was picked. */
+  agent: z.object({
+    runner: z.string(),
+    agentProfile: z.string().optional(),
+    account: z.string(),
+    label: z.string(),
+    reason: z.string(),
+    /** Every allowed account is out of limits: the task waits in the queue until this instant. */
+    queuedUntil: z.string().optional(),
+  }).optional(),
+  /** An explicit account that is out of limits, naming an allowed one with capacity. */
+  warning: z.string().optional(),
 });
 export type ManagerCreateTaskResponse = z.infer<typeof managerCreateTaskResponseSchema>;
 

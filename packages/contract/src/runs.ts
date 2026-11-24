@@ -255,6 +255,10 @@ export const runRecordSchema = z.object({
     revision: z.number().int().nonnegative(),
     incarnation: z.string().nullable(),
     revocation: z.string().nullable(),
+    /** `manager`: the starting manager's allowed task accounts, whose settings are the consent. */
+    source: z.literal('manager').optional(),
+    /** The manager whose current list a `manager` policy is checked against at fallback time. */
+    managerId: z.string().optional(),
   }).optional(),
   /** Echo of the extra system prompt the run used (POST override or config default). */
   systemPrompt: z.string().optional(),
@@ -1360,6 +1364,16 @@ export const createRunInputBaseSchema = z
     /** The manager starting this task (spec 2026-10-31-managers): provenance for `task cancel`'s
      *  own-tasks rule and the manager's `startedBy`. Never an authorization by itself. */
     startedByManager: z.object({ id: z.string().min(1).max(64), name: z.string().min(1).max(80) }).optional(),
+    /** How the starting manager chose the agent: a timeline note, and the manager's other allowed
+     *  accounts a usage limit falls back to. Honored only with `startedByManager`. */
+    managerAgent: z.object({
+      note: z.string().min(1).max(500),
+      fallback: z.array(z.object({
+        provider: runnerSchema,
+        profileId: z.string().min(1).max(64),
+        model: z.string().min(1).max(200).optional(),
+      })).max(10).optional(),
+    }).optional(),
   });
 
 /** A task may be attachments alone (a pasted screenshot is a brief), but never nothing at all. */

@@ -236,6 +236,8 @@ export const runRecordSchema = z.object({
     enabled: z.boolean(),
     candidates: z.array(z.object({ provider: z.string(), profileId: z.string(), model: z.string().optional() })).max(10),
     revision: z.number().int().nonnegative(), incarnation: z.string().nullable(), revocation: z.string().nullable(),
+    source: z.literal('manager').optional().catch(undefined),
+    managerId: z.string().optional().catch(undefined),
   }).optional().catch(undefined),
   /** Echo of the extra system prompt this run actually used (R2): the
    *  `POST /api/runs` override, or the `config.json` default it fell back to.

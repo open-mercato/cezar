@@ -3218,7 +3218,7 @@ describe('ManagerEngine', () => {
     it('tasks go through POST /runs, the one implementation', async () => {
       const engine = makeEngine();
       const id = await create(engine);
-      expect(await engine.createTask(id, { projectId: 'alpha', task: 'Fix it', title: 'Fix' })).toEqual({ projectId: 'alpha', runId: 'new-run' });
+      expect(await engine.createTask(id, { projectId: 'alpha', task: 'Fix it', title: 'Fix' })).toMatchObject({ projectId: 'alpha', runId: 'new-run', agent: { runner: 'claude' } });
       expect(requests[0]).toMatchObject({ path: '/api/v1/p/alpha/runs', method: 'POST', body: { workflow: 'quick-task', task: 'Fix it' } });
       expect(requests[0]?.body).not.toHaveProperty('systemPrompt');
       expect(requests[1]).toMatchObject({ path: '/api/v1/p/alpha/runs/new-run', method: 'PATCH', body: { title: 'Fix' } });
@@ -3306,6 +3306,162 @@ describe('ManagerEngine', () => {
       expect(requests.at(-1)?.body).toMatchObject({ runner: 'claude' });
     });
 
+    describe('default from manager settings, limit-aware (#manager-task-agents)', () => {
+      const RESET = Date.parse('2099-01-01T05:00:00.000Z');
+      const twoClaudes = [{ runner: 'claude' as const, agentProfile: 'first' }, { runner: 'claude' as const, agentProfile: 'second' }];
+      const limited = (held: Record<string, number>) => makeEngine({
+        accountLimit: async (runner, agentProfile) => {
+          const account = agentProfile ?? 'default';
+          const until = held[`${runner}:${account}`];
+          return { account, label: `${account} login`, ...(until !== undefined ? { until } : {}) };
+        },
+      });
+      const managerWith = async (engine: ReturnType<typeof makeEngine>, taskAgents: Array<{ runner: 'claude' | 'codex'; agentProfile: string }> = twoClaudes) => {
+        const created = await engine.create({ instructions: '', projects: 'all', runner: 'claude', taskAgents, cronMinutes: 0 });
+        if ('error' in created) throw created;
+        return created.id;
+      };
+
+      it('takes the first allowed account with no flags, says why and hands the rest to fallback', async () => {
+        const engine = limited({});
+        const id = await managerWith(engine);
+        const created = await engine.createTask(id, { projectId: 'alpha', task: 'Fix it' });
+        expect(created).toMatchObject({ agent: { runner: 'claude', agentProfile: 'first', reason: 'default from manager settings: claude first login' } });
+        expect(created).not.toHaveProperty('warning');
+        expect(requests.at(-1)?.body).toMatchObject({
+          runner: 'claude', agentProfile: 'first',
+          managerAgent: { note: expect.stringContaining('default from manager settings'), fallback: [{ provider: 'claude', profileId: 'second' }] },
+        });
+      });
+
+      it('skips an account that is out of limits for the next one with capacity', async () => {
+        const engine = limited({ 'claude:first': RESET });
+        const id = await managerWith(engine);
+        const created = await engine.createTask(id, { projectId: 'alpha', task: 'Fix it' });
+        expect(created).toMatchObject({ agent: { agentProfile: 'second', reason: 'default from manager settings: claude first login out of limits until 2099-01-01T05:00:00.000Z, used claude second login' } });
+        expect(created).not.toHaveProperty('agent.queuedUntil');
+        expect(requests.at(-1)?.body).toMatchObject({ agentProfile: 'second', managerAgent: { fallback: [{ provider: 'claude', profileId: 'first' }] } });
+      });
+
+      it('an explicit --account wins, with a warning naming an allowed account with capacity', async () => {
+        const engine = limited({ 'claude:first': RESET });
+        const id = await managerWith(engine);
+        const created = await engine.createTask(id, { projectId: 'alpha', task: 'Fix it', runner: 'claude', agentProfile: 'first' });
+        expect(requests.at(-1)?.body).toMatchObject({ runner: 'claude', agentProfile: 'first' });
+        expect(created).toMatchObject({
+          agent: { agentProfile: 'first', queuedUntil: '2099-01-01T05:00:00.000Z' },
+          warning: 'claude first login is out of usage limits until 2099-01-01T05:00:00.000Z; claude second login has capacity (--runner claude --account second)',
+        });
+        // Still only the allowed list: an explicit account outside it is refused.
+        expect(await engine.createTask(id, { projectId: 'alpha', task: 'Other', runner: 'claude', agentProfile: 'stranger' })).toMatchObject({ status: 403 });
+      });
+
+      it('with every allowed account exhausted, queues on the one that resets first and tells the manager', async () => {
+        const engine = limited({ 'claude:first': RESET + 60_000, 'claude:second': RESET });
+        const id = await managerWith(engine);
+        const created = await engine.createTask(id, { projectId: 'alpha', task: 'Fix it' });
+        expect(created).not.toHaveProperty('status');
+        expect(created).toMatchObject({ agent: { agentProfile: 'second', queuedUntil: '2099-01-01T05:00:00.000Z', reason: expect.stringContaining('every allowed account is out of limits') } });
+        expect(requests.at(-1)?.body).toMatchObject({ agentProfile: 'second' });
+      });
+
+      it('a retry takes the default too, its old account first while it has capacity', async () => {
+        const old = { id: 'old', task: 'Retry this', workflow: 'quick-task', status: 'failed', runner: 'claude', agentProfile: 'second', model: 'opus', steps: [] } as unknown as RunRecord;
+        let held: Record<string, number> = {};
+        const engine = makeEngine({
+          projects: async () => [{ ...connected, runs: () => [old] }],
+          accountLimit: async (_runner, agentProfile) => ({ account: agentProfile ?? 'default', label: agentProfile ?? 'default', ...(held[agentProfile ?? ''] ? { until: held[agentProfile ?? ''] } : {}) }),
+        });
+        const id = await managerWith(engine);
+        await engine.retryTask(id, { projectId: 'alpha', runId: 'old' });
+        expect(requests.at(-1)?.body).toMatchObject({ runner: 'claude', agentProfile: 'second' });
+        held = { second: RESET };
+        const retried = await engine.retryTask(id, { projectId: 'alpha', runId: 'old' });
+        expect(retried).toMatchObject({ agent: { agentProfile: 'first' } });
+        expect(retried).not.toHaveProperty('warning');
+      });
+
+      it('--model and --effort are dropped, not refused, when a limit skip lands the task on another runner', async () => {
+        const engine = limited({ 'claude:first': RESET, 'claude:second': RESET });
+        const id = await managerWith(engine, [...twoClaudes, { runner: 'codex' as const, agentProfile: 'work' }]);
+        const created = await engine.createTask(id, { projectId: 'alpha', task: 'Fix it', model: 'opus', effort: 'high' });
+        expect(created).toMatchObject({ runId: 'new-run', agent: { runner: 'codex', agentProfile: 'work', reason: expect.stringContaining('--model opus and --effort high dropped: meant for claude, not codex') } });
+        expect(requests.at(-1)?.body).toMatchObject({ runner: 'codex', agentProfile: 'work' });
+        expect(requests.at(-1)?.body).not.toHaveProperty('model');
+        expect(requests.at(-1)?.body).not.toHaveProperty('reasoningEffort');
+        // On the runner it was meant for, the model stays.
+        const own = limited({});
+        await engine.createTask(await managerWith(own), { projectId: 'alpha', task: 'Fix it', model: 'opus' });
+        expect(requests.at(-1)?.body).toMatchObject({ runner: 'claude', agentProfile: 'first', model: 'opus' });
+      });
+
+      it('after a limit skip to another runner, fallbacks on the runner --model was meant for keep it', async () => {
+        const engine = limited({ 'claude:first': RESET, 'claude:second': RESET });
+        const id = await managerWith(engine, [...twoClaudes, { runner: 'codex' as const, agentProfile: 'work' }]);
+        await engine.createTask(id, { projectId: 'alpha', task: 'Fix it', model: 'opus' });
+        expect(requests.at(-1)?.body).toMatchObject({
+          runner: 'codex',
+          managerAgent: { fallback: [{ provider: 'claude', profileId: 'first', model: 'opus' }, { provider: 'claude', profileId: 'second', model: 'opus' }] },
+        });
+        expect(requests.at(-1)?.body).not.toHaveProperty('model');
+      });
+
+      it('a same-runner fallback keeps the requested model; another runner starts on its own default', async () => {
+        const engine = limited({});
+        const id = await managerWith(engine, [...twoClaudes, { runner: 'codex' as const, agentProfile: 'work' }]);
+        await engine.createTask(id, { projectId: 'alpha', task: 'Fix it', model: 'opus' });
+        expect(requests.at(-1)?.body).toMatchObject({ model: 'opus', managerAgent: { fallback: [{ provider: 'claude', profileId: 'second', model: 'opus' }, { provider: 'codex', profileId: 'work' }] } });
+        expect((requests.at(-1)?.body as { managerAgent: { fallback: object[] } }).managerAgent.fallback[1]).not.toHaveProperty('model');
+      });
+
+      it('a manager with one allowed account sends fallback: [] so the task never falls back outside the list', async () => {
+        const engine = limited({});
+        const id = await managerWith(engine, [{ runner: 'claude' as const, agentProfile: 'first' }]);
+        await engine.createTask(id, { projectId: 'alpha', task: 'Fix it' });
+        expect(requests.at(-1)?.body).toMatchObject({ agentProfile: 'first', managerAgent: { fallback: [] } });
+      });
+
+      it('an explicit --runner or --account keeps fallback on that runner', async () => {
+        const engine = limited({});
+        const id = await managerWith(engine, [...twoClaudes, { runner: 'codex' as const, agentProfile: 'work' }]);
+        await engine.createTask(id, { projectId: 'alpha', task: 'No flags' });
+        expect(requests.at(-1)?.body).toMatchObject({ agentProfile: 'first', managerAgent: { fallback: [{ provider: 'claude', profileId: 'second' }, { provider: 'codex', profileId: 'work' }] } });
+        await engine.createTask(id, { projectId: 'alpha', task: 'Codex only', runner: 'codex' });
+        expect(requests.at(-1)?.body).toMatchObject({ runner: 'codex', agentProfile: 'work', managerAgent: { fallback: [] } });
+        await engine.createTask(id, { projectId: 'alpha', task: 'This Claude', agentProfile: 'second' });
+        expect(requests.at(-1)?.body).toMatchObject({ runner: 'claude', agentProfile: 'second', managerAgent: { fallback: [{ provider: 'claude', profileId: 'first' }] } });
+        await engine.createTask(id, { projectId: 'alpha', task: 'Claude', runner: 'claude' });
+        expect(requests.at(-1)?.body).toMatchObject({ agentProfile: 'first', managerAgent: { fallback: [{ provider: 'claude', profileId: 'second' }] } });
+      });
+
+      it('a retry whose old account was deselected drops the old runner’s model and effort on another runner', async () => {
+        const old = { id: 'old', task: 'Retry this', workflow: 'quick-task', status: 'failed', runner: 'claude', agentProfile: 'gone', model: 'opus', reasoningEffort: 'high', steps: [] } as unknown as RunRecord;
+        const engine = makeEngine({ projects: async () => [{ ...connected, runs: () => [old] }] });
+        const id = await managerWith(engine, [{ runner: 'codex' as const, agentProfile: 'work' }]);
+        expect(await engine.retryTask(id, { projectId: 'alpha', runId: 'old' })).toMatchObject({ runId: 'new-run', agent: { runner: 'codex', agentProfile: 'work' } });
+        expect(requests.at(-1)?.body).toMatchObject({ runner: 'codex', agentProfile: 'work' });
+        expect(requests.at(-1)?.body).not.toHaveProperty('model');
+        expect(requests.at(-1)?.body).not.toHaveProperty('reasoningEffort');
+      });
+
+      it('status lists the allowed accounts and which are out of limits', async () => {
+        const engine = limited({ 'claude:second': RESET });
+        const id = await managerWith(engine);
+        expect((await engine.snapshot(id))?.accounts).toEqual([
+          { runner: 'claude', agentProfile: 'first', account: 'first', label: 'first login' },
+          { runner: 'claude', agentProfile: 'second', account: 'second', label: 'second login', outOfLimitsUntil: '2099-01-01T05:00:00.000Z' },
+        ]);
+      });
+
+      it('Automatic selection keeps the project fallback policy (no manager list to fall back within)', async () => {
+        const engine = limited({});
+        const id = await create(engine, 0);
+        expect(await engine.createTask(id, { projectId: 'alpha', task: 'Fix it' })).toMatchObject({ agent: { reason: expect.stringContaining('automatic selection') } });
+        expect(requests.at(-1)?.body).toHaveProperty('managerAgent.note');
+        expect(requests.at(-1)?.body).not.toHaveProperty('managerAgent.fallback');
+      });
+    });
+
     it('validates a model against the enforced task agent', async () => {
       const engine = makeEngine();
       const id = await create(engine, 0);
@@ -3321,8 +3477,9 @@ describe('ManagerEngine', () => {
     const catalog = { runner: 'claude', source: 'live', stale: false, models: [{ id: 'opus', reasoningEfforts: [{ id: 'low' }, { id: 'high' }, { id: 'max' }] }, { id: 'claude-sonnet-5' }] };
 
     /** A project holding `runs`; `/cancel` marks the subtree cancelled the way `RunManager.cancel` does. */
-    const withRuns = (runs: RunRecord[]) => makeEngine({
+    const withRuns = (runs: RunRecord[], accountLimit?: ManagerEngineDeps['accountLimit']) => makeEngine({
       projects: async () => [{ ...connected, runs: () => runs }],
+      accountLimit,
       request: async (path, init) => {
         requests.push({ path, method: init?.method ?? 'GET', ...(typeof init?.body === 'string' ? { body: JSON.parse(init.body) } : {}) });
         if (path.startsWith('/api/v1/models')) return Response.json(catalog);
@@ -3406,15 +3563,34 @@ describe('ManagerEngine', () => {
       });
     });
 
+    it('allows only the resolved default for a bare account entry and reads edits to the list', async () => {
+      const id = await create(withRuns([]), 0);
+      const engine = withRuns([run('owned', { runner: 'claude', startedByManager: { id, name: 'Manager' } })],
+        async () => ({ account: 'project-work', label: 'Work' }));
+      await engine.update(id, { taskAgents: [{ runner: 'codex' }] });
+      const input = { projectId: 'alpha', runId: 'owned', runner: 'codex' };
+      expect(await engine.switchTask(id, { ...input, agentProfile: 'default' })).toMatchObject({ status: 403 });
+      expect(await engine.switchTask(id, input)).toMatchObject({ runId: 'owned' });
+      expect(requests.at(-1)?.body).toMatchObject({ runner: 'codex', agentProfile: 'project-work' });
+      expect(await engine.switchTask(id, { ...input, agentProfile: 'project-work' })).toMatchObject({ runId: 'owned' });
+      await engine.update(id, { taskAgents: [{ runner: 'codex', agentProfile: 'default' }] });
+      expect(await engine.switchTask(id, { ...input, agentProfile: 'project-work' })).toMatchObject({ status: 403 });
+    });
+
     it("keeps the task's effort when a switch changes only the account, and drops it with a new model or runner", async () => {
       const id = await create(withRuns([]), 0);
-      const engine = withRuns([run('owned', { runner: 'claude', reasoningEffort: 'high', startedByManager: { id, name: 'Manager' } })]);
+      const engine = withRuns([run('owned', { runner: 'claude', model: 'opus', reasoningEffort: 'high', startedByManager: { id, name: 'Manager' } })]);
       const input = { projectId: 'alpha', runId: 'owned' };
       await engine.switchTask(id, { ...input, agentProfile: 'default' });
-      expect(requests.at(-1)?.body).toMatchObject({ runner: 'claude', reasoningEffort: 'high' });
+      expect(requests.at(-1)?.body).toMatchObject({ runner: 'claude', model: 'opus', reasoningEffort: 'high' });
       await engine.switchTask(id, { ...input, agentProfile: 'default', effort: 'low' });
       expect(requests.at(-1)?.body).toMatchObject({ reasoningEffort: 'low' });
+      await engine.switchTask(id, { ...input, model: 'claude-sonnet-5' });
+      expect(requests.at(-1)?.body).toMatchObject({ model: 'claude-sonnet-5' });
+      expect(requests.at(-1)?.body).not.toHaveProperty('reasoningEffort');
       await engine.switchTask(id, { ...input, runner: 'codex' });
+      expect(requests.at(-1)?.body).toMatchObject({ runner: 'codex' });
+      expect(requests.at(-1)?.body).not.toHaveProperty('model');
       expect(requests.at(-1)?.body).not.toHaveProperty('reasoningEffort');
     });
 
