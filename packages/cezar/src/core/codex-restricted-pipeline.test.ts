@@ -1,12 +1,12 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 import { EventEmitter } from 'node:events';
-import { chmodSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { delimiter, join } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { BrokeredShell } from './agent-runner.ts';
 import { compileCodexRestrictedPolicy } from './codex-restricted-policy.ts';
-import { CodexReadBroker, PIPELINE_REFUSED, runPipeline, type PipelineOptions } from './codex-restricted-tools.ts';
+import { CodexReadBroker, killLiveStages, PIPELINE_REFUSED, runPipeline, stageKillPlan, wholeUtf8, type PipelineOptions } from './codex-restricted-tools.ts';
 import { managerShellPlan } from '../managers/bash-policy.ts';
 
 const node = process.execPath;
@@ -20,6 +20,26 @@ const alive = (pid: number): boolean => { try { process.kill(pid, 0); return tru
 async function gone(pid: number): Promise<boolean> {
   for (let i = 0; i < 40 && alive(pid); i++) await new Promise((done) => setTimeout(done, 50));
   return !alive(pid);
+}
+
+/** Records every stage it really spawns. */
+function recordingSpawn(): { spawn: typeof spawn; children: ChildProcess[] } {
+  const children: ChildProcess[] = [];
+  const recording = ((bin: string, args: readonly string[], options: object) => {
+    const child = spawn(bin, args, options);
+    children.push(child);
+    return child;
+  }) as unknown as typeof spawn;
+  return { spawn: recording, children };
+}
+
+async function waitForFile(path: string): Promise<string> {
+  for (let i = 0; i < 100; i++) {
+    const text = existsSync(path) ? readFileSync(path, 'utf8').trim() : '';
+    if (text) return text;
+    await new Promise((done) => setTimeout(done, 30));
+  }
+  throw new Error(`${path} never appeared`);
 }
 
 /** The first stage really runs; the second fails the way `failure` says. */
@@ -78,12 +98,31 @@ describe.skipIf(process.platform === 'win32')('runPipeline', () => {
     expect(await gone(grandchild)).toBe(true);
   });
 
-  it('reports output over the cap as truncated success, like the read path', async () => {
-    const ran = await runPipeline([[node, '-e', "process.stdout.write('x'.repeat(300000))"]], undefined, opts());
+  it('reports output over the cap as truncated success and stops an endless writer', async () => {
+    const started = Date.now();
+    const ran = await runPipeline([[node, '-e', "const more = () => process.stdout.write('x'.repeat(65536), more); more()"]], undefined, opts({ timeoutMs: 20_000 }));
+    expect(Date.now() - started).toBeLessThan(10_000);
     expect(ran.ok).toBe(true);
     expect(ran.text.startsWith('x'.repeat(256_000))).toBe(true);
     expect(ran.text.endsWith('[cezar: output truncated; narrow the pattern, path or range]')).toBe(true);
     expect(ran.text).not.toContain('[exit');
+  });
+
+  it('truncates on a UTF-8 character boundary: no U+FFFD before the marker', async () => {
+    // 'ab' + 3-byte '€'s: the 256,000-byte cap falls inside a character.
+    const ran = await runPipeline([[node, '-e', "const more = () => process.stdout.write('€'.repeat(20000), more); process.stdout.write('ab', more)"]], undefined, opts({ timeoutMs: 20_000 }));
+    expect(ran.ok).toBe(true);
+    const body = ran.text.replace('\n[cezar: output truncated; narrow the pattern, path or range]', '');
+    expect(body).not.toContain('\uFFFD');
+    expect(body).toBe(`ab${'€'.repeat(Math.floor((256_000 - 2) / 3))}`);
+  });
+
+  it('caps stderr at exactly 16 KB, on a character boundary', async () => {
+    const ran = await runPipeline([[node, '-e', "process.stderr.write('e'.repeat(100000)); process.stderr.write('é'.repeat(10))"]], undefined, opts());
+    const stderr = ran.text.slice(ran.text.indexOf('[stderr]\n') + '[stderr]\n'.length);
+    expect(stderr).toBe('e'.repeat(16_000));
+    expect(wholeUtf8(Buffer.from('aé', 'utf8').subarray(0, 2)).toString('utf8')).toBe('a');
+    expect(wholeUtf8(Buffer.from('a€', 'utf8')).toString('utf8')).toBe('a€');
   });
 
   it('decodes multibyte UTF-8 split across chunk boundaries', async () => {
@@ -105,10 +144,59 @@ describe.skipIf(process.platform === 'win32')('runPipeline', () => {
 
   it('ends started stages when a later stage is missing', async () => {
     const started = Date.now();
-    const ran = await runPipeline([['sleep', '30'], ['cez-no-such-binary-2458']], undefined, opts());
+    const recording = recordingSpawn();
+    const ran = await runPipeline([['sleep', '30'], ['cez-no-such-binary-2458']], undefined, opts({ spawn: recording.spawn }));
     expect(ran.ok).toBe(false);
     expect(ran.text).toContain('cez-no-such-binary-2458');
     expect(Date.now() - started).toBeLessThan(10_000);
+    expect(await gone(recording.children[0]!.pid!)).toBe(true);
+  });
+
+  it('hears an earlier stage\'s late spawn error when a later spawn throws (no uncaught exception)', async () => {
+    const unheard = vi.fn();
+    process.on('uncaughtException', unheard);
+    try {
+      let calls = 0;
+      const fake = ((bin: string, args: readonly string[], options: object) => {
+        if (calls++ === 0) return spawn(bin, args, options); // ENOENT arrives as 'error' a tick later
+        throw new Error('spawn E2BIG');
+      }) as unknown as typeof spawn;
+      const ran = await runPipeline([['cez-no-such-binary-2460'], ['cat']], undefined, opts({ spawn: fake }));
+      expect(ran.ok).toBe(false);
+      expect(ran.text).toContain('could not start cat: spawn E2BIG');
+      await new Promise((done) => setTimeout(done, 100));
+      expect(unheard).not.toHaveBeenCalled();
+    } finally {
+      process.off('uncaughtException', unheard);
+    }
+  });
+
+  it('never signals the group of a stage that already closed', async () => {
+    const recording = recordingSpawn();
+    const kill = vi.spyOn(process, 'kill');
+    try {
+      const ran = await runPipeline([['true'], ['sleep', '30']], undefined, opts({ spawn: recording.spawn, timeoutMs: 500 }));
+      expect(ran.text).toContain('timed out');
+      const [first, second] = recording.children;
+      const groups = kill.mock.calls.filter(([pid, signal]) => signal === 'SIGKILL' && typeof pid === 'number' && pid < 0).map(([pid]) => pid);
+      expect(groups).toContain(-second!.pid!);
+      expect(groups).not.toContain(-first!.pid!);
+    } finally {
+      kill.mockRestore();
+    }
+  });
+
+  it('kills its live stages when the server exits', async () => {
+    const recording = recordingSpawn();
+    const started = Date.now();
+    const running = runPipeline([['sleep', '30']], undefined, opts({ spawn: recording.spawn }));
+    await new Promise((done) => setTimeout(done, 100));
+    expect(process.listeners('exit')).toContain(killLiveStages);
+    killLiveStages();
+    const ran = await running;
+    expect(ran.ok).toBe(false);
+    expect(Date.now() - started).toBeLessThan(5_000);
+    expect(await gone(recording.children[0]!.pid!)).toBe(true);
   });
 
   it('ends the writers of a pipeline whose reader quits early, as a shell would', async () => {
@@ -128,13 +216,17 @@ describe.skipIf(process.platform === 'win32')('the broker running a manager shel
   it('closes the broker at its backstop when a command outlives it', async () => {
     const pidFile = join(tempDir(), 'pid');
     const shell: BrokeredShell = { describe: 'x', env: { PATH: process.env.PATH }, verify: () => ({ ok: true, pipeline: [['sh', '-c', `echo $$ > ${pidFile}; exec sleep 30`]] }) };
-    const broker = brokerFor(shell, true, { shellTimeoutMs: 30_000, backstopMs: 300 });
+    const broker = brokerFor(shell, true, { shellTimeoutMs: 30_000, backstopMs: 2_000 });
     const started = Date.now();
-    expect(await call(broker, 'hang')).toEqual({ success: false, text: 'cezar: read timed out; this broker is closed' });
-    expect(Date.now() - started).toBeLessThan(5_000);
+    const hang = call(broker, 'hang');
+    // The stage is known to be running before the backstop can fire.
+    const pid = Number(await waitForFile(pidFile));
+    expect(Date.now() - started).toBeLessThan(2_000);
+    expect(pid).toBeGreaterThan(0);
+    expect(await hang).toEqual({ success: false, text: 'cezar: read timed out; this broker is closed' });
+    expect(Date.now() - started).toBeLessThan(8_000);
     expect(await call(broker, 'again')).toMatchObject({ success: false, text: expect.stringContaining('session is closed') });
-    const { readFileSync } = await import('node:fs');
-    expect(await gone(Number(readFileSync(pidFile, 'utf8')))).toBe(true);
+    expect(await gone(pid)).toBe(true);
   });
 
   it('under CEZ_CODEX_NETWORK=0 runs only offline programs: no gh, user-allowed patterns included', async () => {
@@ -160,5 +252,13 @@ describe.skipIf(process.platform === 'win32')('the broker running a manager shel
     expect((await call(brokerFor(unnamed, false), 'cez-manager tasks')).success).toBe(false);
     // With the network on, the user's allowed pattern runs.
     expect(await call(brokerFor(shell, true), 'gh label list')).toEqual({ success: true, text: 'gh label list\n' });
+  });
+});
+
+describe('stage kill plans', () => {
+  it('kills a POSIX stage\'s process group and a Windows stage\'s tree', () => {
+    expect(stageKillPlan(4242, 'linux')).toEqual({ group: -4242 });
+    expect(stageKillPlan(4242, 'darwin')).toEqual({ group: -4242 });
+    expect(stageKillPlan(4242, 'win32')).toEqual({ taskkill: ['/pid', '4242', '/T', '/F'] });
   });
 });

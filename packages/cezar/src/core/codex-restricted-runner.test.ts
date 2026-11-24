@@ -140,7 +140,11 @@ describe.skipIf(process.platform === 'win32')('isolated Codex execution boundary
     const previous = process.env.CEZ_CODEX_NETWORK;
     process.env.CEZ_CODEX_NETWORK = '0';
     try {
-      const brokeredShell = { describe: 'x', env: { PATH: process.env.PATH }, verify: (command: string) => command === 'gh pr view 1'
+      // A stub gh first on PATH: a regressed guard would run it, never the host's real gh.
+      const stubs = join(f.cwd, 'stub-bin');
+      mkdirSync(stubs);
+      writeFileSync(join(stubs, 'gh'), '#!/bin/sh\necho "stub gh: $*"\n', { mode: 0o755 });
+      const brokeredShell = { describe: 'x', env: { PATH: `${stubs}${delimiter}${process.env.PATH}` }, verify: (command: string) => command === 'gh pr view 1'
         ? { ok: true as const, pipeline: [['gh', 'pr', 'view', '1']] } : { ok: false as const, reason: 'no' } };
       const result = await f.runner.run({ ...f.spec, allowedTools: ['Read', 'Bash'], bashAllowlist: undefined, brokeredShell });
       const reply = JSON.parse(result.text).find((r: {id: number}) => r.id === 221).result;

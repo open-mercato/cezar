@@ -1,4 +1,4 @@
-import { execFile, spawn, type ChildProcess } from 'node:child_process';
+import { execFile, spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import { constants } from 'node:fs';
 import { open, realpath } from 'node:fs/promises';
 import { isAbsolute, relative, resolve, sep } from 'node:path';
@@ -36,6 +36,48 @@ const CONTROL = /[\x00-\x08\x0b\x0c\x0e-\x1f]/;
 const SHELL_OUTPUT_CAP = 256_000;
 // A detached Windows child gets its own console window and has no process group to signal.
 const STAGE_GROUPS = process.platform !== 'win32';
+const STDERR_CAP = 16_000;
+
+/** How a stage and what it forked are killed: its process group on POSIX, `taskkill /T` on Windows. */
+export function stageKillPlan(pid: number, platform: NodeJS.Platform = process.platform): { group: number } | { taskkill: string[] } {
+  return platform === 'win32' ? { taskkill: ['/pid', String(pid), '/T', '/F'] } : { group: -pid };
+}
+
+function killTree(child: ChildProcess, opts: { closed: boolean; sync?: boolean }): void {
+  // A closed stage's pid may already lead an unrelated group. Until close, its group cannot be
+  // reused: POSIX keeps a process group id reserved while a member (a grandchild) still lives.
+  if (child.pid && !opts.closed) {
+    const plan = stageKillPlan(child.pid);
+    if ('group' in plan) {
+      try { process.kill(plan.group, 'SIGKILL'); } catch { /* the group is gone */ }
+    } else if (opts.sync) {
+      spawnSync('taskkill', plan.taskkill, { stdio: 'ignore', windowsHide: true });
+    } else {
+      spawn('taskkill', plan.taskkill, { stdio: 'ignore', windowsHide: true }).on('error', () => {});
+    }
+  }
+  child.kill('SIGKILL');
+}
+
+// Detached stages miss the server's Ctrl-C and outlive its timers; a clean stop or a crash
+// ('exit' fires for both) takes them down. A SIGKILLed server cannot, and their timeout dies with it.
+const liveStages = new Map<ChildProcess, () => boolean>();
+let exitHookInstalled = false;
+export function killLiveStages(): void {
+  for (const [child, closed] of liveStages) killTree(child, { closed: closed(), sync: true });
+  liveStages.clear();
+}
+
+/** The longest prefix that does not end in a UTF-8 sequence a byte cap cut short. */
+export function wholeUtf8(buffer: Buffer): Buffer {
+  let index = buffer.length - 1;
+  let continuation = 0;
+  while (index >= 0 && continuation < 3 && (buffer[index]! & 0xc0) === 0x80) { index--; continuation++; }
+  if (index < 0) return buffer;
+  const lead = buffer[index]!;
+  const needs = lead >= 0xf0 ? 4 : lead >= 0xe0 ? 3 : lead >= 0xc0 ? 2 : 1;
+  return needs > continuation + 1 ? buffer.subarray(0, index) : buffer;
+}
 
 export interface PipelineOptions {
   cwd: string;
@@ -68,6 +110,7 @@ export function runPipeline(pipeline: readonly string[][], stdin: string | undef
     let outBytes = 0;
     let errBytes = 0;
     let truncated = false;
+    let errTruncated = false;
     let failure: string | undefined;
     let open = pipeline.length;
     let code: number | null = null;
@@ -75,11 +118,8 @@ export function runPipeline(pipeline: readonly string[][], stdin: string | undef
     const children: ChildProcess[] = [];
     // A closed stage's pgid may already belong to an unrelated group; never signal it again.
     const closed = new Set<ChildProcess>();
-    const killOne = (child: ChildProcess) => {
-      // The group outlives its leader while a forked grandchild (gh's git, a pager) still holds a pipe.
-      if (STAGE_GROUPS && child.pid && !closed.has(child)) try { process.kill(-child.pid, 'SIGKILL'); } catch { /* the group is gone */ }
-      child.kill('SIGKILL');
-    };
+    // The group outlives its leader while a forked grandchild (gh's git, a pager) still holds a pipe.
+    const killOne = (child: ChildProcess) => killTree(child, { closed: closed.has(child) });
     const killAll = () => { for (const child of children) killOne(child); };
     const finish = () => {
       if (settled) return;
@@ -87,10 +127,14 @@ export function runPipeline(pipeline: readonly string[][], stdin: string | undef
       clearTimeout(timer);
       opts.signal.removeEventListener('abort', onAbort);
       killAll();
+      for (const child of children) liveStages.delete(child);
       // Release pipes a surviving grandchild may hold, so nothing keeps this call's streams open.
       for (const child of children) for (const stream of [child.stdin, child.stdout, child.stderr]) stream?.destroy();
-      const text = Buffer.concat(out).toString('utf8') + (truncated ? TRUNCATED : '');
-      const errText = Buffer.concat(err).toString('utf8').trim();
+      // A cap cuts bytes; never leave half a character (U+FFFD) in front of the marker.
+      const stdoutBytes = Buffer.concat(out);
+      const text = (truncated ? wholeUtf8(stdoutBytes) : stdoutBytes).toString('utf8') + (truncated ? TRUNCATED : '');
+      const stderrBytes = Buffer.concat(err);
+      const errText = (errTruncated ? wholeUtf8(stderrBytes) : stderrBytes).toString('utf8').trim();
       // Over the cap is the read path's truncation, not a failure: cezar stopped it, the command did not fail.
       const ok = !failure && (truncated || code === 0);
       const detail = [text, errText && `[stderr]\n${errText}`, failure, !ok && !failure ? `[exit ${code ?? 'signal'}]` : ''].filter(Boolean).join('\n');
@@ -108,6 +152,8 @@ export function runPipeline(pipeline: readonly string[][], stdin: string | undef
         const [bin, ...args] = pipeline[stage]!;
         const child = start(bin!, args, { cwd: opts.cwd, env, shell: false, stdio: ['pipe', 'pipe', 'pipe'], detached: STAGE_GROUPS, windowsHide: true });
         children.push(child);
+        liveStages.set(child, () => closed.has(child));
+        if (!exitHookInstalled) { exitHookInstalled = true; process.on('exit', killLiveStages); }
         // Listen at once: a child that fails below still emits 'error' a tick later, and unheard it crashes the server.
         child.on('error', (error) => { failure ??= `${pipeline[children.indexOf(child)]![0]}: ${error.message.slice(0, 200)}`; });
         // EMFILE/ENFILE: node returns a child without stdio and reports the error a tick later.
@@ -128,7 +174,13 @@ export function runPipeline(pipeline: readonly string[][], stdin: string | undef
         outBytes += Math.min(chunk.length, room);
         if (chunk.length > room) { truncated = true; finish(); }
       });
-      child.stderr!.on('data', (chunk: Buffer) => { if (errBytes < 16_000) { err.push(chunk); errBytes += chunk.length; } });
+      child.stderr!.on('data', (chunk: Buffer) => {
+        const room = STDERR_CAP - errBytes;
+        if (room <= 0) return;
+        if (chunk.length > room) errTruncated = true;
+        err.push(chunk.length > room ? chunk.subarray(0, room) : chunk);
+        errBytes += Math.min(chunk.length, room);
+      });
       child.stdin!.on('error', () => {});
       child.on('close', (exit) => {
         closed.add(child);

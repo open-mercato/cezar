@@ -9,7 +9,9 @@ import type { AgentEvent, AgentRunner, AgentRunSpec, AgentSession, RunnerId } fr
 import { inRelayScope, runInRelayScope } from '../relay/scope.ts';
 import { buildClaudeArgs, ClaudeCliRunner } from '../core/claude-cli-runner.ts';
 import { fileURLToPath } from 'node:url';
-import { MANAGER_TEXT_IN_FILES } from './bash-policy.ts';
+import { MANAGER_BASH_FILTERS, MANAGER_TEXT_IN_FILES } from './bash-policy.ts';
+import { compileCodexRestrictedPolicy } from '../core/codex-restricted-policy.ts';
+import { CodexReadBroker } from '../core/codex-restricted-tools.ts';
 import { ManagerEngine, managerWriteRules, type AutomationRunReport, type ManagerEngineDeps } from './engine.ts';
 import { followupPrompt, MANAGER_QUIET, managerSystemPrompt, watchPrompt } from './prompts.ts';
 import { readColdRuns, type ManagerProjectSource } from './snapshot.ts';
@@ -948,6 +950,32 @@ describe('ManagerEngine', () => {
         expect(shell.env.PATH?.split(delimiter)[0]).toMatch(/bin$/);
       }
       expect(backend.specs.map((spec) => spec.env?.CEZ_MANAGER_TURN)).toEqual(['watch', 'chat']);
+    });
+
+    it('a Codex manager\'s production shell, network off: cez-manager and its filters run, every gh is refused', async () => {
+      const engine = makeEngine({ defaultRunner: async (): Promise<RunnerId> => 'codex' });
+      const id = await create(engine, 0);
+      await engine.update(id, { bashAllow: ['gh label list'] });
+      engine.send(id, 'hi');
+      await settled(engine);
+      const shell = backend.specs[0]!.brokeredShell!;
+      expect(shell.offlinePrograms).toEqual(['cez-manager', ...MANAGER_BASH_FILTERS]);
+      expect(shell.offlinePrograms).not.toContain('gh');
+      // The production verifier and offline list; only PATH points at stubs instead of the cockpit.
+      const stubs = join(home, 'stub-bin');
+      mkdirSync(stubs);
+      writeFileSync(join(stubs, 'cez-manager'), '#!/bin/sh\necho \'{"tasks":[{"id":"t1"}]}\'\n', { mode: 0o755 });
+      writeFileSync(join(stubs, 'gh'), '#!/bin/sh\necho "stub gh: $*"\n', { mode: 0o755 });
+      const offline = new CodexReadBroker(
+        compileCodexRestrictedPolicy({ ...backend.specs[0]!, brokeredShell: { ...shell, env: { PATH: `${stubs}${delimiter}${process.env.PATH}` } } })!,
+        { cwd: home }, {}, false,
+      );
+      const run = async (command: string) => (await offline.call({ tool: 'cezar_read', arguments: { tool: 'Bash', command } })).contentItems[0]!.text;
+      expect(await run('cez-manager tasks --json | jq -c .tasks')).toBe('[{"id":"t1"}]\n');
+      for (const command of ['gh pr view 7', 'gh label list', 'gh pr view 7 --json title | jq .title']) {
+        expect(await run(command)).toContain('network commands are disabled by CEZ_CODEX_NETWORK=0 (`gh` may reach the network)');
+      }
+      offline.close();
     });
 
     it('a Claude watch keeps its allowlist instead of read-only', async () => {
