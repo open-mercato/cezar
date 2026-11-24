@@ -1,4 +1,5 @@
 import { execFile, spawn } from 'node:child_process';
+import { demoMode } from '../demo.ts';
 import { CEZAR_DATA_EXCLUDE } from '../data-gitignore.ts';
 import { gitHasIdentity, unresolvedConflicts } from '../git-worktree.ts';
 
@@ -55,6 +56,7 @@ const reason = (res: GitResult, fallback: string) =>
   (res.stderr.trim() || res.stdout.trim()).split('\n').slice(0, 3).join('\n') || fallback;
 
 export function runShellCheck(command: string, cwd: string, env?: NodeJS.ProcessEnv): Promise<{ ok: boolean; output: string }> {
+  if (demoMode()) return Promise.resolve({ ok: true, output: 'demo: not run' });
   return new Promise((resolve) => {
     const child = spawn('bash', ['-lc', command], { cwd, env: env ?? process.env });
     let output = '';

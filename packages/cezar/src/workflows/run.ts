@@ -1,4 +1,5 @@
 import type { StepToolPolicy } from '@open-mercato/cezar-contract';
+import { demoMode } from '../demo.ts';
 import { readOnlyEnv } from '../core/read-only-env.ts';
 import { AgentUsageHolds } from '../workspace/agent-usage-holds.ts';
 import { completionReason } from './completion-reason.ts';
@@ -10780,6 +10781,10 @@ export class RunManager {
   ): Promise<{ ok: boolean; output: string; exitCode: number }> {
     const command = step.command as string;
     emit({ type: 'note', stepId: step.id, message: `$ ${command}` });
+    if (demoMode()) {
+      emit({ type: 'note', stepId: step.id, message: 'demo: check steps are not run on this cezar' });
+      return { ok: true, output: 'demo: not run', exitCode: 0 };
+    }
     const env = await this.checkStepEnv(runId, state, step, emit);
     // A cancel that landed during the read had no child to interrupt; do not spawn one now.
     if (state.cancelled) return { ok: false, output: 'cancelled', exitCode: -1 };

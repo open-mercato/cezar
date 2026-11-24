@@ -273,6 +273,95 @@ function firstAuthFailure(text) {
   }
 }
 
+
+// Store-review demo (branch demo/store-review, never merged): CEZ_DEMO=1 under CEZ_DRY_RUN=1.
+// Every reply says plainly that nothing real runs. Hidden `<!-- demo:… -->` tags in a seeded
+// task pick its script; a reviewer's own task works a little, asks once, then finishes.
+const DEMO = process.env.CEZ_DEMO === '1';
+const DEMO_NOTE = 'This is a demo cezar for App Review. The agent is simulated: no AI model runs and no code changes.';
+let demoAsked = false;
+
+function demoTool(name, input, result) {
+  const id = `toolu_demo_${turn}_${Math.random().toString(36).slice(2, 8)}`;
+  emit({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'tool_use', id, name, input }], usage: { input_tokens: 120, output_tokens: 30 } } });
+  emit({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: id, content: result }] } });
+}
+
+async function demoSay(text) {
+  emit({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text }], usage: { input_tokens: 600, output_tokens: 120 } } });
+  emit({ type: 'result', subtype: 'success', result: text, usage: { input_tokens: 600, output_tokens: 120 }, total_cost_usd: 0 });
+}
+
+const DEMO_STEPS = [
+  ['Read', { file_path: 'README.md' }, '(demo) 42 lines'],
+  ['Grep', { pattern: 'TODO', path: 'src' }, '(demo) src/cli.js:18: // TODO'],
+  ['Edit', { file_path: 'src/cli.js', old_string: '// TODO', new_string: '// done' }, '(demo) The file was not really changed.'],
+  ['Bash', { command: 'npm test' }, '(demo) 12 passing — simulated, nothing ran'],
+];
+
+async function demoTask(userText) {
+  if (userText.includes('demo:long')) {
+    // The seeded "running" task: visible progress for about 50 minutes, then done.
+    for (let i = 0; i < 100; i += 1) {
+      const [name, input, result] = DEMO_STEPS[i % DEMO_STEPS.length];
+      demoTool(name, input, result);
+      await sleep(30_000);
+    }
+    return demoSay(`${DEMO_NOTE}\n\nFinished the simulated work.\n\nCEZ:DONE`);
+  }
+  if (userText.includes('demo:done')) {
+    for (const [name, input, result] of DEMO_STEPS) demoTool(name, input, result);
+    return demoSay(`${DEMO_NOTE}\n\nThe change is ready (simulated), and a pull request was opened for it.\n\nCEZ:DONE`);
+  }
+  if (userText.includes('demo:reply')) {
+    demoTool(...DEMO_STEPS[0]);
+    return demoSay(`${DEMO_NOTE}\n\nBefore I go on: should due dates use the phone's time zone or UTC? Reply here and I will finish (simulated).`);
+  }
+  // A reply, in this process or after a respawn: the answer quotes the question it answers.
+  if (demoAsked || turn > 1 || /How should I finish this demo task|time zone or UTC/.test(userText)) {
+    return demoSay(`${DEMO_NOTE}\n\nThanks, that settles it. The task is finished (simulated); in a real cezar the agent would now open a pull request for you to review.\n\nCEZ:DONE`);
+  }
+  demoAsked = true;
+  for (const [name, input, result] of DEMO_STEPS.slice(0, 3)) {
+    demoTool(name, input, result);
+    await sleep(7_000);
+  }
+  return demoSay(`${DEMO_NOTE}\n\nIn a real cezar, your own coding agent would now be working on this in your repository. I need one decision to finish.\n\nCEZ:ASK ${JSON.stringify({ questions: [
+    { header: 'Finish', question: 'How should I finish this demo task?', options: [
+      { label: 'Open a pull request (recommended)', description: 'Simulated: nothing is pushed.' },
+      { label: 'Keep the changes local', description: 'Simulated: nothing changes.' },
+    ] },
+  ] })}`);
+}
+
+async function demoManagerChat(said, tool, say) {
+  const status = (() => { try { return JSON.parse(tool(['status', '--json']) ?? ''); } catch { return undefined; } })();
+  const projects = status?.projects ?? [];
+  const cards = projects.flatMap((project) => project.tasks.map((task) => `[[task:${project.projectId}/${task.runId}]]`)).slice(0, 3);
+  const lines = [`${DEMO_NOTE} The manager is simulated too.`];
+  if (/\b(start|create|new task|do)\b/i.test(said) && projects[0]) {
+    const text = said.replace(/\[cez-manager:chat\]/, '').trim().slice(0, 200) || 'A demo task';
+    const created = tool(['task', 'create', '--project', projects[0].projectId, '--title', 'Started from the chat', text]);
+    const card = /\[\[task:[^\]]+\]\]/.exec(created ?? '')?.[0];
+    lines.push(card ? `I started a demo task. It will ask you one question in about 20 seconds, and you get a notification if they are on:\n\n${card}` : 'I could not start a task.');
+    return say(lines.join('\n\n'));
+  }
+  if (cards.length) lines.push(`Here is where things stand:\n\n${cards.join('\n\n')}`);
+  if (/\b(morning|today|brief|summary)\b/i.test(said)) {
+    const proposed = tool(['job', 'add', '--name', 'Morning summary', '--every', '1440', 'Summarize what changed overnight']);
+    if (proposed) lines.push('I proposed a daily morning summary. Approve the card if you want it.');
+    lines.push(`One decision for you.\n\nCEZ:ASK ${JSON.stringify({ questions: [
+      { header: 'Priority', question: 'Which should the agents look at first today?', options: [
+        { label: 'The storefront checkout (recommended)', description: 'Two tasks wait on it.' },
+        { label: 'The to-do CLI', description: 'One task waits on you there.' },
+      ] },
+    ] })}`);
+  } else {
+    lines.push('Ask me to start a task, for example "Start a task to add dark mode".');
+  }
+  return say(lines.join('\n\n'));
+}
+
 async function managerTurn(userText) {
   const kind = /\[cez-manager:(chat|watch|job|followup)\]/.exec(userText)?.[1] ?? 'chat';
   const said = userText.slice(userText.lastIndexOf(`[cez-manager:${kind}]`));
@@ -304,19 +393,22 @@ async function managerTurn(userText) {
       return undefined;
     }
   };
-  const say = async (text) => {
+  const say = async (raw) => {
+    // Demo: every manager reply says it is simulated, follow-ups and jobs included.
+    const text = DEMO && raw !== 'MANAGER:QUIET' && !raw.includes(DEMO_NOTE) ? `${DEMO_NOTE}\n\n${raw.replace(/ \(dry run\)/g, '')}` : raw;
     await pace(150);
     emit({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text }], usage: { input_tokens: 400, output_tokens: 80 } } });
     await pace(100);
     emit({ type: 'result', subtype: 'success', result: text, usage: { input_tokens: 400, output_tokens: 80 }, total_cost_usd: 0.0123 });
   };
+  if (DEMO && kind === 'chat' && !said.includes('mock:')) return demoManagerChat(said, tool, say);
   if (kind === 'watch') {
     const count = Number(/New attention items: (\d+)/.exec(userText)?.[1] ?? 0);
     const key = /"projectId":"([^"]+)","title":"[^"]*"(?:,"number":(\d+))?/.exec(userText);
     if (count === 0 || userText.includes('mock:quiet')) return say('MANAGER:QUIET');
     return say(`${count} thing${count === 1 ? '' : 's'} need${count === 1 ? 's' : ''} you.${key?.[2] ? ` Start with [[pr:${key[1]}/${key[2]}]].` : ''} (dry run)`);
   }
-  if (kind === 'job') return say('Job done: nothing changed since the last run. (dry run)');
+  if (kind === 'job') return say(DEMO ? `${DEMO_NOTE} Morning summary: nothing changed overnight.` : 'Job done: nothing changed since the last run. (dry run)');
   // A followed task settled: build on its card, the way the follow-up prompt asks.
   if (kind === 'followup') {
     const cards = [...said.matchAll(/\[\[task:[^\]]+\]\]/g)].map((match) => match[0]);
@@ -474,6 +566,7 @@ async function respond(userText, imageCount) {
   await pace(250);
   if (userText.includes('[cez-connector-call]')) return connectorCall(userText);
   if (userText.includes('[cez-manager:')) return managerTurn(userText);
+  if (DEMO && !userText.includes('mock:')) return demoTask(userText);
   // `mock:done` anywhere in the message → the reply ends with the CEZ:DONE
   // completion marker (#347), so the auto-close path is testable dry. `mock:report` implies it:
   // a unit that has reported is finished, and a report with no done marker would leave the child

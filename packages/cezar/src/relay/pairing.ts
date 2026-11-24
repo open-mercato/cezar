@@ -34,6 +34,8 @@ export interface PairingDeps {
   /** Saves the device, reaches the relay, sends `device-add`. Throws a failure reason. */
   commit(phone: PairedPhone): Promise<void>;
   rollback(phone: PairedPhone): void;
+  /** Store-review demo: approve as soon as the handshake ends, with nobody at the computer. */
+  autoApprove?: boolean;
 }
 
 /** One pairing: both rendezvous, the handshake on whichever a phone joined, the decision. */
@@ -70,6 +72,22 @@ export class Pairing {
     this.lifeTimer = setTimeout(() => this.expire(), PAIRING_LIFE_MS);
     this.lifeTimer.unref?.();
     return { id: this.id, qr: qrString(origin, secret, identity.x25519Public), expiresAt: new Date(this.expiresAtMs).toISOString() };
+  }
+
+  /** Store-review demo: only a typed-code rendezvous, on a code that does not change between pairings. */
+  async startWithCode(code: string): Promise<void> {
+    const channel = this.channel('code', await deriveFromCode(code));
+    this.channels = [channel];
+    try {
+      await channel.open();
+    } catch (error) {
+      this.closeChannels();
+      throw refusalError(error);
+    }
+    this.code = displayCode(code);
+    this.expiresAtMs = Date.now() + PAIRING_LIFE_MS;
+    this.lifeTimer = setTimeout(() => this.expire(), PAIRING_LIFE_MS);
+    this.lifeTimer.unref?.();
   }
 
   /** The typed code's own rendezvous, on request. If it is refused, the QR code stands alone. */
@@ -129,6 +147,7 @@ export class Pairing {
     this.phone = phone;
     this.digits = digits;
     this.set('confirm');
+    if (this.deps.autoApprove) this.approve();
   }
 
   private onChannelEnd(channel: RendezvousChannel, end: ChannelEnd): void {
@@ -187,6 +206,10 @@ export class Pairing {
     if (this.settled) return;
     this.winner?.tell({ t: 'failure', reason });
     this.outcome('failed', reason);
+  }
+
+  get settledOnce(): boolean {
+    return this.settled;
   }
 
   get canReplace(): boolean {

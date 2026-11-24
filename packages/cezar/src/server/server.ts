@@ -408,6 +408,7 @@ import { readUiState, uiStatePath } from '../ui-state.ts';
 import { agentHomePaths, cezarHomeDir, expandTilde, isAbsolutePath } from '../paths.ts';
 import { renameWithRetry } from '../fs-rename.ts';
 import { narrowForRelay, inRelayScope, outsideRelayScope, relayDeviceId } from '../relay/scope.ts';
+import { DEMO_REFUSAL, demoAllows, demoMode } from '../demo.ts';
 import { PairingStartError, RelayAccountActionError, RelayAddressError, RelayService, pushBlocked } from '../relay/service.ts';
 import { agentAccountsEnabled, isLoopbackHostHeader, normalizeHostname, resolveCapabilities } from './capabilities.ts';
 import { createSocketHub, type SocketHub, type WsUpgradeVerdict } from './ws.ts';
@@ -1856,6 +1857,16 @@ export function createApp(deps: ServerDeps) {
   // what check 1 stops.
   const MUTATING_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
   const isHostedMode = () => !capabilities().localHandoff;
+  // Store-review demo: a paired phone changes only what the demo shows (src/demo.ts).
+  if (demoMode()) {
+    app.use('/api/*', async (c, next) => {
+      if (inRelayScope() && !demoAllows(c.req.method, new URL(c.req.url).pathname)) {
+        console.warn(`cezar demo: refused ${c.req.method} ${new URL(c.req.url).pathname}`);
+        return c.json({ error: DEMO_REFUSAL }, 403);
+      }
+      return next();
+    });
+  }
   app.use('/api/*', async (c, next) => {
     const hostName = hostnameOfHost(c.req.header('host'));
     // Strict twin of `isLoopbackHost`: a *missing* Host is untrusted here (an

@@ -123,6 +123,12 @@ const CODE_ALPHABET = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
 export const generateCode = (): string =>
   Array.from({ length: 12 }, () => CODE_ALPHABET[randomInt(32)]).join('');
 
+/** § 9.2's normalization of a typed code: `null` unless it is exactly 12 characters of the alphabet. */
+export function normalizeCode(typed: string): string | null {
+  const code = typed.replace(/[\s\-\u2010-\u2015]/g, '').toUpperCase().replace(/O/g, '0').replace(/[IL]/g, '1');
+  return code.length === 12 && [...code].every((char) => CODE_ALPHABET.includes(char)) ? code : null;
+}
+
 export const displayCode = (code: string): string => code.replace(/(.{4})(.{4})(.{4})/, '$1-$2-$3');
 
 export const sas = (handshakeHash: Buffer): string =>

@@ -20,7 +20,7 @@ import type { PairedPhone } from './rendezvous.ts';
 import { outsideRelayScope, runInRelayScope } from './scope.ts';
 import { PhoneSession } from './session.ts';
 import { openWebSocket, type SocketFactory } from './socket.ts';
-import { CLOSE, DEFAULT_RELAY_ORIGIN, b64u, fromB64u, parseRelayOrigin, resolveRelayAddress, type RelayAddress } from './wire.ts';
+import { CLOSE, DEFAULT_RELAY_ORIGIN, b64u, fromB64u, normalizeCode, parseRelayOrigin, resolveRelayAddress, type RelayAddress } from './wire.ts';
 
 export const PAIRINGS_PER_HOUR = 5;
 const STATUS_POLL_MS = 60_000;
@@ -28,6 +28,20 @@ const STATUS_POLL_MS = 60_000;
 const STATUS_CHECK_MS = 10_000;
 const INVALID_ADDRESS = 'Use https://host, or http:// only for 127.0.0.1, localhost or [::1], with no path.';
 const HOUR_MS = 3_600_000;
+/** After an outcome the rendezvous lingers up to 5 s (`PAIRING_CLOSE_AFTER_OUTCOME_MS`); reopen after it. */
+const DEMO_REOPEN_MS = 7_000;
+/** An expired code with no phone closes at once: reopen almost at once, so a phone rarely finds it shut. */
+const DEMO_REOPEN_IDLE_MS = 500;
+const DEMO_RETRY_MS = 60_000;
+
+/**
+ * Store-review demo (branch `demo/store-review`, never merged): a fixed typed code that stays open and
+ * approves itself. Honoured only under `CEZ_DRY_RUN=1`, where no agent and no push is real.
+ */
+export function demoPairingCode(env: NodeJS.ProcessEnv = process.env): string | null {
+  if (env.CEZ_DRY_RUN !== '1' || !env.CEZ_RELAY_DEMO_CODE) return null;
+  return normalizeCode(env.CEZ_RELAY_DEMO_CODE);
+}
 const SOCKET_READY_MS = 8_000;
 /** How long a new address waits for the old relay, so a dead one cannot hold the Save. */
 const LEAVE_RELAY_MS = 5_000;
@@ -128,6 +142,9 @@ export class RelayService {
   private detail: string | undefined;
   private pairing: Pairing | undefined;
   private pairingStarts: number[] = [];
+  private readonly demoCode: string | null;
+  private demoTimer: NodeJS.Timeout | undefined;
+  private demoAnnounced = false;
   private readonly slots = new Set<string>();
   private readonly sessions = new Map<string, PhoneSession>();
   private fetcher: ((request: Request) => Promise<Response>) | undefined;
@@ -154,6 +171,8 @@ export class RelayService {
 
   constructor(options: RelayServiceOptions = {}) {
     this.env = options.env ?? process.env;
+    this.demoCode = demoPairingCode(this.env);
+    if (this.env.CEZ_RELAY_DEMO_CODE && !this.demoCode) console.warn('cezar: CEZ_RELAY_DEMO_CODE ignored (needs CEZ_DRY_RUN=1 and a 12-character code)');
     this.open = options.open ?? openWebSocket;
     this.directory = options.directory ?? join(cezarHomeDir(this.env), 'relay');
     this.identityStore = options.identity ?? new RelayIdentityStore(this.directory);
@@ -327,6 +346,7 @@ export class RelayService {
     await this.refreshAddress();
     const origin = this.origin;
     if (!origin || this.disposed) return;
+    if (this.demoCode) this.scheduleDemo(0);
     this.syncKeepAwake();
     const idle = () => this.devices.list().length === 0 && this.devices.pendingRemovals().length === 0;
     try {
@@ -352,6 +372,7 @@ export class RelayService {
 
   dispose(): void {
     this.disposed = true;
+    if (this.demoTimer) clearTimeout(this.demoTimer);
     this.keepAwake.release();
     this.push.dispose();
     this.pairing?.dispose();
@@ -714,6 +735,57 @@ export class RelayService {
       } catch (error) {
         if (this.pairing === pairing) this.pairing = undefined;
         throw error;
+      }
+    });
+  }
+
+  private scheduleDemo(ms: number): void {
+    if (this.disposed || !this.demoCode) return;
+    if (this.demoTimer) clearTimeout(this.demoTimer);
+    this.demoTimer = setTimeout(() => void this.runDemo(), ms);
+    this.demoTimer.unref?.();
+  }
+
+  /** Keeps the demo code's rendezvous open: one at a time, reopened once the last one settled. */
+  private async runDemo(): Promise<void> {
+    this.demoTimer = undefined;
+    const code = this.demoCode;
+    const origin = this.origin;
+    if (this.disposed || !code || !origin) return;
+    if (this.pairing && !this.pairing.settledOnce) return this.scheduleDemo(DEMO_RETRY_MS);
+    await outsideRelayScope(async () => {
+      try {
+        const identity = await this.identityStore.ensure();
+        this.identity = identity;
+        if (!this.accountToken() && !this.accountsUnsupported.has(origin)) throw new PairingStartError('no relay account attached');
+        this.pairing?.dispose();
+        const pairing: Pairing = new Pairing({
+          origin,
+          identity,
+          label: this.computerName(),
+          open: this.open,
+          autoApprove: true,
+          onChange: () => {
+            if (this.pairing !== pairing) return;
+            this.onChange();
+            if (pairing.settledOnce) this.scheduleDemo(pairing.view().method ? DEMO_REOPEN_MS : DEMO_REOPEN_IDLE_MS);
+          },
+          accepts: (phone) => this.acceptsPhone(phone),
+          commit: (phone) => this.commit(phone, identity),
+          rollback: (phone) => { this.dropDevice(phone.deviceId); },
+        });
+        this.pairing = pairing;
+        await pairing.startWithCode(code);
+        if (!this.demoAnnounced) {
+          this.demoAnnounced = true;
+          console.log(`cezar demo: pairing code open on ${origin} for cezarId ${identity.cezarId}`);
+        }
+        this.onChange();
+      } catch (error) {
+        this.pairing = undefined;
+        const retryAfter = error instanceof PairingStartError ? error.retryAfter : undefined;
+        console.warn(`cezar: demo pairing code not open: ${error instanceof Error ? error.message : String(error)}`);
+        this.scheduleDemo(retryAfter ? retryAfter * 1000 : DEMO_RETRY_MS);
       }
     });
   }
