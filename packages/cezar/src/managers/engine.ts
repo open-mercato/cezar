@@ -385,8 +385,9 @@ export function managerWriteRules(filesDir: string): string[] {
 export { MANAGER_BASH_ALLOWLIST } from './bash-policy.ts';
 
 /** Backends that keep the manager to `MANAGER_BASH_ALLOWLIST` (Pi drops `Bash` instead). */
-// Codex's fence is cezar's broker running `managerShellPlan` in an isolated session (#2330).
-const ALLOWLIST_FENCED: ReadonlySet<RunnerId> = new Set(['claude', 'pi', 'codex']);
+// Claude fences Bash with its hook, Codex through cezar's broker
+// running `managerShellPlan` in an isolated session (#2330).
+const ALLOWLIST_FENCED: ReadonlySet<RunnerId> = new Set<RunnerId>(['claude', 'pi']).add('codex');
 
 /** `attachmentInputSchema`'s per-file bound, and the task text bound of `POST /runs`. */
 const ATTACHMENT_BASE64_LIMIT = 7_000_000;
