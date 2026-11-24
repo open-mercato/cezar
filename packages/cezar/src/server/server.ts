@@ -206,7 +206,7 @@ import { currentUsage, currentTimedUsage, onUsage } from '../core/process-usage.
 import { DashboardReader } from '../workspace/dashboard.ts';
 import { dashboardRoutes } from './dashboard.ts';
 import { planUsageRoutes } from './plan-usage.ts';
-import { managerAccountLimit } from '../managers/account-limit.ts';
+import { managerAccountLimit, managerFallbackWithin } from '../managers/account-limit.ts';
 import {
   createManagedAccountDir,
   isManagedAccountDir,
@@ -5589,6 +5589,14 @@ export function createApp(deps: ServerDeps) {
       }
       const images = resolveAttachments(parsed.data.images);
       if (typeof images === 'string') return c.json({ error: images }, 400);
+      // `startedByManager` is provenance, not consent: the manager must exist, and fallback stays
+      // within its own task accounts (#2463).
+      const startingManager = parsed.data.startedByManager ? managerStore.get(parsed.data.startedByManager.id) : undefined;
+      const requestedAgent = startingManager ? parsed.data.managerAgent : undefined;
+      const managerAgent = requestedAgent && {
+        note: requestedAgent.note,
+        ...(requestedAgent.fallback ? { fallback: await managerFallbackWithin(startingManager?.taskAgents, requestedAgent.fallback, repoRoot) } : {}),
+      };
       const input = {
         task: parsed.data.task,
         model: parsed.data.model,
@@ -5598,7 +5606,7 @@ export function createApp(deps: ServerDeps) {
         images,
         systemPrompt: parsed.data.systemPrompt,
         ...(parsed.data.startedByManager ? { startedByManager: parsed.data.startedByManager } : {}),
-        ...(parsed.data.startedByManager && parsed.data.managerAgent ? { managerAgent: parsed.data.managerAgent } : {}),
+        ...(managerAgent ? { managerAgent } : {}),
         worktree: parsed.data.worktree,
         newBranch: parsed.data.newBranch,
         branch: parsed.data.branch,

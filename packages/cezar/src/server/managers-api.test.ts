@@ -242,6 +242,29 @@ describe('the managers routes', () => {
     expect(await spawn()).toMatchObject({ runner });
   });
 
+  it('POST /runs honors managerAgent only for a real manager, and falls back only within its task accounts (#2463)', async () => {
+    const add = async (provider: 'claude' | 'codex', label: string) => {
+      const configDir = join(home, label);
+      mkdirSync(configDir);
+      const response = await request('/api/v1/workspace/agent-profiles', { method: 'POST', body: { provider, label, configDir } });
+      return agentProfileResponseSchema.parse(await response.json()).profile.id;
+    };
+    const first = await add('claude', 'First');
+    const second = await add('claude', 'Second');
+    const codex = await add('codex', 'Codex');
+    const { id } = await createManager({ instructions: '', projects: 'all', taskAgents: [{ runner: 'claude', agentProfile: first }, { runner: 'claude', agentProfile: second }], cronMinutes: 0 });
+    const managerAgent = { note: 'Agent chosen by manager', fallback: [{ provider: 'claude', profileId: second }, { provider: 'codex', profileId: codex }, { provider: 'claude', profileId: 'default' }] };
+    const post = (body: object) => request('/api/v1/runs', { method: 'POST', body: { workflow: 'quick-task', task: 'x', runner: 'claude', agentProfile: first, managerAgent, ...body } });
+
+    expect((await post({ startedByManager: { id, name: 'M' } })).status).toBe(201);
+    expect(startRun.mock.calls.at(-1)?.[1]).toMatchObject({ managerAgent: { note: managerAgent.note, fallback: [{ provider: 'claude', profileId: second }] } });
+    // Provenance alone is not consent: an unknown manager, or none, carries no manager fallback.
+    expect((await post({ startedByManager: { id: 'not-a-manager', name: 'M' } })).status).toBe(201);
+    expect(startRun.mock.calls.at(-1)?.[1]).not.toHaveProperty('managerAgent');
+    expect((await post({})).status).toBe(201);
+    expect(startRun.mock.calls.at(-1)?.[1]).not.toHaveProperty('managerAgent');
+  });
+
   it('persists two Claude accounts and one Codex account and forwards only selected pairs into POST /runs', async () => {
     const add = async (provider: 'claude' | 'codex', label: string) => {
       const configDir = join(home, label);

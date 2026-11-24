@@ -1354,7 +1354,8 @@ export const createRunInputBaseSchema = z
      *  own-tasks rule and the manager's `startedBy`. Never an authorization by itself. */
     startedByManager: z.object({ id: z.string().min(1).max(64), name: z.string().min(1).max(80) }).optional(),
     /** How the starting manager chose the agent: a timeline note, and the manager's other allowed
-     *  accounts a usage limit falls back to. Honored only with `startedByManager`. */
+     *  accounts a usage limit falls back to. Honored only when `startedByManager` names an existing manager;
+     *  `fallback` is cut to that manager's own task accounts. */
     managerAgent: z.object({
       note: z.string().min(1).max(500),
       fallback: z.array(z.object({
