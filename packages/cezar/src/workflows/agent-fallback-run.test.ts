@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cezarHomeDir } from '../paths.ts';
 import { RunStore } from '../runs/store.ts';
 import { putAgentFallbackPolicy, type AgentFallbackPolicy } from '../workspace/agent-fallback.ts';
+import { WorkspaceSemaphore } from '../workspace/semaphore.ts';
 import { RunManager } from './run.ts';
 import type { WorkflowDef } from './types.ts';
 
@@ -493,7 +494,10 @@ describe('automatic agent fallback', () => {
   it('hands a task to the explicitly selected agent when automatic fallback is still being admitted', async () => {
     registerAccounts(['second']);
     const policy = await enable([{ provider: 'claude', profileId: 'second' }]);
-    manager = new RunManager(store, repoRoot);
+    const semaphore = new WorkspaceSemaphore({ initial: { maxParallel: 1 } });
+    // Keep the admitted successor in the queue so this assertion stops at the handoff.
+    semaphore.register({ busySlots: () => 1, oldestQueuedAt: () => null, pump: () => {} });
+    manager = new RunManager(store, repoRoot, { semaphore });
     let release!: (value: string | null) => void;
     const gate = new Promise<string | null>((resolve) => { release = resolve; });
     const check = vi.spyOn(manager as unknown as { fallbackProviderRefusal(): Promise<string | null> }, 'fallbackProviderRefusal').mockReturnValue(gate);
@@ -503,7 +507,7 @@ describe('automatic agent fallback', () => {
     expect(manager.switchAgent(id, { runner: 'codex', agentProfile: 'default', changedBy: 'Release Manager' })).toHaveProperty('summary');
     release(null);
     await until(() => !(manager as unknown as { fallbackPending: Set<string> }).fallbackPending.has(id), 'selection settles');
-    expect(store.getRun(id)).toMatchObject({ runner: 'codex', agentProfile: 'default', fallbackPolicy: policy });
+    expect(store.getRun(id)).toMatchObject({ status: 'queued', runner: 'codex', agentProfile: 'default', fallbackPolicy: policy });
     expect(store.getRun(id)?.fallbackEpisode).toBeUndefined();
     expect(store.getRun(id)?.steps.map((step) => step.id)).toEqual(['work', 'continue-1']);
   }, 40_000);
