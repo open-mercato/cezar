@@ -6,8 +6,10 @@ import { promisify } from 'node:util';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cezarHomeDir } from '../paths.ts';
 import { RunStore } from '../runs/store.ts';
-import { putAgentFallbackPolicy, type AgentFallbackPolicy } from '../workspace/agent-fallback.ts';
-import { RunManager } from './run.ts';
+import { putAgentFallbackPolicy, setManagerTaskAccountsLookup, type AgentFallbackPolicy } from '../workspace/agent-fallback.ts';
+import { WorkspaceSemaphore } from '../workspace/semaphore.ts';
+import { RunManager, setFallbackProviderCheck } from './run.ts';
+import { managerAccountLimit } from '../managers/account-limit.ts';
 import type { WorkflowDef } from './types.ts';
 
 const run = promisify(execFile);
@@ -72,6 +74,8 @@ describe('automatic agent fallback', () => {
 
   afterEach(async () => {
     vi.restoreAllMocks();
+    setFallbackProviderCheck(undefined);
+    setManagerTaskAccountsLookup(undefined);
     if (manager) {
       for (const { id } of store.listRuns()) manager.cancel(id);
       await until(() => store.listRuns().every(({ id }) => !manager?.isActive(id)), 'runs to stop');
@@ -192,12 +196,172 @@ describe('automatic agent fallback', () => {
       expect(store.getRun(started.id)?.status).toBe('failed');
     }, 40_000);
 
+    it('keeps the reset-time auto-resume when the only other allowed account is signed out', async () => {
+      registerAccounts(['second']);
+      setFallbackProviderCheck(async (_provider, profileId) => (profileId === 'second' ? 'not signed in' : null));
+      manager = new RunManager(store, repoRoot);
+      const started = manager.startRun(workflow, {
+        task: 'mock:limit', worktree: false, startedByManager,
+        managerAgent: { note: 'chosen', fallback: [{ provider: 'claude', profileId: 'second' }] },
+      });
+      await until(() => store.getRun(started.id)?.autoResumeAt !== undefined, 'auto-resume to arm');
+      const record = store.getRun(started.id);
+      expect(record?.status).toBe('failed');
+      expect(record?.agentProfile).toBeUndefined();
+      expect(messages(started.id)).toContain('fallback skipped claude · Second — not signed in');
+      expect(messages(started.id).some((m) => m.startsWith('no fallback agent could continue'))).toBe(false);
+      expect(messages(started.id).some((m) => m.startsWith('usage limit reached — resuming automatically'))).toBe(true);
+    }, 40_000);
+
+    it('reports the account limit under the key the queue holds, named and automatic accounts alike', async () => {
+      registerAccounts(['second']);
+      manager = new RunManager(store, repoRoot);
+      const named = manager.startRun(workflow, { task: 'mock:limit', worktree: false, agentProfile: 'second' });
+      const automatic = manager.startRun(workflow, { task: 'mock:limit', worktree: false });
+      await until(() => Boolean(store.getRun(named.id)?.autoResumeAt && store.getRun(automatic.id)?.autoResumeAt), 'both accounts held');
+      const holds = () => manager!.accountHolds();
+      const second = await managerAccountLimit(holds, 'claude', 'second', repoRoot);
+      expect(second).toMatchObject({ account: 'second', label: 'Second' });
+      expect(second.until).toBe(holds().deadlines?.get('claude:second'));
+      expect(second.until).toBeGreaterThan(Date.now());
+      const discovered = await managerAccountLimit(holds, 'claude', undefined, repoRoot);
+      expect(discovered).toMatchObject({ account: 'default', label: 'default account' });
+      expect(discovered.until).toBeGreaterThan(Date.now());
+      expect(await managerAccountLimit(holds, 'codex', undefined, repoRoot)).not.toHaveProperty('until');
+    }, 40_000);
+
+    const managerTask = (fallback: Array<{ provider: 'claude' | 'opencode'; profileId: string; model?: string }>, task = 'mock:limit') => manager!.startRun(workflow, {
+      task, worktree: false, startedByManager, managerAgent: { note: 'chosen', fallback },
+    });
+    const resumesAtReset = async (id: string) => {
+      await until(() => store.getRun(id)?.autoResumeAt !== undefined, 'auto-resume to arm');
+      expect(store.getRun(id)?.status).toBe('failed');
+      expect(store.getRun(id)?.agentProfile).toBeUndefined();
+      expect(messages(id).some((m) => m.startsWith('no fallback agent could continue'))).toBe(false);
+    };
+
+    it('keeps the reset-time auto-resume when the only other allowed account was deleted', async () => {
+      registerAccounts([]);
+      manager = new RunManager(store, repoRoot);
+      await resumesAtReset(managerTask([{ provider: 'claude', profileId: 'removed' }]).id);
+    }, 40_000);
+
+    it('keeps the reset-time auto-resume when the only other allowed account is on a disabled provider', async () => {
+      writeFileSync(join(cezarHomeDir(), 'config.json'), JSON.stringify({ disabledProviders: ['opencode'] }));
+      try {
+        manager = new RunManager(store, repoRoot);
+        const started = managerTask([{ provider: 'opencode', profileId: 'default' }]);
+        await resumesAtReset(started.id);
+        expect(messages(started.id)).toContain('fallback skipped opencode · Default — provider is disabled in Settings');
+      } finally {
+        rmSync(join(cezarHomeDir(), 'config.json'), { force: true });
+      }
+    }, 40_000);
+
+    it('a same-runner fallback keeps the model the manager asked for', async () => {
+      registerAccounts(['second']);
+      manager = new RunManager(store, repoRoot);
+      const started = managerTask([{ provider: 'claude', profileId: 'second', model: 'opus' }], 'fix the bug mock:limit');
+      await until(() => store.getRun(started.id)?.fallbackEpisode?.current !== undefined, 'successor reserved');
+      expect(store.getRun(started.id)).toMatchObject({ agentProfile: 'second', model: 'opus' });
+      expect(messages(started.id)).toContain('claude · Default reached its usage limit — claude · Second · opus continues this task');
+    }, 40_000);
+
+    it('is withdrawn when the manager is deleted after the task started', async () => {
+      registerAccounts(['second']);
+      setManagerTaskAccountsLookup(() => null);
+      manager = new RunManager(store, repoRoot);
+      await resumesAtReset(managerTask([{ provider: 'claude', profileId: 'second' }]).id);
+    }, 40_000);
+
+    it('skips an account the manager removed from its list after the task started', async () => {
+      registerAccounts(['second']);
+      setManagerTaskAccountsLookup((id) => (id === 'm1' ? [{ runner: 'claude', agentProfile: 'default' }] : null));
+      manager = new RunManager(store, repoRoot);
+      const started = managerTask([{ provider: 'claude', profileId: 'second' }]);
+      await resumesAtReset(started.id);
+      // The pre-check already sees the current list, so fallback never claims the failure.
+      expect(store.getRun(started.id)?.fallbackEpisode).toBeUndefined();
+    }, 40_000);
+
+    it('a bare { runner } left in the list is the default account only, so a removed named account is not a target', async () => {
+      registerAccounts(['second']);
+      setManagerTaskAccountsLookup(() => [{ runner: 'claude' }]);
+      manager = new RunManager(store, repoRoot);
+      const started = managerTask([{ provider: 'claude', profileId: 'second' }]);
+      await resumesAtReset(started.id);
+      expect(store.getRun(started.id)?.fallbackEpisode).toBeUndefined();
+    }, 40_000);
+
+    it('still falls back while the account is in the manager’s current list', async () => {
+      registerAccounts(['second']);
+      setManagerTaskAccountsLookup(() => [{ runner: 'claude', agentProfile: 'default' }, { runner: 'claude', agentProfile: 'second' }]);
+      manager = new RunManager(store, repoRoot);
+      const started = managerTask([{ provider: 'claude', profileId: 'second' }]);
+      await until(() => store.getRun(started.id)?.fallbackEpisode?.current !== undefined, 'successor reserved');
+      expect(store.getRun(started.id)?.agentProfile).toBe('second');
+    }, 40_000);
+
+    it('a dispatched child keeps the manager policy, never the project one', async () => {
+      registerAccounts(['second']);
+      await enable([{ provider: 'claude', profileId: 'second' }]);
+      manager = new RunManager(store, repoRoot);
+      for (const fallback of [[{ provider: 'claude' as const, profileId: 'second' }], []]) {
+        const parent = manager.startRun(workflow, { task: 'mock:monitoring waiting on my tasks', startedByManager, managerAgent: { note: 'chosen', fallback } });
+        store.updateRun(parent.id, { dispatch: { rootRunId: parent.id } });
+        await until(() => store.getRun(parent.id)?.activity === 'monitoring', 'parent parked');
+        const child = manager.dispatch(parent.id, { objective: 'mock:done child' });
+        if ('refused' in child) throw new Error(child.refused);
+        const policy = store.getRun(child.id)?.fallbackPolicy;
+        expect(policy).toEqual(store.getRun(parent.id)?.fallbackPolicy);
+        expect(policy).toMatchObject({ source: 'manager', managerId: 'm1', enabled: fallback.length > 0 });
+      }
+    }, 40_000);
+
+    it('a dispatched child with its own model keeps it on a same-runner fallback, not the parent’s', async () => {
+      registerAccounts(['second']);
+      manager = new RunManager(store, repoRoot);
+      const parent = manager.startRun(workflow, {
+        task: 'mock:monitoring waiting on my tasks', model: 'opus', startedByManager,
+        managerAgent: { note: 'chosen', fallback: [{ provider: 'claude', profileId: 'second', model: 'opus' }] },
+      });
+      store.updateRun(parent.id, { dispatch: { rootRunId: parent.id } });
+      await until(() => store.getRun(parent.id)?.activity === 'monitoring', 'parent parked');
+      const own = manager.dispatch(parent.id, { objective: 'mock:done child', model: 'sonnet' });
+      if ('refused' in own) throw new Error(own.refused);
+      expect(store.getRun(own.id)?.fallbackPolicy?.candidates).toEqual([{ provider: 'claude', profileId: 'second', model: 'sonnet' }]);
+      // A child that names no model inherits the parent's on the same runner, and its fallback with it.
+      const inherited = manager.dispatch(parent.id, { objective: 'mock:done child two' });
+      if ('refused' in inherited) throw new Error(inherited.refused);
+      expect(store.getRun(inherited.id)?.model).toBe('opus');
+      expect(store.getRun(inherited.id)?.fallbackPolicy?.candidates).toEqual([{ provider: 'claude', profileId: 'second', model: 'opus' }]);
+    }, 40_000);
+
+    it('the limit a manager sees is the semaphore’s merged deadline under the queue’s own key', async () => {
+      registerAccounts(['second']);
+      const semaphore = new WorkspaceSemaphore();
+      manager = new RunManager(store, repoRoot, { semaphore });
+      const named = manager.startRun(workflow, { task: 'mock:limit', worktree: false, agentProfile: 'second' });
+      await until(() => store.getRun(named.id)?.autoResumeAt !== undefined, 'second held');
+      const own = manager.accountHolds().deadlines!.get('claude:second')!;
+      expect((await managerAccountLimit(() => semaphore.accountHolds(), 'claude', 'second', repoRoot)).until).toBe(own);
+      // Another project holding the same account resets sooner: the earliest reset wins.
+      const sooner = Date.now() + 60_000;
+      const off = semaphore.register({
+        busy: () => 0, pump: async () => undefined, oldestQueuedAt: () => null,
+        accountHolds: () => ({ deadline: new Set(['claude:second']), inFlight: new Set(), deadlines: new Map([['claude:second', sooner]]) }),
+      } as unknown as Parameters<WorkspaceSemaphore['register']>[0]);
+      expect((await managerAccountLimit(() => semaphore.accountHolds(), 'claude', 'second', repoRoot)).until).toBe(sooner);
+      off();
+      expect((await managerAccountLimit(() => semaphore.accountHolds(), 'claude', 'second', repoRoot)).until).toBe(own);
+    }, 40_000);
+
     it('an empty allowed remainder never falls back outside the list, even with project fallback on', async () => {
       registerAccounts(['second']);
       await enable([{ provider: 'claude', profileId: 'second' }]);
       manager = new RunManager(store, repoRoot);
       const started = manager.startRun(workflow, { task: 'mock:limit', worktree: false, startedByManager, managerAgent: { note: 'chosen', fallback: [] } });
-      expect(store.getRun(started.id)?.fallbackPolicy).toBeUndefined();
+      expect(store.getRun(started.id)?.fallbackPolicy).toMatchObject({ enabled: false, source: 'manager', managerId: 'm1' });
       await until(() => store.getRun(started.id)?.autoResumeAt !== undefined, 'auto-resume to arm');
       expect(store.getRun(started.id)?.agentProfile).toBeUndefined();
     }, 40_000);

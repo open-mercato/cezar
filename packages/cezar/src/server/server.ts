@@ -206,6 +206,13 @@ import { currentUsage, currentTimedUsage, onUsage } from '../core/process-usage.
 import { DashboardReader } from '../workspace/dashboard.ts';
 import { dashboardRoutes } from './dashboard.ts';
 import { planUsageRoutes } from './plan-usage.ts';
+import { managerAccountLimit } from '../managers/account-limit.ts';
+
+/** Proves a request came from this process's manager engine (`POST /runs` `managerAgent`). Never leaves the process. */
+const MANAGER_AGENT_HEADER = 'x-cezar-manager-agent';
+const MANAGER_AGENT_TOKEN = randomUUID();
+// Byte lengths, not string lengths: a non-ASCII header must be a 403, never a timingSafeEqual throw.
+const managerAgentTokenMatches = (value: string | undefined): boolean => matchesPrivateToken(value, MANAGER_AGENT_TOKEN);
 import {
   createManagedAccountDir,
   isManagedAccountDir,
@@ -374,7 +381,6 @@ import {
   defaultAgentProfile,
   listAgentProfiles,
   profileDirState,
-  resolveAccountId,
   resolveProfileEnvForRoot,
   resolveStoredProfile,
   sameProfileDir,
@@ -400,6 +406,7 @@ import {
   FallbackPolicyInputError,
   getAgentFallbackPolicy,
   putAgentFallbackPolicy,
+  setManagerTaskAccountsLookup,
 } from '../workspace/agent-fallback.ts';
 import { mergeWriteWorkspaceUiState, readWorkspaceUiState } from '../workspace/ui-state.ts';
 import { checkoutRepo, type CloneRunner } from './checkout.ts';
@@ -1754,6 +1761,8 @@ export function createApp(deps: ServerDeps) {
   // count against the same workspace semaphore as the boot manager (step 2.5).
   // Workspace-level, shared by the managers family and the automation report link.
   const managerStore = new ManagerStore();
+  // A manager task's fallback follows the manager's list as it is now (deleted or Automatic = withdrawn).
+  setManagerTaskAccountsLookup((managerId) => managerStore.get(managerId)?.taskAgents ?? null);
   const contextProjects = async () => {
     const selector = capabilities().singleProject
       ? { projectId: await resolveBootProject() }
@@ -5541,6 +5550,11 @@ export function createApp(deps: ServerDeps) {
     .post('/runs', jsonZodValidator(createRunInputSchema), async (c) => {
       const { root: repoRoot, dataDir, manager, store } = c.get('project');
       const parsed = { data: c.req.valid('json') };
+      // A manager fallback policy bypasses the project's Automatic fallback setting: only the
+      // manager engine's in-process request, which carries this process's token, may set one.
+      if (parsed.data.managerAgent && !managerAgentTokenMatches(c.req.header(MANAGER_AGENT_HEADER))) {
+        return c.json({ error: 'managerAgent is set only by a cezar manager' }, 403);
+      }
       if (agentModelsLocked(repoRoot) && (parsed.data.model?.trim() || parsed.data.reasoningEffort?.trim())) {
         return c.json({ error: AGENT_MODELS_LOCKED_ERROR }, 409);
       }
@@ -9198,20 +9212,12 @@ export function createApp(deps: ServerDeps) {
       return 'error' in account ? account.error : null;
     },
     // The same holds the queue enforces (spec 2026-08-03-auto-resume-after-usage-limit).
-    accountLimit: async (runner, agentProfile, repoRoot) => {
-      const store = await loadAgentAccounts().catch(() => undefined);
-      const account = agentProfile ?? (store ? resolveAccountId(store, { provider: runner, ...(repoRoot ? { repoRoot } : {}) }) : DEFAULT_AGENT_ACCOUNT_ID);
-      const named = store?.accounts.find((entry) => entry.id === account && entry.provider === runner);
-      const until = deps.semaphore?.accountHolds().deadlines?.get(`${runner}:${account}`);
-      return {
-        account,
-        label: named?.label || (account === DEFAULT_AGENT_ACCOUNT_ID ? 'default account' : account),
-        ...(until !== undefined && until > Date.now() ? { until } : {}),
-      };
-    },
+    accountLimit: (runner, agentProfile, repoRoot) => managerAccountLimit(() => deps.semaphore?.accountHolds(), runner, agentProfile, repoRoot),
     request: (path, init) => {
       if (!managerLoopback.request) throw new Error('the cockpit is not ready');
-      return managerLoopback.request(path, init);
+      const headers = new Headers(init?.headers);
+      headers.set(MANAGER_AGENT_HEADER, MANAGER_AGENT_TOKEN);
+      return managerLoopback.request(path, { ...init, headers });
     },
     costVisible: () => capabilities().costMetrics,
     autoResume: () => deps.semaphore?.autoResumeOnUsageLimit() ?? true,
