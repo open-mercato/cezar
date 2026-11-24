@@ -11,7 +11,7 @@ import {
 import { hasWorkflowGraph } from '@/lib/has-workflow-graph'
 import { ManagerBackLink } from '../manager/manager-back-link'
 import { cloneElement, Fragment, isValidElement, memo, useEffect, useId, useMemo, useReducer, useRef, useState, type ReactNode, type RefObject } from 'react'
-import { RunTagsEditor } from '@/components/run-tags'
+import { RunTagChips, RunTagsEditor } from '@/components/run-tags'
 import { Link, useNavigate } from '@/lib/project-router'
 
 import {
@@ -205,6 +205,8 @@ function RunHeaderView({
               {quietWord ? <QuietStatusWord word={quietWord} title={idleClosedDetail(run)} className="max-md:hidden" /> : null}
               {/* In the title row so a folded header still shows it (main had it here). */}
               <ImpactChip run={run} />
+              {/* A folded desktop header hides the meta line that holds the tag editor: keep the tags in sight. */}
+              {collapsed ? <RunTagChips tags={run.tags} max={3} className="max-md:hidden shrink-0" /> : null}
             </span>
             <span className="ml-auto flex shrink-0 items-center gap-2">
               <HeaderActions run={run} actions={actions} changesShowing={tab === 'changes'} onRename={() => beginRename.current()} onTags={() => {

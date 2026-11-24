@@ -236,6 +236,17 @@ describe('collapse header — the minimalist view short of full screen', () => {
     expect(meta.lastElementChild!.className).not.toContain('overflow-hidden')
   })
 
+  it('a folded desktop header still shows the tags beside the title', () => {
+    localStorage.setItem('cez:run-header-collapsed', '1')
+    stubFetch()
+    renderHeader(run('done', { tags: [{ id: 'tt-tag00001', name: 'hello' }] }))
+    const chips = document.querySelector('[data-slot="run-title-row"] [data-slot="run-tag-chips"]')!
+    expect(chips.textContent).toContain('hello')
+    expect(chips.className).toContain('max-md:hidden')
+    fireEvent.click(screen.getByRole('button', { name: 'Expand header' }))
+    expect(document.querySelector('[data-slot="run-title-row"] [data-slot="run-tag-chips"]')).toBeNull()
+  })
+
   it('"Tags…" unfolds a folded header so the picker has its anchor', async () => {
     localStorage.setItem('cez:run-header-collapsed', '1')
     stubFetch()
