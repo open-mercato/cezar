@@ -1660,7 +1660,7 @@ export class ManagerEngine {
     }).catch((error: unknown) => ({ result: turnFailure(error), ran: manager } as ChainOutcome));
     const result = chain.result;
     if (chain.ref) base = { ...base, agent: chain.ref };
-    this.reportTurn(manager, turn, startedAt, result);
+    this.reportTurn(chain.ran, turn, startedAt, result);
     if (throttle) clearTimeout(throttle);
     if (!store.get(id)) return 'failed';
     this.addCost(id, result.costUsd);
@@ -2255,7 +2255,7 @@ export class ManagerEngine {
       .catch((error: unknown) => ({ result: turnFailure(error), ran: manager } as ChainOutcome));
     const result = chain.result;
     const agent = chain.ref ? { agent: chain.ref } : {};
-    this.reportTurn(manager, turn, startedAt, result);
+    this.reportTurn(chain.ran, turn, startedAt, result);
     if (!store.get(id)) return;
     this.addCost(id, result.costUsd);
     // A user's Stop leaves the keys fresh for the next check; a hung backend is a failure the chat shows.
@@ -2373,11 +2373,18 @@ export class ManagerEngine {
     if (usd > 0) this.deps.store.updateState(id, (state) => ({ ...state, costUsd: state.costUsd + usd }));
   }
 
-  /** Parks the current transcripts under their key and brings back `sessionKey`'s, if any. */
+  /**
+   * Parks the current transcripts under their key and brings back `sessionKey`'s, if any. A parked
+   * transcript that missed replies another row wrote since starts over: only the preamble carries them.
+   */
   private swapSessions(id: string, sessionKey: string): void {
-    const state = this.deps.store.state(id);
+    const { store } = this.deps;
+    const state = store.state(id);
     if (state.sessionKey === sessionKey) return;
-    this.deps.store.updateState(id, (current) => {
+    const messages = store.messages(id);
+    // The turn's own streaming placeholder keeps its seq for the reply, so it does not count as seen.
+    const lastSeq = messages.filter((message) => !(message.kind === 'assistant' && message.streaming)).at(-1)?.seq ?? 0;
+    store.updateState(id, (current) => {
       const parked = { ...current.parkedSessions };
       if (current.sessionKey) {
         parked[current.sessionKey] = {
@@ -2385,9 +2392,12 @@ export class ManagerEngine {
           ...(current.watchSessionId ? { watchSessionId: current.watchSessionId } : {}),
           ...(current.jobSessionId ? { jobSessionId: current.jobSessionId } : {}),
           sessions: current.sessions,
+          parkedSeq: lastSeq,
         };
       }
-      const restored = parked[sessionKey];
+      const candidate = parked[sessionKey];
+      const missed = candidate && messages.some((message) => message.kind === 'assistant' && !message.streaming && message.seq > (candidate.parkedSeq ?? 0));
+      const restored = missed ? undefined : candidate;
       delete parked[sessionKey];
       // One per chain row at most.
       const kept = Object.fromEntries(Object.entries(parked).slice(-4));
@@ -2471,7 +2481,8 @@ export class ManagerEngine {
           memory: renderMemory(this.memoryFor(id, (profile.env as Record<string, string | undefined>).CLAUDE_CONFIG_DIR ?? process.env.CLAUDE_CONFIG_DIR).entries),
         },
       ),
-      userPrompt: resumeId ? prompt : freshPrompt,
+      // A session restored from another row may not have seen the cards an ids-only prompt names.
+      userPrompt: resumeId ? (turn.cards?.ids && state.sessions.chat?.cardsDigest !== turn.cards.digest ? unseen : prompt) : freshPrompt,
       cwd: store.workdir(id),
       allowedTools: [...MANAGER_ALLOWED_TOOLS, ...(writable ? managerWriteRules(writable) : []), ...connectorRules],
       bashAllowlist: [...MANAGER_BASH_ALLOWLIST, ...(manager.bashAllow ?? [])],
@@ -2729,7 +2740,8 @@ export class ManagerEngine {
   accountHolds(): { deadlines: ReadonlyMap<string, number>; deadline: ReadonlySet<string>; inFlight: ReadonlySet<string> } {
     if (!this.chainHoldsLoaded) {
       this.chainHoldsLoaded = true;
-      for (const manager of this.deps.store.list()) if (hasChain(manager)) this.syncChainHolds(manager.id);
+      // Inside a pump: loading must not re-enter the semaphore.
+      for (const manager of this.deps.store.list()) if (hasChain(manager)) this.syncChainHolds(manager.id, false);
     }
     const now = this.now();
     const deadlines = new Map<string, number>();
@@ -2741,7 +2753,7 @@ export class ManagerEngine {
 
   private readonly chainHoldTimers = new Map<string, NodeJS.Timeout>();
 
-  private syncChainHolds(id: string): void {
+  private syncChainHolds(id: string, notify = true): void {
     const manager = this.deps.store.get(id);
     const now = this.now();
     const holds = new Map<string, number>();
@@ -2763,7 +2775,7 @@ export class ManagerEngine {
       timer.unref?.();
       this.chainHoldTimers.set(id, timer);
     }
-    if (before !== JSON.stringify([...holds])) this.deps.onAccountHoldsChanged?.();
+    if (notify && before !== JSON.stringify([...holds])) this.deps.onAccountHoldsChanged?.();
   }
 
   private async rowInfo(row: ChainRow): Promise<RowInfo> {
@@ -2857,14 +2869,16 @@ export class ManagerEngine {
     const active = Math.min(state.chain?.active?.slot ?? 0, rows.length - 1);
     const preferred = manager.failback === 'manual' ? active : 0;
     const { row, skipped } = pickRow(rows, preferred, (candidate) => this.rowHold(id, infos[candidate.slot]!, now));
-    if (row.slot !== active) {
+    // Every row held: the preferred row is tried as today, but nothing switched, so no notice.
+    if (row.slot !== active && skipped.length < rows.length) {
       if (row.slot === 0) {
         this.chainNotice(id, manager, infos[active]!, infos[0]!, 'back');
         this.setActive(id, 0, 'back');
       } else {
-        const cause = skipped.find((entry) => entry.row.slot === active)?.hold ?? skipped[0]?.hold;
+        const blocked = skipped.find((entry) => entry.row.slot === active) ?? skipped[0];
+        const cause = blocked?.hold;
         const reason = cause?.reason ?? 'held';
-        this.chainNotice(id, manager, infos[active]!, infos[row.slot]!, reason, reason === 'usage-limit' || reason === 'held' ? cause?.until : undefined);
+        this.chainNotice(id, manager, infos[blocked?.row.slot ?? active]!, infos[row.slot]!, reason, reason === 'usage-limit' || reason === 'held' ? cause?.until : undefined);
         this.setActive(id, row.slot, reason);
       }
     }
@@ -2889,11 +2903,14 @@ export class ManagerEngine {
     const attempted = new Set<number>();
     let row = plan.row;
     let current = prompt;
+    let spent = 0;
     for (;;) {
       attempted.add(row.slot);
       const info = infos[row.slot]!;
       const ran = withRow(manager, row);
-      const result = await this.drive(id, ran, current, turn, onProgress);
+      const attempt = await this.drive(id, ran, current, turn, onProgress);
+      spent += attempt.costUsd;
+      const result = { ...attempt, costUsd: spent };
       if (!this.deps.store.get(id)) return { result, ran, ref: info.ref };
       const now = this.now();
       const resetAt = this.usageLimit(result, turn);
@@ -2903,6 +2920,10 @@ export class ManagerEngine {
         // A turn that got through proves the row works again.
         if (!result.error && !turn.stopped && this.deps.store.state(id).chain?.holds[info.key]) {
           this.updateChain(id, (chain) => ({ ...chain, holds: Object.fromEntries(Object.entries(chain.holds).filter(([key]) => key !== info.key)) }));
+        }
+        // Every row was held and the preferred one got through anyway: it is the one answering now.
+        if (!result.error && !turn.stopped && (this.deps.store.state(id).chain?.active?.slot ?? 0) !== row.slot) {
+          this.setActive(id, row.slot, row.slot === 0 ? 'back' : 'held');
         }
         return { result, ran, ref: info.ref };
       }

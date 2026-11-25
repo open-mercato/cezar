@@ -142,6 +142,8 @@ const stateSchema = z
         watchSessionId: z.string().optional(),
         jobSessionId: z.string().optional(),
         sessions: z.object({ chat: sessionMetaSchema, watch: sessionMetaSchema, job: sessionMetaSchema }).catch({}),
+        /** The chat's last seq when it was parked: a reply after it means the transcript missed turns. */
+        parkedSeq: z.number().int().optional(),
       }))
       .optional()
       .catch(undefined),

@@ -1,7 +1,7 @@
 import { ArrowLeftRightIcon, BotIcon, ChevronLeftIcon, CircleAlertIcon, CircleCheckIcon, GripVerticalIcon, InfoIcon, PlusIcon } from 'lucide-react'
 import { useState, type DragEvent } from 'react'
 
-import { useAgentProfiles, useProviderStatus, useRunnerModels } from '@/api/queries'
+import { useAgentProfiles, useHealth, useProviderStatus, useRunnerModels } from '@/api/queries'
 import { useUpdateManager } from '@/api/managers'
 import { Button } from '@/components/ui/button'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuRadioGroup, DropdownMenuRadioItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
@@ -117,19 +117,21 @@ function StatusPill({ tone, children }: { tone: 'ok' | 'warn' | 'bad' | 'plain';
   )
 }
 
-function RowEditor({ row, slot, count, fallbackRunner, onChange, onMove, onPrimary, onRemove }: {
+function RowEditor({ row, slot, count, fallbackRunner, canReorder, onChange, onMove, onPrimary, onRemove }: {
   row: Row
   slot: number
   count: number
   fallbackRunner: string
+  canReorder: boolean
   onChange: (patch: ManagerPatch) => void
   onMove: () => void
   onPrimary: () => void
   onRemove: () => void
 }) {
   const runner = row.runner ?? fallbackRunner
+  // A #1 that follows the default stays unpinned, so picking that agent still pins it.
   const selection = {
-    runner,
+    ...(row.runner ? { runner: row.runner } : {}),
     ...(row.model ? { model: row.model } : {}),
     ...(row.effort ? { effort: row.effort } : {}),
     ...(row.agentProfile !== undefined ? { agentProfile: row.agentProfile } : {}),
@@ -154,8 +156,8 @@ function RowEditor({ row, slot, count, fallbackRunner, onChange, onMove, onPrima
       <div className="flex flex-wrap items-center gap-2">
         {slot > 0 ? (
           <>
-            <Button variant="outline" size="sm" className="pointer-coarse:h-11" data-action="manager-chain-up" onClick={onMove}>Move up</Button>
-            <Button variant="outline" size="sm" className="pointer-coarse:h-11" data-action="manager-chain-primary" onClick={onPrimary}>Make primary</Button>
+            <Button variant="outline" size="sm" className="pointer-coarse:h-11" data-action="manager-chain-up" disabled={!canReorder} onClick={onMove}>Move up</Button>
+            <Button variant="outline" size="sm" className="pointer-coarse:h-11" data-action="manager-chain-primary" disabled={!canReorder} onClick={onPrimary}>Make primary</Button>
             <Button variant="ghost" size="sm" className="ml-auto text-danger hover:text-danger pointer-coarse:h-11" data-action="manager-chain-remove" onClick={onRemove}>Remove</Button>
           </>
         ) : count > 1 ? <p className="text-xs text-muted-foreground">#1 is the primary: it answers whenever it can.</p> : null}
@@ -172,11 +174,15 @@ export function AgentChainSection({ manager, onPatch, initialEditing }: { manage
   const fallbackRunner = useManagerRunner(manager.runner)
   const phone = useMediaQuery(PHONE_QUERY)
   const profiles = useAgentProfiles().data
-  const usable = usableRunners(useProviderStatus().data).filter((runner) => runner !== 'pi')
+  const providerStatus = useProviderStatus()
+  const usable = usableRunners(providerStatus.data).filter((runner) => runner !== 'pi')
+  const health = useHealth()
   const update = useUpdateManager(manager.id)
   const [editing, setEditing] = useState<number | null>(initialEditing ?? null)
   const [dragging, setDragging] = useState<number | null>(null)
   const rows = rowsOf(manager)
+  // An unpinned #1 moved down is saved with the default runner: wait until that is known.
+  const canReorder = rows[0]?.runner !== undefined || health.data !== undefined
   const active = manager.activeAgent?.agent.slot ?? 0
   const grants = Object.values(manager.connectors ?? {}).some((grant) => grant.level !== 'off')
   const save = (next: Row[]) => onPatch(chainPatch(next, fallbackRunner))
@@ -229,6 +235,7 @@ export function AgentChainSection({ manager, onPatch, initialEditing }: { manage
       slot={slot}
       count={rows.length}
       fallbackRunner={fallbackRunner}
+      canReorder={canReorder}
       // #1's own fields patch as they always did; a backup's edit rewrites the list.
       onChange={(patch) => (slot === 0 ? onPatch(patch) : save(rows.map((row, index) => (index === slot ? applyPatch(row, patch) : row))))}
       onMove={() => move(slot, slot - 1)}
@@ -267,7 +274,7 @@ export function AgentChainSection({ manager, onPatch, initialEditing }: { manage
               data-slot="manager-chain-row"
               data-slot-index={slot}
               aria-expanded={editing === slot}
-              draggable={!phone && rows.length > 1}
+              draggable={!phone && rows.length > 1 && canReorder}
               onDragStart={() => setDragging(slot)}
               onDragEnd={() => setDragging(null)}
               onClick={() => setEditing(editing === slot ? null : slot)}
@@ -286,7 +293,7 @@ export function AgentChainSection({ manager, onPatch, initialEditing }: { manage
         ))}
       </ol>
       {rows.length <= MANAGER_BACKUPS_MAX ? (
-        <button type="button" data-action="manager-chain-add" className="flex min-h-8 items-center gap-1.5 text-sm text-primary pointer-coarse:min-h-11" onClick={add}>
+        <button type="button" data-action="manager-chain-add" disabled={!providerStatus.data} className="flex min-h-8 items-center gap-1.5 text-sm text-primary pointer-coarse:min-h-11 disabled:opacity-50" onClick={add}>
           <PlusIcon aria-hidden="true" className="size-3.5" />
           Add backup agent
         </button>
@@ -312,7 +319,7 @@ export function AgentChainSection({ manager, onPatch, initialEditing }: { manage
       {manager.activeAgent ? (
         <div data-slot="manager-chain-active" className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
           <span className="flex-1">Answering with #{manager.activeAgent.agent.slot + 1} since {clock(manager.activeAgent.since)}</span>
-          <Button variant="outline" size="sm" className="pointer-coarse:h-11" onClick={() => update.mutate({ switchToPrimary: true }, { onError: (error) => toast(error.message, { tone: 'danger' }) })}>
+          <Button variant="outline" size="sm" className="pointer-coarse:h-11" disabled={update.isPending} onClick={() => update.mutate({ switchToPrimary: true }, { onError: (error) => toast(error.message, { tone: 'danger' }) })}>
             Switch back to #1 now
           </Button>
         </div>
@@ -361,7 +368,7 @@ export function ActiveAgentInfo({ manager, onOpenSettings }: { manager: ManagerS
           {manager.failback === 'manual' ? ' The Manager stays on the backup until you switch back.' : ' The Manager goes back to it then.'}
         </p>
         <div className="flex flex-wrap gap-2 pt-1">
-          <Button size="sm" variant="outline" className="pointer-coarse:h-11" onClick={() => update.mutate({ switchToPrimary: true }, { onError: (error) => toast(error.message, { tone: 'danger' }) })}>
+          <Button size="sm" variant="outline" className="pointer-coarse:h-11" disabled={update.isPending} onClick={() => update.mutate({ switchToPrimary: true }, { onError: (error) => toast(error.message, { tone: 'danger' }) })}>
             Switch back now
           </Button>
           <Button size="sm" variant="outline" className="pointer-coarse:h-11" onClick={onOpenSettings}>Agent settings</Button>
@@ -406,7 +413,7 @@ export function AgentSwitchNotice({ message, managerId }: { message: Extract<Man
           )}
         </p>
         {!back ? (
-          <Button size="sm" variant="outline" className="pointer-coarse:h-11" onClick={() => update.mutate({ switchToPrimary: true }, { onError: (error) => toast(error.message, { tone: 'danger' }) })}>
+          <Button size="sm" variant="outline" className="pointer-coarse:h-11" disabled={update.isPending} onClick={() => update.mutate({ switchToPrimary: true }, { onError: (error) => toast(error.message, { tone: 'danger' }) })}>
             Switch back now
           </Button>
         ) : null}

@@ -1856,6 +1856,20 @@ describe('/manager/:id', () => {
       expect(within(dialog).getByRole('button', { name: 'Add backup agent' })).toBeTruthy()
     })
 
+    it('#1 that follows the default agent can still pin it, with the same single-field PATCH', async () => {
+      seedChat()
+      renderAt('/manager/global', (client) => {
+        client.setQueryData(workspaceQueryKeys.providerStatus, { providers: ['claude', 'codex'].map((provider) => ({ provider, status: 'connected', enabled: true })) })
+      })
+      fireEvent.click(await screen.findByRole('button', { name: 'Manager settings' }))
+      fireEvent.click(within(await waitFor(() => document.querySelector<HTMLElement>('[data-slot="manager-settings-menu"]')!)).getByRole('button', { name: 'Manager agent…' }))
+      const dialog = await screen.findByRole('dialog', { name: 'Manager agent' })
+      fireEvent.click(dialog.querySelector<HTMLElement>('[data-slot="manager-chain-row"]')!)
+      fireEvent.pointerDown(within(dialog).getByRole('button', { name: 'Manager agent' }))
+      fireEvent.click(await screen.findByRole('menuitemradio', { name: 'claude' }))
+      await waitFor(() => expect(patches()).toContainEqual({ runner: 'claude' }))
+    })
+
     it('lists the chain, swaps a backup into #1 in one PATCH, and sets failback', async () => {
       seedChat({ runner: 'claude', model: 'opus', backups: [{ runner: 'codex', model: 'gpt-5.5' }] })
       renderAt('/manager/global')
