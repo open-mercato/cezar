@@ -26,7 +26,7 @@ and unlisted accounts drop out); then the open Main with the fewest running task
 five-hour usage %, `fiveHourUsedPercent`, then list order); else the first open Backup; else, if
 something is only busy, the least-loaded account with `busy: true` (the task waits); else, everything
 held, the first to reset (as before). "Running" is `WorkspaceSemaphore.accountLoad()`: runs in
-status `running`, not parked, across the workspace. A retry keeps its own Main account while open.
+status `running`, not parked, plus runs dequeued and still starting, across the workspace. A retry keeps its own Main account while open.
 
 ## Queued tasks
 
@@ -37,7 +37,8 @@ finished task's `release()` pumps again). A task out of limits keeps its usage h
 `--account` or `--runner` is never routed (the roles still place a `--runner` task at start, among
 that agent's accounts; the queue's targets span every agent). Only a task that has never started
 moves: a requeued continuation, restart or usage-limit resume follows `taskLimitSwitch` instead.
-"Start now" overrides the busy wait (not a usage hold), and `account-busy` clears as soon as the
+Within one sweep each task that stays or moves counts on its account, so a burst spreads. A task
+with a pinned model or effort moves only between its own runner's accounts. "Start now" overrides the busy wait (not a usage hold), and `account-busy` clears as soon as the
 task's own account opens again.
 
 ## Mid-way

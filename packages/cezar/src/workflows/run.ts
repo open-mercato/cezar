@@ -4707,7 +4707,7 @@ export class RunManager {
    * Only tasks the manager's roles placed: an explicit `--account` never moves.
    */
   private managerRoute(run: RunRecord, holds: AccountHolds, load: Map<string, number>):
-    { kind: 'stay' } | { kind: 'busy' } | { kind: 'move'; runner: RunnerId; agentProfile: string; key: string } {
+    { kind: 'stay'; key?: string } | { kind: 'busy' } | { kind: 'move'; runner: RunnerId; agentProfile: string; key: string } {
     const policy = run.fallbackPolicy as AgentFallbackPolicy | undefined;
     if (run.status !== 'queued' || policy?.source !== 'manager' || !policy.routed) return { kind: 'stay' };
     const routing = currentManagerRouting(policy);
@@ -4716,10 +4716,13 @@ export class RunManager {
     const keyOf = (runner: RunnerId, agentProfile: string | undefined) => runAccountKey({ runner, agentProfile }, runner, accounts);
     const busy = (key: string) => routing.maxRunning !== undefined && (load.get(key) ?? 0) >= routing.maxRunning;
     const open = (key: string) => !holds.deadline.has(key) && !busy(key);
-    const own = keyOf(run.runner ?? 'claude', run.agentProfile);
-    if (open(own)) return { kind: 'stay' };
+    const ownRunner = run.runner ?? 'claude';
+    const own = keyOf(ownRunner, run.agentProfile);
+    if (open(own)) return { kind: 'stay', key: own };
+    // A pinned model or effort belongs to its runner: such a task moves only between its accounts.
+    const pinned = run.model !== undefined || run.reasoningEffort !== undefined;
     const entries = routing.agents
-      .filter((agent): agent is typeof agent & { runner: RunnerId } => isRunnerId(agent.runner))
+      .filter((agent): agent is typeof agent & { runner: RunnerId } => isRunnerId(agent.runner) && (!pinned || agent.runner === ownRunner))
       .map((agent, index) => ({ ...agent, index, key: keyOf(agent.runner, agent.agentProfile) }));
     const main = entries.filter((entry) => entry.role !== 'backup' && open(entry.key))
       .sort((a, b) => (load.get(a.key) ?? 0) - (load.get(b.key) ?? 0) || a.index - b.index)[0];
@@ -4746,12 +4749,19 @@ export class RunManager {
         continue;
       }
       if (route.kind !== 'move') {
+        // Counted as starting there, so a burst in one sweep does not pile onto one account.
+        if (route.key) load.set(route.key, (load.get(route.key) ?? 0) + 1);
         if (run.queueWaitReason?.kind === 'account-busy') this.store.updateRun(id, { queueWaitReason: undefined });
         continue;
       }
       const from = runAccountKey(run, run.runner ?? 'claude', this.askingAccounts());
       const moved = this.switchAgent(id, { runner: route.runner, agentProfile: route.agentProfile, changedBy: 'manager routing' });
-      if ('error' in moved) continue;
+      if ('error' in moved) {
+        // Its own account is busy and the move was refused: wait rather than start there anyway.
+        waiting.add(id);
+        if (run.queueWaitReason?.kind !== 'account-busy') this.store.updateRun(id, { queueWaitReason: { kind: 'account-busy' } });
+        continue;
+      }
       // Counted as started there, so the next queued task spreads to another account.
       load.set(route.key, (load.get(route.key) ?? 0) + 1);
       this.store.updateRun(id, { queueWaitReason: undefined });
@@ -4760,11 +4770,12 @@ export class RunManager {
     return waiting;
   }
 
-  /** Tasks really running per account: queued, waiting and parked ones use nothing. */
+  /** Tasks running or starting per account: queued, waiting and parked ones use nothing. A
+   *  dequeued run is `starting` until `execute` writes `running`, and a burst must see it. */
   accountLoad(): Map<string, number> {
     const load = new Map<string, number>();
     for (const run of this.store.listRuns()) {
-      if (run.status !== 'running' || isIdleParked(run)) continue;
+      if (!this.starting.has(run.id) && (run.status !== 'running' || isIdleParked(run))) continue;
       const key = runAccountKey(run, run.runner ?? 'claude', this.accountStore && { store: this.accountStore, repoRoot: this.repoRoot, holding: true });
       load.set(key, (load.get(key) ?? 0) + 1);
     }

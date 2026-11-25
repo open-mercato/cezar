@@ -853,6 +853,16 @@ describe('automatic agent fallback', () => {
       return semaphore;
     };
 
+    it('spreads a burst queued in one sweep across Main accounts instead of piling onto one', async () => {
+      registerAccounts(['second']);
+      setManagerTaskAccountsLookup(() => ({ agents: [{ runner: 'claude', agentProfile: 'default', role: 'main' }, { runner: 'claude', agentProfile: 'second', role: 'main' }], maxRunning: 1 }));
+      manager = new RunManager(store, repoRoot);
+      const first = routedTask('quick one mock:slow');
+      const second = routedTask('quick two mock:slow');
+      await until(() => [first, second].every(({ id }) => store.getRun(id)?.status !== 'queued'), 'both tasks to start');
+      expect([first, second].map(({ id }) => store.getRun(id)?.agentProfile).sort()).toEqual(['default', 'second']);
+    }, 40_000);
+
     it('never moves a routed task that already ran: it resumes where it ran', async () => {
       registerAccounts(['second']);
       setManagerTaskAccountsLookup(() => ({ agents: [{ runner: 'claude', agentProfile: 'default', role: 'main' }, { runner: 'claude', agentProfile: 'second', role: 'main' }], maxRunning: 1 }));
