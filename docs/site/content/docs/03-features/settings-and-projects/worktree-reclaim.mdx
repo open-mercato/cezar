@@ -31,10 +31,10 @@ Project settings → Worktrees → Reclaim now
 
 > **Good to know**: Tasks in review and waiting are reclaimed too once they pass the age limit (default 7 days). The diff keeps working, read from the kept branch. Opening a pull request and Continue restore the worktree.
 
+> **Good to know**: Archiving a task also frees its worktree. The branch is kept.
+
 ## A reclaimed task's Changes tab
 
 A reclaimed task's Changes tab shows the kept branch's committed changes, with a note saying the worktree is not on disk. Line comments still work on that diff: earlier comments stay on their lines, and you can add new ones and send them. Opening files in an editor, file context and the terminal come back once the worktree is restored.
 
 Use **Restore worktree** in that note, or on the Files tab, to check the branch out again. The restored worktree is reclaimed again later like any other. If the branch was deleted in the meantime, the tab says so and there is nothing to restore.
-
-> **Good to know**: Archiving a task also frees its worktree. The branch is kept.
