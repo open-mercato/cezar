@@ -295,6 +295,7 @@ export const workflowNodeCatalogResponseSchema = z.object({
         'if',
         'workflow',
         'git.push',
+        'github.pr-checkout',
         'git.sync-base',
         'github.pr-update',
         'github.issue-comment',

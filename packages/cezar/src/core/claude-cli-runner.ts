@@ -488,6 +488,8 @@ export function buildClaudeArgs(
     }
   }
   const allowed = buildAllowedTools(spec.allowedTools ?? [], spec.bashAllowlist);
+  const artifactsRule = claudeArtifactsWriteRule(spec);
+  if (artifactsRule) allowed.push(artifactsRule);
   // Private MCP servers (spec 2026-10-07-private-project-mcp): `--mcp-config` ADDS to the repo's
   // own MCP config, and their tools are allowed — `dontAsk` would deny every one of them otherwise.
   if (spec.noMcpServers) {
@@ -527,6 +529,7 @@ export function buildClaudeArgs(
   for (const dir of spec.additionalDirectories ?? []) {
     args.push('--add-dir', dir);
   }
+  if (artifactsRule && !spec.additionalDirectories?.includes(spec.artifactsWriteDir!)) args.push('--add-dir', spec.artifactsWriteDir!);
   if (settingsPath && spec.claudeSettings) args.push('--settings', settingsPath);
   return args;
 }
@@ -603,6 +606,20 @@ export function writeClaudeMcpConfig(
   } catch {
     return undefined;
   }
+}
+
+/**
+ * A path-scoped `Edit(//<dir>/**)` rule — Claude applies Edit rules to every file-writing tool —
+ * for a restricted step's own artifacts directory. Undefined when the step may write anyway, when
+ * it must not write at all, or when the path cannot be expressed as a rule.
+ */
+export function claudeArtifactsWriteRule(spec: Pick<AgentRunSpec, 'artifactsWriteDir' | 'allowedTools' | 'enforceReadOnly'>): string | undefined {
+  const dir = spec.artifactsWriteDir;
+  if (!dir || spec.enforceReadOnly || !spec.allowedTools) return undefined;
+  if (spec.allowedTools.some((t) => t === 'Write' || t === 'Edit' || t === 'MultiEdit')) return undefined;
+  // Absolute POSIX paths only, and nothing a rule would read as a glob or end its specifier with.
+  if (!dir.startsWith('/') || /[*?[\](),\n]/.test(dir)) return undefined;
+  return `Edit(/${dir.replace(/\/+$/, '')}/**)`;
 }
 
 /**

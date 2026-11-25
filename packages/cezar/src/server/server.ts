@@ -231,6 +231,8 @@ import {
   graphToSteps,
   workflowGraphFileSchema,
   workflowGraphSchema,
+  type WorkflowGraph,
+  type WorkflowGraphBody,
 } from '../workflows/graph.ts';
 import {
   QUICK_TASK_WORKFLOW,
@@ -975,11 +977,14 @@ const saveWorkflowSchema = z
     message: 'provide either "steps" or "skills", not both',
   });
 
-const validateGraphSchema = z.object({ graph: workflowGraphSchema });
+// A NAMED body type: the inlined graph union tips `AppType` past TS7056's serialization limit.
+// Validation is unchanged — this is the same schema object.
+const graphBodySchema = workflowGraphSchema as unknown as z.ZodType<WorkflowGraph, WorkflowGraphBody>;
+const validateGraphSchema = z.object({ graph: graphBodySchema });
 const saveGraphSchema = z.object({
   name: z.string().trim().min(1).max(80),
   description: z.string().max(2_000, 'must be at most 2000 characters').optional(),
-  graph: workflowGraphSchema,
+  graph: graphBodySchema,
   overwrite: z.boolean().optional(),
 });
 

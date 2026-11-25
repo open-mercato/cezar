@@ -133,7 +133,7 @@ export const graphNodeSchema = z.discriminatedUnion('type', [
   // ---- more git / GitHub ----
   z.object({ ...nodeBase, type: z.literal('git.push') }),
   /** Check the PR named in `{{task}}` out into the worktree and save its metadata and diff to the
-   *  run's artifacts, so read-only reviewers only read files. */
+   *  run's artifacts (`pr-checkout.ts`), so read-only reviewers only read files. */
   z.object({ ...nodeBase, type: z.literal('github.pr-checkout') }),
   /** Merge the freshest base (`origin/<base>`) into the task branch. On conflict the merge is
    *  LEFT in progress and the node leaves by `conflict`, so the next agent sees the conflicts. */
@@ -172,6 +172,8 @@ export type GraphNode = z.infer<typeof graphNodeSchema>;
 export type GraphNodeType = GraphNode['type'];
 export type GraphEdge = z.infer<typeof graphEdgeSchema>;
 export type WorkflowGraph = z.infer<typeof workflowGraphSchema>;
+/** A request body's graph, as a NAMED type the server's route types refer to instead of inlining. */
+export interface WorkflowGraphBody extends z.input<typeof workflowGraphSchema> {}
 export type WorkflowGraphFile = z.infer<typeof workflowGraphFileSchema>;
 
 /** Output ports per node type; the first is the default a bare `from: <node>` means. */

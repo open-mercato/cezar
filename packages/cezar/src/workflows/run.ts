@@ -6931,6 +6931,7 @@ export class RunManager {
           cwd: state.cwd,
           ...continuationTools,
           ...(state.bypassPermissions && !continuationTools.enforceReadOnly ? { bypassPermissions: true } : {}),
+          artifactsWriteDir: artifactsDir(this.dataDir, runId),
           additionalDirectories: agentDirectories(
             join(this.dataDir, 'runs'),
             state.grantedAttachmentLibrary,
@@ -9537,6 +9538,7 @@ export class RunManager {
           ...stepTools,
           ...(state.bypassPermissions && !stepTools.enforceReadOnly ? { bypassPermissions: true } : {}),
           // The handoff file lives outside the worktree — grant access.
+          artifactsWriteDir: artifactsDir(this.dataDir, runId),
           additionalDirectories: agentDirectories(
             join(this.dataDir, 'runs'),
             state.grantedAttachmentLibrary,
