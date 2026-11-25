@@ -3,7 +3,7 @@ import { Trash2Icon } from 'lucide-react'
 import { useState } from 'react'
 
 import {
-  SECRET_AUDIENCES, SECRET_BINDING_SCHEMES, secretBindingSchema, secretNameIssue,
+  SECRET_BINDING_SCHEMES, secretBindingSchema, secretNameIssue,
   type SecretAudience, type SecretBinding, type SecretBindingScheme, type SecretsList,
 } from '@open-mercato/cezar-api-client'
 import { queryScope } from '@open-mercato/cezar-api-client'
@@ -13,18 +13,16 @@ import {
 import { queryKeys, useProjectSecrets, useWorkspaceSecrets, workspaceQueryKeys } from '@/api/queries'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { toast } from '@/components/ui/toaster'
 import { LoadingState, RowsSkeleton } from '@/components/loading-state'
 import { CardNote, FormRow, SettingsCard } from './form-row'
 
-/** What each audience means to the person storing the secret. */
-const AUDIENCE_LABELS: Record<SecretAudience, string> = {
-  checks: 'Check steps (workflow commands)',
-  cezar: 'cezar itself (its own features — not the agents)',
-  proxy: 'Outbound proxy (injected into requests to the hosts you name)',
+/** Secrets stored before every secret went through the proxy keep their old audiences; the table says so. */
+const LEGACY_LABELS: Record<Exclude<SecretAudience, 'proxy'>, string> = {
+  checks: 'check steps',
+  cezar: 'cezar itself',
 }
-
-const FORM_AUDIENCES = SECRET_AUDIENCES
 
 const bindingSummary = (binding: SecretBinding) =>
   `${binding.hosts.join(', ')} · ${binding.header} (${binding.scheme})${binding.sentinel ? ` · $${binding.sentinel}` : ''}`
@@ -40,9 +38,8 @@ function parseBinding(hosts: string, header: string, scheme: SecretBindingScheme
   return parsed.success ? { binding: parsed.data } : { issue: parsed.error.issues[0]?.message ?? 'invalid binding' }
 }
 
-/** The short form for the table's "Visible to" column. */
-const audienceSummary = (audiences: readonly SecretAudience[]) =>
-  audiences.map((a) => AUDIENCE_LABELS[a].split(' (')[0]).join(' · ')
+const usageSummary = (audiences: readonly SecretAudience[]) =>
+  `Not proxied (legacy: ${audiences.filter((a): a is Exclude<SecretAudience, 'proxy'> => a !== 'proxy').map((a) => LEGACY_LABELS[a]).join(' · ')})`
 
 /** The backend line under the list: a file fallback is never silent. */
 function keyBackendNote(keyBackend: SecretsList['keyBackend']): string {
@@ -69,17 +66,15 @@ function SecretsSection({ scope, list, save, remove, invalidate }: SecretsSectio
   const queryClient = useQueryClient()
   const [name, setName] = useState('')
   const [value, setValue] = useState('')
-  const [audiences, setAudiences] = useState<SecretAudience[]>(['checks'])
-  const [hosts, setHosts] = useState('')
+    const [hosts, setHosts] = useState('')
   const [header, setHeader] = useState('Authorization')
   const [scheme, setScheme] = useState<SecretBindingScheme>('bearer')
   const [sentinel, setSentinel] = useState('')
   const [error, setError] = useState<string | null>(null)
-  const isProxy = audiences.includes('proxy')
   const nameIssue = name === '' ? null : secretNameIssue(name)
 
   const saving = useMutation({
-    mutationFn: async () => { const projectId = queryScope(); await save(name, { value, audiences, ...(isProxy ? { binding: parseBinding(hosts, header, scheme, sentinel).binding } : {}) }); return { projectId, saved: name } },
+    mutationFn: async () => { const projectId = queryScope(); await save(name, { value, audiences: ['proxy'], binding: parseBinding(hosts, header, scheme, sentinel).binding }); return { projectId, saved: name } },
     onSuccess: async ({ projectId, saved }) => {
       if (queryScope() === projectId) { setName(''); setValue(''); setHosts(''); setSentinel(''); setError(null) }
       await invalidate(queryClient, projectId)
@@ -98,25 +93,15 @@ function SecretsSection({ scope, list, save, remove, invalidate }: SecretsSectio
   const submit = () => {
     const issue = secretNameIssue(name)
     if (issue) { setError(issue); return }
-    if (audiences.length === 0) { setError('pick at least one audience'); return }
-    if (isProxy) {
-      const { issue } = parseBinding(hosts, header, scheme, sentinel)
-      if (issue) { setError(issue); return }
-    }
+    const { issue: bindingIssue } = parseBinding(hosts, header, scheme, sentinel)
+    if (bindingIssue) { setError(bindingIssue); return }
     setError(null)
     saving.mutate()
   }
-  const toggleAudience = (audience: SecretAudience) =>
-    setAudiences((current) => {
-      if (audience === 'proxy') return current.includes('proxy') ? ['checks'] : ['proxy']
-      const others = current.filter((a) => a !== 'proxy')
-      return others.includes(audience) ? others.filter((a) => a !== audience) : [...others, audience]
-    })
-
   const title = scope === 'project' ? 'Project secrets' : 'Workspace secrets'
   const intro = scope === 'project'
-    ? 'Values for this project only — an e2e runner’s model key, a staging login. They reach the audiences you pick and never an agent session.'
-    : 'Values shared by every project on this machine — a key cezar’s own features use, a token every project’s checks need. A project secret of the same name wins. They never reach an agent session.'
+    ? 'Values for this project only — an e2e runner’s model key, a staging login. Each is sent only to the hosts you name, through the proxy, and never reaches an agent session.'
+    : 'Values shared by every project on this machine — a key cezar’s own features use, a token every project’s checks need. A project secret of the same name wins. Each is sent only to the hosts you name, through the proxy, and never reaches an agent session.'
   const secrets = list.data?.secrets ?? []
 
   return (
@@ -131,7 +116,7 @@ function SecretsSection({ scope, list, save, remove, invalidate }: SecretsSectio
               <thead>
                 <tr className="border-b border-border text-left text-label text-soft-foreground">
                   <th scope="col" className="px-4 py-2 font-medium">Name</th>
-                  <th scope="col" className="px-4 py-2 font-medium">Visible to</th>
+                  <th scope="col" className="px-4 py-2 font-medium">Sent to</th>
                   <th scope="col" className="px-4 py-2 text-right font-medium"><span className="sr-only">Actions</span></th>
                 </tr>
               </thead>
@@ -140,8 +125,9 @@ function SecretsSection({ scope, list, save, remove, invalidate }: SecretsSectio
                   <tr key={stored.name} data-slot="secret-row" data-name={stored.name} className="border-b border-border last:border-0">
                     <th scope="row" className="px-4 py-2 text-left font-normal"><code className="font-mono text-ui">{stored.name}</code></th>
                     <td className="px-4 py-2 text-muted-foreground">
-                      {audienceSummary(stored.audiences)}
-                      {stored.binding ? <span className="block font-mono text-meta" data-slot="secret-binding">{bindingSummary(stored.binding)}</span> : null}
+                      {stored.binding
+                        ? <span className="font-mono text-meta" data-slot="secret-binding">{bindingSummary(stored.binding)}</span>
+                        : usageSummary(stored.audiences)}
                     </td>
                     <td className="px-4 py-2 text-right whitespace-nowrap">
                       <Button variant="danger-ghost" size="xs" aria-label={`Delete ${stored.name}`} disabled={removing.isPending} onClick={() => removing.mutate(stored.name)}>
@@ -161,7 +147,7 @@ function SecretsSection({ scope, list, save, remove, invalidate }: SecretsSectio
           <FormRow
             stacked
             label="Add or replace a secret"
-            description="Agents are never an audience: a secret cannot be handed to a Claude Code, Codex or OpenCode session."
+            description="Every secret goes through the proxy to the hosts you name; an agent session never sees the value."
           >
             <div className="grid gap-3 sm:grid-cols-2">
               <label className="block text-ui">Name
@@ -175,17 +161,7 @@ function SecretsSection({ scope, list, save, remove, invalidate }: SecretsSectio
               </label>
             </div>
             {nameIssue ? <p className="text-meta text-danger">{nameIssue}</p> : null}
-            <fieldset className="flex flex-wrap items-center gap-x-4 gap-y-1">
-              <legend className="mb-1 text-ui">Visible to</legend>
-              {FORM_AUDIENCES.map((audience) => (
-                <label key={audience} className="flex items-center gap-2 text-ui">
-                  <input type="checkbox" aria-label={AUDIENCE_LABELS[audience]} checked={audiences.includes(audience)} onChange={() => toggleAudience(audience)} />
-                  {AUDIENCE_LABELS[audience]}
-                </label>
-              ))}
-            </fieldset>
-            {isProxy ? (
-              <div className="grid gap-3 sm:grid-cols-2" data-slot="secret-binding-form">
+            <div className="grid gap-3 sm:grid-cols-2" data-slot="secret-binding-form">
                 <label className="block text-ui sm:col-span-2">Hosts (comma or space separated, exact, https only)
                   <Input aria-label="Hosts" value={hosts} onChange={(event) => { setHosts(event.target.value); setError(null) }}
                     autoComplete="off" spellCheck={false} placeholder="api.github.com, github.com" className="mt-1 h-8 font-mono text-ui" />
@@ -194,22 +170,23 @@ function SecretsSection({ scope, list, save, remove, invalidate }: SecretsSectio
                   <Input aria-label="Header" value={header} onChange={(event) => { setHeader(event.target.value); setError(null) }}
                     autoComplete="off" spellCheck={false} className="mt-1 h-8 font-mono text-ui" />
                 </label>
-                <label className="block text-ui">Scheme
-                  <select aria-label="Scheme" value={scheme} onChange={(event) => setScheme(event.target.value as SecretBindingScheme)}
-                    className="mt-1 h-8 w-full rounded-md border border-border bg-background px-2 text-ui">
-                    {SECRET_BINDING_SCHEMES.map((option) => <option key={option} value={option}>{option}</option>)}
-                  </select>
-                </label>
+                <div className="block text-ui">Scheme
+                  <Select value={scheme} onValueChange={(value) => setScheme(value as SecretBindingScheme)}>
+                    <SelectTrigger size="sm" aria-label="Scheme" className="mt-1 w-full"><SelectValue /></SelectTrigger>
+                    <SelectContent position="popper">
+                      {SECRET_BINDING_SCHEMES.map((option) => <SelectItem key={option} value={option}>{option}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                </div>
                 <label className="block text-ui sm:col-span-2">Placeholder env var (optional — what the sandbox sees instead of the value)
                   <Input aria-label="Placeholder env var" value={sentinel} onChange={(event) => { setSentinel(event.target.value.toUpperCase()); setError(null) }}
                     autoComplete="off" spellCheck={false} placeholder="GH_TOKEN" className="mt-1 h-8 font-mono text-ui" />
                 </label>
                 <p className="text-meta text-soft-foreground sm:col-span-2">Changing hosts, header or scheme means re-entering the value — it is stored sealed to its destinations.</p>
-              </div>
-            ) : null}
+            </div>
             {error && error !== nameIssue ? <p role="alert" className="text-ui text-danger">{error}</p> : null}
             <div>
-              <Button type="submit" size="sm" disabled={saving.isPending || name === '' || value === '' || audiences.length === 0 || !!nameIssue || (isProxy && hosts.trim() === '')}>Save secret</Button>
+              <Button type="submit" size="sm" disabled={saving.isPending || name === '' || value === '' || !!nameIssue || hosts.trim() === ''}>Save secret</Button>
             </div>
           </FormRow>
         </form>

@@ -34,10 +34,10 @@ describe('Secrets settings', () => {
     setup()
     await screen.findByText('OPENAI_API_KEY')
     expect(screen.getByText('STAGING_TOKEN')).toBeTruthy()
-    expect(screen.getByText('Check steps · cezar itself')).toBeTruthy()
+    expect(screen.getByText('Not proxied (legacy: check steps · cezar itself)')).toBeTruthy()
     expect(screen.getByText(/kept in your OS keychain/)).toBeTruthy()
-    // No value is rendered anywhere: the only inputs with content are the audience checkboxes.
-    expect(screen.queryAllByDisplayValue(/.+/).every((el) => (el as HTMLInputElement).type === 'checkbox')).toBe(true)
+    expect(screen.queryByText(/Visible to/)).toBeNull()
+    expect(screen.queryByDisplayValue(/s3cret|sk-/)).toBeNull()
     expect((screen.getByLabelText('Value') as HTMLInputElement).value).toBe('')
     expect(screen.getByLabelText('Value').getAttribute('type')).toBe('password')
   })
@@ -54,18 +54,22 @@ describe('Secrets settings', () => {
     expect(screen.getByText(/private file, not a vault/)).toBeTruthy()
   })
 
-  it('adds a secret with PUT, audiences included, and clears the inputs', async () => {
+  it('adds a secret as a proxy secret and clears the inputs', async () => {
     const calls = setup()
     await screen.findByText('OPENAI_API_KEY')
     fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'NEW_KEY' } })
     fireEvent.change(screen.getByLabelText('Value'), { target: { value: 's3cret' } })
-    fireEvent.click(screen.getByLabelText(/cezar itself/))
+    expect((screen.getByRole('button', { name: /save secret/i }) as HTMLButtonElement).disabled).toBe(true)
+    fireEvent.change(screen.getByLabelText('Hosts'), { target: { value: 'api.example.com' } })
     fireEvent.click(screen.getByRole('button', { name: /save secret/i }))
     await waitFor(() => expect((screen.getByLabelText('Value') as HTMLInputElement).value).toBe(''))
     const put = calls.find((c) => c.method === 'PUT')!
     expect(put.url).toMatch(/\/secrets\/NEW_KEY$/)
     expect(put.url).not.toContain('/workspace/')
-    expect(JSON.parse(put.body!)).toEqual({ value: 's3cret', audiences: ['checks', 'cezar'] })
+    expect(JSON.parse(put.body!)).toEqual({
+      value: 's3cret', audiences: ['proxy'],
+      binding: { hosts: ['api.example.com'], header: 'Authorization', scheme: 'bearer' },
+    })
     expect((screen.getByLabelText('Name') as HTMLInputElement).value).toBe('')
     expect(screen.queryByText('s3cret')).toBeNull()
   })
@@ -73,11 +77,8 @@ describe('Secrets settings', () => {
   it('collects the destination binding for a proxy secret and sends it with the value', async () => {
     const calls = setup()
     await screen.findByText('OPENAI_API_KEY')
-    expect(screen.queryByLabelText('Hosts')).toBeNull()
     fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'GH_READONLY_TOKEN' } })
     fireEvent.change(screen.getByLabelText('Value'), { target: { value: 'ghp_x' } })
-    fireEvent.click(screen.getByLabelText(/Outbound proxy/))
-    expect((screen.getByLabelText(/Check steps/) as HTMLInputElement).checked).toBe(false)
     fireEvent.change(screen.getByLabelText('Hosts'), { target: { value: 'github.com, API.github.com' } })
     fireEvent.change(screen.getByLabelText('Placeholder env var'), { target: { value: 'gh_token' } })
     fireEvent.click(screen.getByRole('button', { name: /save secret/i }))
@@ -98,7 +99,6 @@ describe('Secrets settings', () => {
     expect(screen.getByText('github.com · Authorization (basic)')).toBeTruthy()
     fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'X' } })
     fireEvent.change(screen.getByLabelText('Value'), { target: { value: 'v' } })
-    fireEvent.click(screen.getByLabelText(/Outbound proxy/))
     fireEvent.change(screen.getByLabelText('Hosts'), { target: { value: '*.github.com' } })
     fireEvent.click(screen.getByRole('button', { name: /save secret/i }))
     expect((await screen.findByRole('alert')).textContent).toContain('exact lowercase hostname')
@@ -111,6 +111,7 @@ describe('Secrets settings', () => {
     expect(calls[0]!.url).toMatch(/\/api\/v1\/workspace\/secrets$/)
     fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'LLM_KEY' } })
     fireEvent.change(screen.getByLabelText('Value'), { target: { value: 'sk-x' } })
+    fireEvent.change(screen.getByLabelText('Hosts'), { target: { value: 'api.example.com' } })
     fireEvent.click(screen.getByRole('button', { name: /save secret/i }))
     await waitFor(() => expect(calls.some((c) => c.method === 'PUT')).toBe(true))
     expect(calls.find((c) => c.method === 'PUT')!.url).toMatch(/\/api\/v1\/workspace\/secrets\/LLM_KEY$/)
@@ -128,12 +129,11 @@ describe('Secrets settings', () => {
     expect(calls.some((c) => c.method === 'PUT')).toBe(false)
   })
 
-  it('keeps Save disabled with no audience picked', async () => {
+  it('keeps Save disabled until a destination host is given', async () => {
     const calls = setup()
     await screen.findByText('OPENAI_API_KEY')
     fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'OK_NAME' } })
     fireEvent.change(screen.getByLabelText('Value'), { target: { value: 'x' } })
-    fireEvent.click(screen.getByLabelText(/Check steps/))
     expect((screen.getByRole('button', { name: /save secret/i }) as HTMLButtonElement).disabled).toBe(true)
     fireEvent.submit(screen.getByLabelText('Name').closest('form')!)
     expect(calls.some((c) => c.method === 'PUT')).toBe(false)
@@ -144,6 +144,7 @@ describe('Secrets settings', () => {
     await screen.findByText('A')
     fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'OK_NAME' } })
     fireEvent.change(screen.getByLabelText('Value'), { target: { value: 'a-long-pasted-key' } })
+    fireEvent.change(screen.getByLabelText('Hosts'), { target: { value: 'api.example.com' } })
     fireEvent.click(screen.getByRole('button', { name: /save secret/i }))
     expect(await screen.findByText('storage failed')).toBeTruthy()
     // Retrying a transient failure must not cost a re-paste of the key.
@@ -163,7 +164,7 @@ describe('Secrets settings', () => {
     expect(screen.getByLabelText('Name').getAttribute('data-slot')).toBe('input')
     expect(screen.getByLabelText('Value').getAttribute('data-slot')).toBe('input')
     expect(screen.getByLabelText('Name').closest('[data-slot="form-row"]')).not.toBeNull()
-    expect(document.querySelector('select')).toBeNull()
+    expect(document.querySelector('select:not([aria-hidden])')).toBeNull()
     expect(screen.getByRole('button', { name: 'Delete OPENAI_API_KEY' }).getAttribute('data-variant')).toBe('danger-ghost')
   })
 })
