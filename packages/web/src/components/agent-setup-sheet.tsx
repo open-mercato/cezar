@@ -304,14 +304,15 @@ function Confirm({
   const canRun = available && plan?.runnable === true && command !== null && !phoneBlocked
   const method = action === 'update' ? installMethodLabel(entry.method) : null
   const label = PROVIDER_LABELS[entry.provider]
-  const why = !plan?.runnable
-    ? (command
-      ? 'cezar does not run this command itself (it is not verified yet, or it is a third-party installer), so it shows it for you to run.'
-      : action === 'update'
-        ? `cezar cannot tell how this copy of ${label} was installed, so it has no update to run. Update it the way you installed it; the vendor’s page shows how.`
-        : 'cezar does not know this installer yet. The vendor’s page shows how to install it.')
-    : !available
-      ? reason
+  // The server's refusal first: a hosted cockpit blanks the update line, which is not "unknown method".
+  const why = !available
+    ? reason
+    : !plan?.runnable
+      ? (command
+        ? 'cezar does not run this command itself (it is not verified yet, or it is a third-party installer), so it shows it for you to run.'
+        : action === 'update'
+          ? `cezar cannot tell how this copy of ${label} was installed, so it has no update to run. Update it the way you installed it; the vendor’s page shows how.`
+          : 'cezar does not know this installer yet. The vendor’s page shows how to install it.')
       : phoneBlocked
         ? 'This needs your computer password, so it has to finish on your computer.'
         : null

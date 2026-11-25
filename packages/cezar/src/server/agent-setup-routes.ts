@@ -192,6 +192,9 @@ export function agentSetupRoutes(deps: AgentSetupDeps) {
     const info = deps.sessions.get(sessionId);
     return info && info.runId === AGENT_SETUP_OWNER ? info : null;
   };
+  /** Every session body a phone receives goes through here: no host path reaches it. */
+  const shown = (session: AgentSetupSession): AgentSetupSession =>
+    phone() ? { ...session, command: withoutHostPaths(session.command) } : session;
   const unavailable = async (): Promise<string | null> => {
     const policy = deps.refusal();
     if (policy) return policy;
@@ -221,7 +224,7 @@ export function agentSetupRoutes(deps: AgentSetupDeps) {
         return c.json(refused);
       }
       const described = info && phoneMayRead(info.id) ? describe(info) : null;
-      const session: AgentSetupSession | null = described && phone() ? { ...described, command: withoutHostPaths(described.command) } : described;
+      const session: AgentSetupSession | null = described ? shown(described) : null;
       const listed: AgentSetupEntry[] = phone() ? agents.map(forPhone) : agents;
       const state: AgentSetupState = agentSetupStateSchema.parse({ available: true, reason: null, agents: listed, interactive: !phone(), session });
       return c.json(state);
@@ -237,7 +240,7 @@ export function agentSetupRoutes(deps: AgentSetupDeps) {
       if (live?.exitCode === null) {
         // A double click or a second tab joins the session already running (a phone never a sign-in's).
         if (current?.provider === provider && current.action === action && phoneMayRead(live.id)) {
-          const joined: AgentSetupSession = agentSetupSessionSchema.parse(describe(live));
+          const joined: AgentSetupSession = shown(agentSetupSessionSchema.parse(describe(live)));
           return c.json(joined, 201);
         }
         return c.json(refusal('Another agent is being set up. Finish or cancel it first.'), 409);
@@ -296,8 +299,7 @@ export function agentSetupRoutes(deps: AgentSetupDeps) {
         if (action === 'login' && row) {
           deps.onLoginOpened(provider, row.status === 'unknown' ? 'unknown' : 'disconnected', deps.deviceSid(c.req.header('x-cezar-sid')));
         }
-        const started = agentSetupSessionSchema.parse(describe(created.session));
-        const body: AgentSetupSession = phone() ? { ...started, command: withoutHostPaths(started.command) } : started;
+        const body: AgentSetupSession = shown(agentSetupSessionSchema.parse(describe(created.session)));
         return c.json(body, 201);
       } finally {
         starting = false;

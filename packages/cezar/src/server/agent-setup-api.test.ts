@@ -416,6 +416,39 @@ describe('/api/v1/providers/setup', () => {
       expect(body.agents.every((agent) => agent.loginCommand === null)).toBe(true);
     });
 
+    it("sends a phone no host path in any session body: a fresh start, a join, or the listing's session", async () => {
+      const routes = routesWith({
+        phone: () => true,
+        executable: () => '/Users/someone/.local/bin/claude',
+        locate: (executable) => ({ executable, path: executable, method: 'native' }),
+      });
+      const fresh = await start(routes, { provider: 'claude', action: 'update' });
+      expect(fresh.status).toBe(201);
+      expect(await fresh.json()).toMatchObject({ command: "'claude' update" });
+      const joined = await start(routes, { provider: 'claude', action: 'update' });
+      expect(joined.status).toBe(201);
+      expect(await joined.json()).toMatchObject({ command: "'claude' update" });
+      const listed = await (await routes.request('/providers/setup')).json() as { session: { command: string } | null };
+      expect(listed.session?.command).toBe("'claude' update");
+      // The host still runs the real binary.
+      expect(spawns).toHaveLength(1);
+      expect(spawns[0]!.args.at(-1)).toContain('/Users/someone/.local/bin/claude');
+    });
+
+    it('a refused listing blanks the update line, which names the host binary', async () => {
+      const routes = routesWith({
+        refusal: () => 'Set up agents on the machine hosting cezar.',
+        executable: () => '/Users/someone/.local/bin/claude',
+        locate: (executable) => ({ executable, path: executable, method: 'native' }),
+      });
+      const body = await (await routes.request('/providers/setup')).json() as { available: boolean; agents: Array<{ provider: string; installed: boolean; update: { command: string | null; runnable: boolean } | null }> };
+      expect(body.available).toBe(false);
+      const claude = body.agents.find((agent) => agent.provider === 'claude')!;
+      expect(claude.installed).toBe(true);
+      expect(claude.update).toMatchObject({ command: null, runnable: false });
+      expect(JSON.stringify(body)).not.toContain('/Users/someone');
+    });
+
     it('probes the versions again once an update ends, not while it runs', async () => {
       let probes = 0;
       let version = '2.0.14 (Claude Code)';

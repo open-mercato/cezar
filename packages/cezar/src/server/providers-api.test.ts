@@ -12,6 +12,7 @@ import {
 import type { InstallEnv, InstalledCli } from '../core/agent-install.ts';
 import { RUNNER_IDS } from '../core/agent-runner.ts';
 import { RunStore } from '../runs/store.ts';
+import { runInRelayScope } from '../relay/scope.ts';
 import { defaultWorkspaceConfig, type WorkspaceConfig } from '../workspace/config.ts';
 import { RunManager } from '../workflows/run.ts';
 import { ProjectContexts } from './project-context.ts';
@@ -886,6 +887,27 @@ describe('workspace provider API', () => {
         command: "'opencode' upgrade",
       });
       expect(openTerminal).not.toHaveBeenCalled();
+    });
+
+    it('strips host binary paths from the 409 command for a paired phone', async () => {
+      const prev = process.env.CEZ_CLAUDE_BIN;
+      process.env.CEZ_CLAUDE_BIN = '/Users/someone/.local/bin/claude';
+      try {
+        const openTerminal = vi.fn(async () => true);
+        const found = (executable: string): InstalledCli => ({ executable, path: executable, method: 'native' });
+        const instance = app({ openTerminal, providerAuth: service({}, undefined, undefined, found) });
+        const response = await runInRelayScope({ deviceId: 'phone-1' }, () => update(instance, 'claude'));
+
+        expect(response.status).toBe(409);
+        expect(await response.json()).toEqual({
+          error: 'Run this command on the machine hosting cezar.',
+          command: "'claude' update",
+        });
+        expect(openTerminal).not.toHaveBeenCalled();
+      } finally {
+        if (prev === undefined) delete process.env.CEZ_CLAUDE_BIN;
+        else process.env.CEZ_CLAUDE_BIN = prev;
+      }
     });
 
     it('answers 409 plus command when no terminal opens', async () => {

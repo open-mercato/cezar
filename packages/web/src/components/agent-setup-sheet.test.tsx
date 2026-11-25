@@ -27,6 +27,8 @@ vi.mock('@/components/reconnect/reconnect-card', () => ({
 const fetchMock = vi.fn<typeof fetch>()
 let agents: AgentSetupEntry[] = []
 let interactive = true
+/** The server's refusal (hosted cockpit, terminal off): null when setup is available. */
+let refusedWith: string | null = null
 let statuses: Record<string, string> = {}
 let session: Record<string, unknown> | null = null
 let posted: Array<Record<string, unknown>> = []
@@ -58,7 +60,7 @@ beforeEach(() => {
     if (url.pathname === '/api/v1/providers/status') {
       return json({ providers: Object.entries(statuses).map(([provider, status]) => ({ provider, status, enabled: true })) })
     }
-    if (url.pathname === '/api/v1/providers/setup') return json({ available: true, reason: null, interactive, session, agents })
+    if (url.pathname === '/api/v1/providers/setup') return json({ available: refusedWith === null, reason: refusedWith, interactive, session, agents })
     if (url.pathname === '/api/v1/providers/setup/sessions' && method === 'POST') {
       const body = JSON.parse(String(init?.body)) as Record<string, unknown>
       // `force` rides a header (the typed API is at its size limit): record it with the body.
@@ -78,6 +80,7 @@ beforeEach(() => {
 afterEach(() => {
   agents = []
   interactive = true
+  refusedWith = null
   statuses = {}
   session = null
   posted = []
@@ -208,6 +211,17 @@ describe('AgentSetupFlow: review follow-ups (#2474)', () => {
     expect(await screen.findByText(/cannot tell how this copy of Codex was installed/)).toBeTruthy()
     expect(screen.getByText(/Update Codex on the computer running cezar/)).toBeTruthy()
     expect(screen.queryByText(/does not know this installer/)).toBeNull()
+  })
+
+  it("on a hosted cockpit, an update gives the server's reason, not an unknown install method", async () => {
+    refusedWith = 'Set up agents on the machine hosting cezar.'
+    statuses = { claude: 'connected' }
+    // A refused listing blanks the update line: it would name the host's binary.
+    agents = [entry('claude', { installed: true, version: '2.0.14', method: 'native', update: { command: null, runnable: false, sudo: false } })]
+    renderFlow('claude', 'update')
+    expect(await screen.findByText('Set up agents on the machine hosting cezar.')).toBeTruthy()
+    expect(screen.queryByText(/cannot tell how this copy/)).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Update' })).toBeNull()
   })
 
   it('says to keep the sheet open while it waits, and that closing it cancels the update', async () => {

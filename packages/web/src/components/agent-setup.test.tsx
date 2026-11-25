@@ -23,6 +23,8 @@ vi.mock('@/routes/task-workspace/terminal-pane', () => ({
 type Status = 'connected' | 'disconnected' | 'not-installed'
 const fetchMock = vi.fn<typeof fetch>()
 let available = true
+/** False on a paired phone: setup is available there, but nobody can type at it. */
+let interactive = true
 let statuses: Record<string, Status> = {}
 let session: Record<string, unknown> | null = null
 let started: Array<{ provider: string; action: string }> = []
@@ -49,7 +51,7 @@ beforeEach(() => {
       return json({ providers: Object.entries(statuses).map(([provider, status]) => ({ provider, status, enabled: true })) })
     }
     if (url.pathname === '/api/v1/providers/setup') {
-      return json(available ? { available: true, reason: null, interactive: true, agents, session } : { available: false, reason: 'Set up agents on the machine hosting cezar.', interactive: false, agents, session: null })
+      return json(available ? { available: true, reason: null, interactive, agents, session } : { available: false, reason: 'Set up agents on the machine hosting cezar.', interactive: false, agents, session: null })
     }
     if (url.pathname === '/api/v1/providers/setup/sessions' && method === 'POST') {
       if (startError) return json({ error: startError }, 409)
@@ -77,6 +79,7 @@ beforeEach(() => {
 
 afterEach(() => {
   available = true
+  interactive = true
   statuses = {}
   session = null
   started = []
@@ -255,5 +258,15 @@ describe('the first-run agent step', () => {
     expect(screen.queryByRole('button', { name: 'Install' })).toBeNull()
     expect(screen.getByText('Opens the login in Terminal.')).toBeTruthy()
     expect(screen.getByText('npm i -g @anthropic-ai/claude-code')).toBeTruthy()
+  })
+
+  it('on a paired phone, keeps the sign-in card instead of a list it cannot finish (#2474)', async () => {
+    interactive = false
+    statuses = { claude: 'not-installed', codex: 'disconnected' }
+    renderStep()
+    expect(await screen.findByRole('heading', { name: 'Sign in to an agent' })).toBeTruthy()
+    expect(screen.queryByRole('heading', { name: 'Pick your agent' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Install' })).toBeNull()
+    expect(started).toEqual([])
   })
 })

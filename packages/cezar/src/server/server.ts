@@ -439,7 +439,7 @@ import { onPrClosed, reportPrClosed } from './forge/pr-closed.ts';
 import { fetchGithub, fetchGithubChecks, fetchGithubComments, fetchGithubPrDiff, fetchGithubRefStatus, forgetRefStatus, readCachedPrEnds, readCachedRefStatuses, refNumberFromUrl, searchGithubItems, GithubPrNotFoundError, GH_CHECKS_MAX, GH_SEARCH_MAX, GH_REF_STATUS_MAX, forgetGithubListCache } from './github.ts';
 import { ensureLaunchKey } from './launch-key.ts';
 import { openInTerminal } from './open-in-terminal.ts';
-import { AGENT_SETUP_OWNER, agentSetupRoutes } from './agent-setup-routes.ts';
+import { AGENT_SETUP_OWNER, agentSetupRoutes, withoutHostPaths } from './agent-setup-routes.ts';
 import { countActiveRuns } from './agent-active-runs.ts';
 import { probeInstallEnv, type InstallEnv } from './agent-setup.ts';
 import {
@@ -2702,7 +2702,8 @@ export function createApp(deps: ServerDeps) {
         if (!runnable || !capabilities().localHandoff) {
           trackUpdateOpened(provider, runnable ? 'hosted' : 'unsupported', sid);
           const error = runnable ? 'Run this command on the machine hosting cezar.' : 'cezar does not run this update itself. Run it in a terminal.';
-          return c.json({ error, command }, 409);
+          const shown = inRelayScope() ? withoutHostPaths(command) : command;
+          return c.json({ error, command: shown }, 409);
         }
         let opened = false;
         try {

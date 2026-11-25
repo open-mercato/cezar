@@ -106,10 +106,11 @@ files in place. New starts are not held during the swap; brew, native and script
 A relay request reads the host's capabilities for this family only. A phone may start an install or update whose plan is
 runnable and needs no sudo. It may not start a login, and input to a setup session answers 409 (read-only). A sign-in
 session started at the computer is invisible to a phone: the listing omits it, and its output (the OAuth link, the
-device code) and resize answer 409. A phone reads install and update logs only, and never a host path: the listing
-and a started session carry command lines with absolute binary paths cut to the program name (`withoutHostPaths`) and
-no sign-in line, as `/workspace/agent-profiles` withholds host paths from phones. Recorded as pending owner
-ratification in AGENTS.md.
+device code) and resize answer 409. On the setup routes and `POST /providers/:provider/update`, a phone reads install
+and update logs only, with absolute binary paths cut to the program name (`withoutHostPaths`) in the listing, started or
+joined session bodies, and update refusals, and with no sign-in line (matching how `/workspace/agent-profiles` withholds
+host paths from phones). On the first-run agent step, a phone stays on `SignInToAgent` because `interactive` is false.
+Recorded as pending owner ratification in AGENTS.md.
 
 **Waiting for tasks** happens in the open sheet: it says "Keep this open", and closing it mid-wait cancels the update with
 a toast that says so.
