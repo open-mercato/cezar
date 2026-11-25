@@ -38,5 +38,5 @@ keeps two settled-run pools (regular, automation), each sized from Settings.
 
 ### Phase 2: Cockpit and docs
 
-- [ ] 2.1 Settings → Resources task history card
-- [ ] 2.2 Env contract and reference docs
+- [x] 2.1 Settings → Resources task history card — 483600ff0
+- [x] 2.2 Env contract and reference docs — 859f40486
