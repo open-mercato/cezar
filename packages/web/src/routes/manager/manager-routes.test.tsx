@@ -1948,10 +1948,12 @@ describe('/manager/:id', () => {
         expect(items[1]!.querySelector('[data-slot="manager-chain-status"]')).toBeNull()
 
         const info = within(items[1]!).getByRole('button', { name: 'No connectors on this agent' })
-        // Accessible description exposes the explanation to screen readers.
+        // Hidden accessible description exposes the explanation to screen readers without reading twice.
         const describedBy = info.getAttribute('aria-describedby')
         expect(describedBy).toBeTruthy()
-        expect(document.getElementById(describedBy!)?.textContent).toBe('Connectors are Claude-only. While this agent answers, the Manager works without them.')
+        const description = document.getElementById(describedBy!)
+        expect(description?.hidden).toBe(true)
+        expect(description?.textContent).toBe('Connectors are Claude-only. While this agent answers, the Manager works without them.')
         // Dragging belongs to the row button, not the info icon.
         expect(info.closest('[draggable="true"]')).toBeNull()
 
@@ -1985,11 +1987,16 @@ describe('/manager/:id', () => {
         fireEvent(info, new TestPointerEvent('pointerout', { bubbles: true, pointerType: 'mouse' }))
         await waitFor(() => expect(popover()).toBeNull())
 
-        // Keyboard focus opens it, click/Space/Enter keeps it open, and blur closes it.
+        // Keyboard focus opens it, pointerleave while focused does not close it, activating the button keeps it open (browsers synthesize click on Enter/Space), and blur closes it.
+        info.focus()
         fireEvent.focus(info)
         await waitFor(() => expect(popover()).not.toBeNull())
+        fireEvent(info, new TestPointerEvent('pointerout', { bubbles: true, pointerType: 'mouse' }))
+        await new Promise((resolve) => setTimeout(resolve, 130))
+        expect(popover()).not.toBeNull()
         fireEvent.click(info)
         expect(popover()).not.toBeNull()
+        info.blur()
         fireEvent.blur(info)
         await waitFor(() => expect(popover()).toBeNull())
 
@@ -1999,6 +2006,27 @@ describe('/manager/:id', () => {
       } finally {
         globalThis.PointerEvent = OrigPointerEvent
       }
+    })
+
+    it('reorders chain rows by dragging the row button', async () => {
+      seedChat({ runner: 'claude', model: 'opus', backups: [{ runner: 'codex', model: 'gpt-5.5' }] })
+      renderAt('/manager/global')
+      fireEvent.click(await screen.findByRole('button', { name: 'Manager settings' }))
+      fireEvent.click(within(await waitFor(() => document.querySelector<HTMLElement>('[data-slot="manager-settings-menu"]')!)).getByRole('button', { name: 'Manager agent…' }))
+      const dialog = await screen.findByRole('dialog', { name: 'Manager agent' })
+      const items = dialog.querySelectorAll<HTMLElement>('[data-slot="manager-chain"] ol > li')
+      const rows = dialog.querySelectorAll<HTMLElement>('[data-slot="manager-chain-row"]')
+      expect(rows).toHaveLength(2)
+      expect(rows[0]!.getAttribute('draggable')).toBe('true')
+      expect(rows[1]!.getAttribute('draggable')).toBe('true')
+
+      fireEvent.dragStart(rows[1]!)
+      fireEvent.dragOver(items[0]!)
+      fireEvent.drop(items[0]!)
+      await waitFor(() => expect(patches()).toContainEqual({
+        runner: 'codex', agentProfile: null, model: 'gpt-5.5', effort: null,
+        backups: [{ runner: 'claude', model: 'opus' }],
+      }))
     })
 
     it('shows the no-connectors info icon on an answering non-Claude row and hides it when no grants are enabled', async () => {

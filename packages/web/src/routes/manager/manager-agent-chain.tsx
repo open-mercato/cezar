@@ -110,18 +110,18 @@ function NoConnectorsInfo() {
   const closeTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
 
   const clearTimer = () => clearTimeout(closeTimer.current)
+  const holdsFocus = (node: EventTarget | null) =>
+    node instanceof Node && (contentRef.current?.contains(node) || triggerRef.current?.contains(node))
   const scheduleClose = () => {
+    if (holdsFocus(document.activeElement)) return
     clearTimer()
     closeTimer.current = setTimeout(() => setOpen(false), 100)
   }
   useEffect(() => () => clearTimeout(closeTimer.current), [])
 
-  const holdsFocus = (node: EventTarget | null) =>
-    node instanceof Node && (contentRef.current?.contains(node) || triggerRef.current?.contains(node))
-
   return (
     <Popover open={open} onOpenChange={(next) => { clearTimer(); setOpen(next) }}>
-      <span id={descriptionId} className="sr-only">{NO_CONNECTORS_TEXT}</span>
+      <span id={descriptionId} hidden>{NO_CONNECTORS_TEXT}</span>
       <PopoverTrigger asChild>
         <button
           ref={triggerRef}
@@ -440,7 +440,7 @@ export function ActiveAgentInfo({ manager, onOpenSettings }: { manager: ManagerS
           type="button"
           data-slot="manager-active-agent"
           aria-label={`Answering with backup #${active.agent.slot + 1}`}
-          className="inline-flex size-6 shrink-0 items-center justify-center rounded-full text-pending-strong outline-none hover:bg-muted focus-visible:ring-[3px] focus-visible:ring-ring/50 max-md:size-11"
+          className="inline-flex size-6 shrink-0 items-center justify-center rounded-full text-pending-strong outline-none hover:bg-muted focus-visible:ring-[3px] focus-visible:ring-ring/50 pointer-coarse:size-11"
         >
           <InfoIcon aria-hidden="true" className="size-4" />
         </button>
