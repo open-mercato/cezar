@@ -10,9 +10,11 @@ import type { RunManager } from '../workflows/run.ts';
 import { WorktreeLifecycleCoordinator } from '../worktree-lifecycle/coordinator.ts';
 import { writeLifecycleConfig } from '../worktree-lifecycle/config.ts';
 import { WorkspaceSemaphore } from '../workspace/semaphore.ts';
-import { createWorktree } from '../git-worktree.ts';
+import { createWorktree, removeWorktree } from '../git-worktree.ts';
 import { createApp } from './server.ts';
 import { apiRequest } from './loopback-request.testkit.ts';
+
+vi.mock('../git-worktree.ts', { spy: true });
 
 describe('worktree lifecycle API', () => {
   let root: string;
@@ -50,6 +52,23 @@ describe('worktree lifecycle API', () => {
   it('keeps hook-free legacy deletion and its original response',async()=>{
     const res=await request(`/runs/${runId}/remove-worktree`,{});
     expect(res.status).toBe(200); expect(await res.json()).toEqual({removed:true});expect(existsSync(path)).toBe(false);
+  });
+  it.each([
+    { method: 'POST', suffix: '/remove-worktree' },
+    { method: 'DELETE', suffix: '' },
+  ])('keeps the task and its worktree when $method cleanup cannot finish', async ({ method, suffix }) => {
+    const branch = store.getRun(runId)?.branch;
+    const cleanup = vi.mocked(removeWorktree).mockResolvedValueOnce(undefined);
+    try {
+      const res = await request(`/runs/${runId}${suffix}`, {}, method);
+      expect(cleanup).toHaveBeenCalledWith(root, path, branch);
+      expect(res.status).toBe(409);
+      expect(await res.json()).toEqual({ error: 'Worktree removal did not complete' });
+      expect(existsSync(path)).toBe(true);
+      expect(store.getRun(runId)).toMatchObject({ worktreePath: path, branch });
+    } finally {
+      cleanup.mockRestore();
+    }
   });
   it('refuses legacy deletion before any directory or record mutation when hooks exist',async()=>{
     await writeLifecycleConfig(root,{afterCreate:[],beforeRemove:[script('exit 0')]},null);

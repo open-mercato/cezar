@@ -659,6 +659,12 @@ async function legacyWorktreeMutation<T>(project: ProjectContext, runId: string,
   return withWorktreeMutation(project, runId, mutate);
 }
 
+async function removeTaskWorktree(repoRoot: string, { worktreePath, branch }: Pick<RunRecord, 'worktreePath' | 'branch'>): Promise<void> {
+  if (!worktreePath) return;
+  await removeWorktree(repoRoot, worktreePath, branch);
+  if (existsSync(worktreePath)) throw new Error('Worktree removal did not complete');
+}
+
 // ---- project-scoped routing (multi-project spec, step 2.2) -----------------
 
 /** Hono env for the mirrored project-route table: the scope resolver puts the
@@ -6648,7 +6654,7 @@ export function createApp(deps: ServerDeps) {
         return await legacyWorktreeMutation(c.get('project'), id, async () => {
           // A shell must not outlive the directory it is standing in (spec §6).
           stopTaskProcesses(id);
-          if (run.worktreePath) await removeWorktree(repoRoot, run.worktreePath, run.branch);
+          await removeTaskWorktree(repoRoot, run);
           store.updateRun(id, { worktreePath: undefined, branch: undefined });
           if (run.prHead) await manager.sweepPrHeadRefs();
           return c.json({ removed: true });
@@ -6668,9 +6674,9 @@ export function createApp(deps: ServerDeps) {
       try {
         return await legacyWorktreeMutation(c.get('project'), id, async () => {
           stopTaskProcesses(id);
+          await removeTaskWorktree(repoRoot, run);
           // Layouts go with the task, and only with it — archiving keeps them (spec §5.3).
           deleteRunLayouts(dataDir, id);
-          if (run.worktreePath) await removeWorktree(repoRoot, run.worktreePath, run.branch);
           const deleted = store.deleteRun(id);
           // The run's `refs/cezar/pr/<n>` goes with the last run that needed it (Phase 3).
           if (deleted && run.prHead) await manager.sweepPrHeadRefs();
