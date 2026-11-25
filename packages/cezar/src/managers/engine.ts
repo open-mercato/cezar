@@ -59,6 +59,7 @@ import type { AttentionKind, AutomationDefinition, AutomationReportMode, Manager
 import { DEFAULT_AGENT_ACCOUNT_ID } from '../workspace/agent-accounts.ts';
 import { taskAgentSelection } from '../runs/agent-selection.ts';
 import { loadConfig } from '../config.ts';
+import { loadWorkspaceConfig } from '../workspace/config.ts';
 import { agentModelsLocked } from '../core/agent-model-policy.ts';
 import { parseAskCloseMarkers, parseAskMarker, stripAskCloseMarkers, stripAskMarker, type AskCloseMarker } from '../core/ask.ts';
 import type { RunRecord } from '../runs/store.ts';
@@ -86,6 +87,8 @@ import { isRunnerId, type AgentEvent, type AgentRunner, type AgentRunSpec, type 
 import { supportsProfiles } from '../core/agent-profiles.ts';
 import { readOnlyEnv } from '../core/read-only-env.ts';
 import { canEnforceReadOnly, createRunner } from '../core/runner-factory.ts';
+import { noCompatibleRunnerRefusal, readOnlyWorkflowRefusal, workflowSupportsBackend } from '../workflows/capabilities.ts';
+import { loadWorkflows } from '../workflows/load.ts';
 import { parseUsageLimit } from '../core/usage-limit.ts';
 import type { UiEvent } from '../core/ui-events.ts';
 import { assertCezarHomeWriteIsSandboxed, managersDir } from '../paths.ts';
@@ -160,6 +163,7 @@ import { outsideRelayScope } from '../relay/scope.ts';
 import { PlanUsageTracker, recordUsageObservation, type LedgerAccountRef } from '../usage-ledger/recorder.ts';
 import { ledgerAccountRef } from '../usage-ledger/identity.ts';
 import { managerConsumerId } from '../usage-ledger/report.ts';
+import type { RestartGate } from '../workspace/restart-gate.ts';
 
 /**
  * The manager turn engine (spec 2026-10-31-managers § Turns, § Watching, § Safety). One turn per
@@ -207,6 +211,9 @@ export interface ManagerEngineDeps {
   retryDelayMs?: number;
   /** A manager was deactivated or reactivated: the Questions count leaves its cards out while inactive. */
   onActivityChange?: (managerId: string) => void;
+  /** "Restart when idle": a turn in flight blocks it, and while it is pending only the user's own
+   *  chat starts a turn — watches, jobs and follow-ups wait (the restart re-arms them). */
+  restartGate?: RestartGate;
   /** A chain row's usage limit was recorded or released: the task queues re-read `accountHolds()`. */
   onAccountHoldsChanged?: () => void;
 }
@@ -658,7 +665,28 @@ export class ManagerEngine {
   /** The Questions inbox provider's listeners: every card opened, closed or flagged. */
   private readonly askListeners = new Set<(change: ManagerAskChange) => void>();
 
-  constructor(private readonly deps: ManagerEngineDeps) {}
+  private readonly offRestartGate: Array<() => void> = [];
+
+  constructor(private readonly deps: ManagerEngineDeps) {
+    const gate = deps.restartGate;
+    if (gate) {
+      this.offRestartGate.push(
+        gate.addSource(() => [{ kind: 'manager', names: this.turnsInFlight() }]),
+        gate.onRelease(() => {
+          for (const id of this.runtimes.keys()) this.pump(id);
+        }),
+      );
+    }
+  }
+
+  /** Names of the managers mid-turn, for the restart gate. */
+  private turnsInFlight(): string[] {
+    const names: string[] = [];
+    for (const [id, runtime] of this.runtimes) {
+      if (runtime.active) names.push(this.deps.store.get(id)?.name ?? id);
+    }
+    return names;
+  }
 
   private now(): number {
     return this.deps.now?.() ?? Date.now();
@@ -747,6 +775,7 @@ export class ManagerEngine {
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
+    for (const off of this.offRestartGate.splice(0)) off();
     if (this.timer) clearTimeout(this.timer);
     if (this.recoveryTimer) clearTimeout(this.recoveryTimer);
     for (const timer of this.alerts) clearTimeout(timer);
@@ -1412,6 +1441,8 @@ export class ManagerEngine {
   private pump(id: string): void {
     const runtime = this.runtime(id);
     if (this.disposed || runtime.deleted || runtime.active || runtime.queue.length === 0) return;
+    // A pending restart: only what the user just typed starts a turn (and the restart waits for it).
+    if (this.deps.restartGate?.holding && !runtime.queue.some((item) => item.kind === 'chat')) return;
     // Queued before it was deactivated, by a path that skipped the gate's sweep (a lease retry).
     if (this.inactive(id)) {
       runtime.queue = [];
@@ -2470,6 +2501,8 @@ export class ManagerEngine {
     const connectorRules = connectorTurn ? connectorAllowRules(manager.connectors, state.connectors) : [];
     // A manager with nothing granted loads no connector; a watch never calls one (spec 2026-11-21 § 2.4).
     const noMcpServers = runner === 'claude' && (!connectorTurn || !hasConnectorGrant(manager.connectors));
+    // Read per turn, so an edit in Settings reaches a resumed session too.
+    const globalInstructions = (await loadWorkspaceConfig().catch(() => null))?.systemPrompt;
     const base: AgentRunSpec = {
       systemPrompt: managerSystemPrompt(
         manager,
@@ -2479,6 +2512,7 @@ export class ManagerEngine {
         {
           textInFiles: runner === 'claude' && writable !== undefined,
           memory: renderMemory(this.memoryFor(id, (profile.env as Record<string, string | undefined>).CLAUDE_CONFIG_DIR ?? process.env.CLAUDE_CONFIG_DIR).entries),
+          globalInstructions,
         },
       ),
       // A session restored from another row may not have seen the cards an ids-only prompt names.
@@ -3324,14 +3358,25 @@ export class ManagerEngine {
     const composed = this.composed(id, input.task, input);
     if ('error' in composed) return composed;
     const { forward } = composed;
+    const workflowName = input.workflow ?? 'quick-task';
+    const root = scope.source?.root;
+    const workflowCatalog = root ? (await loadWorkflows(root)).workflows : [];
+    const workflowDef = workflowCatalog.find((w) => w.name === workflowName);
+    const workflowCompatible = (candidateRunner: RunnerId) =>
+      readOnly || workflowSupportsBackend(workflowDef, candidateRunner, workflowCatalog);
     const agents = scope.manager.taskAgents?.filter((agent): agent is ManagerTaskAgent & { runner: RunnerId } => isRunnerId(agent.runner));
     const preferred = await this.runnerOf(scope.manager);
-    const candidates = agents?.filter((agent) => (!input.runner || agent.runner === input.runner)
+    const matching = agents?.filter((agent) => (!input.runner || agent.runner === input.runner)
       && (input.agentProfile === undefined || agent.agentProfile === input.agentProfile));
-    if (candidates?.length === 0) {
+    if (matching?.length === 0) {
       return { error: 'Choose an agent account from the manager’s selected accounts for new tasks', status: 403 };
     }
-    const root = scope.source?.root;
+    const compatibleAgents = agents?.filter((agent) => workflowCompatible(agent.runner));
+    const candidates = matching?.filter((agent) => workflowCompatible(agent.runner));
+    if (matching && candidates?.length === 0) {
+      const refusal = noCompatibleRunnerRefusal(workflowDef, matching.map((agent) => agent.runner), workflowCatalog);
+      return { error: refusal ?? `No allowed agent supports workflow "${workflowName}"`, status: 400 };
+    }
     const now = this.now();
     let choice: TaskAgentChoice | undefined;
     let fallbackOptions: AccountOption[] | undefined;
@@ -3339,13 +3384,13 @@ export class ManagerEngine {
     let firstRunner: string | undefined;
     // Roles on the list switch on routing (spec 2026-11-25-manager-task-routing); none keeps the original order.
     const roles = agents && routedByRoles(scope.manager) ? roleRouting(scope.manager) : undefined;
-    if (agents && candidates) {
+    if (compatibleAgents && candidates) {
       // The manager's settings are the default: a retried task's own account, then its own runner, then list order.
       // With roles, list order is the order (Backup rows are used top to bottom).
       const rank = (agent: ManagerTaskAgent) => (roles ? 0 : retry?.allowed && agent.runner === retry.runner && agent.agentProfile === retry.agentProfile ? 0 : agent.runner === preferred ? 1 : 2);
       const ordered = [...candidates].sort((a, b) => rank(a) - rank(b));
       const load = roles ? this.deps.accountLoad?.() : undefined;
-      const allowed = await Promise.all([...agents].sort((a, b) => rank(a) - rank(b)).map(async (agent) => {
+      const allowed = await Promise.all([...compatibleAgents].sort((a, b) => rank(a) - rank(b)).map(async (agent) => {
         const option = await this.accountOption(agent.runner, agent.agentProfile, root);
         if (!roles) return option;
         const usage = fiveHourUsedPercent(option.runner, option.account, now);
@@ -3360,7 +3405,7 @@ export class ManagerEngine {
       choice = ownOpen ? { chosen: own, reason: `retry: its own account ${own.runner} · ${own.label}` } : chooseTaskAgent(options, {
         explicitAccount: input.agentProfile !== undefined, fromSettings: true, allowed, now,
         ...(roles ? { roles } : {}),
-        ...(input.runner && candidates.length < agents.length ? { narrowedBy: `--runner ${input.runner}` } : {}),
+        ...(input.runner && candidates.length < compatibleAgents.length ? { narrowedBy: `--runner ${input.runner}` } : {}),
       });
       firstRunner = options[0]?.runner;
       const picked = choice.chosen;
@@ -3375,6 +3420,10 @@ export class ManagerEngine {
     const runner = choice?.chosen.runner ?? scope.manager.taskRunner ?? input.runner ?? preferred;
     const agentProfile = choice ? choice.chosen.agentProfile : input.agentProfile;
     if (!isRunnerId(runner)) return { error: `unknown runner: ${runner}`, status: 400 };
+    if (!readOnly) {
+      const workflowRefusal = readOnlyWorkflowRefusal(workflowDef, runner, workflowCatalog);
+      if (workflowRefusal) return { error: workflowRefusal, status: 400 };
+    }
     const accountIssue = await this.accountIssue(runner, agentProfile);
     if (accountIssue) return accountIssue;
     choice ??= chooseTaskAgent([await this.accountOption(runner, agentProfile, root)], { explicitAccount: agentProfile !== undefined, fromSettings: false, now });
@@ -3391,7 +3440,7 @@ export class ManagerEngine {
         // Dropped only when another allowed runner can use it: a flag the manager typed that no listed
         // runner accepts (a typo) is refused with the valid choices, as when nothing moved. A retry's
         // flags are the old run's, so they are only ever dropped.
-        const runners = retry ? [] as RunnerId[] : [...new Set((agents ?? []).map((agent) => agent.runner))].filter((other) => other !== runner);
+        const runners = retry ? [] as RunnerId[] : [...new Set((compatibleAgents ?? []).map((agent) => agent.runner))].filter((other) => other !== runner);
         const usable = async (check: (other: RunnerId) => Promise<ManagerRefusal | undefined>) => {
           for (const other of runners) if (!(await check(other))) return true;
           return false;
@@ -3412,12 +3461,26 @@ export class ManagerEngine {
         choice = { ...choice, reason: `${choice.reason}; ${dropped} dropped: not valid on ${runner}` };
       }
     }
-    // A fallback entry carries the requested model only where that runner accepts it.
+    // Default models from Settings → Agents (when not locked) and per-row pins on `taskAgents`.
+    const modelsLocked = agentModelsLocked(root);
+    const projectConfig = !modelsLocked && root ? await loadConfig(root).catch(() => undefined) : undefined;
+    const defaultModelFor = (candidateRunner: RunnerId, candidateProfile?: string): string | undefined => {
+      if (modelsLocked) return undefined;
+      const row = agents?.find((agent) => agent.runner === candidateRunner && agent.agentProfile === candidateProfile);
+      if (row?.model) return row.model;
+      if (projectConfig?.defaultModelsAuto?.[candidateRunner]) return undefined;
+      return projectConfig?.defaultModels?.[candidateRunner];
+    };
+    const effectiveModel = carried.model ?? defaultModelFor(runner, agentProfile);
+    // A fallback entry carries the requested model only where that runner accepts it, else its row/settings default.
     const modelValidOn = new Map<string, boolean>();
     const fallback: Array<{ provider: RunnerId; profileId: string; model?: string }> | undefined = fallbackOptions && [];
     for (const option of fallbackOptions ?? []) {
       if (input.model && !modelValidOn.has(option.runner)) modelValidOn.set(option.runner, !(await this.modelIssue(option.runner, input.model, undefined)));
-      fallback!.push({ provider: option.runner, profileId: option.account, ...(input.model && modelValidOn.get(option.runner) ? { model: input.model } : {}) });
+      const entryModel = input.model
+        ? (modelValidOn.get(option.runner) ? input.model : undefined)
+        : defaultModelFor(option.runner, option.agentProfile);
+      fallback!.push({ provider: option.runner, profileId: option.account, ...(entryModel ? { model: entryModel } : {}) });
     }
     const agentNote = `Agent chosen by manager ${scope.manager.name}: ${choice.chosen.runner} · ${choice.chosen.label} — ${choice.reason}`;
     const prefix = `/p/${encodeURIComponent(input.projectId)}`;
@@ -3436,7 +3499,7 @@ export class ManagerEngine {
         ...(readOnly ? { readOnly: true, enforceReadOnly: true } : {}),
         runner,
         ...(agentProfile !== undefined ? { agentProfile } : {}),
-        ...(carried.model ? { model: carried.model } : {}),
+        ...(effectiveModel ? { model: effectiveModel } : {}),
         ...(carried.effort ? { reasoningEffort: carried.effort } : {}),
         ...(dispatch ? { dispatch: {} } : {}),
         startedByManager: { id: scope.manager.id, name: scope.manager.name },

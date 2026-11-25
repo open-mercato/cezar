@@ -1836,6 +1836,14 @@ describe('/manager/:id', () => {
         taskAgents: [{ runner: 'codex', agentProfile: 'default' }, { runner: 'claude', agentProfile: 'default' }],
       }))
     })
+
+    it('lets each task-agent row pick a default model and saves it in taskAgents', async () => {
+      seedChat({ taskAgents: [{ runner: 'antigravity', agentProfile: 'default', role: 'main' }] })
+      renderAt('/manager/global')
+      const dialog = await openDialog()
+      const trigger = within(dialog).getByRole('button', { name: 'Model for antigravity · Default' })
+      expect(trigger.textContent).toContain('auto')
+    })
   })
 
   describe('agent chain (spec 2026-11-25-manager-agent-chain)', () => {
@@ -1908,6 +1916,7 @@ describe('/manager/:id', () => {
         client.setQueryData(workspaceQueryKeys.agentProfiles, { profiles: [{ provider: 'claude', id: 'automations', label: 'Automations' }] })
       })
       const info = await screen.findByRole('button', { name: 'Answering with backup #2' })
+      expect(info.className).toContain('pointer-coarse:size-11')
       await screen.findByText('From the backup')
       expect(document.querySelectorAll('[data-slot="manager-reply-agent"]')).toHaveLength(1)
       expect(document.querySelector('[data-slot="manager-reply-agent"]')?.textContent).toBe('#2 · codex Work')
@@ -1917,6 +1926,163 @@ describe('/manager/:id', () => {
       expect(popover.textContent).toContain('#1 claude · Automations is out of usage limits until')
       fireEvent.click(within(popover).getByRole('button', { name: 'Switch back now' }))
       await waitFor(() => expect(patches()).toContainEqual({ switchToPrimary: true }))
+    })
+
+    it('replaces the non-Claude "no connectors" pill with an accessible info popover that opens on hover, focus, and tap', async () => {
+      // jsdom lacks PointerEvent, so fireEvent.pointerEnter drops pointerType; polyfill it for this test.
+      const OrigPointerEvent = globalThis.PointerEvent
+      class TestPointerEvent extends MouseEvent {
+        readonly pointerType: string
+        constructor(type: string, init: PointerEventInit = {}) {
+          super(type, init)
+          this.pointerType = init.pointerType ?? ''
+        }
+      }
+      globalThis.PointerEvent = TestPointerEvent as unknown as typeof PointerEvent
+      try {
+        seedChat({
+          runner: 'claude',
+          backups: [{ runner: 'codex' }],
+          connectors: { github: { level: 'read' } },
+        })
+        renderAt('/manager/global')
+        fireEvent.click(await screen.findByRole('button', { name: 'Manager settings' }))
+        fireEvent.click(within(await waitFor(() => document.querySelector<HTMLElement>('[data-slot="manager-settings-menu"]')!)).getByRole('button', { name: 'Manager agent…' }))
+        const dialog = await screen.findByRole('dialog', { name: 'Manager agent' })
+
+        expect(dialog.textContent).not.toContain('no connectors')
+        const items = dialog.querySelectorAll<HTMLElement>('[data-slot="manager-chain"] ol > li')
+        expect(items).toHaveLength(2)
+        expect(items[0]!.querySelector('[data-slot="manager-chain-no-connectors"]')).toBeNull()
+        expect(items[1]!.querySelector('[data-slot="manager-chain-status"]')).toBeNull()
+
+        const info = within(items[1]!).getByRole('button', { name: 'No connectors on this agent' })
+        // Hidden accessible description exposes the explanation to screen readers without reading twice.
+        const describedBy = info.getAttribute('aria-describedby')
+        expect(describedBy).toBeTruthy()
+        const description = document.getElementById(describedBy!)
+        expect(description?.hidden).toBe(true)
+        expect(description?.textContent).toBe('Connectors are Claude-only. While this agent answers, the Manager works without them.')
+        // Dragging belongs to the row button, not the info icon.
+        expect(info.closest('[draggable="true"]')).toBeNull()
+
+        const popover = () => document.querySelector<HTMLElement>('[data-slot="manager-chain-no-connectors-popover"]')
+
+        // Touch pointerenter does not hover-open the popover.
+        fireEvent(info, new TestPointerEvent('pointerover', { bubbles: true, pointerType: 'touch' }))
+        expect(popover()).toBeNull()
+
+        // Tap / Chrome Android sequence (pointerdown -> focus -> click) opens and keeps it open without opening the row editor.
+        fireEvent(info, new TestPointerEvent('pointerdown', { bubbles: true, pointerType: 'touch' }))
+        fireEvent.focus(info)
+        fireEvent.click(info)
+        await waitFor(() => expect(popover()?.textContent).toBe('Connectors are Claude-only. While this agent answers, the Manager works without them.'))
+        expect(dialog.querySelector('[data-slot="manager-chain-editor"]')).toBeNull()
+
+        // Touch pointerleave does not close an open popover.
+        fireEvent(info, new TestPointerEvent('pointerout', { bubbles: true, pointerType: 'touch' }))
+        await new Promise((resolve) => setTimeout(resolve, 130))
+        expect(popover()).not.toBeNull()
+
+        // Escape closes it.
+        fireEvent.keyDown(info, { key: 'Escape' })
+        await waitFor(() => expect(popover()).toBeNull())
+
+        // Hover then click stays open, and mouse pointerleave closes it even when the click focused the button.
+        fireEvent(info, new TestPointerEvent('pointerover', { bubbles: true, pointerType: 'mouse' }))
+        await waitFor(() => expect(popover()).not.toBeNull())
+        fireEvent(info, new TestPointerEvent('pointerdown', { bubbles: true, pointerType: 'mouse' }))
+        info.focus()
+        fireEvent.click(info)
+        expect(popover()).not.toBeNull()
+        fireEvent(info, new TestPointerEvent('pointerout', { bubbles: true, pointerType: 'mouse' }))
+        await waitFor(() => expect(popover()).toBeNull())
+        info.blur()
+
+        // Clicking text inside PopoverContent (tabIndex=-1) does not block hover-close when the pointer leaves.
+        fireEvent(info, new TestPointerEvent('pointerover', { bubbles: true, pointerType: 'mouse' }))
+        const content = await waitFor(() => popover()!)
+        fireEvent(content, new TestPointerEvent('pointerdown', { bubbles: true, pointerType: 'mouse' }))
+        content.focus()
+        fireEvent(content, new TestPointerEvent('pointerout', { bubbles: true, pointerType: 'mouse' }))
+        await waitFor(() => expect(popover()).toBeNull())
+
+        // Safari / Firefox on macOS: pointerdown + click without focus must not poison a subsequent keyboard focus.
+        fireEvent(info, new TestPointerEvent('pointerdown', { bubbles: true, pointerType: 'mouse' }))
+        fireEvent.click(info)
+        await waitFor(() => expect(popover()).not.toBeNull())
+        fireEvent.keyDown(info, { key: 'Escape' })
+        await waitFor(() => expect(popover()).toBeNull())
+
+        // Keyboard focus opens it, pointerleave while focused does not close it, activating the button keeps it open (browsers synthesize click on Enter/Space), and blur closes it.
+        info.focus()
+        fireEvent.focus(info)
+        await waitFor(() => expect(popover()).not.toBeNull())
+        fireEvent(info, new TestPointerEvent('pointerover', { bubbles: true, pointerType: 'mouse' }))
+        fireEvent(info, new TestPointerEvent('pointerout', { bubbles: true, pointerType: 'mouse' }))
+        await new Promise((resolve) => setTimeout(resolve, 130))
+        expect(popover()).not.toBeNull()
+        fireEvent.click(info)
+        expect(popover()).not.toBeNull()
+        info.blur()
+        fireEvent.blur(info)
+        await waitFor(() => expect(popover()).toBeNull())
+
+        // Clicking the row button itself opens the editor (proves the earlier editor-absent check is meaningful).
+        fireEvent.click(items[1]!.querySelector<HTMLElement>('[data-slot="manager-chain-row"]')!)
+        expect(dialog.querySelector('[data-slot="manager-chain-editor"]')).not.toBeNull()
+      } finally {
+        globalThis.PointerEvent = OrigPointerEvent
+      }
+    })
+
+    it('reorders chain rows by dragging the row button', async () => {
+      seedChat({ runner: 'claude', model: 'opus', backups: [{ runner: 'codex', model: 'gpt-5.5' }] })
+      renderAt('/manager/global')
+      fireEvent.click(await screen.findByRole('button', { name: 'Manager settings' }))
+      fireEvent.click(within(await waitFor(() => document.querySelector<HTMLElement>('[data-slot="manager-settings-menu"]')!)).getByRole('button', { name: 'Manager agent…' }))
+      const dialog = await screen.findByRole('dialog', { name: 'Manager agent' })
+      const items = dialog.querySelectorAll<HTMLElement>('[data-slot="manager-chain"] ol > li')
+      const rows = dialog.querySelectorAll<HTMLElement>('[data-slot="manager-chain-row"]')
+      expect(rows).toHaveLength(2)
+      expect(rows[0]!.getAttribute('draggable')).toBe('true')
+      expect(rows[1]!.getAttribute('draggable')).toBe('true')
+
+      fireEvent.dragStart(rows[1]!)
+      fireEvent.dragOver(items[0]!)
+      fireEvent.drop(items[0]!)
+      await waitFor(() => expect(patches()).toContainEqual({
+        runner: 'codex', agentProfile: null, model: 'gpt-5.5', effort: null,
+        backups: [{ runner: 'claude', model: 'opus' }],
+      }))
+    })
+
+    it('shows the no-connectors info icon on an answering non-Claude row and hides it when no grants are enabled', async () => {
+      seedChat({
+        runner: 'claude',
+        backups: [{ runner: 'codex' }],
+        connectors: { github: { level: 'read' } },
+        activeAgent: { agent: ref(1, 'codex', 'Work'), reason: 'usage-limit', since: '2026-11-25T16:12:00.000Z' },
+      })
+      const first = renderAt('/manager/global')
+      fireEvent.click(await screen.findByRole('button', { name: 'Manager settings' }))
+      fireEvent.click(within(await waitFor(() => document.querySelector<HTMLElement>('[data-slot="manager-settings-menu"]')!)).getByRole('button', { name: 'Manager agent…' }))
+      const dialog = await screen.findByRole('dialog', { name: 'Manager agent' })
+      const items = dialog.querySelectorAll<HTMLElement>('[data-slot="manager-chain"] ol > li')
+      expect(items[1]!.textContent).toContain('answering')
+      expect(within(items[1]!).getByRole('button', { name: 'No connectors on this agent' })).toBeTruthy()
+      first.unmount()
+
+      seedChat({
+        runner: 'claude',
+        backups: [{ runner: 'codex' }],
+        connectors: { github: { level: 'off' } },
+      })
+      renderAt('/manager/global')
+      fireEvent.click(await screen.findByRole('button', { name: 'Manager settings' }))
+      fireEvent.click(within(await waitFor(() => document.querySelector<HTMLElement>('[data-slot="manager-settings-menu"]')!)).getByRole('button', { name: 'Manager agent…' }))
+      const secondDialog = await screen.findByRole('dialog', { name: 'Manager agent' })
+      expect(secondDialog.querySelector('[data-slot="manager-chain-no-connectors"]')).toBeNull()
     })
   })
 })

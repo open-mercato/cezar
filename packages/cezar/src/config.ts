@@ -128,14 +128,7 @@ export const configSchema = z.object({
    * `true` means auto; anything else is no opinion, and the writers delete the
    * key rather than storing `false`.
    */
-  defaultModelsAuto: z
-    .object({
-      claude: z.boolean().optional(),
-      codex: z.boolean().optional(),
-      opencode: z.boolean().optional(),
-      pi: z.boolean().optional(),
-      omp: z.boolean().optional(),
-    })
+  defaultModelsAuto: perRunner(z.boolean().optional())
     .optional()
     .catch(undefined),
   /**

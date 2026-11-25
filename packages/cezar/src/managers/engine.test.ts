@@ -13,10 +13,12 @@ import { MANAGER_BASH_FILTERS, MANAGER_TEXT_IN_FILES } from './bash-policy.ts';
 import { compileCodexRestrictedPolicy } from '../core/codex-restricted-policy.ts';
 import { CodexReadBroker } from '../core/codex-restricted-tools.ts';
 import { ManagerEngine, managerWriteRules, type AutomationRunReport, type ManagerEngineDeps } from './engine.ts';
-import { followupPrompt, MANAGER_QUIET, managerSystemPrompt, watchPrompt } from './prompts.ts';
+import { followupPrompt, MANAGER_GLOBAL_INSTRUCTIONS_HEADING, MANAGER_QUIET, managerSystemPrompt, watchPrompt } from './prompts.ts';
+import { mergeWriteWorkspaceConfig } from '../workspace/config.ts';
 import { readColdRuns, type ManagerProjectSource } from './snapshot.ts';
 import type { RunRecord } from '../runs/store.ts';
 import { ManagerStore } from './store.ts';
+import { RestartGate } from '../workspace/restart-gate.ts';
 import { createManagerQuestionProvider } from './questions.ts';
 
 interface Script {
@@ -252,6 +254,39 @@ describe('ManagerEngine', () => {
       expect(await engine.update(id, { bashAllow: [] })).not.toHaveProperty('bashAllow');
     });
 
+    it('carries the current global instructions into chat, watch and job turns, re-read on every turn', async () => {
+      try {
+        await mergeWriteWorkspaceConfig((config) => { config.systemPrompt = 'Never run the full test suite.'; });
+        const engine = makeEngine();
+        const id = await create(engine);
+        engine.send(id, 'hi');
+        await settled(engine);
+        engine.check(id);
+        await settled(engine);
+        await engine.update(id, { jobs: [{ name: 'Sweep', prompt: 'p', everyMinutes: 5, enabled: true }] });
+        store.update(id, (manager) => ({ ...manager, jobs: manager.jobs.map((job) => ({ ...job, lastRunAt: '2000-01-01T00:00:00.000Z' })) }));
+        engine.tick();
+        await settled(engine);
+        expect(backend.specs.map((spec) => spec.env?.CEZ_MANAGER_TURN)).toEqual(['chat', 'watch', 'job']);
+        for (const spec of backend.specs) {
+          expect(spec.systemPrompt).toContain(MANAGER_GLOBAL_INSTRUCTIONS_HEADING);
+          expect(spec.systemPrompt).toContain('Never run the full test suite.');
+        }
+        await mergeWriteWorkspaceConfig((config) => { config.systemPrompt = 'Run only focused tests.'; });
+        engine.send(id, 'again');
+        await settled(engine);
+        const resumed = backend.specs.at(-1)!;
+        expect(resumed.systemPrompt).toContain('Run only focused tests.');
+        expect(resumed.systemPrompt).not.toContain('Never run the full test suite.');
+        await mergeWriteWorkspaceConfig((config) => { delete config.systemPrompt; });
+        engine.send(id, 'once more');
+        await settled(engine);
+        expect(backend.specs.at(-1)?.systemPrompt).not.toContain(MANAGER_GLOBAL_INSTRUCTIONS_HEADING);
+      } finally {
+        await mergeWriteWorkspaceConfig((config) => { delete config.systemPrompt; });
+      }
+    });
+
     it('lets Claude write only under files/: never .claude/ in its cwd, never a bare Write, Edit or Bash', async () => {
       const engine = makeEngine();
       const id = await create(engine);
@@ -292,6 +327,38 @@ describe('ManagerEngine', () => {
       engine.send(created.id, 'b');
       await settled(engine);
       expect(backend.specs.map((spec) => [spec.model, spec.reasoningEffort])).toEqual([['opus', 'high'], ['opus', 'high']]);
+    });
+
+    it('a turn in flight blocks "restart when idle"; while one is pending only chat starts a turn', async () => {
+      const gate = new RestartGate();
+      const engine = makeEngine({ restartGate: gate });
+      const id = await create(engine);
+      const name = store.get(id)!.name;
+      backend.scripts.push({ hold: true }, say('ok'));
+      engine.send(id, 'long one');
+      await vi.waitFor(() => expect(backend.open).toHaveLength(1));
+      expect(gate.blockers()).toEqual([{ kind: 'manager', count: 1, names: [name] }]);
+      backend.open[0]?.finish();
+      await settled(engine);
+      expect(gate.idle()).toBe(true);
+
+      // Pending: a timed or forced check waits; it would otherwise start a turn mid-restart.
+      gate.hold();
+      const checkedBefore = store.state(id).lastCheckAt;
+      engine.check(id);
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(engine.inFlight()).toBe(0);
+      expect(store.state(id).lastCheckAt).toBe(checkedBefore);
+      // What the user types still runs — and the restart waits for it.
+      engine.send(id, 'quick question');
+      await settled(engine);
+      expect(assistants(id).at(-1)?.text).toBe('ok');
+      expect(store.state(id).lastCheckAt).toBe(checkedBefore);
+
+      // Cancelled: the held check runs.
+      gate.release();
+      await vi.waitFor(() => expect(store.state(id).lastCheckAt).not.toBe(checkedBefore));
+      await settled(engine);
     });
 
     it('queues during a turn and folds what piled up into one', async () => {
@@ -3316,11 +3383,111 @@ describe('ManagerEngine', () => {
           return { account, label: `${account} login`, ...(until !== undefined ? { until } : {}) };
         },
       });
-      const managerWith = async (engine: ReturnType<typeof makeEngine>, taskAgents: Array<{ runner: 'claude' | 'codex'; agentProfile: string; role?: 'main' | 'backup' }> = twoClaudes) => {
+      const managerWith = async (engine: ReturnType<typeof makeEngine>, taskAgents: Array<{ runner: 'claude' | 'codex' | 'antigravity' | 'opencode' | 'cursor'; agentProfile?: string; model?: string; role?: 'main' | 'backup' }> = twoClaudes) => {
         const created = await engine.create({ instructions: '', projects: 'all', runner: 'claude', taskAgents, cronMinutes: 0 });
         if ('error' in created) throw created;
         return created.id;
       };
+
+      describe('read-only workflow compatibility', () => {
+        const mixedRoles = [
+          { runner: 'claude' as const, agentProfile: 'first', role: 'main' as const },
+          { runner: 'claude' as const, agentProfile: 'second', role: 'main' as const },
+          { runner: 'opencode' as const, agentProfile: 'default', role: 'main' as const },
+        ];
+
+        it('allows antigravity for review-pr when Claude accounts are out of limits and forwards its configured model', async () => {
+          const engine = makeEngine({
+            accountLimit: async (runner, agentProfile) => {
+              const account = agentProfile ?? 'default';
+              const held: Record<string, number> = {
+                'claude:first': RESET + 60_000,
+                'claude:second': RESET,
+              };
+              const until = held[`${runner}:${account}`];
+              return { account, label: `${account} login`, ...(until !== undefined ? { until } : {}) };
+            },
+            accountLoad: () => new Map([['antigravity:default', 0]]),
+          });
+          const id = await managerWith(engine, [
+            { runner: 'claude', agentProfile: 'first', role: 'main' },
+            { runner: 'claude', agentProfile: 'second', role: 'main' },
+            { runner: 'antigravity', agentProfile: 'default', model: 'gemini-4-neon-high', role: 'main' },
+          ]);
+          const created = await engine.createTask(id, { projectId: 'alpha', task: 'Review PR #1', workflow: 'review-pr' });
+          expect(created).not.toHaveProperty('status');
+          expect(created).toMatchObject({ agent: { runner: 'antigravity', agentProfile: 'default' } });
+          const body = requests.at(-1)?.body as { runner: string; model?: string; managerAgent: { fallback: Array<{ provider: string; model?: string }> } };
+          expect(body).toMatchObject({ runner: 'antigravity', model: 'gemini-4-neon-high' });
+          expect(body.managerAgent.fallback.find((entry) => entry.provider === 'antigravity')?.model).toBe('gemini-4-neon-high');
+        });
+
+        it('skips incompatible runners for review-pr and queues on the earliest-reset compatible account when all compatible accounts are out of limits', async () => {
+          const engine = makeEngine({
+            accountLimit: async (runner, agentProfile) => {
+              const account = agentProfile ?? 'default';
+              const held: Record<string, number> = {
+                'claude:first': RESET + 60_000,
+                'claude:second': RESET,
+              };
+              const until = held[`${runner}:${account}`];
+              return { account, label: `${account} login`, ...(until !== undefined ? { until } : {}) };
+            },
+            accountLoad: () => new Map([['opencode:default', 0]]),
+          });
+          const id = await managerWith(engine, mixedRoles);
+          const created = await engine.createTask(id, { projectId: 'alpha', task: 'Review PR #1', workflow: 'review-pr' });
+          expect(created).not.toHaveProperty('status');
+          expect(created).toMatchObject({
+            agent: {
+              runner: 'claude',
+              agentProfile: 'second',
+              queuedUntil: '2099-01-01T05:00:00.000Z',
+            },
+          });
+          const body = requests.at(-1)?.body as { runner: string; agentProfile: string; managerAgent: { fallback: Array<{ provider: string }> } };
+          expect(body).toMatchObject({ runner: 'claude', agentProfile: 'second' });
+          expect(body.managerAgent.fallback.map((c) => c.provider)).toEqual(['claude', 'claude']);
+
+          // Guard: a non-read-only workflow still picks the open opencode account.
+          const writeTask = await engine.createTask(id, { projectId: 'alpha', task: 'Fix bug', workflow: 'quick-task' });
+          expect(writeTask).toMatchObject({ agent: { runner: 'opencode' } });
+        });
+
+        it('refuses up front without calling POST /runs when no allowed account supports a read-only workflow', async () => {
+          const engine = limited({});
+          const id = await managerWith(engine, [
+            { runner: 'opencode', agentProfile: 'default', role: 'main' },
+            { runner: 'cursor', agentProfile: 'default', role: 'backup' },
+          ]);
+          const result = await engine.createTask(id, { projectId: 'alpha', task: 'Review PR #1', workflow: 'review-pr' });
+          expect(result).toMatchObject({
+            status: 400,
+            error: expect.stringContaining('review-pr'),
+          });
+          expect((result as { error: string }).error).toContain('Claude Code, Codex, Pi or Antigravity');
+          expect(requests.filter((r) => r.path.endsWith('/runs'))).toEqual([]);
+        });
+
+        it('refuses an explicit incompatible --runner up front without calling POST /runs', async () => {
+          const engine = limited({});
+          const id = await managerWith(engine, mixedRoles);
+          const fromList = await engine.createTask(id, { projectId: 'alpha', task: 'Review PR #1', workflow: 'review-pr', runner: 'opencode' });
+          expect(fromList).toMatchObject({
+            status: 400,
+            error: expect.stringContaining('opencode does not enforce'),
+          });
+
+          // Also when taskAgents is unset (automatic selection) and --runner is incompatible.
+          const autoId = await create(engine, 0);
+          const fromAuto = await engine.createTask(autoId, { projectId: 'alpha', task: 'Review PR #1', workflow: 'review-pr', runner: 'opencode' });
+          expect(fromAuto).toMatchObject({
+            status: 400,
+            error: expect.stringContaining('opencode does not enforce'),
+          });
+          expect(requests.filter((r) => r.path.endsWith('/runs'))).toEqual([]);
+        });
+      });
 
       describe('with roles (spec 2026-11-25-manager-task-routing)', () => {
         const routed = (load: Record<string, number>, held: Record<string, number> = {}) => makeEngine({

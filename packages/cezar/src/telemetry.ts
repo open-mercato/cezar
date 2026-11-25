@@ -473,7 +473,15 @@ function featureFlags(): Record<string, boolean> {
 export function reportError(
   error: unknown,
   context: Context = {},
-  opts: { code?: string; fingerprint?: string; sid?: string } = {},
+  opts: {
+    code?: string;
+    fingerprint?: string;
+    sid?: string;
+    /** File it under another build's version (an earlier process's death, `unclean-exit.ts`). */
+    version?: string;
+    /** Distinct occurrences reported together (several dead cockpits found at one boot). */
+    unthrottled?: boolean;
+  } = {},
 ): void {
   if (!telemetryEnabled()) return;
   try {
@@ -482,8 +490,10 @@ export function reportError(
     const message = scrub(err.message || String(error)).slice(0, 2048);
     const key = `${type}:${message}`;
     const now = Date.now();
-    if (now - (lastReported.get(key) ?? 0) < ERROR_THROTTLE_MS) return;
-    lastReported.set(key, now);
+    if (!opts.unthrottled) {
+      if (now - (lastReported.get(key) ?? 0) < ERROR_THROTTLE_MS) return;
+      lastReported.set(key, now);
+    }
     refreshProjectRoots(); // a project added since boot is masked from the next report on
 
     const errCode = (err as { code?: unknown }).code;
@@ -507,9 +517,10 @@ export function reportError(
       }
     }
     const occurredAt = new Date().toISOString();
+    const reportVersion = opts.version ?? version;
     inFlight(stillGranted().then((ok) => ok && cezarId().then((id) => post('/track/error', {
       service: SERVICE,
-      version,
+      version: reportVersion,
       platform: platform(),
       runtime: telemetryRuntime(),
       occurredAt,

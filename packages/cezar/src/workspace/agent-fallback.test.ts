@@ -14,6 +14,8 @@ import {
   type AgentFallbackPolicy,
 } from './agent-fallback.ts';
 import { defaultAgentAccountStore, type AgentAccountStore } from './agent-accounts.ts';
+import { REVIEW_PR } from '../workflows/templates.ts';
+import { QUICK_TASK_WORKFLOW } from '../workflows/types.ts';
 
 let home: string;
 let repo: string;
@@ -277,5 +279,24 @@ describe('a manager fallback policy', () => {
     expect(eligibleFallbackCandidates(list, new Set(), new Set(), null, undefined, 'x', load).eligible.map((c) => c.provider)).toEqual(['codex', 'claude', 'opencode']);
     load.set('codex:default', 2);
     expect(eligibleFallbackCandidates(list, new Set(), new Set(), null, undefined, 'x', load).eligible.map((c) => c.provider)).toEqual(['claude', 'opencode', 'codex']);
+  });
+
+  it('skips runners incompatible with a read-only workflow, while keeping compatible runners (including antigravity) and all runners for write workflows', () => {
+    const list = managerFallbackPolicy([
+      { provider: 'antigravity', profileId: 'default' },
+      { provider: 'opencode', profileId: 'default' },
+      { provider: 'cursor', profileId: 'default' },
+      { provider: 'codex', profileId: 'default' },
+      { provider: 'claude', profileId: 'default' },
+    ], 'm1');
+    const readOnlyResult = eligibleFallbackCandidates(list, new Set(), new Set(), null, undefined, 'claude', undefined, REVIEW_PR);
+    expect(readOnlyResult.eligible.map((c) => c.provider)).toEqual(['antigravity', 'codex', 'claude']);
+    expect(readOnlyResult.skipped).toEqual([
+      { candidate: { provider: 'opencode', profileId: 'default' }, reason: expect.stringContaining('opencode does not enforce') },
+      { candidate: { provider: 'cursor', profileId: 'default' }, reason: expect.stringContaining('cursor does not enforce') },
+    ]);
+    const writeResult = eligibleFallbackCandidates(list, new Set(), new Set(), null, undefined, 'claude', undefined, QUICK_TASK_WORKFLOW);
+    expect(writeResult.eligible.map((c) => c.provider)).toEqual(['antigravity', 'opencode', 'cursor', 'codex', 'claude']);
+    expect(writeResult.skipped).toEqual([]);
   });
 });

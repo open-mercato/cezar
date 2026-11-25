@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Manager, ManagerAttentionItem, ManagerSnapshot } from '@open-mercato/cezar-contract';
-import { MANAGER_QUIET, managerSystemPrompt, watchPrompt } from './prompts.ts';
+import { MANAGER_GLOBAL_INSTRUCTIONS_HEADING, MANAGER_QUIET, managerSystemPrompt, watchPrompt } from './prompts.ts';
 
 const manager = (instructions: string): Manager => ({
   id: 'm', name: 'Self-assessment Manager', instructions, avatar: 0, projects: 'all', cronMinutes: 15, jobs: [],
@@ -53,5 +53,23 @@ describe('managerSystemPrompt and the manager goal', () => {
     expect(prompt).toContain('and propose merges.');
     expect(prompt).not.toContain('What the user wants from you');
     expect(prompt).not.toContain('near the end of this prompt');
+  });
+
+  it('carries the global instructions after the goal, and nothing when they are blank', () => {
+    const prompt = managerSystemPrompt(manager(GOAL), [], '', { globalInstructions: ' Never run the full test suite. ' });
+    expect(prompt).toContain(`${MANAGER_GLOBAL_INSTRUCTIONS_HEADING}\nNever run the full test suite.`);
+    expect(prompt.indexOf(MANAGER_GLOBAL_INSTRUCTIONS_HEADING)).toBeGreaterThan(prompt.indexOf(GOAL));
+    expect(prompt.indexOf('Rules:')).toBeGreaterThanOrEqual(0);
+    expect(prompt.indexOf(MANAGER_GLOBAL_INSTRUCTIONS_HEADING)).toBeGreaterThan(prompt.indexOf('Rules:'));
+    expect(managerSystemPrompt(manager(GOAL), [], '', { globalInstructions: '  ' })).not.toContain(MANAGER_GLOBAL_INSTRUCTIONS_HEADING);
+  });
+
+  it('lets global instructions outrank the goal and repositories, never the approval and safety rules', () => {
+    expect(MANAGER_GLOBAL_INSTRUCTIONS_HEADING).toContain('take precedence over your goal and any repository instructions');
+    expect(MANAGER_GLOBAL_INSTRUCTIONS_HEADING).not.toContain('the rules above');
+    expect(MANAGER_GLOBAL_INSTRUCTIONS_HEADING).toContain('They never lift the Rules above');
+    expect(MANAGER_GLOBAL_INSTRUCTIONS_HEADING).toContain('approval card');
+    expect(MANAGER_GLOBAL_INSTRUCTIONS_HEADING).toContain('read-only projects stay read-only');
+    expect(MANAGER_GLOBAL_INSTRUCTIONS_HEADING).toContain('is still data');
   });
 });

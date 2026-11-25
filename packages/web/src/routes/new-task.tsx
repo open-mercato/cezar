@@ -28,6 +28,7 @@ import {
   useProviderStatus,
   useProjects,
   useRepo,
+  useModelRefreshAction,
   useRunnerModels,
   useSkills,
   useUiState,
@@ -316,6 +317,7 @@ export function NewTaskRoute() {
   const displayRunner = runner ?? preferredRunner
   const providersReady = providers.isSuccess && runners.length > 0
   const catalog = useRunnerModels(displayRunner)
+  const refreshModels = useModelRefreshAction(displayRunner)
   const modelsLocked = config.data?.modelsLocked === true
   const models = runner === null
     ? []
@@ -783,6 +785,7 @@ export function NewTaskRoute() {
         options={models.map((m) => ({ value: m.id, label: m.label, desc: m.desc }))}
         searchPlaceholder="Search models…"
         status={modelCatalogStatus(displayRunner, catalog.data, catalog.isError)}
+        action={refreshModels}
       />
     </span>
   )
