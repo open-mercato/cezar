@@ -132,8 +132,8 @@ export const graphNodeSchema = z.discriminatedUnion('type', [
   z.object({ ...nodeBase, type: z.literal('if'), condition: conditionSchema }),
   // ---- more git / GitHub ----
   z.object({ ...nodeBase, type: z.literal('git.push') }),
-  /** Check the PR named in `{{task}}` out into the worktree and save its metadata and diff to the
-   *  run's artifacts (`pr-checkout.ts`), so read-only reviewers only read files. */
+  /** Export the PR named in `{{task}}` into its own folder (`pr-checkout.ts`), never the task's
+   *  tree, so read-only reviewers only read files. */
   z.object({ ...nodeBase, type: z.literal('github.pr-checkout') }),
   /** Merge the freshest base (`origin/<base>`) into the task branch. On conflict the merge is
    *  LEFT in progress and the node leaves by `conflict`, so the next agent sees the conflicts. */
@@ -232,7 +232,7 @@ export const NODE_CATALOG: NodeCatalogEntry[] = [
   { type: 'join', category: 'flow', label: 'Join', description: "Where a fork's agents meet: wait for all, or the first to succeed.", ports: ['done', 'failed'], outputs: ['succeeded', 'failed'] },
   { type: 'if', category: 'flow', label: 'If', description: 'Branch on the diff size, changed paths, a node output or the base branch.', ports: ['true', 'false'], outputs: ['result', 'value'] },
   { type: 'git.push', category: 'git', label: 'Push', description: 'Push the task branch to origin.', ports: ['done', 'failed'], outputs: [] },
-  { type: 'github.pr-checkout', category: 'git', label: 'Check out PR', description: "Check out the head of the PR named in the task and save its metadata and diff to the run's artifacts. Never pushes or posts.", ports: ['done', 'failed'], outputs: ['number', 'head', 'diff', 'meta', 'checkedOut'] },
+  { type: 'github.pr-checkout', category: 'git', label: 'Check out PR', description: "Export the head of the PR named in the task into its own read-only folder, with its metadata and diff. The task's tree and branch are not touched. Never pushes or posts.", ports: ['done', 'failed'], outputs: ['number', 'head', 'tree', 'diff', 'meta', 'checkedOut'] },
   { type: 'git.sync-base', category: 'git', label: 'Sync with base', description: 'Merge the latest base branch in; stops on conflict for an agent to resolve.', ports: ['done', 'conflict', 'failed'], outputs: ['conflicts'] },
   { type: 'github.pr-update', category: 'git', label: 'Update PR', description: 'Mark the task PR ready, add labels, request reviewers.', ports: ['done', 'failed'], outputs: [] },
   { type: 'github.issue-comment', category: 'git', label: 'Issue comment', description: "Comment on the task's issue.", ports: ['done', 'failed'], outputs: ['issue'] },

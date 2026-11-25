@@ -519,8 +519,6 @@ export function buildClaudeArgs(
   if (spec.enforceReadOnly) {
     args.push('--disallowedTools', CLAUDE_WRITE_TOOLS.join(','));
   }
-  // The PR's own `.claude/settings*.json` could allow Bash or add hooks, and its CLAUDE.md instruct.
-  if (spec.untrustedWorktree) args.push('--setting-sources', 'user');
   if (spec.model) {
     args.push('--model', spec.model);
   }

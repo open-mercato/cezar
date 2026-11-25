@@ -504,7 +504,7 @@ whose counter never resets within a run, so every run is finite.
 | `workflow` (`workflow`, `prompt?`, `runner?`, `budgetUsd?`) | `done`, `failed` | `runId`, `status`, `summary` |
 | `if` (`condition`) | `true`, `false` | `result`, `value` |
 | `git.push` | `done`, `failed` | — |
-| `github.pr-checkout` | `done`, `failed` | `number`, `head`, `diff`, `meta`, `checkedOut` |
+| `github.pr-checkout` | `done`, `failed` | `number`, `head`, `tree`, `diff`, `meta`, `checkedOut` |
 | `git.sync-base` | `done`, `conflict`, `failed` | `conflicts` |
 | `github.pr-update` (`ready?`, `addLabels?`, `reviewers?`) | `done`, `failed` | — |
 | `github.issue-comment` (`body`, `issue?` — default: the task's issue) | `done`, `failed` | `issue` |
@@ -522,14 +522,15 @@ whose counter never resets within a run, so every run is finite.
   <node>.<field>`, `op`, `value` — numeric when both sides are numbers) and `branch`
   (`equals` / `matches` on the base branch).
 - **`github.pr-checkout`** fetches `pull/<n>/head` for the PR URL in the task — from the remote
-  that is the PR's repository, else from the repository's URL — and moves the task branch to it.
-  It refuses, leaving the tree as it was, when the task runs in the repository's own working
-  tree, has uncommitted changes, has commits of its own past the base branch, or has untracked
-  or ignored files at a path the PR tracks. It saves `pr-<n>.json` and `pr-<n>.diff` in the
-  run's artifacts either way, posts nothing, and leaves by `failed` when the head is not checked
-  out. Under `CEZ_DRY_RUN=1` it fetches and checks out nothing. Claude steps of a workflow with
-  this node ignore the checked-out tree's project/local settings, hooks, `CLAUDE.md` and MCP
-  config (`--setting-sources user`, `--strict-mcp-config`).
+  that is the PR's repository, else from that repository's URL — and, when GitHub reports the PR's
+  head, only if the two agree. It exports that head into `.ai/cezar/pr-checkouts/<run>/tree`
+  (symlinks as plain files), never into the task's own tree: the task's branch, files, Changes
+  and merge/push/PR actions stay the base's, so it works in place too. Beside the tree it saves
+  `pr-<n>.json` and `pr-<n>.diff` (`gh pr diff`, else a diff against the PR's base fetched fresh;
+  `headVerified` and `diffBase` say how much GitHub confirmed); the run's artifacts get copies.
+  Every step of the workflow can read that folder; none runs in it, so the PR's own
+  `.claude`/`.pi` settings, hooks, `CLAUDE.md` and `.mcp.json` never load. It posts nothing,
+  leaves by `failed` when nothing was exported, and under `CEZ_DRY_RUN=1` fetches nothing.
 - **`git.sync-base`** merges the freshest base into the task branch. On a conflict it
   leaves the merge in progress and leaves by `conflict` — wire that to an agent to
   resolve it (`{{nodes.<id>.conflicts}}` lists the files).

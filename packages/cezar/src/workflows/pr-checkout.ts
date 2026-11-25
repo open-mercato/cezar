@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { lstatSync, mkdirSync, writeFileSync } from 'node:fs';
+import { copyFileSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { ghEnv } from '../core/gh-env.ts';
 import { parseRemote } from '../git-remotes.ts';
@@ -7,10 +7,10 @@ import { isSafeGitRef } from '../git-refs.ts';
 import { isGithubHost } from '../github-hosts.ts';
 
 /**
- * The `github.pr-checkout` node: put the PR's head into the task worktree and its metadata and
- * diff into the run's artifacts BEFORE any agent runs, so a read-only reviewer only reads files
- * (the 5700 review: every reviewer's `git fetch` and `gh pr diff > file` was refused).
- * The checked-out tree is untrusted: Claude steps that read it ignore its settings (`run.ts`).
+ * The `github.pr-checkout` node: export the PR's head into its own folder beside the task —
+ * never into the task's worktree or branch — and save its metadata and diff there, before any
+ * agent runs. The task tree stays the base: its Changes, its merge/push/PR gate and the agents'
+ * own settings are untouched, and the PR's untrusted files are only ever read.
  */
 
 export interface PrRef {
@@ -42,25 +42,28 @@ const exec: Exec = (file, args, { cwd, timeoutMs, env }) => new Promise((done) =
 });
 
 export interface PrCheckoutInput {
+  /** A checkout of the repository, for git: only objects and FETCH_HEAD change; its files never do. */
   cwd: string;
-  artifactsDir: string;
+  /** This run's PR folder (`prCheckoutDir`): emptied, then filled with `tree/`, the diff and metadata. */
+  dir: string;
+  /** Where the user sees copies of the diff and metadata (the run's artifacts). Agents read `dir`'s. */
+  copyTo?: string;
   pr: PrRef;
-  /** False for a task running in the repository's own working tree: that tree is the user's, never reset. */
-  ownWorktree: boolean;
-  /** The task's base branch: the task branch must have no commits of its own past it. */
+  /** The task's base branch, when GitHub cannot name the PR's. */
   baseBranch?: string;
-  /** CEZ_DRY_RUN=1: no network and no reset — nothing is fetched or checked out. */
+  /** CEZ_DRY_RUN=1: no network — nothing is fetched or exported. */
   offline?: boolean;
   exec?: Exec;
 }
 
 export interface PrCheckoutResult {
-  /** The PR head is what the worktree now holds. */
+  /** The PR head was exported to `tree`. */
   checkedOut: boolean;
   head: string;
+  tree: string;
   diffPath: string;
   metaPath: string;
-  /** One line per thing that did not work; empty on full success. */
+  /** One line per thing that did not work or is not verified; empty on full success. */
   problems: string[];
 }
 
@@ -76,43 +79,23 @@ export async function prRemote(cwd: string, pr: PrRef, run: Exec = exec): Promis
   return undefined;
 }
 
-const exists = (path: string): boolean => { try { lstatSync(path); return true; } catch { return false; } };
 const lastLine = (s: string) => s.trim().split('\n').pop()?.slice(0, 300) ?? '';
-
-/** Why resetting the task branch to `head` would lose something, or undefined when it is safe. */
-async function resetRefusal(git: (args: string[], timeoutMs?: number) => ReturnType<Exec>, cwd: string, head: string, baseBranch: string | undefined, remote: string | undefined): Promise<string | undefined> {
-  const dirty = await git(['status', '--porcelain', '--untracked-files=no']);
-  if (!dirty.ok || dirty.stdout.trim()) return 'the worktree has uncommitted changes';
-  // Commits of its own (an autosave, an earlier turn) would be dropped by the reset.
-  // The fewest against either base: the branch forked from one of them, and the other may be stale.
-  let ahead: number | undefined;
-  for (const base of baseBranch ? [baseBranch, `${remote ?? 'origin'}/${baseBranch}`] : []) {
-    const count = await git(['rev-list', '--count', `${base}..HEAD`]);
-    if (count.ok) ahead = Math.min(ahead ?? Infinity, Number(count.stdout.trim()));
-  }
-  if (ahead === undefined) return 'cannot tell whether the task branch has commits of its own (no base branch)';
-  if (ahead > 0) return `the task branch has ${ahead} commit(s) of its own`;
-  // Untracked or ignored files (seeded config, build output) at a path the PR tracks would be overwritten.
-  const others = await git(['ls-files', '-z', '--others', '--directory']);
-  const tracked = await git(['ls-tree', '-r', '-z', '--name-only', head], 60_000);
-  if (!others.ok || !tracked.ok) return 'could not list the files the checkout would overwrite';
-  const local = others.stdout.split('\0').filter(Boolean);
-  // `--directory` collapses an untracked folder (node_modules, a seeded .claude/): only a file that exists there clashes.
-  const clash = tracked.stdout.split('\0').filter((path) => local.some((o) => (o.endsWith('/') ? path.startsWith(o) && exists(join(cwd, path)) : path === o)));
-  if (clash.length) return `untracked or ignored files would be overwritten (${clash.slice(0, 3).join(', ')}${clash.length > 3 ? ', …' : ''})`;
-  return undefined;
-}
 
 export async function checkoutPr(input: PrCheckoutInput): Promise<PrCheckoutResult> {
   const run = input.exec ?? exec;
-  const { cwd, pr } = input;
-  const git = (args: string[], timeoutMs = 30_000) => run('git', args, { cwd, timeoutMs });
+  const { cwd, pr, dir } = input;
+  const git = (args: string[], timeoutMs = 30_000, env?: NodeJS.ProcessEnv) => run('git', args, { cwd, timeoutMs, ...(env ? { env } : {}) });
   const problems: string[] = [];
+  const tree = join(dir, 'tree');
   let head = '';
   let checkedOut = false;
+  // A re-run (a new push to the PR) starts from nothing: the old head is not this run's work.
+  rmSync(dir, { recursive: true, force: true });
+  mkdirSync(dir, { recursive: true });
 
   let meta: Record<string, unknown> = { number: pr.number, url: pr.url, repository: `${pr.owner}/${pr.repo}` };
   let diff: string | undefined;
+  let diffBase = 'github';
   if (!input.offline) {
     const repo = pr.host === 'github.com' ? `${pr.owner}/${pr.repo}` : `${pr.host}/${pr.owner}/${pr.repo}`;
     const gh = (args: string[]) => run('gh', args, { cwd, timeoutMs: 60_000, env: ghEnv() });
@@ -128,55 +111,79 @@ export async function checkoutPr(input: PrCheckoutInput): Promise<PrCheckoutResu
   const ghHead = typeof meta.headRefOid === 'string' ? meta.headRefOid : '';
 
   const remote = await prRemote(cwd, pr, run);
+  // No remote of this repository is the PR's (a fork's PR, a clone of something else): fetch its URL.
+  const source = remote ?? `https://${pr.host}/${pr.owner}/${pr.repo}.git`;
   if (input.offline) problems.push('CEZ_DRY_RUN=1: the PR was not fetched or checked out');
   else {
-    // No remote of this repository is the PR's (a fork's PR, a clone of something else): fetch its URL.
-    const source = remote ?? `https://${pr.host}/${pr.owner}/${pr.repo}.git`;
     const fetched = await git(['fetch', '--no-tags', '--quiet', source, `+refs/pull/${pr.number}/head`], 120_000);
     if (!fetched.ok) problems.push(`git fetch ${source} pull/${pr.number}/head failed — ${lastLine(fetched.stderr)}`);
-    else head = (await git(['rev-parse', '--verify', 'FETCH_HEAD^{commit}'])).stdout.trim();
-    // Belt and braces: what was fetched must be the head GitHub reports for this PR.
+    else {
+      const resolved = await git(['rev-parse', '--verify', 'FETCH_HEAD^{commit}']);
+      if (resolved.ok && resolved.stdout.trim()) head = resolved.stdout.trim();
+      else problems.push(`fetched pull/${pr.number}/head but could not read it — ${lastLine(resolved.stderr)}`);
+    }
+    // What was fetched must be the head GitHub reports for this PR.
     if (head && ghHead && head !== ghHead) {
       problems.push(`${source} pull/${pr.number}/head is ${head.slice(0, 12)}, not the PR's head ${ghHead.slice(0, 12)}; nothing was checked out`);
       head = '';
     }
   }
-  if (head) meta.headRefOid = head;
 
-  if (head && !input.ownWorktree) problems.push('the task runs in the repository working tree, which is never reset; the PR head was fetched but not checked out');
-  else if (head) {
-    const current = (await git(['rev-parse', 'HEAD'])).stdout.trim();
-    // A resumed walk finds its own earlier checkout.
-    const refusal = current === head ? undefined : await resetRefusal(git, cwd, head, input.baseBranch, remote);
-    if (refusal) problems.push(`${refusal}; the PR head was not checked out`);
-    else if (current === head) checkedOut = true;
-    else {
-      // The task branch moves to the PR head, so the Changes tab and the reviewers see the PR itself.
-      const reset = await git(['reset', '--hard', '--quiet', head]);
-      if (reset.ok) checkedOut = true;
-      else problems.push(`could not check out ${head.slice(0, 12)} — ${lastLine(reset.stderr)}`);
-    }
+  if (head) {
+    // A throwaway index, so neither the task's index nor its files are touched. Symlinks become
+    // plain files (a PR's link cannot point a reader elsewhere), and no LFS download runs.
+    const index = join(dir, 'index.tmp');
+    const env = { ...process.env, GIT_INDEX_FILE: index, GIT_LFS_SKIP_SMUDGE: '1' };
+    const read = await git(['-c', 'core.symlinks=false', 'read-tree', head], 60_000, env);
+    const out = read.ok ? await git(['-c', 'core.symlinks=false', 'checkout-index', '-a', '-f', `--prefix=${tree}/`], 300_000, env) : read;
+    rmSync(index, { force: true });
+    if (out.ok) checkedOut = true;
+    else problems.push(`could not export ${head.slice(0, 12)} — ${lastLine(out.stderr)}`);
   }
 
   if (diff === undefined && head) {
-    // gh is unavailable: the PR's own commits against the base branch, from git alone.
-    const baseName = typeof meta.baseRefName === 'string' ? meta.baseRefName : input.baseBranch;
-    const candidates = baseName ? [...(remote ? [`${remote}/${baseName}`] : []), baseName] : [];
-    for (const base of candidates) {
-      const mb = await git(['merge-base', base, head]);
-      if (!mb.ok) continue;
-      const local = await git(['diff', '--no-color', '--no-ext-diff', mb.stdout.trim(), head], 60_000);
-      if (local.ok) { diff = local.stdout; break; }
+    // No gh: the PR's commits against its base, fetched fresh; a local base may be stale.
+    const named = typeof meta.baseRefName === 'string' ? meta.baseRefName : input.baseBranch;
+    const baseName = named && isSafeGitRef(named) ? named : undefined;
+    let base: string | undefined;
+    if (baseName) {
+      const f = await git(['fetch', '--no-tags', '--quiet', source, `+refs/heads/${baseName}`], 120_000);
+      const sha = f.ok ? await git(['rev-parse', '--verify', 'FETCH_HEAD^{commit}']) : undefined;
+      if (sha?.ok) { base = sha.stdout.trim(); diffBase = `${baseName} fetched from ${source}`; }
+      else {
+        for (const local of [...(remote ? [`${remote}/${baseName}`] : []), baseName]) {
+          if ((await git(['rev-parse', '--verify', `${local}^{commit}`])).ok) { base = local; break; }
+        }
+        if (base) {
+          diffBase = `local ${base} (may be stale)`;
+          problems.push(`the diff is against the local ${base}, which may be behind the PR's base`);
+        }
+      }
     }
+    const mb = base ? await git(['merge-base', base, head]) : undefined;
+    const local = mb?.ok ? await git(['diff', '--no-color', '--no-ext-diff', mb.stdout.trim(), head], 60_000) : undefined;
+    if (local?.ok) diff = local.stdout;
   }
 
-  mkdirSync(input.artifactsDir, { recursive: true });
-  const metaPath = join(input.artifactsDir, `pr-${pr.number}.json`);
-  writeFileSync(metaPath, `${JSON.stringify({ ...meta, checkedOut }, null, 2)}\n`);
+  meta = {
+    ...meta,
+    ...(head ? { headRefOid: head } : {}),
+    // Only GitHub's own headRefOid confirms the fetched commit is the PR's.
+    headVerified: !!head && head === ghHead,
+    ...(diff !== undefined ? { diffBase } : {}),
+    checkedOut,
+    ...(checkedOut ? { tree } : {}),
+  };
+  const metaPath = join(dir, `pr-${pr.number}.json`);
+  writeFileSync(metaPath, `${JSON.stringify(meta, null, 2)}\n`);
   let diffPath = '';
   if (diff !== undefined) {
-    diffPath = join(input.artifactsDir, `pr-${pr.number}.diff`);
+    diffPath = join(dir, `pr-${pr.number}.diff`);
     writeFileSync(diffPath, diff);
   } else problems.push('no diff could be saved');
-  return { checkedOut, head, diffPath, metaPath, problems };
+  if (input.copyTo) {
+    mkdirSync(input.copyTo, { recursive: true });
+    for (const file of [metaPath, diffPath].filter(Boolean)) copyFileSync(file, join(input.copyTo, file.slice(dir.length + 1)));
+  }
+  return { checkedOut, head, tree: checkedOut ? tree : '', diffPath, metaPath, problems };
 }

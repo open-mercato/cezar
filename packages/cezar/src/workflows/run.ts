@@ -110,7 +110,7 @@ import { getHeadCommit, getRepoInfo } from '../server/git.ts';
 import { loadWorkflows, newerCatalogWorkflow } from './load.ts';
 import type { QueuedMessage, RunRecord, RunStore, StepState } from '../runs/store.ts';
 import { switchedWorkflowAgent, taskAgentSelection, workflowAgentSwitch } from '../runs/agent-selection.ts';
-import { artifactsDir, authParkForAccount, isIdleParked } from '../runs/store.ts';
+import { artifactsDir, authParkForAccount, isIdleParked, prCheckoutDir } from '../runs/store.ts';
 import { checkoutPr, parsePrUrl } from './pr-checkout.ts';
 import { artifactsPromptPart, scanArtifacts, watchArtifacts } from '../runs/artifacts.ts';
 import { backstopRender } from '../impact/publish.ts';
@@ -795,14 +795,24 @@ interface ActiveRun {
 }
 
 /**
- * Launch fields for a step of a read-only workflow (review-pr): its own artifacts directory is
- * writable on Claude, and a workflow that checks a PR out reads an untrusted tree, so Claude
- * ignores that tree's settings, hooks, CLAUDE.md and MCP config. An Ask task gets neither.
+ * What a workflow's own shape changes about an agent launch. A read-only workflow (review-pr)
+ * never runs with Claude's bypassPermissions, and its Claude steps may write the run's own
+ * artifacts directory; an Ask task gets neither widening. A workflow that checks a PR out lets
+ * every step read the PR's folder (`prCheckoutDir`) — read, never run in: the agents' working
+ * directory stays the task's own tree.
  */
-export function readOnlyWorkflowSpec(def: WorkflowDef | undefined, state: Pick<ActiveRun, 'readOnly'>, artifacts: string): Pick<AgentRunSpec, 'artifactsWriteDir' | 'untrustedWorktree' | 'noMcpServers'> {
-  if (!def || state.readOnly || !isReadOnlyWorkflow(def)) return {};
-  const untrusted = !!def.graph?.nodes.some((n) => n.type === 'github.pr-checkout');
-  return { artifactsWriteDir: artifacts, ...(untrusted ? { untrustedWorktree: true, noMcpServers: true } : {}) };
+export function workflowLaunchSpec(
+  def: WorkflowDef | undefined,
+  state: Pick<ActiveRun, 'readOnly'>,
+  dirs: { artifacts: string; prCheckout: string },
+): { readOnlyWorkflow: boolean; artifactsWriteDir?: string; prDirs: string[] } {
+  const readOnlyWorkflow = !!def && isReadOnlyWorkflow(def);
+  const checksOutPr = !!def?.graph?.nodes.some((n) => n.type === 'github.pr-checkout');
+  return {
+    readOnlyWorkflow,
+    ...(readOnlyWorkflow && !state.readOnly ? { artifactsWriteDir: dirs.artifacts } : {}),
+    prDirs: checksOutPr ? [dirs.prCheckout] : [],
+  };
 }
 
 function savedContinuationTools(run: RunRecord | undefined, owner?: StepState): StepToolPolicy | undefined {
@@ -6847,6 +6857,7 @@ export class RunManager {
       return;
     }
     const continuationTools = resolveAgentStepTools(state, toolsStep, savedTools);
+    const continueLaunch = workflowLaunchSpec(record?.workflowDef, state, { artifacts: artifactsDir(this.dataDir, runId), prCheckout: prCheckoutDir(this.dataDir, runId) });
     this.store.updateStep(runId, stepId, { toolPolicy: continuationTools });
     // The temp-directory preflight (#785) rides along with the account resolution: a resumed
     // turn hits the same broken `/tmp` a fresh one would, and an agent whose shell silently
@@ -6941,13 +6952,16 @@ export class RunManager {
           ...(openingImages.length ? { images: openingImages } : {}),
           cwd: state.cwd,
           ...continuationTools,
-          ...(state.bypassPermissions && !continuationTools.enforceReadOnly ? { bypassPermissions: true } : {}),
-          ...readOnlyWorkflowSpec(record?.workflowDef, state, artifactsDir(this.dataDir, runId)),
-          additionalDirectories: agentDirectories(
-            join(this.dataDir, 'runs'),
-            state.grantedAttachmentLibrary,
-            continueProfile.env,
-          ),
+          ...(state.bypassPermissions && !continuationTools.enforceReadOnly && !continueLaunch.readOnlyWorkflow ? { bypassPermissions: true } : {}),
+          ...(continueLaunch.artifactsWriteDir ? { artifactsWriteDir: continueLaunch.artifactsWriteDir } : {}),
+          additionalDirectories: [
+            ...agentDirectories(
+              join(this.dataDir, 'runs'),
+              state.grantedAttachmentLibrary,
+              continueProfile.env,
+            ),
+            ...continueLaunch.prDirs,
+          ],
           env: continuationTools.enforceReadOnly ? { ...continueProfile.env, ...readOnlyEnv() } : continueProfile.env,
           onUsageWindows: continueProfile.onUsageWindows,
           // A private server's tools are writes nothing here can vouch for.
@@ -8435,17 +8449,18 @@ export class RunManager {
           note('no GitHub pull request URL in the task to check out', 'danger');
           return 'failed';
         }
+        // Never into the task's tree: its branch, Changes and merge/push/PR gate stay the base's.
         const res = await checkoutPr({
           cwd: state.cwd,
-          artifactsDir: artifactsDir(this.dataDir, runId),
+          dir: prCheckoutDir(this.dataDir, runId),
+          copyTo: artifactsDir(this.dataDir, runId),
           pr,
-          ownWorktree: !!run.branch && run.worktree !== false && resolvePath(state.cwd) !== resolvePath(this.repoRoot),
           ...(run.baseBranch ? { baseBranch: run.baseBranch } : {}),
           offline: process.env.CEZ_DRY_RUN === '1',
         });
-        outputs.set(node.id, { number: pr.number, head: res.head, diff: res.diffPath, meta: res.metaPath, checkedOut: res.checkedOut ? 'yes' : 'no' });
+        outputs.set(node.id, { number: pr.number, head: res.head, tree: res.tree, diff: res.diffPath, meta: res.metaPath, checkedOut: res.checkedOut ? 'yes' : 'no' });
         for (const problem of res.problems) note(problem, 'danger');
-        if (res.checkedOut) note(`checked out PR #${pr.number} at ${res.head.slice(0, 12)}`);
+        if (res.checkedOut) note(`checked out PR #${pr.number} at ${res.head.slice(0, 12)} into ${res.tree}`);
         return res.checkedOut ? 'done' : 'failed';
       }
       case 'git.sync-base': {
@@ -9516,6 +9531,7 @@ export class RunManager {
       if (refusal) return refusal;
     }
     const stepTools = resolveAgentStepTools(state, step, graphHooks?.savedTools);
+    const stepLaunch = workflowLaunchSpec(stepDef, state, { artifacts: artifactsDir(this.dataDir, runId), prCheckout: prCheckoutDir(this.dataDir, runId) });
     this.store.updateStep(runId, step.id, { toolPolicy: stepTools });
     const stepPrivateMcp = !stepDef || !isReadOnlyWorkflow(stepDef);
     const runner = createRunner(stepBackend);
@@ -9547,14 +9563,17 @@ export class RunManager {
           images,
           cwd: state.cwd,
           ...stepTools,
-          ...(state.bypassPermissions && !stepTools.enforceReadOnly ? { bypassPermissions: true } : {}),
+          ...(state.bypassPermissions && !stepTools.enforceReadOnly && !stepLaunch.readOnlyWorkflow ? { bypassPermissions: true } : {}),
+          ...(stepLaunch.artifactsWriteDir ? { artifactsWriteDir: stepLaunch.artifactsWriteDir } : {}),
           // The handoff file lives outside the worktree — grant access.
-          ...readOnlyWorkflowSpec(stepDef, state, artifactsDir(this.dataDir, runId)),
-          additionalDirectories: agentDirectories(
-            join(this.dataDir, 'runs'),
-            state.grantedAttachmentLibrary,
-            stepProfile.env,
-          ),
+          additionalDirectories: [
+            ...agentDirectories(
+              join(this.dataDir, 'runs'),
+              state.grantedAttachmentLibrary,
+              stepProfile.env,
+            ),
+            ...stepLaunch.prDirs,
+          ],
           env: stepTools.enforceReadOnly ? { ...stepProfile.env, ...readOnlyEnv() } : stepProfile.env,
           onUsageWindows: stepProfile.onUsageWindows,
           mcpServers: stepTools.enforceReadOnly ? [] : stepMcp,

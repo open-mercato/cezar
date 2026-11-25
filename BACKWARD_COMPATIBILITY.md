@@ -703,14 +703,14 @@ unknown ui-state keys. It does not touch per-repo files.
 
 - **Additive node type**: `github.pr-checkout` (ports `done`, `failed`). A graph that does not use it
   is unchanged.
-- **Changed built-in**: `review-pr` starts with a `checkout` node, so its reviewers read the PR from
-  the worktree and the run's artifacts. A saved copy of `review-pr` keeps the graph it was saved with.
+- **Changed built-in**: `review-pr` starts with a `checkout` node that exports the PR into
+  `.ai/cezar/pr-checkouts/<run>/` (new state, deleted with the task); its reviewers read the PR
+  there and run in the task's untouched tree. A saved copy of `review-pr` keeps the graph it was saved with.
 - **Wider grant, read-only workflows only**: a Claude agent step (and its Continue) in any workflow
   whose capabilities are all false may now write its own run's artifacts directory
   (`Edit(//<artifacts>/**)`). Ask tasks and every other workflow are unchanged.
-- **Narrower settings**: Claude steps of a workflow with a `github.pr-checkout` node no longer load
-  the worktree's project/local settings, hooks, `CLAUDE.md` or project MCP servers — the PR's,
-  and also a personal `.claude/settings.local.json` cezar seeded there. User-level settings still load.
+- **Narrower permission**: a read-only workflow's Claude steps no longer take the project's
+  `bypassPermissions`, as Ask tasks already did not.
 
 ## Workflows — a human gate before every review-council PR, 2026-11-12
 

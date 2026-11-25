@@ -3,7 +3,7 @@ import type { AgentRunSpec } from '../core/agent-runner.ts';
 import { buildClaudeArgs, claudeArtifactsWriteRule } from '../core/claude-cli-runner.ts';
 import { codexBashArgv, compileCodexRestrictedPolicy } from '../core/codex-restricted-policy.ts';
 import { isReadOnlyWorkflow } from './capabilities.ts';
-import { readOnlyWorkflowSpec } from './run.ts';
+import { workflowLaunchSpec } from './run.ts';
 import { QUICK_TASK_WORKFLOW } from './types.ts';
 import { REVIEW_PR } from './templates.ts';
 
@@ -125,20 +125,27 @@ describe('claudeArtifactsWriteRule', () => {
   });
 });
 
-describe('readOnlyWorkflowSpec', () => {
-  it('gives review-pr steps their artifacts and an untrusted-tree launch', () => {
-    expect(readOnlyWorkflowSpec(REVIEW_PR, {}, ARTIFACTS)).toEqual({ artifactsWriteDir: ARTIFACTS, untrustedWorktree: true, noMcpServers: true });
+describe('workflowLaunchSpec', () => {
+  const dirs = { artifacts: ARTIFACTS, prCheckout: '/data/pr-checkouts/run-1' };
+  it('gives review-pr steps their artifacts, the PR folder, and no bypass', () => {
+    expect(workflowLaunchSpec(REVIEW_PR, {}, dirs)).toEqual({ readOnlyWorkflow: true, artifactsWriteDir: ARTIFACTS, prDirs: [dirs.prCheckout] });
   });
-  it('leaves Ask tasks and writable workflows exactly as before', () => {
-    expect(readOnlyWorkflowSpec(REVIEW_PR, { readOnly: true }, ARTIFACTS)).toEqual({});
-    expect(readOnlyWorkflowSpec(QUICK_TASK_WORKFLOW, {}, ARTIFACTS)).toEqual({});
-    expect(readOnlyWorkflowSpec(undefined, {}, ARTIFACTS)).toEqual({});
+  it('lets an Ask task write nothing new', () => {
+    expect(workflowLaunchSpec(REVIEW_PR, { readOnly: true }, dirs).artifactsWriteDir).toBeUndefined();
   });
-  it("makes Claude ignore the checked-out tree's settings, hooks, CLAUDE.md and MCP config", () => {
-    const node = agents[0]!;
-    const args = buildClaudeArgs(spec(node, readOnlyWorkflowSpec(REVIEW_PR, {}, ARTIFACTS)), {});
-    expect(args[args.indexOf('--setting-sources') + 1]).toBe('user');
-    expect(args).toContain('--strict-mcp-config');
-    expect(buildClaudeArgs(spec(node), {})).not.toContain('--setting-sources');
+  it('leaves a writable workflow without a PR checkout exactly as before', () => {
+    expect(workflowLaunchSpec(QUICK_TASK_WORKFLOW, {}, dirs)).toEqual({ readOnlyWorkflow: false, prDirs: [] });
+    expect(workflowLaunchSpec(undefined, {}, dirs)).toEqual({ readOnlyWorkflow: false, prDirs: [] });
+  });
+  it('gives every step of a writable workflow that checks a PR out the PR folder to read, and no artifacts grant', () => {
+    const writable = {
+      ...REVIEW_PR,
+      name: 'fix-pr',
+      graph: {
+        ...REVIEW_PR.graph!,
+        nodes: REVIEW_PR.graph!.nodes.map((n) => (n.type === 'agent' && n.id === 'judge' ? { ...n, allowedTools: undefined, bashAllowlist: undefined } : n)),
+      },
+    };
+    expect(workflowLaunchSpec(writable, {}, dirs)).toEqual({ readOnlyWorkflow: false, prDirs: [dirs.prCheckout] });
   });
 });

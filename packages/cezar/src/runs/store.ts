@@ -670,6 +670,12 @@ export function artifactsDir(dataDir: string, runId: string): string {
   return join(dataDir, 'artifacts', runId);
 }
 
+/** A `github.pr-checkout` node's PR head, diff and metadata — outside every worktree, and read-only
+ *  to the run's agents (`workflows/pr-checkout.ts`). */
+export function prCheckoutDir(dataDir: string, runId: string): string {
+  return join(dataDir, 'pr-checkouts', runId);
+}
+
 /** `https://github.com/open-mercato/cezar/pull/402` → `open-mercato/cezar`, lowercased.
  *  Undefined for anything that is not a `<host>/<owner>/<repo>/<kind>/<n>` forge URL. */
 function refUrlRepo(url: string): string | undefined {
@@ -2576,6 +2582,7 @@ export class RunStore extends EventEmitter {
       rmSync(this.handoffPath(id), { force: true }); // spec 007: the journal goes with the task
       rmSync(this.imagesDir(id), { recursive: true, force: true }); // agent screenshots
       rmSync(artifactsDir(this.dataDir, id), { recursive: true, force: true });
+      rmSync(prCheckoutDir(this.dataDir, id), { recursive: true, force: true });
       // Unsent drafts go with the task (#939): a draft for a run that no longer exists is
       // unreachable by definition, and it may be holding megabytes of pasted screenshots.
       deleteRunDrafts(this.dataDir, id);
