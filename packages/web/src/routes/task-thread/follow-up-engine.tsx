@@ -3,8 +3,8 @@ import { useState, type ReactNode } from 'react'
 
 import { hasAccountChoice, useAgentAccounts } from '@/api/agent-accounts'
 import { continueRun } from '@/api/client'
-import { queryKeys, useConfig, useRunnerModels } from '@/api/queries'
-import { DEFAULT_AGENT_ACCOUNT_ID, runnerSupportsReasoningEffort } from '@open-mercato/cezar-api-client'
+import { queryKeys, useConfig, useRefreshRunnerModels, useRunnerModels } from '@/api/queries'
+import { DEFAULT_AGENT_ACCOUNT_ID, runnerDiscoversModels, runnerSupportsReasoningEffort } from '@open-mercato/cezar-api-client'
 import type { ApiRun, ContinueResponse, AttachmentEntry, Runner } from '@open-mercato/cezar-api-client'
 import { PickerPill, RunnerPill, engineLeftClass, engineRightClass, modelPillClass } from '@/components/picker-pill'
 import { ReasoningEffortPill, reasoningEffortOffered } from '@/components/reasoning-effort-pill'
@@ -77,6 +77,7 @@ export function useContinueAction(run: ApiRun): ContinueAction {
   // fetches at all — every other thread (running, queued, closed with no session) would be
   // fetching it to render nothing.
   const catalog = useRunnerModels(runner, available)
+  const refreshModels = useRefreshRunnerModels()
   const modelsLocked = config.data?.modelsLocked === true
   // While the runner is unchanged, the model pill starts on the run's own pin; switching the
   // runner invalidates that pin and falls back to the new backend's configured default / auto.
@@ -199,6 +200,16 @@ export function useContinueAction(run: ApiRun): ContinueAction {
       }}
       options={models.map((m) => ({ value: m.id, label: m.label, desc: m.desc }))}
       status={modelCatalogStatus(runner, catalog.data, catalog.isError)}
+      action={
+        runnerDiscoversModels(runner)
+          ? {
+              label: refreshModels.isPending ? 'Refreshing models…' : 'Refresh models…',
+              slot: 'model-pill-refresh',
+              disabled: refreshModels.isPending,
+              onSelect: () => refreshModels.mutate(runner),
+            }
+          : undefined
+      }
     />
   )
   const effortPill = (

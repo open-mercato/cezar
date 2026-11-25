@@ -28,6 +28,7 @@ import {
   useProviderStatus,
   useProjects,
   useRepo,
+  useRefreshRunnerModels,
   useRunnerModels,
   useSkills,
   useUiState,
@@ -43,6 +44,7 @@ import {
   type ProjectListEntry,
   type RepoResponse,
   type Runner,
+  runnerDiscoversModels,
 } from '@open-mercato/cezar-api-client'
 import { TwinkleBackdrop } from '@/components/centered-state'
 import { Composer, type ComposerHandle } from '@/components/composer/composer'
@@ -316,6 +318,7 @@ export function NewTaskRoute() {
   const displayRunner = runner ?? preferredRunner
   const providersReady = providers.isSuccess && runners.length > 0
   const catalog = useRunnerModels(displayRunner)
+  const refreshModels = useRefreshRunnerModels()
   const modelsLocked = config.data?.modelsLocked === true
   const models = runner === null
     ? []
@@ -783,6 +786,16 @@ export function NewTaskRoute() {
         options={models.map((m) => ({ value: m.id, label: m.label, desc: m.desc }))}
         searchPlaceholder="Search models…"
         status={modelCatalogStatus(displayRunner, catalog.data, catalog.isError)}
+        action={
+          runnerDiscoversModels(displayRunner)
+            ? {
+                label: refreshModels.isPending ? 'Refreshing models…' : 'Refresh models…',
+                slot: 'model-pill-refresh',
+                disabled: refreshModels.isPending,
+                onSelect: () => refreshModels.mutate(displayRunner),
+              }
+            : undefined
+        }
       />
     </span>
   )
