@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { currentEntry, activate, activeId, assertSafeId, detectInstallKind, installId, runsFromCheckout, listInstalled, versionDir, versionEntry, versionsDir, writeManifest } from './layout.ts';
 import { fetchPackageDocument, RegistryCache, registryPath } from './registry.ts';
 import { SelfUpdateService } from './service.ts';
+import { RestartGate, type RestartBlockerItems } from '../workspace/restart-gate.ts';
 import { restartArgs } from './restart.ts';
 import { runSelfUpdateCommand } from './cli.ts';
 import { classifyVersion, compareVersions, devVersion, isNewer } from './semver.ts';
@@ -208,6 +209,7 @@ describe('update when idle', () => {
   let idle: boolean;
   let restart: ReturnType<typeof vi.fn<() => void>>;
   let service: SelfUpdateService;
+  let gate: RestartGate;
 
   const fakeInstall = (id: string) => {
     const entry = versionEntry(id, env);
@@ -224,13 +226,16 @@ describe('update when idle', () => {
     activate('0.12.0', env);
     idle = false;
     restart = vi.fn<() => void>();
+    gate = new RestartGate();
+    gate.addSource(() => (idle ? [] : [{ kind: 'task', names: ['a running task'] }]));
     const offline = (async () => new Response('', { status: 503 })) as unknown as typeof fetch;
     service = new SelfUpdateService({
       pkgName: '@open-mercato/cezar',
       version: '0.12.0',
       entry: versionEntry('0.12.0', env),
       restart,
-      runs: { idle: () => idle, activeRuns: () => (idle ? 0 : 1) },
+      runs: { activeRuns: () => (idle ? 0 : 1) },
+      gate,
       idlePollMs: 10,
       env,
       registry: new RegistryCache('@open-mercato/cezar', offline),
@@ -274,7 +279,8 @@ describe('update when idle', () => {
       version: '0.12.0',
       entry: versionEntry('0.12.0', env),
       restart,
-      runs: { idle: () => idle, activeRuns: () => (idle ? 0 : 1) },
+      runs: { activeRuns: () => (idle ? 0 : 1) },
+      gate,
       idlePollMs: 10,
       env,
       registry: new RegistryCache('@open-mercato/cezar', offline),
@@ -301,8 +307,11 @@ describe('update when idle', () => {
   it('applies at once when nothing is running', async () => {
     idle = true;
     service.scheduleWhenIdle('0.12.1');
-    expect((await service.status()).scheduled).toBeNull();
+    // Still shown as pending until the restart actually fires.
+    expect((await service.status()).scheduled?.target).toBe('0.12.1');
     expect((await service.status()).job?.target).toBe('0.12.1');
+    await vi.waitFor(() => expect(restart).toHaveBeenCalledTimes(1), { timeout: 3_000 });
+    expect((await service.status()).scheduled).toBeNull();
   });
 
   it('never applies a cancelled schedule', async () => {
@@ -350,6 +359,115 @@ describe('update when idle', () => {
       log.mockRestore();
       vi.unstubAllEnvs();
     }
+  });
+
+  describe('waits for every kind of work, not just held slots', () => {
+    // The bug: a task monitoring its CI, a manager mid-turn and a setup terminal hold no parallel
+    // slot, so the old slot-count "idle" restarted under all three.
+    let work: Record<RestartBlockerItems['kind'], string[]>;
+    let gated: SelfUpdateService;
+    beforeEach(() => {
+      idle = true;
+      work = { task: [], manager: [], setup: [] };
+      const kinds = new RestartGate();
+      for (const kind of ['task', 'manager', 'setup'] as const) kinds.addSource(() => [{ kind, names: work[kind] }]);
+      gate = kinds;
+      gated = new SelfUpdateService({
+        pkgName: '@open-mercato/cezar',
+        version: '0.12.0',
+        entry: versionEntry('0.12.0', env),
+        restart,
+        gate,
+        idlePollMs: 10,
+        env,
+        registry: new RegistryCache('@open-mercato/cezar', (async () => new Response('', { status: 503 })) as unknown as typeof fetch),
+      });
+    });
+    afterEach(() => gated.cancelScheduled());
+
+    const settle = () => new Promise((resolve) => setTimeout(resolve, 60));
+
+    it.each([
+      ['a task monitoring its CI', 'task'],
+      ['a manager turn', 'manager'],
+      ['an agent setup terminal', 'setup'],
+    ] as const)('is deferred while %s runs, and fires once it is done', async (_label, kind) => {
+      work[kind] = ['busy one'];
+      gated.scheduleWhenIdle('0.12.1');
+      await settle();
+      const pending = await gated.status();
+      expect(pending.scheduled?.target).toBe('0.12.1');
+      expect(pending.restartBlockers).toEqual([{ kind, count: 1, names: ['busy one'] }]);
+      expect(pending.job).toBeNull();
+      expect(gate.holding).toBe(true);
+      expect(restart).not.toHaveBeenCalled();
+
+      work[kind] = [];
+      await vi.waitFor(() => expect(restart).toHaveBeenCalledTimes(1), { timeout: 3_000 });
+      expect(activeId(env)).toBe('0.12.1');
+      expect((await gated.status()).scheduled).toBeNull();
+    });
+
+    it('waits until ALL of them are idle', async () => {
+      work = { task: ['t'], manager: ['m'], setup: ['s'] };
+      gated.scheduleWhenIdle('0.12.1');
+      work.task = [];
+      await settle();
+      work.manager = [];
+      await settle();
+      expect(restart).not.toHaveBeenCalled();
+      work.setup = [];
+      await vi.waitFor(() => expect(restart).toHaveBeenCalledTimes(1), { timeout: 3_000 });
+    });
+
+    it('re-checks right before restarting: work that started during the install is waited for', async () => {
+      gated.scheduleWhenIdle('0.12.1');
+      // Idle at schedule time, so the install started. Work slips in before the restart fires.
+      expect((await gated.status()).job?.target).toBe('0.12.1');
+      work.manager = ['a chat the user just sent'];
+      await vi.waitFor(async () => expect((await gated.status()).job?.status).toBe('restarting'));
+      await new Promise((resolve) => setTimeout(resolve, 900));
+      expect(restart).not.toHaveBeenCalled();
+      expect((await gated.status()).scheduled?.target).toBe('0.12.1');
+
+      work.manager = [];
+      await vi.waitFor(() => expect(restart).toHaveBeenCalledTimes(1), { timeout: 3_000 });
+    });
+
+    it('holds new work while pending and lets it go on cancel', async () => {
+      work.task = ['t'];
+      const released = vi.fn();
+      gate.onRelease(released);
+      gated.scheduleWhenIdle('0.12.1');
+      expect(gate.holding).toBe(true);
+      gated.cancelScheduled();
+      expect(gate.holding).toBe(false);
+      expect(released).toHaveBeenCalledTimes(1);
+      work.task = [];
+      await settle();
+      expect(restart).not.toHaveBeenCalled();
+    });
+
+    it('"Restart now" on the scheduled target restarts without waiting', async () => {
+      work.task = ['t'];
+      gated.scheduleWhenIdle('0.12.1');
+      gated.apply('0.12.1');
+      await vi.waitFor(() => expect(restart).toHaveBeenCalledTimes(1), { timeout: 3_000 });
+    });
+
+    it('cancelling an activated restart that is still waiting keeps the process running', async () => {
+      gated.scheduleWhenIdle('0.12.1');
+      work.task = ['started during install'];
+      await vi.waitFor(async () => expect((await gated.status()).job?.status).toBe('restarting'));
+      gated.cancelScheduled();
+      work.task = [];
+      await new Promise((resolve) => setTimeout(resolve, 900));
+      expect(restart).not.toHaveBeenCalled();
+      const status = await gated.status();
+      expect(status.job?.status).toBe('failed');
+      expect(status.job?.error).toMatch(/restart cancelled/);
+      expect(gate.holding).toBe(false);
+    });
   });
 
   it('refuses up front when this install cannot update itself', () => {

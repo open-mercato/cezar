@@ -65,6 +65,16 @@ export const selfUpdateScheduledSchema = z.object({
 });
 export type SelfUpdateScheduled = z.infer<typeof selfUpdateScheduledSchema>;
 
+/** One kind of work a restart would interrupt: a task that is working (running, monitoring its
+ *  CI or children, starting, or queued to start), a manager mid-turn, or an agent setup terminal.
+ *  `names` are a few of them, for the "waiting for…" line. */
+export const restartBlockerSchema = z.object({
+  kind: z.enum(['task', 'manager', 'setup']),
+  count: z.number().int().min(1),
+  names: z.array(z.string()),
+});
+export type RestartBlocker = z.infer<typeof restartBlockerSchema>;
+
 /** `GET /api/v1/workspace/self-update` (and every mutation on the family). */
 export const selfUpdateStatusSchema = z.object({
   version: z.string(),
@@ -89,11 +99,14 @@ export const selfUpdateStatusSchema = z.object({
   installed: z.array(installedVersionSchema),
   available: z.array(availableVersionSchema),
   job: selfUpdateJobSchema.nullable(),
-  /** "Update when idle": the version this process installs and restarts into as soon as no task
-   *  is running or queued. In memory only — a restart for any other reason forgets it. */
+  /** "Update when idle": the version this process installs and restarts into as soon as nothing
+   *  is working (`restartBlockers` is empty). New tasks and timed manager turns are held while it
+   *  is pending. In memory only — a restart for any other reason forgets it. */
   scheduled: selfUpdateScheduledSchema.nullable(),
   /** Runs in flight across the workspace — a restart interrupts them (boot recovery re-queues). */
   activeRuns: z.number().int().min(0),
+  /** What a restart would interrupt right now; empty means idle. "When idle" waits for all of it. */
+  restartBlockers: z.array(restartBlockerSchema),
 });
 export type SelfUpdateStatus = z.infer<typeof selfUpdateStatusSchema>;
 

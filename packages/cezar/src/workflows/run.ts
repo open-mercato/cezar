@@ -1767,6 +1767,7 @@ export class RunManager {
       accountHolds: () => this.accountHolds(),
       refreshQueueReasons: () => this.refreshQueueReasons(),
       activeRuns: () => this.store.listRuns().filter((r) => RESTART_SENSITIVE.has(r.status) && !isIdleParked(r)).length,
+      restartBlockers: () => this.restartBlockers(),
     });
     this.lifecycle = new WorktreeLifecycleCoordinator(repoRoot, store, {
       semaphore: this.semaphore,
@@ -2355,6 +2356,34 @@ export class RunManager {
   }
 
   /**
+   * Runs a restart would cut off mid-work, by title. Unlike `busySlots`, a run monitoring its CI
+   * or its children counts — it is still working — and so does every queued run the pending
+   * restart does not hold. A run waiting on the user does not: boot resumes it as it was.
+   */
+  private restartBlockers(): string[] {
+    const names: string[] = [];
+    for (const run of this.store.listRuns()) {
+      const working = run.status === 'running' || this.starting.has(run.id)
+        || (run.status === 'queued' && !this.heldForRestart(run));
+      if (working) names.push(run.title || run.task.slice(0, 60));
+    }
+    return names;
+  }
+
+  /**
+   * A pending "restart when idle" holds new tasks in the queue, so the wait can end. Not held:
+   * continuations (a resume of work already under way — restart recovery, a usage-limit resume, the
+   * user's own Continue), a dispatched child (its parent is waiting on it, and the parent blocks the
+   * restart until it reports), and a run the user told to Start now.
+   */
+  private heldForRestart(run: RunRecord): boolean {
+    return this.semaphore.restartGate.holding
+      && !this.pendingContinuations.has(run.id)
+      && !run.dispatch?.parentRunId
+      && !this.startNowRequested.has(run.id);
+  }
+
+  /**
    * Park a run in the monitoring set — the ONE entry, so `unitParents ⊆ monitoring` cannot be
    * half-applied across the two near-identical turn-end handlers (AGENTS.md § "Find every
    * construction site of a shared in-memory object").
@@ -2538,6 +2567,7 @@ export class RunManager {
         const defaultRunner = anyHold ? (await loadConfig(this.repoRoot)).defaultRunner : undefined;
         const startable = (id: string): boolean => {
           const queued = this.store.getRun(id);
+          if (queued && this.heldForRestart(queued)) return false;
           if (queued && anyHold && accountHeldFor(queued, holds, defaultRunner ?? 'claude', this.askingAccounts(), this.pendingJobs.get(id)?.workflow)) return false;
           // "Start now" goes over `maxParallel` on purpose, but a non-git root still runs one at a time.
           if (this.startNowRequested.has(id)) return repo !== null || this.busySlots() < 1;
@@ -4604,6 +4634,8 @@ export class RunManager {
       await this.reviveQueuedRun(run, 'queue watchdog');
     }
     if (this.queue.length === 0) return;
+    // A pending restart holds the queue on purpose; cancelling it pumps every manager.
+    if (this.semaphore.restartGate.holding) return;
     if (this.busySlots() > 0 || this.starting.size > 0) return;
     if (this.semaphore.busy() > 0) return;
     // A future deadline is a real reason to sit still: that timer will fire and pump.
