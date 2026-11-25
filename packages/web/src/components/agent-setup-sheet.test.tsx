@@ -47,7 +47,6 @@ const entry = (provider: AgentSetupProvider, over: Partial<AgentSetupEntry> = {}
   method: null,
   minVersion: null,
   latestVersion: null,
-  autoUpdates: null,
   activeRuns: 0,
   ...over,
 })

@@ -1,7 +1,7 @@
 import { homedir } from 'node:os';
 
 import {
-  agentSetupQuerySchema,
+  AGENT_SETUP_LATEST_HEADER,
   agentSetupSessionParamsSchema,
   agentSetupSessionSchema,
   agentSetupStartSchema,
@@ -62,7 +62,7 @@ export interface AgentSetupDeps {
   locate?: (executable: string) => InstalledCli;
   /** Tasks running on this agent now. */
   activeRuns?: (provider: AgentSetupProvider) => number | Promise<number>;
-  /** The newest release, read only for `?latest=1`. */
+  /** The newest release, read only when the request sets `AGENT_SETUP_LATEST_HEADER`. */
   latest?: LatestVersions;
   /** The request came through a paired phone: no typing, and nothing that needs a password. */
   phone?: () => boolean;
@@ -157,7 +157,6 @@ export function agentSetupRoutes(deps: AgentSetupDeps) {
         method: where?.method ?? null,
         minVersion,
         latestVersion,
-        autoUpdates: recipe.autoUpdates,
         activeRuns: await (deps.activeRuns?.(provider) ?? 0),
       };
     }));
@@ -203,12 +202,12 @@ export function agentSetupRoutes(deps: AgentSetupDeps) {
 
 
   return new Hono()
-    .get('/providers/setup', queryZodValidator(agentSetupQuerySchema), async (c) => {
+    .get('/providers/setup', async (c) => {
       c.header('Cache-Control', 'no-store');
       // First: a session that just ended clears the version cache before the listing reads it.
       const info = currentInfo();
       const status = await (deps.currentStatus ?? deps.status)().catch((): ProviderStatusResponse => ({ providers: [] }));
-      const agents = await entries(c.req.valid('query').latest === '1', status);
+      const agents = await entries(c.req.header(AGENT_SETUP_LATEST_HEADER) === '1', status);
       const reason = await unavailable();
       // Refused (hosted, terminal off): the install lines and docs still help, but a sign-in or
       // update line names the host's binary path, which a hosted reader must not learn.

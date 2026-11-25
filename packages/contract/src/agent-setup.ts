@@ -50,10 +50,8 @@ export const agentSetupEntrySchema = z.object({
   method: agentInstallMethodSchema.nullable(),
   /** The oldest version cezar is known to drive, including one an agent error stated. */
   minVersion: z.string().nullable(),
-  /** The newest release, only when the request asked for it (`?latest=1`) and the lookup is on. */
+  /** The newest release, only when the request asked for it (`AGENT_SETUP_LATEST_HEADER`) and the lookup is on. */
   latestVersion: z.string().nullable(),
-  /** The vendor keeps it current by itself; null = not known. */
-  autoUpdates: z.boolean().nullable(),
   /** Tasks running on this agent right now: an update waits for them unless told otherwise. */
   activeRuns: z.number().int().min(0),
 });
@@ -98,6 +96,6 @@ export type AgentSetupStart = z.infer<typeof agentSetupStartSchema>;
 
 export const agentSetupSessionParamsSchema = z.object({ sessionId: z.string() });
 
-/** `GET /api/v1/providers/setup?latest=1` also looks up the newest release of each agent. */
-export const agentSetupQuerySchema = z.object({ latest: z.literal('1').optional() });
-export type AgentSetupQuery = z.infer<typeof agentSetupQuerySchema>;
+/** `GET /api/v1/providers/setup` with this header set to `1` also looks up the newest release of
+ *  each agent. A header, not a query: the typed API sits at its size limit (TS7056, #2474). */
+export const AGENT_SETUP_LATEST_HEADER = 'x-cezar-latest';

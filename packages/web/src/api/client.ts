@@ -5,7 +5,7 @@ import type {
   lifecyclePreviewInputSchema, lifecycleListQuerySchema, LifecycleOutputResponse,
   LifecyclePreviewResponse, LifecycleActionInput, StartLifecycleRemovalInput,
 } from '@open-mercato/cezar-api-client'
-import { deferredAlreadyStartedSchema, trackerReadScope, resolveApiUrl, workspaceBrandingLogoResponseSchema } from '@open-mercato/cezar-api-client'
+import { AGENT_SETUP_LATEST_HEADER, deferredAlreadyStartedSchema, trackerReadScope, resolveApiUrl, workspaceBrandingLogoResponseSchema } from '@open-mercato/cezar-api-client'
 import type {
   DetectedUrlsResponse,
   DiscoveredCommandsResponse,
@@ -675,7 +675,7 @@ export async function cancelGithubLogin(): Promise<GithubLoginState> {
 /** Installing and signing in to an agent on the first-run page: the state, and one setup terminal. */
 export async function getAgentSetup(opts?: ReadOptions & { latest?: boolean }): Promise<AgentSetupState> {
   return unwrap(
-    await cez.api.v1.providers.setup.$get({ query: opts?.latest ? { latest: '1' } : {} }, init(opts)),
+    await cez.api.v1.providers.setup.$get({}, { ...init(opts), ...(opts?.latest ? { headers: { [AGENT_SETUP_LATEST_HEADER]: '1' } } : {}) }),
     '/providers/setup',
   )
 }

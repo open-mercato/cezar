@@ -165,7 +165,6 @@ describe('AgentUpdateRequiredCard', () => {
     method: update.method,
     minVersion: '1.18.0',
     latestVersion: null,
-    autoUpdates: null,
     activeRuns: 0,
   })
   const serve = (agents: unknown[]) => {

@@ -2680,14 +2680,13 @@ export function createApp(deps: ServerDeps) {
           trackUpdateOpened(provider, 'unsupported', sid);
           return c.json({ error: 'This agent has no update command of its own. Update it the way you installed it.' }, 409);
         }
-        // A command cezar does not vouch for is shown, never run (`core/agent-install.ts`).
-        if (!plan?.runnable) {
-          trackUpdateOpened(provider, 'unsupported', sid);
-          return c.json({ error: 'cezar does not run this update itself. Run it in a terminal.', command }, 409);
-        }
-        if (!capabilities().localHandoff) {
-          trackUpdateOpened(provider, 'hosted', sid);
-          return c.json({ error: 'Run this command on the machine hosting cezar.', command }, 409);
+        // A command cezar does not vouch for is shown, never run (`core/agent-install.ts`). One refusal
+        // with the hosted one: a separate `c.json` tipped AppType over TS7056 on Windows (#2474).
+        const runnable = plan?.runnable === true;
+        if (!runnable || !capabilities().localHandoff) {
+          trackUpdateOpened(provider, runnable ? 'hosted' : 'unsupported', sid);
+          const error = runnable ? 'Run this command on the machine hosting cezar.' : 'cezar does not run this update itself. Run it in a terminal.';
+          return c.json({ error, command }, 409);
         }
         let opened = false;
         try {

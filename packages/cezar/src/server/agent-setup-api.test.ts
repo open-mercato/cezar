@@ -309,7 +309,7 @@ describe('/api/v1/providers/setup', () => {
       const plain = await (await routes.request('/providers/setup')).json() as { agents: Array<{ provider: string; latestVersion: string | null }> };
       expect(plain.agents.find((agent) => agent.provider === 'claude')?.latestVersion).toBeNull();
       expect(fetches).toEqual([]);
-      const body = await (await routes.request('/providers/setup?latest=1')).json() as { interactive: boolean; agents: Array<Record<string, unknown>> };
+      const body = await (await routes.request('/providers/setup', { headers: { 'x-cezar-latest': '1' } })).json() as { interactive: boolean; agents: Array<Record<string, unknown>> };
       expect(body.interactive).toBe(true);
       expect(body.agents.find((agent) => agent.provider === 'claude')).toMatchObject({
         installed: true,

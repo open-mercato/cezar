@@ -343,7 +343,6 @@ function Confirm({
           {entry.method === 'npm' ? ' them, because npm replaces the files in place.' : ' a task that starts the CLI again.'}
         </p>
       ) : null}
-      {action === 'update' && entry.autoUpdates ? <p className="text-meta text-soft-foreground">{label} also updates itself; this does it sooner.</p> : null}
       {waiting ? (
         <p data-slot="agent-setup-waiting" role="status" className="text-ui text-soft-foreground">
           Keep this open: the update starts here once the tasks finish. Closing it cancels the wait.

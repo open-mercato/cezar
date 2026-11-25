@@ -51,7 +51,7 @@ run failed with "X or newer is required". The install commands lived in three pl
   (`noteAgentErrorVersion`, in memory) only when the sentence names the agent, or says "version", right before the
   number, with no runtime or system (Node.js, git, macOS…) in that span: an allowlist, because a minimum someone else
   owns is one Update could never clear. The latest version
-  comes from npm (`/<pkg>/latest`, or the newest stable within `npmMajor`), only on `GET /providers/setup?latest=1`,
+  comes from npm (`/<pkg>/latest`, or the newest stable within `npmMajor`), only when `GET /providers/setup` carries `x-cezar-latest: 1`,
   cached for 6 h (30 min after a failure). `CEZ_AGENT_VERSION_CHECK=0` turns it off. Chips: below the minimum is
   "X required", behind npm is "X available".
 
@@ -61,15 +61,19 @@ The state is one flat object, `{available, reason, interactive, agents, session}
 is unavailable, so a hosted cockpit can still copy commands (without sign-in or update lines, which name host paths).
 Each entry carries `install` and `update` plans (`{command, runnable, sudo}`, plus `method` on the install plan; the
 update's method is the entry's `method`), `docsUrl`, `copyOnlyReason`, `installed`, `version`, `method`, `minVersion`,
-`latestVersion`, `autoUpdates` and `activeRuns`. `POST /sessions` accepts `action: 'update'` and `force`; joining a
+`latestVersion` and `activeRuns`. `POST /sessions` accepts `action: 'update'` and `force`; joining a
 running session answers 201 like a fresh start, and "could not be checked" answers 409.
 
 **Why so flat.** The typed API (`AppType`) sits at the compiler's declaration-length limit (TS7056): with `main` at
 `3bc0ef093`/`4ce90da91` it had about 100 characters to spare. A union of two states spelled the agent list out twice,
 a second success status spelled the session out twice, and `versionState` and `installCommand` repeat what the other
 fields already say, so the reader derives those two (`entryVersionState`, `install.runnable ? install.command : null`).
-The entry has no `installHint` either (the first-run row shows the copy line or the docs link), and `?latest` takes
-only `1`: on Windows `main` itself sits within a character of the limit, so this family must cost less than `main`'s.
+The entry has no `installHint` or `autoUpdates` either (the first-run row shows the copy line or the docs link, and the
+"updates itself" note is gone), and "look up the newest releases" is the `x-cezar-latest: 1` header rather than a
+query, which would join the typed route signature. Windows checks out CRLF, and its count of the same `AppType` runs a
+little longer: `main` itself sits within a character of the limit there, so this family must cost less than `main`'s.
+`POST /providers/:provider/update` folds "cezar does not run this update itself" into its hosted refusal for the same
+reason.
 Every refusal in the family is plain `{ error }`, as on `main`: a second error shape (`{ error, command }`) was reduced
 away on macOS but not on Windows, which tipped the Windows build over. The command to copy is in the listing.
 
