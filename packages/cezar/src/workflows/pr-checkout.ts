@@ -151,7 +151,7 @@ const EMPTY_TREE = { sha1: '4b825dc642cb6eb9a060e54bf8d69288fbee4904', sha256: '
  *  well as by its tool rules. */
 function writeReadOnly(path: string, content: string): void {
   rmSync(path, { force: true });
-  writeFileSync(path, content, { mode: 0o444 });
+  writeFileSync(path, content, { mode: 0o444, flag: 'wx' });
 }
 
 /**

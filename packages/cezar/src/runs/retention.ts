@@ -368,13 +368,13 @@ export function freePrCheckoutTree(store: RetentionStore, runId: string, now = (
       // The agents' copy and the user's copy in the artifacts (what Assets shows) say the same.
       for (const path of [join(dir, name), ...(store.artifactsDir ? [join(store.artifactsDir(runId), name)] : [])]) {
         try {
-          if (!existsSync(path)) continue;
           const meta = JSON.parse(readFileSync(path, 'utf8')) as Record<string, unknown>;
           delete meta.tree;
-          // Read-only on disk (`pr-checkout.ts`): replaced, never written over.
+          // Read-only on disk (`pr-checkout.ts`): replaced, never written over. `wx` creates it
+          // afresh, so whatever appeared at the path in between is refused, never followed.
           rmSync(path, { force: true });
-          writeFileSync(path, `${JSON.stringify({ ...meta, checkedOut: false, treeReclaimedAt: reclaimedAt }, null, 2)}\n`, { mode: 0o444 });
-        } catch { /* an unreadable metadata file stays as it was */ }
+          writeFileSync(path, `${JSON.stringify({ ...meta, checkedOut: false, treeReclaimedAt: reclaimedAt }, null, 2)}\n`, { mode: 0o444, flag: 'wx' });
+        } catch { /* a missing or unreadable metadata file stays as it was */ }
       }
     }
     return true;
