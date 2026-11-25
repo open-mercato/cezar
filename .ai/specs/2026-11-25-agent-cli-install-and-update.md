@@ -59,9 +59,9 @@ run failed with "X or newer is required". The install commands lived in three pl
 
 The state is one flat object, `{available, reason, interactive, agents, session}`, and lists every agent even when setup
 is unavailable, so a hosted cockpit can still copy commands (without sign-in or update lines, which name host paths).
-Each entry carries `install` and `update` plans (`{command, runnable, sudo}`, plus `method` on the install plan; the
-update's method is the entry's `method`), `docsUrl`, `copyOnlyReason`, `installed`, `version`, `method`, `minVersion`,
-`latestVersion` and `activeRuns`. `POST /sessions` accepts `action: 'update'` and `force`; joining a
+Each entry carries `install` and `update` plans (`{command, runnable, sudo}`), `docsUrl`, `installed`, `version`,
+`method` (how the installed copy got there), `minVersion`,
+`latestVersion` and `activeRuns`. `POST /sessions` accepts `action: 'update'`, and the `x-cezar-force: 1` header to update while tasks run; joining a
 running session answers 201 like a fresh start, and "could not be checked" answers 409.
 
 **Why so flat.** The typed API (`AppType`) sits at the compiler's declaration-length limit (TS7056): with `main` at
@@ -73,7 +73,9 @@ The entry has no `installHint` or `autoUpdates` either (the first-run row shows 
 query, which would join the typed route signature. Windows checks out CRLF, and its count of the same `AppType` runs a
 little longer: `main` itself sits within a character of the limit there, so this family must cost less than `main`'s.
 `POST /providers/:provider/update` folds "cezar does not run this update itself" into its hosted refusal for the same
-reason.
+reason. When `main` grew again (#2490), the entry also lost `copyOnlyReason` (the sheet says "not verified yet, or a
+third-party installer" for every copy-only line) and the install plan its `method`, and `force` became the
+`x-cezar-force: 1` header: this family now costs about 400 characters less than `main`'s.
 Every refusal in the family is plain `{ error }`, as on `main`: a second error shape (`{ error, command }`) was reduced
 away on macOS but not on Windows, which tipped the Windows build over. The command to copy is in the listing.
 

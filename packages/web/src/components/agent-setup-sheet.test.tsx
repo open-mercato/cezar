@@ -38,10 +38,9 @@ const json = (body: unknown, status = 200) => new Response(JSON.stringify(body),
 const entry = (provider: AgentSetupProvider, over: Partial<AgentSetupEntry> = {}): AgentSetupEntry => ({
   provider,
   loginCommand: `${provider} login`,
-  install: { command: null, runnable: false, method: null, sudo: false },
+  install: { command: null, runnable: false, sudo: false },
   update: null,
   docsUrl: `https://docs.example/${provider}`,
-  copyOnlyReason: null,
   installed: false,
   version: null,
   method: null,
@@ -62,7 +61,8 @@ beforeEach(() => {
     if (url.pathname === '/api/v1/providers/setup') return json({ available: true, reason: null, interactive, session, agents })
     if (url.pathname === '/api/v1/providers/setup/sessions' && method === 'POST') {
       const body = JSON.parse(String(init?.body)) as Record<string, unknown>
-      posted.push(body)
+      // `force` rides a header (the typed API is at its size limit): record it with the body.
+      posted.push(new Headers(init?.headers).get('x-cezar-force') === '1' ? { ...body, force: true } : body)
       if (postDelayMs) await new Promise((resolve) => setTimeout(resolve, postDelayMs))
       session = {
         id: `s${posted.length}`, runId: 'agent-setup', cwd: '/home/me', shell: '/bin/sh', cols: 80, rows: 24, startedAt: 'now', exitCode: null,
@@ -100,7 +100,7 @@ const WAIT = { timeout: 5_000 }
 describe('AgentSetupFlow', () => {
   it('confirms the exact command, installs, then moves on to the sign-in', async () => {
     statuses = { codex: 'not-installed' }
-    agents = [entry('codex', { install: { command: 'npm install -g @openai/codex', runnable: true, method: 'npm', sudo: false } })]
+    agents = [entry('codex', { install: { command: 'npm install -g @openai/codex', runnable: true, sudo: false } })]
     renderFlow('codex', 'install')
     expect(await screen.findByText('npm install -g @openai/codex')).toBeTruthy()
     expect(posted).toEqual([])
@@ -116,12 +116,11 @@ describe('AgentSetupFlow', () => {
   it('shows OMP’s third-party tap to copy, and never offers to run it', async () => {
     statuses = { omp: 'not-installed' }
     agents = [entry('omp', {
-      install: { command: 'brew install can1357/tap/omp', runnable: false, method: 'brew', sudo: false },
-      copyOnlyReason: 'OMP installs from a third-party Homebrew tap, so cezar shows the command instead of running it.',
+      install: { command: 'brew install can1357/tap/omp', runnable: false, sudo: false },
     })]
     renderFlow('omp', 'install')
     expect(await screen.findByText('brew install can1357/tap/omp')).toBeTruthy()
-    expect(screen.getByText(/third-party Homebrew tap/)).toBeTruthy()
+    expect(screen.getByText(/third-party installer/)).toBeTruthy()
     expect(screen.queryByRole('button', { name: 'Install' })).toBeNull()
     expect(screen.getByRole('link', { name: /Official docs/ }).getAttribute('href')).toBe('https://docs.example/omp')
   })
@@ -155,7 +154,7 @@ describe('AgentSetupFlow', () => {
   it('on a phone, will not start what needs the computer password', async () => {
     interactive = false
     statuses = { codex: 'not-installed' }
-    agents = [entry('codex', { install: { command: 'sudo npm install -g @openai/codex', runnable: true, method: 'npm', sudo: true } })]
+    agents = [entry('codex', { install: { command: 'sudo npm install -g @openai/codex', runnable: true, sudo: true } })]
     renderFlow('codex', 'install')
     expect(await screen.findByText(/needs your computer password/)).toBeTruthy()
     expect(screen.queryByRole('button', { name: 'Install' })).toBeNull()
@@ -270,8 +269,8 @@ describe('DefaultAgentPicker with the setup catalog', () => {
     const onAgentAction = vi.fn()
     const setup = [
       entry('claude', { installed: true, version: '2.0.14', latestVersion: '2.1.3', update: { command: "'claude' update", runnable: true, sudo: false } }),
-      entry('gemini', { install: { command: 'npm install -g @google/gemini-cli', runnable: false, method: 'npm', sudo: false } }),
-      entry('codex', { install: { command: 'npm install -g @openai/codex', runnable: true, method: 'npm', sudo: false } }),
+      entry('gemini', { install: { command: 'npm install -g @google/gemini-cli', runnable: false, sudo: false } }),
+      entry('codex', { install: { command: 'npm install -g @openai/codex', runnable: true, sudo: false } }),
       entry('copilot', { installed: true, version: '1.0.88' }),
       entry('pi'),
     ]

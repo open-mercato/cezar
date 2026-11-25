@@ -302,11 +302,11 @@ function Confirm({
   const command = plan?.command ?? null
   const phoneBlocked = !interactive && plan?.sudo === true
   const canRun = available && plan?.runnable === true && command !== null && !phoneBlocked
-  const method = installMethodLabel(action === 'update' ? entry.method : entry.install.method)
+  const method = action === 'update' ? installMethodLabel(entry.method) : null
   const label = PROVIDER_LABELS[entry.provider]
   const why = !plan?.runnable
-    ? entry.copyOnlyReason ?? (command
-      ? 'cezar has not verified this command against the vendor’s docs yet, so it shows it for you to run.'
+    ? (command
+      ? 'cezar does not run this command itself (it is not verified yet, or it is a third-party installer), so it shows it for you to run.'
       : action === 'update'
         ? `cezar cannot tell how this copy of ${label} was installed, so it has no update to run. Update it the way you installed it; the vendor’s page shows how.`
         : 'cezar does not know this installer yet. The vendor’s page shows how to install it.')

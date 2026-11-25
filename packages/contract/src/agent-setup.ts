@@ -24,7 +24,6 @@ export type AgentInstallMethod = z.infer<typeof agentInstallMethodSchema>;
 export const agentCommandPlanSchema = z.object({
   command: z.string().nullable(),
   runnable: z.boolean(),
-  method: agentInstallMethodSchema.nullable(),
   /** Starts with `sudo`: the password goes in a terminal on the computer. */
   sudo: z.boolean(),
 });
@@ -38,12 +37,9 @@ export const agentSetupEntrySchema = z.object({
   loginCommand: z.string().nullable(),
   /** The install for this machine: cezar runs it when `runnable`, else it is the line to copy. */
   install: agentCommandPlanSchema,
-  /** Null while not installed, or when no update is known for how it was installed. Its method is
-   *  the entry's own `method`. */
-  update: agentCommandPlanSchema.omit({ method: true }).nullable(),
+  /** Null while not installed, or when no update is known for how it was installed. */
+  update: agentCommandPlanSchema.nullable(),
   docsUrl: z.string(),
-  /** Why cezar never runs this agent's installer, when it never does. */
-  copyOnlyReason: z.string().nullable(),
   installed: z.boolean(),
   version: z.string().nullable(),
   /** How the installed copy got there, read from where its binary lives. */
@@ -87,8 +83,6 @@ export type AgentSetupState = z.infer<typeof agentSetupStateSchema>;
 export const agentSetupStartSchema = z.object({
   provider: agentSetupProviderSchema,
   action: agentSetupActionSchema,
-  /** Update even while tasks run on this agent. */
-  force: z.boolean().optional(),
   cols: z.number().int().min(1).max(500).optional(),
   rows: z.number().int().min(1).max(500).optional(),
 });
@@ -99,3 +93,6 @@ export const agentSetupSessionParamsSchema = z.object({ sessionId: z.string() })
 /** `GET /api/v1/providers/setup` with this header set to `1` also looks up the newest release of
  *  each agent. A header, not a query: the typed API sits at its size limit (TS7056, #2474). */
 export const AGENT_SETUP_LATEST_HEADER = 'x-cezar-latest';
+/** `POST /api/v1/providers/setup/sessions` with this header set to `1` updates even while tasks run
+ *  on that agent. A header for the same reason as the one above. */
+export const AGENT_SETUP_FORCE_HEADER = 'x-cezar-force';

@@ -153,16 +153,15 @@ describe('ProviderAuthRequiredCard', () => {
 })
 
 describe('AgentUpdateRequiredCard', () => {
-  const entry = (provider: string, update: { command: string; runnable: boolean; method: string | null; sudo: boolean }) => ({
+  const entry = (provider: string, update: { command: string; runnable: boolean; sudo: boolean }, method: string | null) => ({
     provider,
     loginCommand: null,
-    install: { command: null, runnable: false, method: null, sudo: false },
+    install: { command: null, runnable: false, sudo: false },
     update: { command: update.command, runnable: update.runnable, sudo: update.sudo },
     docsUrl: 'https://example.com/docs',
-    copyOnlyReason: null,
     installed: true,
     version: '1.17.0',
-    method: update.method,
+    method,
     minVersion: '1.18.0',
     latestVersion: null,
     activeRuns: 0,
@@ -190,7 +189,7 @@ describe('AgentUpdateRequiredCard', () => {
   afterEach(() => vi.unstubAllGlobals())
 
   it('opens the setup sheet and runs the update for how the CLI was installed', async () => {
-    const calls = serve([entry('opencode', { command: "'opencode' upgrade", runnable: true, method: 'npm', sudo: false })])
+    const calls = serve([entry('opencode', { command: "'opencode' upgrade", runnable: true, sudo: false }, 'npm')])
     renderCard('opencode')
     expect(screen.getByRole('alert').textContent).toContain('OpenCode needs an update')
     await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Update OpenCode' })))
@@ -203,11 +202,11 @@ describe('AgentUpdateRequiredCard', () => {
   })
 
   it('shows an update cezar does not run as a command to copy, with no run button (Gemini CLI from npm)', async () => {
-    serve([entry('gemini', { command: 'npm install -g @google/gemini-cli@latest', runnable: false, method: 'npm', sudo: false })])
+    serve([entry('gemini', { command: 'npm install -g @google/gemini-cli@latest', runnable: false, sudo: false }, 'npm')])
     renderCard('gemini')
     await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Update Gemini CLI' })))
     expect(await screen.findByText('npm install -g @google/gemini-cli@latest')).toBeTruthy()
-    expect(screen.getByText(/has not verified this command/)).toBeTruthy()
+    expect(screen.getByText(/does not run this command itself/)).toBeTruthy()
     expect(screen.queryByRole('button', { name: 'Update' })).toBeNull()
     expect(screen.getByRole('button', { name: 'Copy' })).toBeTruthy()
   })

@@ -5,7 +5,7 @@ import type {
   lifecyclePreviewInputSchema, lifecycleListQuerySchema, LifecycleOutputResponse,
   LifecyclePreviewResponse, LifecycleActionInput, StartLifecycleRemovalInput,
 } from '@open-mercato/cezar-api-client'
-import { AGENT_SETUP_LATEST_HEADER, deferredAlreadyStartedSchema, trackerReadScope, resolveApiUrl, workspaceBrandingLogoResponseSchema } from '@open-mercato/cezar-api-client'
+import { AGENT_SETUP_FORCE_HEADER, AGENT_SETUP_LATEST_HEADER, deferredAlreadyStartedSchema, trackerReadScope, resolveApiUrl, workspaceBrandingLogoResponseSchema } from '@open-mercato/cezar-api-client'
 import type {
   DetectedUrlsResponse,
   DiscoveredCommandsResponse,
@@ -684,7 +684,7 @@ export async function getAgentSetup(opts?: ReadOptions & { latest?: boolean }): 
 
 export async function startAgentSetup(provider: AgentSetupProvider, action: AgentSetupAction, force?: boolean): Promise<AgentSetupSession> {
   return unwrap(
-    await cez.api.v1.providers.setup.sessions.$post({ json: { provider, action, ...(force ? { force } : {}) } }),
+    await cez.api.v1.providers.setup.sessions.$post({ json: { provider, action } }, force ? { headers: { [AGENT_SETUP_FORCE_HEADER]: '1' } } : undefined),
     '/providers/setup/sessions',
   )
 }

@@ -7,10 +7,9 @@ import { agentRowAction, agentSetupListRows, agentVersionChip, entryVersionState
 const agent = (provider: AgentSetupProvider, over: Partial<AgentSetupEntry> = {}): AgentSetupEntry => ({
   provider,
   loginCommand: `login ${provider}`,
-  install: { command: `install ${provider}`, runnable: true, method: 'npm', sudo: false },
+  install: { command: `install ${provider}`, runnable: true, sudo: false },
   update: null,
   docsUrl: 'https://example.com/docs',
-  copyOnlyReason: null,
   installed: false,
   version: null,
   method: null,
@@ -55,7 +54,7 @@ describe('agentRowAction (spec 2026-11-25-agent-cli-install-and-update)', () => 
 
   it('offers Install only for a command cezar runs, How to install otherwise', () => {
     expect(agentRowAction(agent('codex'), { provider: 'codex', status: 'not-installed' })).toBe('install')
-    expect(agentRowAction(agent('omp', { install: { command: 'brew install can1357/tap/omp', runnable: false, method: 'brew', sudo: false } }), { provider: 'omp', status: 'not-installed' })).toBe('how-to-install')
+    expect(agentRowAction(agent('omp', { install: { command: 'brew install can1357/tap/omp', runnable: false, sudo: false } }), { provider: 'omp', status: 'not-installed' })).toBe('how-to-install')
   })
 
   it('offers Update for an outdated install, Sign in for a signed-out one, nothing when ready', () => {

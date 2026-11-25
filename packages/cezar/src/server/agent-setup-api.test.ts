@@ -299,7 +299,8 @@ describe('/api/v1/providers/setup', () => {
       const waiting = await start(routes, { provider: 'claude', action: 'update' });
       expect(waiting.status).toBe(409);
       expect((await waiting.json() as { error: string }).error).toContain('2 tasks are running');
-      expect((await start(routes, { provider: 'claude', action: 'update', force: true })).status).toBe(201);
+      const forced = await routes.request('/providers/setup/sessions', { method: 'POST', body: JSON.stringify({ provider: 'claude', action: 'update' }), headers: { 'content-type': 'application/json', 'x-cezar-force': '1' } });
+      expect(forced.status).toBe(201);
     });
 
     it('lists the installed version, its method and the newest release only when asked', async () => {

@@ -1,6 +1,7 @@
 import { homedir } from 'node:os';
 
 import {
+  AGENT_SETUP_FORCE_HEADER,
   AGENT_SETUP_LATEST_HEADER,
   agentSetupSessionParamsSchema,
   agentSetupSessionSchema,
@@ -95,7 +96,7 @@ const forPhone = (agent: AgentSetupEntry): AgentSetupEntry => ({
 const refusal = (error: string): { error: string } => ({ error });
 
 const plan = (value: CommandPlan): AgentSetupEntry['install'] =>
-  ({ command: value.command, runnable: value.runnable, method: value.method, sudo: value.sudo });
+  ({ command: value.command, runnable: value.runnable, sudo: value.sudo });
 
 /**
  * `/api/v1/providers/setup` (spec 2026-10-26-first-run-onboarding, "Set up an agent here"): one
@@ -149,9 +150,8 @@ export function agentSetupRoutes(deps: AgentSetupDeps) {
         provider,
         loginCommand: deps.loginCommand(provider),
         install: plan(installPlan),
-        update: update ? { command: update.command, runnable: update.runnable, sudo: update.sudo } : null,
+        update: update ? plan(update) : null,
         docsUrl: recipe.docsUrl,
-        copyOnlyReason: recipe.copyOnly ?? null,
         installed,
         version,
         method: where?.method ?? null,
@@ -229,7 +229,8 @@ export function agentSetupRoutes(deps: AgentSetupDeps) {
     .post('/providers/setup/sessions', jsonZodValidator(agentSetupStartSchema), async (c) => {
       const reason = await unavailable();
       if (reason) return c.json(refusal(reason), 409);
-      const { provider, action, cols, rows, force } = c.req.valid('json');
+      const { provider, action, cols, rows } = c.req.valid('json');
+      const force = c.req.header(AGENT_SETUP_FORCE_HEADER) === '1';
       // A phone may start only what needs nobody at the computer: a sign-in has the card for that.
       if (phone() && action === 'login') return c.json(refusal('Sign in from the sign-in card, or finish on your computer.'), 409);
       const live = currentInfo();
