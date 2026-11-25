@@ -18,15 +18,18 @@ manager, including tasks a manager creates and children started by dispatch or a
 precedence over conflicting repository, project, workflow and skill instructions. Project and
 workflow instructions still apply wherever they do not conflict. For example, a global rule
 to run only focused tests takes precedence over a repository instruction to run its full suite.
+They never lift cezar's own safety rules: a read-only task stays read-only, a task a manager
+started still leaves merges and automation enables to you, and a manager still asks for your
+approval before a merge, an automation enable or a new job.
 
 Manager restrictions are added separately, so they do not replace your project instructions.
 Every workflow step receives the combined instructions, including steps that switch agents.
 Continue reuses the task's saved project instructions, but every session (Continue, a resume,
-a switch to another agent) reads the current global instructions, so an edit in Settings reaches
-tasks that are already running. New child tasks read the current settings rather than copying their
-parent's prompt, so they receive one copy of the latest global and project rules. A manager reads
-the global instructions on every turn (chat, watch, job and follow-up) and must not ask a task to
-break them.
+a switch to another agent) reads the current global instructions, on every agent, so an edit in
+Settings reaches tasks that are already running. New child tasks read the current settings rather
+than copying their parent's prompt, so they receive one copy of the latest global and project
+rules. A manager reads the global instructions on every turn (chat, watch, job and follow-up) and
+must not ask a task to break them.
 
 ## Where to find it
 

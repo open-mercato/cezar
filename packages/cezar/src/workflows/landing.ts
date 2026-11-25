@@ -272,13 +272,16 @@ async function runChecks(root: string, options: LandOptions): Promise<LandResult
   return undefined;
 }
 
+/** How the landing part opens; `withCurrentGlobalInstructions` finds the part by it. */
+export const LANDING_PROMPT_LEAD = 'Landing: the project owner enabled AUTO-LAND for this project.';
+
 /** What the agent is told when the owner enabled auto-land — the Guard's written permission. An
  *  interactive run lands only after the user reviews it; an autonomous one lands on CEZ:DONE. */
 export function landingPromptPart(baseBranch: string | undefined, checks: string[], autonomous: boolean): string {
   const target = baseBranch ?? 'the checked-out base branch';
   const checkLine = checks.length ? ` runs the required checks (${checks.map((c) => `\`${c}\``).join(', ')})` : '';
   return [
-    `Landing: the project owner enabled AUTO-LAND for this project. You work directly in the repository checkout on ${target}.`,
+    `${LANDING_PROMPT_LEAD} You work directly in the repository checkout on ${target}.`,
     autonomous
       ? `When you end a turn with CEZ:DONE, cezar commits your changes, rebases onto the remote,${checkLine} and pushes to ${target} itself.`
       : `When you end a turn with CEZ:DONE, the user reviews your changes and may ask for corrections; when they approve, cezar commits, rebases onto the remote,${checkLine} and pushes to ${target} itself.`,
