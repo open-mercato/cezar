@@ -89,11 +89,11 @@ describe('/api/v1/providers/setup', () => {
   it('lists what it can install, with no session yet', async () => {
     const response = await apiRequest(build(), '/api/v1/providers/setup');
     expect(response.status).toBe(200);
-    const body = await response.json() as { available: boolean; session: unknown; agents: Array<{ provider: string; installCommand: string | null }> };
+    const body = await response.json() as { available: boolean; session: unknown; agents: Array<{ provider: string; install: { command: string | null; runnable: boolean } }> };
     expect(body.available).toBe(true);
     expect(body.session).toBeNull();
     expect(body.agents.map((agent) => agent.provider)).toEqual([...RUNNER_IDS]);
-    expect(body.agents.find((agent) => agent.provider === 'codex')?.installCommand).toBe('npm install -g @openai/codex');
+    expect(body.agents.find((agent) => agent.provider === 'codex')?.install).toMatchObject({ command: 'npm install -g @openai/codex', runnable: true });
   });
 
   it('runs the catalog command in the home folder, never the project', async () => {
@@ -137,7 +137,8 @@ describe('/api/v1/providers/setup', () => {
     const app = build();
     const first = await (await post(app, { provider: 'codex', action: 'install' })).json() as { id: string };
     const second = await post(app, { provider: 'codex', action: 'install' });
-    expect(second.status).toBe(200);
+    // The same 201 as a fresh start: one success shape keeps the typed API under its size limit.
+    expect(second.status).toBe(201);
     expect((await second.json() as { id: string }).id).toBe(first.id);
     expect(spawns).toHaveLength(1);
   });
@@ -313,7 +314,6 @@ describe('/api/v1/providers/setup', () => {
         version: '2.0.14',
         method: 'brew',
         latestVersion: '2.1.3',
-        versionState: 'update-available',
         update: { command: 'brew upgrade claude-code', runnable: true },
       });
       expect(fetches).toEqual(['https://registry.npmjs.org/@anthropic-ai/claude-code/latest']);

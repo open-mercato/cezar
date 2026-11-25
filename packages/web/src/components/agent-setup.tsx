@@ -33,7 +33,7 @@ interface Stopped {
   message: string
 }
 
-export function agentSetupHeading(setup: Extract<AgentSetupState, { available: true }>, status: ProviderStatusResponse | undefined): string {
+export function agentSetupHeading(setup: AgentSetupState, status: ProviderStatusResponse | undefined): string {
   return agentSetupListRows(setup, status).some((row) => row.state === 'signed-out') ? 'Sign in to an agent' : 'Pick your agent'
 }
 
@@ -41,7 +41,7 @@ export function AgentSetupList({
   setup,
   status,
 }: {
-  setup: Extract<AgentSetupState, { available: true }>
+  setup: AgentSetupState
   status: ProviderStatusResponse | undefined
 }) {
   const onHealthChanged = useInvalidateHealth()

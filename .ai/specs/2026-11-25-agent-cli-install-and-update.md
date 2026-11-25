@@ -57,11 +57,17 @@ run failed with "X or newer is required". The install commands lived in three pl
 
 ## `GET /api/v1/providers/setup`
 
-The state lists every agent, even when setup is unavailable, so a hosted cockpit can still copy commands. Each entry
-adds `install` and `update` plans (`{command, runnable, method, sudo}`), `docsUrl`, `copyOnlyReason`, `installed`,
-`version`, `method`, `minVersion`, `latestVersion`, `versionState`, `autoUpdates` and `activeRuns`. The available
-variant adds `interactive`. `installCommand` keeps its meaning: what cezar would run, or null. `POST /sessions` accepts
-`action: 'update'` and `force`.
+The state is one flat object, `{available, reason, interactive, agents, session}`, and lists every agent even when setup
+is unavailable, so a hosted cockpit can still copy commands (without sign-in or update lines, which name host paths).
+Each entry carries `install` and `update` plans (`{command, runnable, sudo}`, plus `method` on the install plan; the
+update's method is the entry's `method`), `docsUrl`, `copyOnlyReason`, `installed`, `version`, `method`, `minVersion`,
+`latestVersion`, `autoUpdates` and `activeRuns`. `POST /sessions` accepts `action: 'update'` and `force`; joining a
+running session answers 201 like a fresh start, and "could not be checked" answers 409.
+
+**Why so flat.** The typed API (`AppType`) sits at the compiler's declaration-length limit (TS7056): with `main` at
+`3bc0ef093`/`4ce90da91` it had about 100 characters to spare. A union of two states spelled the agent list out twice,
+a second success status spelled the session out twice, and `versionState` and `installCommand` repeat what the other
+fields already say, so the reader derives those two (`entryVersionState`, `install.runnable ? install.command : null`).
 
 ## The sheet
 

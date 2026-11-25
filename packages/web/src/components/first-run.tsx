@@ -837,7 +837,7 @@ export function AgentStep() {
   return setup.data?.available ? <SetUpAgentHere setup={setup.data} /> : <SignInToAgent />
 }
 
-function SetUpAgentHere({ setup }: { setup: Extract<AgentSetupState, { available: true }> }) {
+function SetUpAgentHere({ setup }: { setup: AgentSetupState }) {
   const providers = useProviderStatus()
   const refresh = useRefreshProviderStatus()
   const write = useOnboardingWrite()

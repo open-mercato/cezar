@@ -14,12 +14,14 @@ import {
   type AgentSetupEntry,
   type AgentSetupProvider,
   type AgentSetupSession,
+  type AgentSetupState,
+  type TerminalOutput,
   type ProviderStatusResponse,
 } from '@open-mercato/cezar-contract';
 import { Hono } from 'hono';
 
 import { minimumVersion, type LatestVersions } from '../core/agent-cli-versions.ts';
-import { locateInstalledCli, planInstall, planUpdate, recipeFor, versionState, type CommandPlan, type InstalledCli } from '../core/agent-install.ts';
+import { locateInstalledCli, planInstall, planUpdate, recipeFor, type CommandPlan, type InstalledCli } from '../core/agent-install.ts';
 import { detectEnvironment, type BackendCheck } from '../core/backend-detect.ts';
 import { cliVersionFrom } from '../core/provider-auth.ts';
 import { AGENT_SETUP_PROVIDERS, probeInstallEnv, shellLine, type InstallEnv } from './agent-setup.ts';
@@ -140,11 +142,10 @@ export function agentSetupRoutes(deps: AgentSetupDeps) {
       const latestVersion = installed && withLatest && deps.latest ? await deps.latest.latest(provider) : null;
       return {
         provider,
-        installCommand: installPlan.runnable ? installPlan.command : null,
         installHint: deps.installHint(provider),
         loginCommand: deps.loginCommand(provider),
         install: plan(installPlan),
-        update: update ? plan(update) : null,
+        update: update ? { command: update.command, runnable: update.runnable, sudo: update.sudo } : null,
         docsUrl: recipe.docsUrl,
         copyOnlyReason: recipe.copyOnly ?? null,
         installed,
@@ -152,7 +153,6 @@ export function agentSetupRoutes(deps: AgentSetupDeps) {
         method: where?.method ?? null,
         minVersion,
         latestVersion,
-        versionState: installed ? versionState(version, minVersion, latestVersion) : 'unknown',
         autoUpdates: recipe.autoUpdates,
         activeRuns: await (deps.activeRuns?.(provider) ?? 0),
       };
@@ -214,12 +214,14 @@ export function agentSetupRoutes(deps: AgentSetupDeps) {
           loginCommand: null,
           update: agent.update ? { ...agent.update, command: null, runnable: false } : null,
         }));
-        return c.json(agentSetupStateSchema.parse({ available: false, reason, agents: safe }));
+        const refused: AgentSetupState = agentSetupStateSchema.parse({ available: false, reason, interactive: false, agents: safe, session: null });
+        return c.json(refused);
       }
       const described = info && phoneMayRead(info.id) ? describe(info) : null;
       const session: AgentSetupSession | null = described && phone() ? { ...described, command: withoutHostPaths(described.command) } : described;
       const listed: AgentSetupEntry[] = phone() ? agents.map(forPhone) : agents;
-      return c.json(agentSetupStateSchema.parse({ available: true, agents: listed, interactive: !phone(), session }));
+      const state: AgentSetupState = agentSetupStateSchema.parse({ available: true, reason: null, agents: listed, interactive: !phone(), session });
+      return c.json(state);
     })
     .post('/providers/setup/sessions', jsonZodValidator(agentSetupStartSchema), async (c) => {
       const reason = await refusal();
@@ -230,7 +232,10 @@ export function agentSetupRoutes(deps: AgentSetupDeps) {
       const live = currentInfo();
       if (live?.exitCode === null) {
         // A double click or a second tab joins the session already running (a phone never a sign-in's).
-        if (current?.provider === provider && current.action === action && phoneMayRead(live.id)) return c.json(agentSetupSessionSchema.parse(describe(live)), 200);
+        if (current?.provider === provider && current.action === action && phoneMayRead(live.id)) {
+          const joined: AgentSetupSession = agentSetupSessionSchema.parse(describe(live));
+          return c.json(joined, 201);
+        }
         return c.json({ error: 'Another agent is being set up. Finish or cancel it first.' }, 409);
       }
       if (starting) return c.json({ error: 'Another agent is being set up. Finish or cancel it first.' }, 409);
@@ -238,7 +243,7 @@ export function agentSetupRoutes(deps: AgentSetupDeps) {
       try {
         const dryRun = process.env.CEZ_DRY_RUN === '1';
         const row = dryRun ? undefined : (await deps.status()).providers.find((candidate) => candidate.provider === provider);
-        if (!dryRun && !row) return c.json({ error: 'The agent could not be checked. Try again.' }, 500);
+        if (!dryRun && !row) return c.json({ error: 'The agent could not be checked. Try again.' }, 409);
         // The status decides, so a stale page can neither reinstall an agent nor sign in to a missing one.
         if (action === 'install' && row && row.status !== 'not-installed') return c.json({ error: 'This agent is already installed.' }, 409);
         if (action !== 'install' && row?.status === 'not-installed') return c.json({ error: 'Install this agent first.' }, 409);
@@ -307,7 +312,8 @@ export function agentSetupRoutes(deps: AgentSetupDeps) {
         const read = deps.sessions.read(info.id, c.req.valid('query').cursor ?? 0);
         if (!read) return c.json({ error: 'setup session not found' }, 404);
         c.header('Cache-Control', 'no-store');
-        return c.json(terminalOutputSchema.parse(read));
+        const output: TerminalOutput = terminalOutputSchema.parse(read);
+        return c.json(output);
       },
     )
     .post(

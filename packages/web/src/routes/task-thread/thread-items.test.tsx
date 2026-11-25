@@ -155,11 +155,10 @@ describe('ProviderAuthRequiredCard', () => {
 describe('AgentUpdateRequiredCard', () => {
   const entry = (provider: string, update: { command: string; runnable: boolean; method: string | null; sudo: boolean }) => ({
     provider,
-    installCommand: null,
     installHint: '',
     loginCommand: null,
     install: { command: null, runnable: false, method: null, sudo: false },
-    update,
+    update: { command: update.command, runnable: update.runnable, sudo: update.sudo },
     docsUrl: 'https://example.com/docs',
     copyOnlyReason: null,
     installed: true,
@@ -167,7 +166,6 @@ describe('AgentUpdateRequiredCard', () => {
     method: update.method,
     minVersion: '1.18.0',
     latestVersion: null,
-    versionState: 'update-required',
     autoUpdates: null,
     activeRuns: 0,
   })
@@ -179,7 +177,7 @@ describe('AgentUpdateRequiredCard', () => {
       const body = url.includes('/providers/setup/sessions')
         ? { id: 's1', runId: 'agent-setup', provider: 'opencode', action: 'update', command: "'opencode' upgrade", exitCode: null, topic: 't', cols: 80, rows: 24 }
         : url.includes('/providers/setup')
-          ? { available: true, interactive: true, session: null, agents }
+          ? { available: true, reason: null, interactive: true, session: null, agents }
           : { providers: [{ provider: 'opencode', status: 'connected', enabled: true }, { provider: 'codex', status: 'connected', enabled: true }] }
       return new Response(JSON.stringify(body), { status: url.includes('/sessions') ? 201 : 200, headers: { 'content-type': 'application/json' } })
     }))

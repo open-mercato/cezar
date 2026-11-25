@@ -33,9 +33,9 @@ let sessionCount = 0
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } })
 const agents = ['claude', 'codex'].map((provider) => ({
   provider,
-  installCommand: `npm install -g ${provider}`,
   installHint: `Install ${provider}.`,
   loginCommand: `${provider} login`,
+  install: { command: `npm install -g ${provider}`, runnable: true, method: 'npm', sudo: false },
 }))
 const finish = (exitCode: number) => {
   session = { ...session, exitCode }
@@ -50,7 +50,7 @@ beforeEach(() => {
       return json({ providers: Object.entries(statuses).map(([provider, status]) => ({ provider, status, enabled: true })) })
     }
     if (url.pathname === '/api/v1/providers/setup') {
-      return json(available ? { available: true, agents, session } : { available: false, reason: 'Set up agents on the machine hosting cezar.' })
+      return json(available ? { available: true, reason: null, interactive: true, agents, session } : { available: false, reason: 'Set up agents on the machine hosting cezar.', interactive: false, agents, session: null })
     }
     if (url.pathname === '/api/v1/providers/setup/sessions' && method === 'POST') {
       if (startError) return json({ error: startError }, 409)

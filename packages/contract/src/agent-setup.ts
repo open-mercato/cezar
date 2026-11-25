@@ -35,14 +35,13 @@ export type AgentVersionState = z.infer<typeof agentVersionStateSchema>;
 
 export const agentSetupEntrySchema = z.object({
   provider: agentSetupProviderSchema,
-  /** The install cezar would run here; null when it would not (nothing here can install it, or the
-   *  recipe is copy-only), and then `install.command` is the line to copy. */
-  installCommand: z.string().nullable(),
   installHint: z.string(),
   loginCommand: z.string().nullable(),
+  /** The install for this machine: cezar runs it when `runnable`, else it is the line to copy. */
   install: agentCommandPlanSchema,
-  /** Null while not installed, or when no update is known for how it was installed. */
-  update: agentCommandPlanSchema.nullable(),
+  /** Null while not installed, or when no update is known for how it was installed. Its method is
+   *  the entry's own `method`. */
+  update: agentCommandPlanSchema.omit({ method: true }).nullable(),
   docsUrl: z.string(),
   /** Why cezar never runs this agent's installer, when it never does. */
   copyOnlyReason: z.string().nullable(),
@@ -54,7 +53,6 @@ export const agentSetupEntrySchema = z.object({
   minVersion: z.string().nullable(),
   /** The newest release, only when the request asked for it (`?latest=1`) and the lookup is on. */
   latestVersion: z.string().nullable(),
-  versionState: agentVersionStateSchema,
   /** The vendor keeps it current by itself; null = not known. */
   autoUpdates: z.boolean().nullable(),
   /** Tasks running on this agent right now: an update waits for them unless told otherwise. */
@@ -71,20 +69,21 @@ export const agentSetupSessionSchema = terminalSessionSchema.extend({
 export type AgentSetupSession = z.infer<typeof agentSetupSessionSchema>;
 
 /** `GET /api/v1/providers/setup`. Unavailable (hosted, terminal off, no PTY) is an answer, not an
- *  error: the page then falls back to commands to copy. */
-export const agentSetupStateSchema = z.discriminatedUnion('available', [
-  /** `agents` still answers, so the page can offer the commands to copy. */
-  z.object({ available: z.literal(false), reason: z.string(), agents: z.array(agentSetupEntrySchema) }),
-  z.object({
-    available: z.literal(true),
-    agents: z.array(agentSetupEntrySchema),
-    /** False on a paired phone: no typing into the terminal, and only installs and updates that
-     *  need no password start from there. */
-    interactive: z.boolean(),
-    /** The running or just-finished session, so a reload reattaches instead of starting another install. */
-    session: agentSetupSessionSchema.nullable(),
-  }),
-]);
+ *  error: the page then falls back to commands to copy. One flat object, not a union of the two
+ *  answers: the typed API (`AppType`) sits at the compiler's declaration-length limit (TS7056), and
+ *  a union spelled the agent list out twice. `versionState` is derived by the reader for the same reason. */
+export const agentSetupStateSchema = z.object({
+  available: z.boolean(),
+  /** Why setup cannot run here; null when it can. */
+  reason: z.string().nullable(),
+  /** False on a paired phone (and when unavailable): no typing into the terminal, and only installs
+   *  and updates that need no password start from there. */
+  interactive: z.boolean(),
+  /** Every agent, also when unavailable, so the page can offer the commands to copy. */
+  agents: z.array(agentSetupEntrySchema),
+  /** The running or just-finished session, so a reload reattaches instead of starting another install. */
+  session: agentSetupSessionSchema.nullable(),
+});
 export type AgentSetupState = z.infer<typeof agentSetupStateSchema>;
 
 /** `POST /api/v1/providers/setup/sessions`. */

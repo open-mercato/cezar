@@ -37,7 +37,6 @@ const json = (body: unknown, status = 200) => new Response(JSON.stringify(body),
 
 const entry = (provider: AgentSetupProvider, over: Partial<AgentSetupEntry> = {}): AgentSetupEntry => ({
   provider,
-  installCommand: null,
   installHint: '',
   loginCommand: `${provider} login`,
   install: { command: null, runnable: false, method: null, sudo: false },
@@ -49,7 +48,6 @@ const entry = (provider: AgentSetupProvider, over: Partial<AgentSetupEntry> = {}
   method: null,
   minVersion: null,
   latestVersion: null,
-  versionState: 'unknown',
   autoUpdates: null,
   activeRuns: 0,
   ...over,
@@ -63,7 +61,7 @@ beforeEach(() => {
     if (url.pathname === '/api/v1/providers/status') {
       return json({ providers: Object.entries(statuses).map(([provider, status]) => ({ provider, status, enabled: true })) })
     }
-    if (url.pathname === '/api/v1/providers/setup') return json({ available: true, interactive, session, agents })
+    if (url.pathname === '/api/v1/providers/setup') return json({ available: true, reason: null, interactive, session, agents })
     if (url.pathname === '/api/v1/providers/setup/sessions' && method === 'POST') {
       const body = JSON.parse(String(init?.body)) as Record<string, unknown>
       posted.push(body)
@@ -104,7 +102,7 @@ const WAIT = { timeout: 5_000 }
 describe('AgentSetupFlow', () => {
   it('confirms the exact command, installs, then moves on to the sign-in', async () => {
     statuses = { codex: 'not-installed' }
-    agents = [entry('codex', { installCommand: 'npm install -g @openai/codex', install: { command: 'npm install -g @openai/codex', runnable: true, method: 'npm', sudo: false } })]
+    agents = [entry('codex', { install: { command: 'npm install -g @openai/codex', runnable: true, method: 'npm', sudo: false } })]
     renderFlow('codex', 'install')
     expect(await screen.findByText('npm install -g @openai/codex')).toBeTruthy()
     expect(posted).toEqual([])
@@ -168,8 +166,8 @@ describe('AgentSetupFlow', () => {
   it('holds an update while tasks run, unless told to update now', async () => {
     statuses = { claude: 'connected' }
     agents = [entry('claude', {
-      installed: true, version: '2.0.14', latestVersion: '2.1.3', versionState: 'update-available', method: 'native', activeRuns: 2,
-      update: { command: "'claude' update", runnable: true, method: 'native', sudo: false },
+      installed: true, version: '2.0.14', latestVersion: '2.1.3', method: 'native', activeRuns: 2,
+      update: { command: "'claude' update", runnable: true, sudo: false },
     })]
     renderFlow('claude', 'update')
     expect(await screen.findByText(/2 tasks are running/)).toBeTruthy()
@@ -182,8 +180,8 @@ describe('AgentSetupFlow', () => {
 
   it('Settings’ own listing reads the new version once an update ends', async () => {
     statuses = { claude: 'connected' }
-    const current = { installed: true, method: 'native' as const, update: { command: "'claude' update", runnable: true, method: 'native' as const, sudo: false } }
-    agents = [entry('claude', { ...current, version: '2.0.14', latestVersion: '2.1.3', versionState: 'update-available' })]
+    const current = { installed: true, method: 'native' as const, update: { command: "'claude' update", runnable: true, sudo: false } }
+    agents = [entry('claude', { ...current, version: '2.0.14', latestVersion: '2.1.3' })]
     // Settings → Agents reads the `latest` listing, a query of its own beside the sheet's.
     function SettingsVersion() {
       const version = useAgentSetup({ latest: true }).data?.agents.find((agent) => agent.provider === 'claude')?.version
@@ -198,7 +196,7 @@ describe('AgentSetupFlow', () => {
     await waitFor(() => expect(screen.getByTestId('settings-version').textContent).toBe('2.0.14'))
     fireEvent.click(await screen.findByRole('button', { name: 'Update' }))
     await waitFor(() => expect(phase()).toBe('running'))
-    agents = [entry('claude', { ...current, version: '2.1.3', latestVersion: '2.1.3', versionState: 'current' })]
+    agents = [entry('claude', { ...current, version: '2.1.3', latestVersion: '2.1.3' })]
     session = { ...session, exitCode: 0 }
     await waitFor(() => expect(phase()).toBe('done'), WAIT)
     await waitFor(() => expect(screen.getByTestId('settings-version').textContent).toBe('2.1.3'), WAIT)
@@ -218,8 +216,8 @@ describe('AgentSetupFlow: review follow-ups (#2474)', () => {
   it('says to keep the sheet open while it waits, and that closing it cancels the update', async () => {
     statuses = { claude: 'connected' }
     agents = [entry('claude', {
-      installed: true, version: '2.0.14', versionState: 'update-available', method: 'native', activeRuns: 1,
-      update: { command: "'claude' update", runnable: true, method: 'native', sudo: false },
+      installed: true, version: '2.0.14', method: 'native', activeRuns: 1,
+      update: { command: "'claude' update", runnable: true, sudo: false },
     })]
     const view = renderFlow('claude', 'update')
     fireEvent.click(await screen.findByRole('button', { name: 'Update when they finish' }))
@@ -239,8 +237,8 @@ describe('AgentSetupFlow: an update that waits for tasks', () => {
     postDelayMs = 2_000
     statuses = { claude: 'connected' }
     const claude = (over: Partial<AgentSetupEntry>) => entry('claude', {
-      installed: true, version: '2.0.14', versionState: 'update-available', method: 'native', activeRuns: 1,
-      update: { command: "'claude' update", runnable: true, method: 'native', sudo: false },
+      installed: true, version: '2.0.14', method: 'native', activeRuns: 1,
+      update: { command: "'claude' update", runnable: true, sudo: false },
       ...over,
     })
     agents = [claude({})]
@@ -260,7 +258,7 @@ describe('AgentSetupFlow: an update that waits for tasks', () => {
     expect(posted).toEqual([{ provider: 'claude', action: 'update' }])
 
     // It ends: the sheet re-reads the listing before it says done, and names the version.
-    agents = [claude({ activeRuns: 0, version: '2.1.3', versionState: 'current' })]
+    agents = [claude({ activeRuns: 0, version: '2.1.3' })]
     session = { ...session, exitCode: 0 }
     await act(async () => { await vi.advanceTimersByTimeAsync(1_100) })
     await waitFor(() => expect(phase()).toBe('done'), WAIT)
@@ -273,7 +271,7 @@ describe('DefaultAgentPicker with the setup catalog', () => {
   it('keeps only pickable agents in the strip and groups the rest by their next step', async () => {
     const onAgentAction = vi.fn()
     const setup = [
-      entry('claude', { installed: true, version: '2.0.14', latestVersion: '2.1.3', versionState: 'update-available', update: { command: "'claude' update", runnable: true, method: 'native', sudo: false } }),
+      entry('claude', { installed: true, version: '2.0.14', latestVersion: '2.1.3', update: { command: "'claude' update", runnable: true, sudo: false } }),
       entry('gemini', { install: { command: 'npm install -g @google/gemini-cli', runnable: false, method: 'npm', sudo: false } }),
       entry('codex', { install: { command: 'npm install -g @openai/codex', runnable: true, method: 'npm', sudo: false } }),
       entry('copilot', { installed: true, version: '1.0.88' }),

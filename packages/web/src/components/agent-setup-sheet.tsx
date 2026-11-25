@@ -79,11 +79,11 @@ export function AgentSetupFlow({ provider, action, onClose }: { provider: AgentS
   const looked = useAgentSetup({ latest: true, enabled: false }).data?.agents.find((agent) => agent.provider === provider)
   const listed = setup.data?.agents.find((agent) => agent.provider === provider)
   const entry = listed && looked?.latestVersion && looked.version === listed.version
-    ? { ...listed, latestVersion: looked.latestVersion, versionState: looked.versionState }
+    ? { ...listed, latestVersion: looked.latestVersion }
     : listed
   const available = setup.data?.available === true
-  const interactive = setup.data?.available === true ? setup.data.interactive : false
-  const session = setup.data?.available ? setup.data.session : null
+  const interactive = setup.data?.available === true && setup.data.interactive
+  const session = setup.data?.session ?? null
   const row = providerStatusFor(status.data, provider)
 
   const [phase, setPhase] = React.useState<Phase>(action === 'sign-in' ? 'sign-in' : 'confirm')
@@ -208,7 +208,7 @@ export function AgentSetupFlow({ provider, action, onClose }: { provider: AgentS
           action={action === 'update' ? 'update' : 'install'}
           available={available}
           interactive={interactive}
-          reason={setup.data?.available === false ? setup.data.reason : null}
+          reason={setup.data?.reason ?? null}
           waiting={phase === 'waiting'}
           busy={start.isPending}
           onRun={(force) => run(action === 'update' ? 'update' : 'install', force)}
@@ -302,7 +302,7 @@ function Confirm({
   const command = plan?.command ?? null
   const phoneBlocked = !interactive && plan?.sudo === true
   const canRun = available && plan?.runnable === true && command !== null && !phoneBlocked
-  const method = installMethodLabel(action === 'update' ? entry.method : plan?.method ?? null)
+  const method = installMethodLabel(action === 'update' ? entry.method : entry.install.method)
   const label = PROVIDER_LABELS[entry.provider]
   const why = !plan?.runnable
     ? entry.copyOnlyReason ?? (command
