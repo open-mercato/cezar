@@ -245,4 +245,4 @@ This section belongs to the fork. It sits at the end so upstream merges stay cle
 
 - `main` mirrors `MigukNamja/cezar-fork`. Fork work goes on `vito`; never rebase or force-push it.
 - Comments: code the fork adds follows the Comments section above — a short why-comment where the reason is not in the code, citing the spec or issue. This holds even when a parent workspace's `AGENTS.md` says otherwise.
-- Keep fork changes narrow and additive, and note each in `BACKWARD_COMPATIBILITY.md`, so they can be proposed upstream.
+- Keep fork changes narrow and additive, and note each in `BACKWARD_COMPATIBILITY.md`.
