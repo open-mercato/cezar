@@ -108,12 +108,15 @@ function NoConnectorsInfo() {
   const triggerRef = useRef<HTMLButtonElement | null>(null)
   const contentRef = useRef<HTMLDivElement | null>(null)
   const closeTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
+  const pointerFocus = useRef(false)
+  const keyboardFocused = useRef(false)
 
   const clearTimer = () => clearTimeout(closeTimer.current)
   const holdsFocus = (node: EventTarget | null) =>
     node instanceof Node && (contentRef.current?.contains(node) || triggerRef.current?.contains(node))
   const scheduleClose = () => {
-    if (holdsFocus(document.activeElement)) return
+    const active = document.activeElement
+    if ((keyboardFocused.current && active === triggerRef.current) || (active && contentRef.current?.contains(active))) return
     clearTimer()
     closeTimer.current = setTimeout(() => setOpen(false), 100)
   }
@@ -132,6 +135,10 @@ function NoConnectorsInfo() {
           // Open-only click: hovering or focusing already opens the popover, so letting Radix's
           // default toggle run would immediately close it on click, tap, or Enter/Space.
           // Outside-tap and Escape still close it via onOpenChange.
+          onPointerDown={() => {
+            pointerFocus.current = true
+            keyboardFocused.current = false
+          }}
           onClick={(event) => {
             event.preventDefault()
             clearTimer()
@@ -146,10 +153,14 @@ function NoConnectorsInfo() {
             if (event.pointerType !== 'touch') scheduleClose()
           }}
           onFocus={() => {
+            keyboardFocused.current = !pointerFocus.current
+            pointerFocus.current = false
             clearTimer()
             setOpen(true)
           }}
           onBlur={(event: FocusEvent) => {
+            pointerFocus.current = false
+            keyboardFocused.current = false
             if (!holdsFocus(event.relatedTarget)) {
               clearTimer()
               setOpen(false)
