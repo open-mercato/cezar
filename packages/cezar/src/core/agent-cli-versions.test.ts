@@ -73,4 +73,11 @@ describe('minimums an agent states at runtime', () => {
     expect(minimumVersion('opencode')).toBe('1.18.0');
     expect(minimumVersion('codex')).toBeNull();
   });
+
+  it('does not take a runtime’s requirement for the CLI’s own', () => {
+    noteAgentErrorVersion('claude', 'Node.js 20.0.0 or newer is required');
+    noteAgentErrorVersion('gemini', 'gemini requires node v20.0 or newer');
+    expect(minimumVersion('claude')).toBeNull();
+    expect(minimumVersion('gemini')).toBeNull();
+  });
 });

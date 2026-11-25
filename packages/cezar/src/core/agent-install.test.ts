@@ -56,6 +56,11 @@ describe('planUpdate', () => {
     expect(planUpdate('claude', at(null), mac)).toMatchObject({ command: "'claude' update", runnable: true });
   });
 
+  it('shows a brew upgrade to copy when brew is no longer here', () => {
+    expect(planUpdate('claude', at('brew'), { ...mac, brew: false })).toMatchObject({ command: 'brew upgrade claude-code', runnable: false });
+    expect(planUpdate('claude', at('native'), { ...mac, brew: false, curl: false })).toMatchObject({ runnable: true });
+  });
+
   it("keeps OpenCode on the major cezar drives, through its own upgrade", () => {
     expect(planUpdate('opencode', { executable: 'opencode', path: '/x/opencode', method: 'npm' }, mac)).toMatchObject({ command: "'opencode' upgrade", runnable: true });
   });

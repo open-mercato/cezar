@@ -152,9 +152,19 @@ export function agentSetupRoutes(deps: AgentSetupDeps) {
     return binding.available ? null : binding.reason;
   };
 
+  // The checks read while an install or update ran describe the old binary: drop them once it exits.
+  let settledId: string | null = null;
+  const forgetChecksOnceSettled = () => {
+    const info = currentInfo();
+    if (!current || current.action === 'login' || info?.exitCode == null || settledId === current.id) return;
+    settledId = current.id;
+    checksCache = null;
+  };
+
   return new Hono()
     .get('/providers/setup', queryZodValidator(agentSetupQuerySchema), async (c) => {
       c.header('Cache-Control', 'no-store');
+      forgetChecksOnceSettled();
       const status = await (deps.currentStatus ?? deps.status)().catch((): ProviderStatusResponse => ({ providers: [] }));
       const agents = await entries(c.req.valid('query').latest === '1', status);
       const reason = await refusal();
@@ -277,6 +287,8 @@ export function agentSetupRoutes(deps: AgentSetupDeps) {
         if (!info) return c.json({ error: 'setup session not found' }, 404);
         const reason = deps.refusal();
         if (reason) return c.json({ error: reason }, 409);
+        // The computer is the one typing: a phone viewer must not reflow its terminal.
+        if (phone()) return c.json({ error: 'The terminal is read-only on your phone.' }, 409);
         const { cols, rows } = c.req.valid('json');
         return c.json({ resized: deps.sessions.resize(info.id, cols, rows) });
       },

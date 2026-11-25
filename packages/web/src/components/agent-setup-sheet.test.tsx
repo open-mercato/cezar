@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { AgentSetupEntry, AgentSetupProvider } from '@open-mercato/cezar-api-client'
 
 import { createQueryClient } from '@/api/query-client'
+import { useAgentSetup } from '@/api/queries'
 import { AgentSetupFlow } from '@/components/agent-setup-sheet'
 import { DefaultAgentPicker, agentPickerRows } from '@/components/default-agent-picker'
 
@@ -172,6 +173,30 @@ describe('AgentSetupFlow', () => {
     expect(posted).toEqual([])
     fireEvent.click(screen.getByRole('button', { name: 'Update now' }))
     await waitFor(() => expect(posted).toEqual([{ provider: 'claude', action: 'update', force: true }]))
+  })
+
+  it('Settings’ own listing reads the new version once an update ends', async () => {
+    statuses = { claude: 'connected' }
+    const current = { installed: true, method: 'native' as const, update: { command: "'claude' update", runnable: true, method: 'native' as const, sudo: false } }
+    agents = [entry('claude', { ...current, version: '2.0.14', latestVersion: '2.1.3', versionState: 'update-available' })]
+    // Settings → Agents reads the `latest` listing, a query of its own beside the sheet's.
+    function SettingsVersion() {
+      const version = useAgentSetup({ latest: true }).data?.agents.find((agent) => agent.provider === 'claude')?.version
+      return <span data-testid="settings-version">{version ?? ''}</span>
+    }
+    render(
+      <QueryClientProvider client={createQueryClient()}>
+        <SettingsVersion />
+        <AgentSetupFlow provider="claude" action="update" onClose={() => {}} />
+      </QueryClientProvider>,
+    )
+    await waitFor(() => expect(screen.getByTestId('settings-version').textContent).toBe('2.0.14'))
+    fireEvent.click(await screen.findByRole('button', { name: 'Update' }))
+    await waitFor(() => expect(phase()).toBe('running'))
+    agents = [entry('claude', { ...current, version: '2.1.3', latestVersion: '2.1.3', versionState: 'current' })]
+    session = { ...session, exitCode: 0 }
+    await waitFor(() => expect(phase()).toBe('done'), WAIT)
+    await waitFor(() => expect(screen.getByTestId('settings-version').textContent).toBe('2.1.3'), WAIT)
   })
 })
 

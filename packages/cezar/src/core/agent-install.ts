@@ -269,7 +269,9 @@ export function planUpdate(provider: RunnerId, installed: InstalledCli, env: Ins
     if (recipe.noSudoNpm || !env.sudo) return { command, runnable: false, method: 'npm', sudo: false };
     return { command: `sudo ${command}`, runnable: runnableTrust(recipe, trust), method: 'npm', sudo: true };
   }
-  return { command, runnable: runnableTrust(recipe, trust), method: method?.id ?? installed.method, sudo: false };
+  // brew and npm upgrade through themselves: without the tool here, the line is only to copy.
+  const toolHere = !own || (method!.id !== 'brew' && method!.id !== 'npm') || hasTool(env, method!.needs);
+  return { command, runnable: toolHere && runnableTrust(recipe, trust), method: method?.id ?? installed.method, sudo: false };
 }
 
 export interface InstalledCli {

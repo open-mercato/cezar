@@ -255,6 +255,20 @@ describe('/api/v1/providers/setup', () => {
       expect(await response.json()).toMatchObject({ action: 'update', command: 'brew upgrade claude-code' });
     });
 
+    it('reads the new version as soon as an update exits, not a check cached while it ran', async () => {
+      let version = '2.0.14 (Claude Code)';
+      const routes = routesWith({ checks: async () => [{ name: 'claude', available: true, version }] });
+      const listed = async () =>
+        ((await (await routes.request('/providers/setup')).json()) as { agents: Array<{ provider: string; version: string | null }> })
+          .agents.find((agent) => agent.provider === 'claude')?.version;
+      expect((await start(routes, { provider: 'claude', action: 'update' })).status).toBe(201);
+      // The sheet polls while the update runs: this read caches the old binary's answer.
+      expect(await listed()).toBe('2.0.14');
+      version = '2.1.3 (Claude Code)';
+      ptys[0]!.finish(0);
+      expect(await listed()).toBe('2.1.3');
+    });
+
     it('waits for running tasks unless told to update now', async () => {
       const routes = routesWith({ activeRuns: () => 2 });
       const waiting = await start(routes, { provider: 'claude', action: 'update' });
@@ -300,7 +314,7 @@ describe('/api/v1/providers/setup', () => {
       expect(spawns).toHaveLength(0);
     });
 
-    it('on a phone: starts a password-free install, and refuses keystrokes', async () => {
+    it('on a phone: starts a password-free install, and refuses keystrokes and resizes', async () => {
       const routes = routesWith({
         phone: () => true,
         status: async () => ({ providers: [{ provider: 'codex', status: 'not-installed' }] }),
@@ -312,6 +326,8 @@ describe('/api/v1/providers/setup', () => {
       const typed = await routes.request(`/providers/setup/sessions/${id}/input`, { method: 'POST', body: JSON.stringify({ data: 'y\n' }), headers: { 'content-type': 'application/json' } });
       expect(typed.status).toBe(409);
       expect(ptys[0]!.written).toEqual([]);
+      const resized = await routes.request(`/providers/setup/sessions/${id}/resize`, { method: 'POST', body: JSON.stringify({ cols: 40, rows: 10 }), headers: { 'content-type': 'application/json' } });
+      expect(resized.status).toBe(409);
     });
   });
 });

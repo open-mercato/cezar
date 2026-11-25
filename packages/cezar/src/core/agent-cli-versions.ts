@@ -95,6 +95,8 @@ export function newestInMajor(versions: readonly string[], major: number): strin
 
 const REQUIRED_RE = /\b(\d+\.\d+(?:\.\d+)?)\+? or (?:newer|later|higher|above) is required\b|\brequires? (?:version |v)?(\d+\.\d+(?:\.\d+)?) or (?:newer|later|higher)\b/i;
 
+const RUNTIME_RE = /\b(?:node(?:\.js|js)?|python|bun|deno)\b/i;
+
 const learned = new Map<RunnerId, string>();
 
 const fullVersion = (version: string): string => (version.split('.').length === 2 ? `${version}.0` : version);
@@ -111,6 +113,8 @@ export function requiredVersionFrom(message: string): string | null {
 export function noteAgentErrorVersion(provider: string | undefined, message: string): void {
   const recipe = provider ? (recipeForOrNull(provider)) : null;
   if (!recipe) return;
+  // "Node.js 20.0.0 or newer is required" is the runtime's minimum, not the CLI's.
+  if (RUNTIME_RE.test(message)) return;
   const version = requiredVersionFrom(message);
   if (!version) return;
   const previous = learned.get(recipe.provider);
