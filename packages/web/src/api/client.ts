@@ -5,7 +5,7 @@ import type {
   lifecyclePreviewInputSchema, lifecycleListQuerySchema, LifecycleOutputResponse,
   LifecyclePreviewResponse, LifecycleActionInput, StartLifecycleRemovalInput,
 } from '@open-mercato/cezar-api-client'
-import { AGENT_SETUP_FORCE_HEADER, AGENT_SETUP_LATEST_HEADER, deferredAlreadyStartedSchema, trackerReadScope, resolveApiUrl, workspaceBrandingLogoResponseSchema } from '@open-mercato/cezar-api-client'
+import { AGENT_SETUP_FORCE_HEADER, AGENT_SETUP_JOINED_HEADER, AGENT_SETUP_LATEST_HEADER, deferredAlreadyStartedSchema, trackerReadScope, resolveApiUrl, workspaceBrandingLogoResponseSchema } from '@open-mercato/cezar-api-client'
 import type {
   DetectedUrlsResponse,
   DiscoveredCommandsResponse,
@@ -682,11 +682,12 @@ export async function getAgentSetup(opts?: ReadOptions & { latest?: boolean }): 
   )
 }
 
-export async function startAgentSetup(provider: AgentSetupProvider, action: AgentSetupAction, force?: boolean): Promise<AgentSetupSession> {
-  return unwrap(
-    await cez.api.v1.providers.setup.sessions.$post({ json: { provider, action } }, force ? { headers: { [AGENT_SETUP_FORCE_HEADER]: '1' } } : undefined),
-    '/providers/setup/sessions',
-  )
+/** `joined` (client-side only, from a response header) marks a session someone else started. */
+export async function startAgentSetup(provider: AgentSetupProvider, action: AgentSetupAction, force?: boolean): Promise<AgentSetupSession & { joined?: true }> {
+  const res = await cez.api.v1.providers.setup.sessions.$post({ json: { provider, action } }, force ? { headers: { [AGENT_SETUP_FORCE_HEADER]: '1' } } : undefined)
+  const joined = res.headers.get(AGENT_SETUP_JOINED_HEADER) === '1'
+  const session = await unwrap(res, '/providers/setup/sessions')
+  return joined ? { ...session, joined: true } : session
 }
 
 export async function readAgentSetup(sessionId: string, cursor: number): Promise<TerminalOutput> {

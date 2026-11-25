@@ -62,7 +62,7 @@ is unavailable, so a hosted cockpit can still copy commands (without sign-in or 
 Each entry carries `install` and `update` plans (`{command, runnable, sudo}`), `docsUrl`, `installed`, `version`,
 `method` (how the installed copy got there), `minVersion`,
 `latestVersion` and `activeRuns`. `POST /sessions` accepts `action: 'update'`, and the `x-cezar-force: 1` header to update while tasks run; joining a
-running session answers 201 like a fresh start, and "could not be checked" answers 409.
+running session answers 201 like a fresh start, marked by an `x-cezar-joined: 1` header so a sheet only cancels a sign-in it started (a landed sign-in is cancelled whoever started it), and "could not be checked" answers 409.
 
 **Why so flat.** The typed API (`AppType`) sits at the compiler's declaration-length limit (TS7056): with `main` at
 `3bc0ef093`/`4ce90da91` it had about 100 characters to spare. A union of two states spelled the agent list out twice,

@@ -43,6 +43,12 @@ let postDelayMs = 0
 let cancelled: string[] = []
 /** When true, DELETE /providers/setup/sessions/:id answers 500 and the session keeps running. */
 let cancelFails = false
+/** When set, a DELETE waits for it before answering (the server still lists the session meanwhile). */
+let cancelGate: Promise<void> | null = null
+/** When true, GET /providers/setup answers 500. */
+let listFails = false
+/** When true, a POST answers as the server's join of the running session, with its header. */
+let joinNext = false
 /** When true, `GET /api/v1/providers/status?refresh=1` answers 500. */
 let refreshFails = false
 
@@ -73,6 +79,7 @@ beforeEach(() => {
       if (url.searchParams.get('refresh') === '1' && refreshFails) return json({ error: 'down' }, 500)
       return json({ providers: Object.entries(statuses).map(([provider, status]) => ({ provider, status, enabled: true })) })
     }
+    if (url.pathname === '/api/v1/providers/setup' && listFails) return json({ error: 'down' }, 500)
     if (url.pathname === '/api/v1/providers/setup') return json({ available: refusedWith === null, reason: refusedWith, interactive, session, agents })
     if (url.pathname === '/api/v1/providers/setup/sessions' && method === 'POST') {
       const body = JSON.parse(String(init?.body)) as Record<string, unknown>
@@ -80,6 +87,9 @@ beforeEach(() => {
       posted.push(new Headers(init?.headers).get('x-cezar-force') === '1' ? { ...body, force: true } : body)
       if (postDelayMs) await new Promise((resolve) => setTimeout(resolve, postDelayMs))
       if (startError) return json({ error: startError }, 409)
+      if (joinNext && session) {
+        return new Response(JSON.stringify(session), { status: 201, headers: { 'content-type': 'application/json', 'x-cezar-joined': '1' } })
+      }
       session = {
         id: `s${posted.length}`, runId: 'agent-setup', cwd: '/home/me', shell: '/bin/sh', cols: 80, rows: 24, startedAt: 'now', exitCode: null,
         label: 'x', busy: false, topic: 't', provider: body.provider, action: body.action, command: `run ${String(body.action)}`,
@@ -89,9 +99,10 @@ beforeEach(() => {
     const cancelMatch = /^\/api\/v1\/providers\/setup\/sessions\/([^/]+)$/.exec(url.pathname)
     if (cancelMatch && method === 'DELETE') {
       cancelled.push(cancelMatch[1]!)
+      if (cancelGate) await cancelGate
       if (cancelFails) return json({ error: 'boom' }, 500)
-      // The server ends the terminal: the listing reports its exit from now on.
-      if (session && session.id === cancelMatch[1]) session = { ...session, exitCode: 130 }
+      // The server kills and forgets the terminal (terminal/sessions.ts): the listing drops it.
+      if (session && session.id === cancelMatch[1]) session = null
       return json({ ok: true })
     }
     if (url.pathname === '/api/v1/health') return json({ repoRoot: '/work', bootProject: 'boot', capabilities: {} })
@@ -114,6 +125,9 @@ afterEach(async () => {
   postDelayMs = 0
   cancelled = []
   cancelFails = false
+  cancelGate = null
+  listFails = false
+  joinNext = false
   refreshFails = false
   fetchMock.mockReset()
   vi.unstubAllGlobals()
@@ -548,6 +562,9 @@ describe('AgentSetupFlow: terminal sign-in and lost sessions (#2474 re-review)',
     await screen.findByTestId('terminal')
     view.unmount()
     await waitFor(() => expect(cancelled).toEqual(['s1']))
+    // waitFor passes on the first DELETE: give a second one time to arrive, then count exactly.
+    await pause(50)
+    expect(cancelled).toEqual(['s1'])
   })
 
   it('a sheet reopened right after closing does not rejoin the sign-in the close cancelled', async () => {
@@ -562,14 +579,103 @@ describe('AgentSetupFlow: terminal sign-in and lost sessions (#2474 re-review)',
     const view = render(<QueryClientProvider client={client}><Page sheet /></QueryClientProvider>)
     fireEvent.click(await screen.findByRole('button', { name: 'Open terminal here' }))
     await screen.findByTestId('terminal')
+    // Reopened while the close's DELETE is still in flight: the server still lists the login.
+    let release!: () => void
+    cancelGate = new Promise<void>((resolve) => { release = resolve })
     view.rerender(<QueryClientProvider client={client}><Page sheet={false} /></QueryClientProvider>)
     await waitFor(() => expect(cancelled).toEqual(['s1']))
     view.rerender(<QueryClientProvider client={client}><Page sheet /></QueryClientProvider>)
+    await pause(50)
+    expect(screen.queryByTestId('terminal')).toBeNull()
+    release()
     await pause(300)
     expect(screen.queryByTestId('terminal')).toBeNull()
     expect(screen.queryByRole('alert')).toBeNull()
     expect(screen.getByRole('button', { name: 'Open terminal here' })).toBeTruthy()
   })
+
+  it('cancels a rejoined sign-in once it lands, so it does not hold the setup slot', async () => {
+    statuses = { antigravity: 'disconnected' }
+    agents = [entry('antigravity', { installed: true, loginCommand: "'agy'" })]
+    session = live({ provider: 'antigravity', action: 'login' })
+    renderFlow('antigravity', 'sign-in')
+    await waitFor(() => expect(screen.getByTestId('terminal').getAttribute('data-session')).toBe('live-1'))
+    statuses = { antigravity: 'connected' }
+    await waitFor(() => expect(phase()).toBe('done'), WAIT)
+    await waitFor(() => expect(cancelled).toEqual(['live-1']))
+    cleanup()
+    await pause(50)
+    expect(cancelled).toEqual(['live-1'])
+  })
+
+  it('after the user cancels, no "terminal closed" alert follows, and a listing still showing it is not rejoined', async () => {
+    statuses = { antigravity: 'disconnected' }
+    agents = [entry('antigravity', { installed: true, loginCommand: "'agy'" })]
+    const client = createQueryClient()
+    renderFlow('antigravity', 'sign-in', { client })
+    fireEvent.click(await screen.findByRole('button', { name: 'Open terminal here' }))
+    await screen.findByTestId('terminal')
+    let release!: () => void
+    cancelGate = new Promise<void>((resolve) => { release = resolve })
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+    await waitFor(() => expect(cancelled).toEqual(['s1']))
+    // A read while the DELETE is in flight still lists the login as running.
+    await act(async () => { await client.refetchQueries({ queryKey: ['workspace', 'providers', 'setup'] }) })
+    await pause(50)
+    expect(screen.queryByTestId('terminal')).toBeNull()
+    release()
+    await pause(300)
+    expect(screen.queryByTestId('terminal')).toBeNull()
+    expect(screen.queryByRole('alert')).toBeNull()
+    expect(screen.getByRole('button', { name: 'Open terminal here' })).toBeTruthy()
+  })
+
+  it('does not cancel on close a sign-in its own start only joined (another tab started it)', async () => {
+    statuses = { antigravity: 'disconnected' }
+    agents = [entry('antigravity', { installed: true, loginCommand: "'agy'" })]
+    renderFlow('antigravity', 'sign-in')
+    await screen.findByRole('button', { name: 'Open terminal here' })
+    // Another tab starts the login after this sheet's last listing; this sheet's start joins it.
+    session = live({ provider: 'antigravity', action: 'login' })
+    joinNext = true
+    fireEvent.click(screen.getByRole('button', { name: 'Open terminal here' }))
+    await waitFor(() => expect(screen.getByTestId('terminal').getAttribute('data-session')).toBe('live-1'))
+    cleanup()
+    await pause(50)
+    expect(cancelled).toEqual([])
+  })
+
+  it('does not settle on a stale listing without the session while the server still runs it', async () => {
+    statuses = { codex: 'not-installed' }
+    agents = [entry('codex', { install: { command: 'npm install -g @openai/codex', runnable: true, sudo: false } })]
+    const client = createQueryClient()
+    renderFlow('codex', 'install', { client })
+    fireEvent.click(await screen.findByRole('button', { name: 'Install' }))
+    await waitFor(() => expect(phase()).toBe('running'))
+    // A read that began before the start lands now, without the session.
+    act(() => { client.setQueryData(['workspace', 'providers', 'setup'], (state: Record<string, unknown>) => ({ ...state, session: null })) })
+    await pause(300)
+    expect(phase()).toBe('running')
+    expect(screen.getByTestId('terminal').getAttribute('data-session')).toBe('s1')
+  })
+
+  it('does not settle when the re-read itself fails', async () => {
+    statuses = { codex: 'not-installed' }
+    agents = [entry('codex', { install: { command: 'npm install -g @openai/codex', runnable: true, sudo: false } })]
+    const client = createQueryClient()
+    renderFlow('codex', 'install', { client })
+    fireEvent.click(await screen.findByRole('button', { name: 'Install' }))
+    await waitFor(() => expect(phase()).toBe('running'))
+    listFails = true
+    act(() => { client.setQueryData(['workspace', 'providers', 'setup'], (state: Record<string, unknown>) => ({ ...state, session: null })) })
+    await pause(300)
+    expect(phase()).toBe('running')
+    // Once the listing answers again and the session is really gone, it settles.
+    listFails = false
+    session = null
+    await waitFor(() => expect(phase()).toBe('failed'), WAIT)
+  })
+
 
   it('keeps the sign-in terminal and its Cancel when the cancel fails', async () => {
     cancelFails = true

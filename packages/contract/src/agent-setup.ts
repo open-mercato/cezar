@@ -96,3 +96,6 @@ export const AGENT_SETUP_LATEST_HEADER = 'x-cezar-latest';
 /** `POST /api/v1/providers/setup/sessions` with this header set to `1` updates even while tasks run
  *  on that agent. A header for the same reason as the one above. */
 export const AGENT_SETUP_FORCE_HEADER = 'x-cezar-force';
+/** Set to `1` on a `POST /api/v1/providers/setup/sessions` 201 that joined a session already
+ *  running instead of starting one: only the starter cancels it on close. */
+export const AGENT_SETUP_JOINED_HEADER = 'x-cezar-joined';

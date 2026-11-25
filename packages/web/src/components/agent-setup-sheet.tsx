@@ -38,6 +38,7 @@ const REJOINS: Record<AgentSetupSheetAction, readonly AgentSetupSession['action'
 }
 
 const SIGN_IN_POLL_MS = 3_000
+const RECHECK_MS = 2_000
 const WAIT_POLL_MS = 5_000
 
 export function AgentSetupSheet({
@@ -141,6 +142,7 @@ export function AgentSetupFlow({ provider, action, onClose }: { provider: AgentS
   shownNow.current = shown
   const checking = React.useRef<string | null>(null)
   const [vanished, setVanished] = React.useState<AgentSetupSession | null>(null)
+  const [recheck, setRecheck] = React.useState(0)
   const watching = phase === 'running' || phase === 'sign-in'
   React.useEffect(() => {
     if (!shown || !setup.data) return
@@ -154,24 +156,29 @@ export function AgentSetupFlow({ provider, action, onClose }: { provider: AgentS
     void refetchSetup().then((next) => {
       checking.current = null
       if (shownNow.current?.id !== lost.id) return
+      // A failed read keeps the old listing: it says nothing about the session, so ask again later.
+      if (next.isError) {
+        window.setTimeout(() => setRecheck((count) => count + 1), RECHECK_MS)
+        return
+      }
       const fresh = next.data?.session
       if (fresh?.id === lost.id) return setShown(fresh)
       setShown(null)
       setVanished(lost)
     })
-  }, [refetchSetup, session, setup.data, shown, watching])
+  }, [recheck, refetchSetup, session, setup.data, shown, watching])
 
-  // A cancelled session leaves the cached listing at once: a sheet reopened before the next read
-  // must not rejoin it.
+  // A session being cancelled leaves the cached listing before the DELETE goes out, so a sheet
+  // reopened meanwhile cannot rejoin it; the listing is read again once the DELETE settles.
   const forget = React.useCallback((id: string) => {
     queryClient.setQueryData<AgentSetupState>(workspaceQueryKeys.agentSetup, (state) =>
       state?.available && state.session?.id === id ? { ...state, session: null } : state)
-    void queryClient.invalidateQueries({ queryKey: workspaceQueryKeys.agentSetup })
   }, [queryClient])
+  const reread = React.useCallback(() => void queryClient.invalidateQueries({ queryKey: workspaceQueryKeys.agentSetup }), [queryClient])
 
-  // A login terminal nobody watches holds the one setup slot: cancel the one this sheet started
-  // when it closes or the sign-in lands. Only a started one, so StrictMode's mount-time remount
-  // has nothing to cancel and a rejoined login from another tab survives.
+  // A login terminal nobody watches holds the one setup slot. Closing cancels only one this sheet
+  // started (StrictMode's mount-time remount has nothing to cancel, and another tab's survives);
+  // a landed sign-in cancels it whoever started it, since some CLIs never exit on their own.
   const cancel = useCancelAgentSetup()
   const liveLogin = shown?.action === 'login' && shown.exitCode === null ? shown.id : null
   const ownedLogin = liveLogin && owned.current.has(liveLogin) ? liveLogin : null
@@ -179,26 +186,34 @@ export function AgentSetupFlow({ provider, action, onClose }: { provider: AgentS
   ownedLoginNow.current = ownedLogin
   React.useEffect(() => () => {
     const login = ownedLoginNow.current
-    if (login) void cancelAgentSetup(login).then(() => forget(login), () => {})
-  }, [forget])
+    if (!login) return
+    forget(login)
+    void cancelAgentSetup(login).catch(() => {}).finally(reread)
+  }, [forget, reread])
   const cancelMutate = cancel.mutate
   React.useEffect(() => {
-    if (phase !== 'done' || !ownedLogin) return
-    cancelMutate(ownedLogin, { onSuccess: () => { forget(ownedLogin); setShown(null) } })
-  }, [cancelMutate, forget, ownedLogin, phase])
-  // Cancel is the user's own click, so it stops a rejoined login too. A failed cancel keeps the
-  // terminal and its Cancel: the server still holds the slot.
+    if (phase !== 'done' || !liveLogin) return
+    dropped.current = liveLogin
+    forget(liveLogin)
+    setShown(null)
+    cancelMutate(liveLogin)
+  }, [cancelMutate, forget, liveLogin, phase])
+  // Cancel is the user's own click, so it stops a rejoined login too. A failed cancel brings the
+  // terminal and its Cancel back: the server still holds the slot.
   const cancelLogin = () => {
-    if (!liveLogin) return setShown(null)
+    if (!shown || !liveLogin) return setShown(null)
     const id = liveLogin
+    const was = shown
     setFailure(null)
+    dropped.current = id
+    forget(id)
+    setShown(null)
     cancelMutate(id, {
-      onSuccess: () => {
-        dropped.current = id
-        forget(id)
-        setShown((current) => (current?.id === id ? null : current))
+      onError: () => {
+        dropped.current = null
+        setShown((current) => current ?? was)
+        setFailure('cezar could not stop the sign-in terminal. Try again.')
       },
-      onError: () => setFailure('cezar could not stop the sign-in terminal. Try again.'),
     })
   }
 
@@ -211,7 +226,8 @@ export function AgentSetupFlow({ provider, action, onClose }: { provider: AgentS
         { provider, action: kind, ...(force ? { force } : {}) },
         {
           onSuccess: (next) => {
-            if (next.action === 'login') owned.current.add(next.id)
+            // A 201 that joined another tab's login is not ours to cancel on close.
+            if (next.action === 'login' && !next.joined) owned.current.add(next.id)
             track(next)
           },
           onError: (error: Error) => {

@@ -138,10 +138,14 @@ describe('/api/v1/providers/setup', () => {
 
   it('joins the running session instead of starting a second install', async () => {
     const app = build();
-    const first = await (await post(app, { provider: 'codex', action: 'install' })).json() as { id: string };
+    const created = await post(app, { provider: 'codex', action: 'install' });
+    const first = await created.json() as { id: string };
     const second = await post(app, { provider: 'codex', action: 'install' });
     // The same 201 as a fresh start: one success shape keeps the typed API under its size limit.
     expect(second.status).toBe(201);
+    // Only the header tells a join from a start, so a sheet never cancels another tab's session.
+    expect(created.headers.get('x-cezar-joined')).toBeNull();
+    expect(second.headers.get('x-cezar-joined')).toBe('1');
     expect((await second.json() as { id: string }).id).toBe(first.id);
     expect(spawns).toHaveLength(1);
   });

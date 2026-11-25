@@ -3,6 +3,7 @@ import { basename } from 'node:path';
 
 import {
   AGENT_SETUP_FORCE_HEADER,
+  AGENT_SETUP_JOINED_HEADER,
   AGENT_SETUP_LATEST_HEADER,
   agentSetupSessionParamsSchema,
   agentSetupSessionSchema,
@@ -266,6 +267,7 @@ export function agentSetupRoutes(deps: AgentSetupDeps) {
         // A double click or a second tab joins the session already running (a phone never a sign-in's).
         if (current?.provider === provider && current.action === action && phoneMayRead(live.id)) {
           const joined: AgentSetupSession = shown(agentSetupSessionSchema.parse(describe(live)));
+          c.header(AGENT_SETUP_JOINED_HEADER, '1');
           return c.json(joined, 201);
         }
         return c.json(refusal('Another agent is being set up. Finish or cancel it first.'), 409);
