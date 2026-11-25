@@ -9,7 +9,7 @@ import {
 } from 'lucide-react'
 import { hasWorkflowGraph } from '@/lib/has-workflow-graph'
 import { Activity, lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
-import { useNavigationType, useParams } from 'react-router'
+import { useLocation, useNavigationType, useParams } from 'react-router'
 
 import { ManagerBackLink } from '@/routes/manager/manager-back-link'
 import { ApiError } from '@/api/client'
@@ -29,7 +29,8 @@ import {
 } from '@/components/ui/alert-dialog'
 import { Button } from '@/components/ui/button'
 import { IconTooltip } from '@/components/ui/icon-tooltip'
-import { Link, useActiveProjectId, useNavigate } from '@/lib/project-router'
+import { Link, Navigate, useActiveProjectId, useNavigate } from '@/lib/project-router'
+import { cardRedirect } from '@/lib/task-route'
 import { isUnread } from '@/lib/read-state'
 import { recordTaskVisit } from '@/lib/recent-tasks'
 import { publishTaskWorkspace, takeQueuedFileOpen, withdrawTaskWorkspace, type TaskWorkspaceBridge } from '@/lib/task-workspace-bridge'
@@ -102,6 +103,7 @@ const GraphColumn = lazy(() =>
 export function TaskWorkspaceRoute({ view }: { view?: ViewId }) {
   const { id } = useParams<{ id: string }>()
   const run = useRun(id)
+  const location = useLocation()
 
   // The read receipt, moved here from the Session route (#unread-done-items, #775): visiting the
   // task marks it read even when no Chat column is showing.
@@ -152,6 +154,11 @@ export function TaskWorkspaceRoute({ view }: { view?: ViewId }) {
       </div>
     )
   }
+
+  // A card's bare `/tasks/:id` opens its wizard (spec 2026-11-15-framework-board); `?view=task`
+  // and the sub-tabs stay here.
+  const redirect = view === undefined ? cardRedirect(run.data, location.search, location.hash) : null
+  if (redirect) return <Navigate to={redirect} replace />
 
   return <WorkspaceView run={run.data} deepLinkView={view} onMarkedUnread={suppressAutoReadFor} />
 }

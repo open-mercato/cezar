@@ -88,6 +88,7 @@ export type AttentionInput = Pick<
   | 'costUsd'
   | 'worktreeLifecycle'
   | 'parked'
+  | 'card'
 >
 
 export type BudgetStop = {
@@ -157,8 +158,16 @@ export function signInAccountKey(run: Pick<RunRecord, 'status' | 'parked'>): str
 }
 
 /** The runs a "needs you" list keeps: waiting, in review, or awaiting an answer. */
-export function isNeedsYouStatus(run: Pick<RunRecord, 'status' | 'awaitingAnswerSince' | 'worktreeLifecycle'>): boolean {
-  return !!run.worktreeLifecycle?.needsAttention || run.status === 'waiting' || run.status === 'review' || isAwaitingAnswer(run)
+export function isNeedsYouStatus(run: Pick<RunRecord, 'status' | 'awaitingAnswerSince' | 'worktreeLifecycle' | 'card'>): boolean {
+  if (run.worktreeLifecycle?.needsAttention) return true
+  return (run.status === 'waiting' && !isCardParkedNeutral(run)) || run.status === 'review' || isAwaitingAnswer(run)
+}
+
+/** A card parked by WIP or precheck — nobody's move (kept here so
+ *  attention stays free of card imports). */
+function isCardParkedNeutral(run: Pick<RunRecord, 'status' | 'card'>): boolean {
+  const reason = run.card?.blocked?.reason
+  return run.status === 'waiting' && (reason === 'wip' || reason === 'precheck')
 }
 
 /**
@@ -209,6 +218,11 @@ export function deriveAttention(run: AttentionInput): Attention {
   // for a sign-in, not a reply — amber, like the "Needs sign-in" chip.
   if (run.status === 'waiting' && run.parked?.kind === 'auth') {
     return { bucket: 'waiting', tone: 'pending', pulse: false, label: 'sign-in needed' }
+  }
+  // A framework card behind a WIP limit or a refused precheck (spec 2026-11-15-framework-board):
+  // `waiting` on the record, but it starts by itself — parked, not "needs you", no notification.
+  if (isCardParkedNeutral(run)) {
+    return { bucket: 'none', tone: 'pending', pulse: false, label: run.card?.blocked?.reason === 'wip' ? 'stage full' : 'precheck' }
   }
   if (run.status === 'waiting') {
     return {

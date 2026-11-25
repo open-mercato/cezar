@@ -198,7 +198,9 @@ import {
   compareValues,
   enterGraph,
   globMatch,
+  graphIssues,
   graphRailSteps,
+  graphToSteps,
   loopBodyIds,
   edgeFrom,
   forkShape,
@@ -221,6 +223,37 @@ import {
 } from './graph.ts';
 import { GATE_APPROVE, GATE_FULL_PR, GATE_REJECT, classifyGateReply, gateInstructionsPrompt, gateOpensPr } from './gate-reply.ts';
 import { resolveContinuationModel } from './run-continuation-model.ts';
+// Framework cards (spec 2026-11-15-framework-board). Inert for every run without a `card`.
+import type { CardStageStatus, CreateCardBody, FrameworkFile, PatchCardBody, RunCard } from '@open-mercato/cezar-contract';
+import { cardNotStarted } from '@open-mercato/cezar-contract';
+import { compileFramework, compiledStages, resolveCardFields, type CompileCard } from '../frameworks/compile.ts';
+import { resolveProjectFramework } from '../frameworks/detect.ts';
+import { approveSdd, isStageApproved, readFrameworkState, scrubbedEnv } from '../frameworks/state.ts';
+import { missingArtifacts } from '../frameworks/artifacts.ts';
+import { cardForkBase, frameworkRequires, missingInTree, missingInWorktreeDetail, missingOnRef, notInstalledOnRefMessage } from '../frameworks/requires.ts';
+import {
+  CardOperationError,
+  cardParkedAt,
+  clearCardPark,
+  CONVERSATION_STAGE_INSTRUCTION,
+  endsWithStageDoneMarker,
+  initialCardStages,
+  LET_AGENT_DECIDE_PROMPT,
+  loadFrameworkSync,
+  readyOrder,
+  runPrecheck,
+  STAGE_DONE_HEADER,
+  STAGE_DONE_NOT_YET,
+  STAGE_DONE_YES,
+  stripStageDoneMarker,
+  tagCardStage,
+  takeNextQueued,
+  watchFrameworkState,
+  withHistory,
+} from '../frameworks/card-runtime.ts';
+
+/** The `graphState.outputs` key a revived card's reply waits under until its node's turn (framework-board). */
+const CARD_REVIVAL_REPLY = 'revivalReply';
 
 /** Backends whose runner honors `resume` (AgentRunSpec) — graph `session.continue` and the
  *  verdict nudge need it. OpenCode always starts a new session; Cursor has no resume yet; omp resumes
@@ -261,13 +294,45 @@ type GraphParkOutcome =
   | { kind: 'answer'; text: string }
   | { kind: 'timeout' }
   | { kind: 'finished' }
-  | { kind: 'cancelled' };
+  | { kind: 'cancelled' }
+  /** A conversation stage only (framework-board D10): Finish stage, and Let the agent decide. */
+  | { kind: 'stage-finished' }
+  | { kind: 'decide' }
+  /** A framework park an automatic wake released: back through the queue for a slot. */
+  | { kind: 'requeue' };
+
+/** A framework-card park cezar re-evaluates on its own wake sources (D7/D13): WIP exits, the
+ *  framework state watcher, the cockpit focus recheck and an in-cockpit approve. */
+interface StageWaiter {
+  runId: string;
+  stage: string;
+  kind: 'enter' | 'gate';
+  node: Extract<GraphNode, { type: 'stage.enter' | 'gate.framework' }>;
+  cwd: string;
+  /** Parked on missing `requires` files: only a merge into the branch clears it, which no state
+   *  watcher sees, so the backoff recheck is always armed. */
+  requiresBlocked?: boolean;
+  recheck: () => Promise<void>;
+}
 
 /** Most recent graph transitions kept on the record — loops are bounded, but a record is not a log. */
 /** Runs a restart interrupts — the self-update dialog's "N tasks are running" (#1524). */
 const RESTART_SENSITIVE: ReadonlySet<RunRecord['status']> = new Set<RunRecord['status']>(['queued', 'waiting', 'running']);
 
 const GRAPH_TAKEN_CAP = 500;
+/** Run statuses after which a card holds no stage and no block (framework-board). */
+const CARD_SETTLED: ReadonlySet<RunRecord['status']> = new Set<RunRecord['status']>(['done', 'review', 'failed', 'cancelled']);
+/** A card's run task: its title, then its brief — what the namer and the thread show. */
+function cardTask(title: string, brief: string | undefined): string {
+  return brief?.trim() ? `${title}\n\n${brief.trim()}` : title;
+}
+/** D3: the framework's `state` snapshotted onto the card, so in-flight cards never re-read the file. */
+function stateDefOf(fw: FrameworkFile): Pick<RunCard, 'frameworkStateDef'> {
+  return fw.state ? { frameworkStateDef: { command: fw.state.command, ...(fw.state.watch ? { watch: fw.state.watch } : {}) } } : {};
+}
+function cardBrief(task: string, title: string): string {
+  return task.startsWith(`${title}\n\n`) ? task.slice(title.length + 2) : '';
+}
 /** The dim thread line for an idle close (spec 2026-11-04-idle-closed-attention-state): not a failure. */
 const IDLE_CLOSED_LIFECYCLE = 'run closed after inactivity — nobody replied; Continue to resume it';
 
@@ -600,6 +665,12 @@ interface ContinueRunOptions {
 
 class AgentAccountUnavailableError extends Error {}
 
+/** A switched agent (#2462) never reopens a session another account recorded. */
+function sameAgentAccount(step: { profileId?: string }, agent: { agentProfile?: string; replaced: boolean } | undefined): boolean {
+  if (!agent?.replaced || agent.agentProfile === undefined) return true;
+  return (step.profileId ?? DEFAULT_AGENT_ACCOUNT_ID) === agent.agentProfile;
+}
+
 interface ActiveRun {
   /** The actual definition this owner is walking, including the dequeue-time refresh. */
   workflow?: WorkflowDef;
@@ -629,6 +700,17 @@ interface ActiveRun {
    *  and a settling dispatch child resolves its entry in `graphChildWaits`. */
   graphAnswer?: (text: string) => void;
   graphFinish?: () => void;
+  /** A parked conversation stage (framework-board D10): Finish stage / Let the agent decide.
+   *  Graph-walk only, so only `execute`'s ActiveRun ever sets them; `runContinuation` never
+   *  walks a graph. */
+  graphStageFinish?: () => void;
+  graphDecide?: () => void;
+  /** The conversation node the walk is in, and a Finish stage pressed mid-turn. */
+  conversationNodeId?: string;
+  stageFinishRequested?: boolean;
+  /** An automatic wake released a framework park: the walk stops at its cursor and `execute`
+   *  sends the run back through the queue, so `pump()` gates its next agent (framework-board). */
+  graphRequeue?: boolean;
   graphChildWaits?: Map<string, (child: { status: string; summary: string }) => void>;
   idleTimer?: NodeJS.Timeout;
   /** The inactivity watchdog closed this session; a plain final wait is not success evidence. */
@@ -1195,6 +1277,9 @@ export interface StartRunInput {
   /** Internal (#1300): this job resumes the agent step a usage limit interrupted. Set only by
    *  `fireAutoResume` (and a restart that revives that queued job), never derived in `execute`. */
   usageLimitResume?: boolean;
+  /** Internal: the board metadata of a framework card (spec 2026-11-15-framework-board), written
+   *  with the workflow snapshot so the scheduler sees `held` before its first pump. */
+  card?: RunCard;
 }
 
 /**
@@ -1583,6 +1668,22 @@ export class RunManager {
   // registering in `active`, so parallel-slot counting is never racy.
   // Order: "Run First" promotions first (newest first), then arrival — see `enqueue()`.
   private readonly queue: string[] = [];
+  // Framework cards (spec 2026-11-15-framework-board): parks cezar re-evaluates itself, the WIP
+  // place each card holds, cards admitted to a stage a moment ago, and open state watchers.
+  private readonly stageWaiters = new Map<string, StageWaiter>();
+  private readonly cardOccupancy = new Map<string, string>();
+  private readonly admitting = new Map<string, string>();
+  private readonly wipWakes = new Set<string>();
+  private readonly frameworkWatches = new Set<() => void>();
+  /** Backoff rechecks of parks no fs watcher could cover; each entry stops its timer. */
+  private readonly frameworkBackoffs = new Set<() => void>();
+  private readonly frameworkRecheckBackoff: { initial: number; max: number };
+  /** Runs a person is releasing right now (in-cockpit approve): they continue in place (#347). */
+  private readonly humanWakes = new Set<string>();
+  /** Runs an automatic wake sent back through the queue, for the resume note. */
+  private readonly releasedWalks = new Set<string>();
+  /** A revived card's reply attachments, for its cursor node's next turn (`reviveCardWalk`). */
+  private readonly cardRevivals = new Map<string, { blocks: ContentBlock[]; attachments: PersistedAttachment[] }>();
   private readonly starting = new Set<string>();
   // Runs cancelled inside that window: there is no `ActiveRun` to flag yet, so the starter checks
   // here once it has one to build (`abandonCancelledStart`).
@@ -1749,9 +1850,12 @@ export class RunManager {
       /** Park a rejected login for a reconnect (spec 2026-11-18-inline-account-reconnect). Off for a
        *  headless `cezar run`: no reconnect can reach it, so it fails as before. */
       parkOnAuth?: boolean;
+      /** The recheck backoff of a framework park no fs watcher covers (framework-board); tests shorten it. */
+      frameworkRecheckBackoffMs?: { initial: number; max: number };
     } = {},
   ) {
     this.dataDir = join(repoRoot, '.ai/cezar');
+    this.frameworkRecheckBackoff = options.frameworkRecheckBackoffMs ?? { initial: 30_000, max: 600_000 };
     this.hosted = options.hosted ?? (() => false);
     this.parkOnAuth = options.parkOnAuth ?? true;
     this.branchNameWaitMs = options.branchNameWaitMs ?? BRANCH_NAME_WAIT_MS;
@@ -1766,7 +1870,8 @@ export class RunManager {
       newestPromotionAt: () => this.newestPromotionAt(),
       accountHolds: () => this.accountHolds(),
       refreshQueueReasons: () => this.refreshQueueReasons(),
-      activeRuns: () => this.store.listRuns().filter((r) => RESTART_SENSITIVE.has(r.status) && !isIdleParked(r)).length,
+      // A Backlog card (framework-board D2) is a draft a restart cannot interrupt.
+      activeRuns: () => this.store.listRuns().filter((r) => RESTART_SENSITIVE.has(r.status) && !isIdleParked(r) && !r.card?.held).length,
     });
     this.lifecycle = new WorktreeLifecycleCoordinator(repoRoot, store, {
       semaphore: this.semaphore,
@@ -1800,6 +1905,12 @@ export class RunManager {
     });
     this.store.on('run', this.onRunHoldInputs);
     this.store.on('deleted', this.onRunDeletedHolds);
+    for (const run of this.store.listRuns()) {
+      const stage = this.occupiedStage(run);
+      if (stage !== undefined) this.cardOccupancy.set(run.id, stage);
+    }
+    this.store.on('run', this.onCardRun);
+    this.store.on('deleted', this.onCardDeleted);
     this.onQueueHoldChange();
     // Memory guard (#memory-guard): the shared process-tree sampler already ticks ~every 2 s for
     // the runs table; piggyback on it to enforce the per-task memory ceiling.
@@ -1850,6 +1961,13 @@ export class RunManager {
     ++this.queueReasonRevision;
     this.store.off('run', this.onRunHoldInputs);
     this.store.off('deleted', this.onRunDeletedHolds);
+    this.store.off('run', this.onCardRun);
+    this.store.off('deleted', this.onCardDeleted);
+    for (const close of this.frameworkWatches) close();
+    this.frameworkWatches.clear();
+    for (const stop of this.frameworkBackoffs) stop();
+    this.frameworkBackoffs.clear();
+    this.stageWaiters.clear();
     this.lifecycle.dispose();
     this.offUsage();
     this.offStoreLifecycle();
@@ -2218,6 +2336,7 @@ export class RunManager {
     this.store.updateRun(run.id, {
       workflowDef: workflow,
       ...(input.startedByManager ? { startedByManager: input.startedByManager } : {}),
+      ...(input.card ? { card: input.card } : {}),
     });
     // On the record, not only the input: restart recovery rebuilds the run from it.
     if (run.worktree === false && input.newBranch) {
@@ -2397,7 +2516,8 @@ export class RunManager {
    *  the promoted run, and this is only the tie-breaker behind
    *  `newestPromotionAt()`. */
   private oldestQueuedAt(): number | null {
-    const head = this.queue[0];
+    // A Backlog card is not waiting for a slot, so it must not win the workspace's fairness key.
+    const head = this.queue.find((id) => !this.store.getRun(id)?.card?.held);
     if (!head) return null;
     const createdAt = this.store.getRun(head)?.createdAt;
     const ms = createdAt ? Date.parse(createdAt) : Number.NaN;
@@ -2440,7 +2560,8 @@ export class RunManager {
    */
   promote(runId: string): boolean {
     const at = this.queue.indexOf(runId);
-    if (at === -1) return false;
+    // A Backlog card waits for a human move to Ready, never for a slot (framework-board D2).
+    if (at === -1 || this.store.getRun(runId)?.card?.held) return false;
     this.queue.splice(at, 1);
     this.store.updateRun(runId, { promotedAt: new Date().toISOString() });
     this.enqueue(runId);
@@ -2538,6 +2659,8 @@ export class RunManager {
         const defaultRunner = anyHold ? (await loadConfig(this.repoRoot)).defaultRunner : undefined;
         const startable = (id: string): boolean => {
           const queued = this.store.getRun(id);
+          // A Backlog card (framework-board D2) waits for a human, never for a slot.
+          if (queued?.card?.held) return false;
           if (queued && anyHold && accountHeldFor(queued, holds, defaultRunner ?? 'claude', this.askingAccounts(), this.pendingJobs.get(id)?.workflow)) return false;
           // "Start now" goes over `maxParallel` on purpose, but a non-git root still runs one at a time.
           if (this.startNowRequested.has(id)) return repo !== null || this.busySlots() < 1;
@@ -2551,10 +2674,10 @@ export class RunManager {
         while (this.queue.length > 0) {
           // FIFO among the runs that CAN start; a held one keeps its place in the queue rather
           // than being dequeued and re-queued (which would churn its position and its record).
-          const next = this.queue.findIndex(startable);
-          if (next === -1) break; // nothing queued can start right now
-          const runId = this.queue.splice(next, 1)[0];
-          if (!runId) break;
+          // Cards take their queue slots in Ready order (`takeNextQueued`); without cards this is
+          // the plain `findIndex(startable)` it always was.
+          const runId = takeNextQueued(this.queue, startable, (id) => this.store.getRun(id)?.card);
+          if (!runId) break; // nothing queued can start right now
           // Leaving the queue gives up a "Run First" place. The store would retire it anyway once
           // the run's status moves on, but the run is still `queued` until `execute` writes
           // `running` — and a usage-limit send-back in that window must not re-enter at the front.
@@ -2713,7 +2836,8 @@ export class RunManager {
     const live = this.store
       .listRuns()
       // An idle park has no process to recover: it rests as it is until a message reopens it.
-      .filter((r) => ['queued', 'waiting', 'running'].includes(r.status) && !isIdleParked(r))
+      // …except a card whose session was stranded outside its walk: that one is handed back (below).
+      .filter((r) => ['queued', 'waiting', 'running'].includes(r.status) && (!isIdleParked(r) || strandedCardSession(r)))
       .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
     // A crash never reaches `dropActive`, so its temp directory (#785) outlived the run.
     // Startup is the one moment we know which runs are still live, so sweep every other
@@ -2727,7 +2851,7 @@ export class RunManager {
       0,
       'left running by a settled task (found at startup)',
     );
-    for (const run of live) {
+    for (let run of live) {
       if (this.lifecycle.isBlocked(run.id)) {
         this.store.updateRun(run.id, {status: 'waiting', error: 'Worktree scripts need an explicit recovery action'});
         continue;
@@ -2750,12 +2874,19 @@ export class RunManager {
       // A standalone Continue would settle the run `done` with those steps pending. An agent
       // parked on a question or a monitor keeps the Continue path below (#1076): the walk must
       // not move past work the agent said was still open.
+      run = this.repairStrandedCardSession(run);
       const cursor = run.graphState?.cursor;
       const walkedGraph = run.workflowDef ? (run.workflowDef.graph ?? compileV1(run.workflowDef.steps)) : undefined;
       const cursorNode = walkedGraph?.nodes.find((n) => n.id === cursor);
-      const parkedAgent = cursorNode?.type === 'agent' && (run.status === 'waiting' || run.activity === 'monitoring');
+      // A framework card's sessionless parks (spec 2026-11-15-framework-board): a stage entry
+      // (WIP / precheck), a framework gate, and a conversation stage waiting for the user. They
+      // resume AT the node, which re-evaluates its condition or parks again without a turn.
+      const conversationPark = cursorNode?.type === 'agent' && cursorNode.mode === 'conversation'
+        && run.graphState?.outputs?.[cursorNode.id]?.conversation !== undefined;
+      const sessionlessPark = conversationPark || cursorNode?.type === 'stage.enter' || cursorNode?.type === 'gate.framework';
+      const parkedAgent = cursorNode?.type === 'agent' && !conversationPark && (run.status === 'waiting' || run.activity === 'monitoring');
       const applyingGate = cursorNode?.type === 'gate.human' && Boolean(run.graphState?.outputs?.[cursorNode.id]?.instructions);
-      const graphWaiting = run.status === 'waiting' && (run.askParked || applyingGate);
+      const graphWaiting = run.status === 'waiting' && (run.askParked || applyingGate || sessionlessPark);
       if (cursor && cursorNode && !parkedAgent && (run.status === 'running' || graphWaiting)) {
         for (const step of run.steps) {
           if (step.status === 'running' || step.status === 'waiting') {
@@ -2768,6 +2899,7 @@ export class RunManager {
           currentStepId: undefined,
           askParked: undefined,
           activity: undefined,
+          ...(run.card ? { card: clearCardPark(run.card) } : {}),
         });
         const requeued = this.store.getRun(run.id);
         if (requeued) await this.reviveQueuedRun(requeued, `cezar restarted — resuming the workflow at "${cursor}"`);
@@ -4447,7 +4579,8 @@ export class RunManager {
       // (#489, spec 2026-09-10-dispatch A11, #1597), as well as the task's account.
       autonomous: run.autonomous,
       dispatch: run.dispatch,
-      worktree: run.worktree,
+      // A framework card always works on its own branch (spec 2026-11-15-framework-board).
+      worktree: run.card ? true : run.worktree,
       ...(run.readOnly ? { readOnly: true } : {}),
       ...(run.readOnly && run.enforceReadOnly ? { enforceReadOnly: true } : {}),
     });
@@ -4603,7 +4736,7 @@ export class RunManager {
       console.warn(`[cez] queue watchdog: re-adopting queued run ${run.id} the engine had lost`);
       await this.reviveQueuedRun(run, 'queue watchdog');
     }
-    if (this.queue.length === 0) return;
+    if (!this.queue.some((id) => !this.store.getRun(id)?.card?.held)) return;
     if (this.busySlots() > 0 || this.starting.size > 0) return;
     if (this.semaphore.busy() > 0) return;
     // A future deadline is a real reason to sit still: that timer will fire and pump.
@@ -5030,7 +5163,8 @@ export class RunManager {
    * cap later, when nobody is looking.
    */
   async startNow(runId: string): Promise<'started' | 'not-queued' | 'held'> {
-    if (!this.queue.includes(runId)) return 'not-queued';
+    // A Backlog card leaves the Backlog first (PATCH held:false); Start now is for Ready work.
+    if (!this.queue.includes(runId) || this.store.getRun(runId)?.card?.held) return 'not-queued';
     const holds = this.semaphore.accountHolds();
     const run = this.store.getRun(runId);
     if (run && (holds.deadline.size > 0 || holds.inFlight.size > 0)) {
@@ -6017,7 +6151,10 @@ export class RunManager {
       return { ok: false, error: `cannot continue a ${run.status} run` };
     }
     const sessionStep = [...run.steps].reverse().find((s) => s.sessionId);
-    if (!sessionStep?.sessionId) {
+    // A card is revived through its graph walk, never as a standalone session (framework-board);
+    // an agent switch keeps its own handoff (#2462).
+    const walkAt = agentSwitch ? undefined : this.cardWalkResumeNode(run);
+    if (!sessionStep?.sessionId && !walkAt) {
       if (!agentSwitch && run.worktreeLifecycle?.phase === 'setup' && run.worktreeLifecycle.state === 'cancelled') {
         void this.lifecycle.reopenSetup(runId).catch(error => this.store.updateRun(runId, {error: String(error)}));
         return {ok: true};
@@ -6124,6 +6261,7 @@ export class RunManager {
       }
       if (!agentSwitch) this.clearPendingAsk(runId);
     }
+    if (walkAt) return this.reviveCardWalk(runId, walkAt, opts.text?.trim() || 'Continue.', opts.images ?? [], !deferForCapacity);
     const continuations = run.steps.filter((s) => s.id.startsWith('continue-')).length;
     const priorStep = agentSwitch?.previousContinuation?.stepId;
     const stepId = priorStep ?? `continue-${continuations + 1}`;
@@ -6220,6 +6358,7 @@ export class RunManager {
     // for retention again — otherwise it keeps a dir on disk while staying
     // invisible to the enforcer forever. Best-effort; falls back to repoRoot.
     const beforePreparation = this.store.getRun(runId);
+    const cardRun = beforePreparation?.card !== undefined;
     const gatedContinuation = !!beforePreparation?.worktreePath && await this.lifecycle.requiresGate(runId).catch(() => true);
     if (this.abandonCancelledStart(runId)) return;
     if (beforePreparation?.worktreePath && gatedContinuation) {
@@ -6453,7 +6592,9 @@ export class RunManager {
         // `CEZ:TITLE=` lines, so running it first lets the two trailing-marker strippers see a
         // `CEZ:MONITORING` / `CEZ:DONE` that an agent put ABOVE its task references. Outside-in
         // they saw those references and left the protocol marker in the transcript.
-        const text = stripAskMarker(stripMonitoringMarker(stripDoneMarker(stripTaskMarkers(withoutAskCloseMarkers(event.text)))));
+        const stripped = stripAskMarker(stripMonitoringMarker(stripDoneMarker(stripTaskMarkers(withoutAskCloseMarkers(event.text)))));
+        // Twin of `runAgentStep`'s: a card's `CEZ:STAGE-DONE` never reaches its transcript.
+        const text = cardRun ? stripStageDoneMarker(stripped) : stripped;
         if (text) this.store.appendEvent(runId, { type: 'text', text, stepId });
         return;
       }
@@ -7351,6 +7492,13 @@ export class RunManager {
       this.dropActive(runId, state);
       return;
     }
+    if (state.graphRequeue) {
+      state.graphRequeue = undefined;
+      if (!state.cancelled && this.active.get(runId) === state) {
+        this.requeueReleasedWalk(runId, state, workflow);
+        return;
+      }
+    }
 
     // How a mid-workflow ask park (#917) ended, read once before the settlement
     // below clears it. A LIVE park never reaches this line: the parked session
@@ -7619,7 +7767,9 @@ export class RunManager {
       ? { kind: 'node', node: resumeNode, transitions: [] }
       : enterGraph(graph, loopCounts);
     if (resumeNode) {
-      const why = ctx.usageLimitResume?.id !== resumeNode.id ? 'a restart'
+      const why = this.releasedWalks.delete(runId) ? 'waiting for a slot'
+        : outputs.get(resumeNode.id)?.[CARD_REVIVAL_REPLY] !== undefined ? 'a Continue'
+        : ctx.usageLimitResume?.id !== resumeNode.id ? 'a restart'
         : autoResumeReasonFor(ctx.usageLimitResume.error) === 'transient' ? 'a temporary provider failure' : 'a usage limit';
       emit({ type: 'note', message: `resuming the workflow at "${resumeNode.name ?? resumeNode.id}" after ${why}` });
     }
@@ -7630,6 +7780,7 @@ export class RunManager {
       const resuming = resumeNode?.id === node.id && cursor === undefined;
       cursor = node.id;
       persistWalk();
+      this.tagCardNode(runId, node);
       const kind: 'agent' | 'check' = node.type === 'agent' ? 'agent' : 'check';
       const iteration = (this.store.getRun(runId)?.steps.find((s) => s.id === node.id)?.iterations ?? 0) + 1;
       this.store.updateRun(runId, { currentStepId: node.id });
@@ -7687,7 +7838,7 @@ export class RunManager {
           outcome = await this.runSystemNode(runId, state, node, outputs, input.task, emit, persistWalk, resumeHere, {
             opensPr, gateNote, readyPr: prApproval?.pr === 'ready', updateExistingPr: Boolean(prApproval?.instructions),
           });
-          if (state.cancelled) return null;
+          if (state.cancelled || state.graphRequeue) return null;
           if (outcome === 'unanswered') {
             gateNote = 'Reply with instructions in text, or choose an option.';
             resumeHere = false;
@@ -7730,7 +7881,8 @@ export class RunManager {
         }
         port = outcome;
         const failed = isFailurePort(port);
-        this.finishStep(runId, node.id, failed ? 'failed' : 'done', failed ? `ended on "${port}"` : undefined, emit);
+        const missing = node.type === 'stage.exit' && port === 'missing' ? outputs.get(node.id)?.missing : undefined;
+        this.finishStep(runId, node.id, failed ? 'failed' : 'done', failed ? (missing ? `missing ${missing}` : `ended on "${port}"`) : undefined, emit);
       } else if (node.type === 'agent') {
         const stepIdx = workflow.steps.findIndex((s) => s.id === node.id);
         const rendered = nodeToStep(node);
@@ -7751,26 +7903,47 @@ export class RunManager {
           ? freshContinuationContext(run, this.store.readEvents(runId), this.attachmentsDir(runId))
           : undefined;
         const lastTurn = { text: '' };
-        const session = interrupted
-          ? { resumeSessionId: RESUMABLE_BACKENDS.has(backend) ? interrupted.sessionId : undefined, usageLimitResume: interrupted }
-          : resuming && !agent?.replaced
-            ? this.resumeInterruptedAgent(runId, node, backend, rendered, lastTurn)
-            : { resumeSessionId: portableContext ? undefined : await this.graphResumeSession(runId, node, backend, emit, agent) };
-        const failure = await this.runAgentStep(
+        // A conversation stage (framework-board D10) parks after every turn instead of finishing
+        // the node; resumed after a restart while parked, it parks again without a turn.
+        const conversing = node.mode === 'conversation' && !this.conversationAutonomous(runId, state);
+        if (conversing) {
+          state.conversationNodeId = node.id;
+          rendered.prompt = `${rendered.prompt ?? '{{task}}'}\n\n${CONVERSATION_STAGE_INSTRUCTION}`;
+        }
+        // A revived card (`reviveCardWalk`): the user's text is this node's next turn.
+        const revivalText = resuming ? outputs.get(node.id)?.[CARD_REVIVAL_REPLY] : undefined;
+        const revival = typeof revivalText === 'string'
+          ? this.takeCardRevival(runId, node, backend, rendered, lastTurn, revivalText, outputs, persistWalk, conversing, agent)
+          : undefined;
+        const resumeConversation = conversing && resuming && !revival && outputs.get(node.id)?.conversation !== undefined;
+        const session = revival
+          ? revival.hooks
+          : interrupted
+            ? { resumeSessionId: RESUMABLE_BACKENDS.has(backend) ? interrupted.sessionId : undefined, usageLimitResume: interrupted }
+            : resuming && !agent?.replaced
+              ? this.resumeInterruptedAgent(runId, node, backend, rendered, lastTurn)
+              : { resumeSessionId: portableContext ? undefined : await this.graphResumeSession(runId, node, backend, emit, agent) };
+        let failure = resumeConversation ? null : await this.runAgentStep(
           runId,
           state,
           rendered,
           agentInput,
           skills,
           checkFailure,
-          isTerminalAgent(graph, node.id),
+          // A conversation stage parks on its own terms (`converse`), never as the interactive tail.
+          !conversing && isTerminalAgent(graph, node.id),
           emit,
-          startImages,
+          revival ? revival.blocks : startImages,
           taskBackend,
           extraSystemPrompt,
           stepIdx >= 0 ? chainStepNote(workflow.steps, stepIdx) : undefined,
-          startAttachments,
-          { ...session, lastTurn, portableContext, workflowAgent: agent },
+          revival ? revival.attachments : startAttachments,
+          {
+            ...session, lastTurn, workflowAgent: agent,
+            // A revival seeds its own history (`takeCardRevival`).
+            ...(revival ? {} : { portableContext }),
+            ...(conversing ? { conversation: true } : {}),
+          },
         );
         startImages = undefined;
         checkFailure = null;
@@ -7782,6 +7955,25 @@ export class RunManager {
         // Inactivity is not evidence that the task completed: the park stays as it was, and
         // `execute` settles it as an idle park. A dispatched child still settles below.
         if (this.idleParks(runId, state)) return null;
+        if (!failure && conversing) {
+          const talked = await this.converse(runId, state, node, rendered, lastTurn, {
+            input: agentInput, skills, emit, taskBackend, extraSystemPrompt, outputs, persistWalk, resumed: resumeConversation,
+            workflowAgent: agent,
+          });
+          state.conversationNodeId = undefined;
+          if (state.cancelled) return null;
+          if (talked === 'finished') {
+            this.finishStep(runId, node.id, 'done', undefined, emit);
+            return null;
+          }
+          if (state.askPark) {
+            if (state.askPark === 'abandoned') this.finishStep(runId, node.id, 'done', undefined, emit);
+            return null;
+          }
+          if (this.idleParks(runId, state)) return null;
+          if (talked !== 'done') failure = talked.failure;
+        }
+        state.conversationNodeId = undefined;
         // The review-gate path remains a needs-you state with its changes available to the user.
         if (await this.idleClosedFails(runId, state)) {
           const error = this.inactivityFailureMessage();
@@ -7911,6 +8103,9 @@ export class RunManager {
     const from = graph.nodes.find((n) => n.id === last?.from);
     if (from?.type === 'agent') return `step "${from.id}" failed: ${agentFailure ?? 'failed'}`;
     if (from?.type === 'check') return `check "${from.id}" failed`;
+    if (from?.type === 'stage.exit' && last?.port === 'missing') {
+      return `stage "${from.stage}" is missing ${outputs.get(from.id)?.missing ?? 'a required file'}`;
+    }
     if (from?.type === 'loop') {
       const into = step.transitions.find((t) => t.to === from.id);
       const source = graph.nodes.find((n) => n.id === into?.from);
@@ -7919,6 +8114,45 @@ export class RunManager {
         : `loop "${from.name ?? from.id}" exhausted after ${from.max} iterations`;
     }
     return `node "${last?.from ?? '?'}" ended on "${last?.port ?? '?'}" with nothing wired`;
+  }
+
+  /**
+   * Graph hooks for a revived card's node (`reviveCardWalk`): the reply opens the node's OWN
+   * session as its next turn — a conversation stage's reply, exactly as `converse` sends one.
+   * Without a resumable session the reply goes to a fresh one seeded with the task's history.
+   */
+  private takeCardRevival(
+    runId: string,
+    node: Extract<GraphNode, { type: 'agent' }>,
+    backend: RunnerId,
+    rendered: WorkflowStepDef,
+    lastTurn: { text: string },
+    text: string,
+    outputs: Map<string, Record<string, string | number>>,
+    persistWalk: () => void,
+    conversing: boolean,
+    agent?: { agentProfile?: string; replaced: boolean },
+  ): { hooks: { resumeSessionId?: string; lastTurn: { text: string } }; blocks: ContentBlock[] | undefined; attachments: PersistedAttachment[] } {
+    const { [CARD_REVIVAL_REPLY]: _reply, ...rest } = outputs.get(node.id) ?? {};
+    if (Object.keys(rest).length) outputs.set(node.id, rest);
+    else outputs.delete(node.id);
+    persistWalk();
+    const extras = this.cardRevivals.get(runId);
+    this.cardRevivals.delete(runId);
+    const rec = this.store.getRun(runId);
+    const own = rec?.steps.find((s) => s.id === node.id);
+    const resume = own?.sessionId && (own.backend ?? backend) === backend && RESUMABLE_BACKENDS.has(backend)
+      && sameAgentAccount(own, agent) ? own.sessionId : undefined;
+    if (resume) rendered.prompt = text;
+    else if (rec) {
+      const seeded = `${freshContinuationContext(rec, this.store.readEvents(runId), this.attachmentsDir(runId))}\n\n---\n\n## New user instruction\n${text}`;
+      rendered.prompt = conversing ? `${seeded}\n\n${CONVERSATION_STAGE_INSTRUCTION}` : seeded;
+    }
+    return {
+      hooks: { ...(resume ? { resumeSessionId: resume } : {}), lastTurn },
+      blocks: extras?.blocks.length ? extras.blocks : undefined,
+      attachments: extras?.attachments ?? [],
+    };
   }
 
   /**
@@ -8474,6 +8708,18 @@ export class RunManager {
         }
         return glyph === 'passing' ? 'green' : 'red';
       }
+      // Framework stages (spec 2026-11-15-framework-board): cezar runs these, no agent session.
+      case 'stage.enter':
+        return this.runStageEnter(runId, state, node, note);
+      case 'stage.exit': {
+        const missing = await missingArtifacts(state.cwd, node.artifacts);
+        if (!missing.length) return 'pass';
+        outputs.set(node.id, { missing: missing.join(', ') });
+        note(`stage "${node.stage}" did not leave ${missing.join(', ')}`, 'danger');
+        return 'missing';
+      }
+      case 'gate.framework':
+        return this.runFrameworkGate(runId, state, node, note);
     }
   }
 
@@ -8575,6 +8821,902 @@ export class RunManager {
     }
   }
 
+  // ---- Framework cards (spec 2026-11-15-framework-board) -----------------------------------
+  //
+  // A card is a run whose workflow is a compiled framework plus its `card` field. Everything below
+  // is reached only through a `card` on the record or a framework node in the graph, so a project
+  // without cards never runs a line of it beyond the `!run.card` early returns.
+
+  /** Compile a framework for a card, refusing a graph the validator rejects. */
+  private compileCardGraph(fw: FrameworkFile, card: CompileCard) {
+    const graph = compileFramework(fw, card);
+    const problems = graphIssues(graph, { frameworkNodes: true });
+    if (problems.length) throw new CardOperationError(`the card compiles to an invalid workflow: ${problems.join('; ')}`, 422);
+    const { included, skipped } = compiledStages(fw, card);
+    if (!included.length) throw new CardOperationError('every stage of this card is skipped', 422);
+    return { graph, included, skipped };
+  }
+
+  /** The card's field values with the framework's defaults, checked against its `cardFields`. */
+  private validCardFields(fw: FrameworkFile, title: string, fields: Record<string, string | boolean> | undefined) {
+    const resolved = resolveCardFields(fw, title, fields);
+    for (const f of fw.cardFields ?? []) {
+      const value = resolved[f.name];
+      if (value === undefined) continue;
+      if (f.type === 'boolean' && typeof value !== 'boolean') throw new CardOperationError(`${f.label} must be true or false`, 422);
+      if (f.type !== 'boolean' && typeof value !== 'string') throw new CardOperationError(`${f.label} must be text`, 422);
+      if (f.pattern && typeof value === 'string') {
+        let re: RegExp;
+        try {
+          re = new RegExp(f.pattern);
+        } catch {
+          continue;
+        }
+        if (!re.test(value)) throw new CardOperationError(`${f.label} "${value}" does not match ${f.pattern}`, 422);
+      }
+    }
+    return resolved;
+  }
+
+  /** Write a card change, only when it changes something. */
+  private updateCard(runId: string, change: (card: RunCard) => RunCard): void {
+    const card = this.store.getRun(runId)?.card;
+    if (!card) return;
+    const next = change(card);
+    if (next === card || JSON.stringify(next) === JSON.stringify(card)) return;
+    this.store.updateRun(runId, { card: next });
+  }
+
+  /** D4: the walk reached `node`; the card's stage follows its tag. */
+  private tagCardNode(runId: string, node: ExecutableNode): void {
+    if (node.type !== 'stage.enter') this.admitting.delete(runId);
+    const stage = node.stage;
+    this.updateCard(runId, (card) => (stage ? tagCardStage(clearCardPark(card), stage) : clearCardPark(card)));
+  }
+
+  /** A parked node shows `waiting` on the card's strip, and `running` again once it moves. */
+  private markCardPark(runId: string, nodeId: string, parked: boolean): void {
+    const run = this.store.getRun(runId);
+    if (!run?.card) return;
+    const node = run.workflowDef?.graph?.nodes.find((n) => n.id === nodeId);
+    const stage = node?.stage;
+    if (!node || !stage) return;
+    this.updateCard(runId, (card) => {
+      const next = parked ? cardParkedAt(card, node) : clearCardPark(card);
+      if (next.stage !== stage || next.stages[stage] === 'stale') return next;
+      return { ...next, stages: { ...next.stages, [stage]: parked ? 'waiting' : 'running' } };
+    });
+  }
+
+  private blockCard(runId: string, block: { reason: 'wip' | 'precheck' | 'gate'; detail?: string }): void {
+    this.updateCard(runId, (card) => {
+      const detail = block.detail?.slice(0, 2_000);
+      if (card.blocked?.reason === block.reason && card.blocked.detail === detail) return card;
+      const since = card.blocked?.reason === block.reason ? card.blocked.since : new Date().toISOString();
+      return { ...card, blocked: { reason: block.reason, ...(detail ? { detail } : {}), since } };
+    });
+  }
+
+  private unblockCard(runId: string): void {
+    this.updateCard(runId, (card) => (card.blocked ? { ...card, blocked: undefined } : card));
+  }
+
+  /** Whether a conversation stage stops parking: an autonomous card, or Let the agent decide. */
+  private conversationAutonomous(runId: string, state: ActiveRun): boolean {
+    const card = this.store.getRun(runId)?.card;
+    return card ? card.autonomous === true : state.autonomous === true;
+  }
+
+  /**
+   * The stage a card holds a WIP place in (D13), or undefined. A card waiting at a stage's entry
+   * holds none; one admitted a moment ago (`admitting`) already does; a card re-queued mid-walk
+   * by a restart still does, so a resumed entry cannot over-admit before it comes back.
+   */
+  private occupiedStage(run: RunRecord): string | undefined {
+    const card = run.card;
+    if (!card || CARD_SETTLED.has(run.status)) return undefined;
+    if (this.admitting.get(run.id) === card.stage) return card.stage;
+    if (card.blocked?.reason === 'wip' || card.blocked?.reason === 'precheck') return undefined;
+    const cursor = run.graphState?.cursor;
+    const at = cursor ? run.workflowDef?.graph?.nodes.find((n) => n.id === cursor) : undefined;
+    if (at?.type === 'stage.enter' && at.stage === card.stage) return undefined;
+    if (run.status === 'running' || run.status === 'waiting') return card.stage;
+    if (run.status === 'queued' && cursor) return card.stage;
+    return undefined;
+  }
+
+  private stageOccupancy(stage: string, exceptRunId: string): number {
+    let count = 0;
+    for (const run of this.store.listRuns()) if (run.id !== exceptRunId && this.occupiedStage(run) === stage) count += 1;
+    return count;
+  }
+
+  /**
+   * D13's "a card leaves that stage by any path": every record write passes here, so advance,
+   * fail, cancel, re-run and (through `onCardDeleted`) delete all wake the stage's waiters.
+   */
+  private readonly onCardRun = (run: RunRecord): void => {
+    const before = this.cardOccupancy.get(run.id);
+    if (!run.card && before === undefined) return;
+    // A place admitted ahead of a requeue (`requeueReleasedWalk`) ends with the run.
+    if (CARD_SETTLED.has(run.status)) {
+      this.admitting.delete(run.id);
+      this.releasedWalks.delete(run.id);
+    }
+    const now = this.occupiedStage(run);
+    if (now === undefined) this.cardOccupancy.delete(run.id);
+    else this.cardOccupancy.set(run.id, now);
+    if (before !== undefined && before !== now) this.scheduleWipWake(before);
+    const card = run.card;
+    if (card && CARD_SETTLED.has(run.status) && (card.blocked || card.gate || card.conversation || ['running', 'waiting'].includes(card.stages[card.stage] ?? ''))) {
+      queueMicrotask(() => this.settleCard(run.id));
+    }
+  };
+
+  private readonly onCardDeleted = (runId: string): void => {
+    const before = this.cardOccupancy.get(runId);
+    this.cardOccupancy.delete(runId);
+    this.admitting.delete(runId);
+    this.releasedWalks.delete(runId);
+    if (before !== undefined) this.scheduleWipWake(before);
+  };
+
+  /** A settled card keeps no block and no live stage on its strip. */
+  private settleCard(runId: string): void {
+    const run = this.store.getRun(runId);
+    if (!run?.card || !CARD_SETTLED.has(run.status)) return;
+    this.updateCard(runId, (card) => {
+      const current = card.stages[card.stage];
+      if (!card.blocked && !card.gate && !card.conversation && current !== 'running' && current !== 'waiting') return card;
+      const status: CardStageStatus = run.status === 'failed' ? 'failed' : run.status === 'cancelled' ? 'pending' : 'done';
+      const stages = current === 'running' || current === 'waiting' ? { ...card.stages, [card.stage]: status } : card.stages;
+      const text = run.status === 'failed' ? `failed in ${card.stage}` : run.status === 'cancelled' ? `cancelled in ${card.stage}` : run.status === 'review' ? 'ready for review' : 'done';
+      return withHistory({ ...clearCardPark(card), blocked: undefined, stages }, text);
+    });
+  }
+
+  /** Re-evaluate a stage's WIP waiters, in Ready order. Their WIP check is synchronous, so each
+   *  one admitted is counted before the next is asked (`evaluateStageEnter`). */
+  private scheduleWipWake(stage: string): void {
+    if (this.wipWakes.has(stage)) return;
+    this.wipWakes.add(stage);
+    queueMicrotask(() => {
+      this.wipWakes.delete(stage);
+      const waiting = [...this.stageWaiters.values()]
+        .map((w) => ({ w, run: this.store.getRun(w.runId) }))
+        .filter(({ w, run }) => w.kind === 'enter' && w.stage === stage && run?.card?.blocked?.reason === 'wip')
+        .sort((a, b) => readyOrder(a.run!, b.run!));
+      for (const { w } of waiting) void w.recheck();
+    });
+  }
+
+  /** Register a parked card's re-evaluation; returns the disarm `parkGraphNode` calls. A framework
+   *  with `state.watch` gets one debounced watcher for exactly as long as the park lasts; a park
+   *  the framework's state can release but no watcher covers gets a bounded backoff recheck. */
+  private registerStageWaiter(waiter: StageWaiter): () => void {
+    let inflight: Promise<void> | undefined;
+    const entry: StageWaiter = {
+      ...waiter,
+      recheck: () => (inflight ??= waiter.recheck().catch(() => undefined).finally(() => { inflight = undefined; })),
+    };
+    this.stageWaiters.set(waiter.runId, entry);
+    const stateMoves = waiter.kind === 'gate' || waiter.requiresBlocked === true || (waiter.node.type === 'stage.enter' && Boolean(waiter.node.precheck));
+    // D3: the card's own snapshot of the framework's state, never the framework file.
+    const glob = this.store.getRun(waiter.runId)?.card?.frameworkStateDef?.watch;
+    const watched = stateMoves && glob ? watchFrameworkState(waiter.cwd, glob, () => void entry.recheck()) : undefined;
+    if (watched) this.frameworkWatches.add(watched);
+    // No watcher (no `state.watch`, its directory missing at park time, or the platform refused):
+    // without this the park's only exits are a focus, an approve or a restart.
+    const backoff = stateMoves && (!watched || waiter.requiresBlocked) ? this.armRecheckBackoff(() => entry.recheck()) : undefined;
+    return () => {
+      if (this.stageWaiters.get(waiter.runId) === entry) this.stageWaiters.delete(waiter.runId);
+      if (watched && this.frameworkWatches.delete(watched)) watched();
+      if (backoff && this.frameworkBackoffs.delete(backoff)) backoff();
+    };
+  }
+
+  /** An unref'd recheck doubling from `initial` to `max`; returns its stop, kept in `frameworkBackoffs`. */
+  private armRecheckBackoff(recheck: () => Promise<void>): () => void {
+    let delay = this.frameworkRecheckBackoff.initial;
+    let timer: NodeJS.Timeout | undefined;
+    const stop = () => {
+      if (timer) clearTimeout(timer);
+      timer = undefined;
+    };
+    const arm = () => {
+      timer = setTimeout(() => {
+        timer = undefined;
+        delay = Math.min(delay * 2, this.frameworkRecheckBackoff.max);
+        void recheck().finally(() => {
+          if (this.frameworkBackoffs.has(stop) && !timer) arm();
+        });
+      }, delay);
+      timer.unref?.();
+    };
+    this.frameworkBackoffs.add(stop);
+    arm();
+    return stop;
+  }
+
+  /** Framework-state watchers open right now (one per card parked where the framework's state
+   *  can move it). Exposed for tests: none may outlive its park. */
+  activeFrameworkWatchers(): number {
+    return this.frameworkWatches.size;
+  }
+
+  /** Backoff rechecks armed right now (parks no watcher covers). Exposed for tests, like the above. */
+  activeFrameworkBackoffs(): number {
+    return this.frameworkBackoffs.size;
+  }
+
+  /**
+   * How a framework park continues once its condition clears. A person's action (in-cockpit
+   * approve) continues in place, as any answered park does (#347); an automatic wake — WIP exit,
+   * watcher, backoff, focus recheck — goes back through the queue, so `pump()` gates the slot
+   * its next agent needs.
+   */
+  private releaseOutcome(runId: string): GraphParkOutcome {
+    return this.humanWakes.has(runId) ? { kind: 'answer', text: '' } : { kind: 'requeue' };
+  }
+
+  /**
+   * The walk stopped at its cursor on an automatic release (`releaseOutcome`): queue the run again
+   * to resume there, the way restart recovery does. A WIP place admitted on the way (`admitting`)
+   * is kept, so the stage cannot over-admit while this card waits for its slot.
+   */
+  private requeueReleasedWalk(runId: string, state: ActiveRun, workflow: WorkflowDef): void {
+    this.clearIdleTimer(state);
+    this.clearAutosaveTimer(state);
+    const run = this.store.getRun(runId);
+    if (!run) {
+      this.dropActive(runId, state);
+      return;
+    }
+    for (const step of run.steps) {
+      if (step.status === 'running' || step.status === 'waiting') this.store.updateStep(runId, step.id, { status: 'pending' });
+    }
+    this.store.updateRun(runId, {
+      status: 'queued',
+      currentStepId: undefined,
+      askParked: undefined,
+      activity: undefined,
+      ...(run.card ? { card: clearCardPark(run.card) } : {}),
+    });
+    this.pendingJobs.set(runId, { workflow, input: this.workflowInput(this.store.getRun(runId) ?? run) });
+    this.releasedWalks.add(runId);
+    this.enqueue(runId);
+    this.store.appendEvent(runId, { type: 'lifecycle', message: `released at "${run.graphState?.cursor ?? 'its stage'}" — queued for a slot` });
+    // Pumps on its way out, after the run has left `active`.
+    this.dropActive(runId, state);
+  }
+
+  /** D13 + the framework pre-gate: why the card may not start `node`'s stage, or null. */
+  private async evaluateStageEnter(
+    runId: string,
+    state: ActiveRun,
+    node: Extract<GraphNode, { type: 'stage.enter' }>,
+  ): Promise<{ reason: 'wip' | 'precheck'; detail: string; requires?: true } | null> {
+    // Synchronous up to the precheck on purpose: see `scheduleWipWake`.
+    // The card's `requires` snapshot, in ITS worktree: a card forked before the framework was
+    // committed on the base must not start a stage and improvise without it.
+    const run = this.store.getRun(runId);
+    const missing = run?.card?.requires?.length ? missingInTree(state.cwd, run.card.requires) : [];
+    if (missing.length) return { reason: 'precheck', detail: missingInWorktreeDetail(missing, run?.baseBranch), requires: true };
+    if (node.wip) {
+      const occupied = this.stageOccupancy(node.stage, runId);
+      if (occupied >= node.wip) return { reason: 'wip', detail: `${occupied}/${node.wip} cards in this stage` };
+      this.admitting.set(runId, node.stage);
+    }
+    if (!node.precheck) return null;
+    const result = await runPrecheck(node.precheck, state.cwd);
+    if (result.ok) return null;
+    if (this.admitting.delete(runId)) this.scheduleWipWake(node.stage);
+    return { reason: 'precheck', detail: result.output };
+  }
+
+  private async runStageEnter(
+    runId: string,
+    state: ActiveRun,
+    node: Extract<GraphNode, { type: 'stage.enter' }>,
+    note: (message: string, tone?: 'danger') => void,
+  ): Promise<string> {
+    const block = await this.evaluateStageEnter(runId, state, node);
+    if (state.cancelled) {
+      if (this.admitting.delete(runId)) this.scheduleWipWake(node.stage);
+      return 'next';
+    }
+    if (!block) {
+      this.unblockCard(runId);
+      return 'next';
+    }
+    let current = block;
+    const say = (b: typeof block) => note(b.reason === 'wip'
+      ? `stage "${node.stage}" is full (${b.detail}) — waiting for a place, holding no slot`
+      : `stage "${node.stage}" cannot start yet:\n${b.detail}`);
+    this.blockCard(runId, block);
+    say(block);
+    let admitted = false;
+    const outcome = await this.parkGraphNode(runId, state, node.id, { waiting: true }, (resolve) =>
+      this.registerStageWaiter({
+        runId, stage: node.stage, kind: 'enter', node, cwd: state.cwd,
+        ...(block.requires ? { requiresBlocked: true } : {}),
+        recheck: async () => {
+          const again = await this.evaluateStageEnter(runId, state, node);
+          if (state.cancelled || admitted) return;
+          if (!again) {
+            admitted = true;
+            resolve(this.releaseOutcome(runId));
+            return;
+          }
+          this.blockCard(runId, again);
+          if (again.reason !== current.reason || again.detail !== current.detail) say(again);
+          current = again;
+        },
+      }));
+    if (admitted && outcome.kind === 'requeue' && !state.cancelled) {
+      this.unblockCard(runId);
+      note(`stage "${node.stage}" can start now — queued for a slot`);
+      state.graphRequeue = true;
+      return 'next';
+    }
+    if (!admitted || outcome.kind !== 'answer') {
+      if (this.admitting.delete(runId)) this.scheduleWipWake(node.stage);
+      return outcome.kind === 'finished' ? 'finished' : 'next';
+    }
+    this.unblockCard(runId);
+    note(`stage "${node.stage}" can start now`);
+    return 'next';
+  }
+
+  /** D7: the framework's own state says the gate's stage is approved/done (never stale/pending).
+   *  Records `stale` stages and the change id on the card as it reads them. */
+  private async frameworkGateApproved(runId: string, cwd: string, node: Extract<GraphNode, { type: 'gate.framework' }>): Promise<boolean> {
+    const card = this.store.getRun(runId)?.card;
+    if (!card?.frameworkStateDef) return false;
+    const result = await readFrameworkState(card.frameworkStateDef, card.stageOrder, cwd);
+    if (!result.ok) return false;
+    this.updateCard(runId, (card) => {
+      const stages = { ...card.stages };
+      for (const [id, status] of Object.entries(result.stages)) {
+        if (status === 'stale') stages[id] = 'stale';
+        else if (stages[id] === 'stale') stages[id] = status;
+      }
+      const changeId = card.frameworkState?.changeId ?? result.status.changeId;
+      return { ...card, stages, ...(changeId ? { frameworkState: { changeId, lastStatus: result.status.raw } } : {}) };
+    });
+    return isStageApproved(result.status.raw[node.approve ?? node.stage]);
+  }
+
+  private async runFrameworkGate(
+    runId: string,
+    state: ActiveRun,
+    node: Extract<GraphNode, { type: 'gate.framework' }>,
+    note: (message: string, tone?: 'danger') => void,
+  ): Promise<string> {
+    const name = node.approve ?? node.stage;
+    const passed = () => {
+      this.unblockCard(runId);
+      this.updateCard(runId, (card) => withHistory(card, `${node.stage} approved (framework state)`));
+      note(`the framework reports "${name}" approved — moving on`);
+      return 'approve';
+    };
+    if (await this.frameworkGateApproved(runId, state.cwd, node)) return passed();
+    if (state.cancelled) return 'approve';
+    this.blockCard(runId, { reason: 'gate', detail: name });
+    note(`waiting for "${name}" to be approved in the framework — holding no slot`);
+    let approved = false;
+    const outcome = await this.parkGraphNode(runId, state, node.id, { waiting: true }, (resolve) =>
+      this.registerStageWaiter({
+        runId, stage: node.stage, kind: 'gate', node, cwd: state.cwd,
+        recheck: async () => {
+          if (approved || state.cancelled) return;
+          if (await this.frameworkGateApproved(runId, state.cwd, node)) {
+            approved = true;
+            resolve(this.releaseOutcome(runId));
+          }
+        },
+      }));
+    if (outcome.kind === 'finished') return 'finished';
+    if (approved && outcome.kind === 'requeue' && !state.cancelled) {
+      // The re-run node re-reads the state and records the approval once it holds a slot.
+      note(`the framework reports "${name}" approved — queued for a slot`);
+      state.graphRequeue = true;
+      return 'approve';
+    }
+    if (!approved || outcome.kind !== 'answer') return 'approve';
+    return passed();
+  }
+
+  /**
+   * D10: a conversation stage parks after every turn (no slot, no session) until the user
+   * finishes it — `CEZ:STAGE-DONE` + "Yes", Finish stage — or lets the agent decide. A reply
+   * reopens the node's own session. `resumed`: a restart found it parked; it parks again first.
+   */
+  private async converse(
+    runId: string,
+    state: ActiveRun,
+    node: Extract<GraphNode, { type: 'agent' }>,
+    rendered: WorkflowStepDef,
+    lastTurn: { text: string },
+    ctx: {
+      input: StartRunInput;
+      skills: Skill[];
+      emit: (event: { type: string; stepId?: string; [k: string]: unknown }) => void;
+      taskBackend: RunnerId;
+      extraSystemPrompt: string | undefined;
+      outputs: Map<string, Record<string, string | number>>;
+      persistWalk: () => void;
+      resumed: boolean;
+      /** The agent a manager switch put on this node (#2462). */
+      workflowAgent?: { runner: RunnerId; agentProfile?: string; replaced: boolean };
+    },
+  ): Promise<'done' | 'finished' | { failure: string }> {
+    const { emit, outputs } = ctx;
+    const backend = ctx.workflowAgent?.runner ?? node.runner ?? ctx.taskBackend;
+    const stage = node.stage ?? node.id;
+    // `proposed` rides the walk too, so a restart re-asks "Finish this stage?" instead of
+    // handing the user's "Yes" to the agent as a reply.
+    const flag = (on: boolean, proposedNow = false) => {
+      const current = { ...(outputs.get(node.id) ?? {}) };
+      if (on) current.conversation = 1;
+      else delete current.conversation;
+      if (on && proposedNow) current.proposed = 1;
+      else delete current.proposed;
+      outputs.set(node.id, current);
+      ctx.persistWalk();
+    };
+    let proposed = ctx.resumed ? outputs.get(node.id)?.proposed !== undefined : endsWithStageDoneMarker(lastTurn.text);
+    for (;;) {
+      if (state.cancelled) return 'done';
+      if (state.stageFinishRequested || this.conversationAutonomous(runId, state)) {
+        state.stageFinishRequested = undefined;
+        return 'done';
+      }
+      flag(true, proposed);
+      const outcome = proposed
+        ? await this.parkForUser(runId, state, node.id, [{
+            header: STAGE_DONE_HEADER,
+            question: `The agent thinks "${node.name ?? stage}" is done. Finish this stage?`,
+            options: [{ label: STAGE_DONE_YES }, { label: STAGE_DONE_NOT_YET }],
+          }], undefined, true)
+        : await this.parkGraphNode(runId, state, node.id, { waiting: true, conversation: true }, (resolve) => {
+            state.graphAnswer = (text) => resolve({ kind: 'answer', text });
+            return () => {
+              state.graphAnswer = undefined;
+            };
+          });
+      if (outcome.kind === 'cancelled') return 'done';
+      flag(false);
+      if (outcome.kind === 'finished') return 'finished';
+      if (outcome.kind === 'stage-finished') {
+        this.updateCard(runId, (card) => withHistory(card, `${stage} finished by the user`));
+        return 'done';
+      }
+      let reply: string;
+      if (outcome.kind === 'decide') {
+        if (proposed) return 'done';
+        emit({ type: 'note', stepId: node.id, message: 'the agent decides the rest of this stage on its own' });
+        reply = LET_AGENT_DECIDE_PROMPT;
+      } else if (outcome.kind === 'answer') {
+        if (proposed) {
+          const answer = cardReply(outcome.text, STAGE_DONE_HEADER).trim().toLowerCase();
+          if (answer === STAGE_DONE_YES.toLowerCase()) {
+            this.updateCard(runId, (card) => withHistory(card, `${stage} finished by the user`));
+            return 'done';
+          }
+          if (answer === STAGE_DONE_NOT_YET.toLowerCase()) {
+            proposed = false;
+            continue;
+          }
+        }
+        reply = outcome.text;
+      } else {
+        continue;
+      }
+      proposed = false;
+      lastTurn.text = '';
+      const rec = this.store.getRun(runId);
+      const own = rec?.steps.find((s) => s.id === node.id);
+      const resume = own?.sessionId && (own.backend ?? backend) === backend && RESUMABLE_BACKENDS.has(backend)
+        && sameAgentAccount(own, ctx.workflowAgent) ? own.sessionId : undefined;
+      const prompt = resume || !rec
+        ? reply
+        : `${freshContinuationContext(rec, this.store.readEvents(runId), this.attachmentsDir(runId))}\n\n---\n\n## New user instruction\n${reply}`;
+      const failure = await this.runAgentStep(
+        runId, state, { ...rendered, prompt }, ctx.input, ctx.skills, null, false, emit, undefined,
+        ctx.taskBackend, ctx.extraSystemPrompt, undefined, [],
+        { ...(resume ? { resumeSessionId: resume } : {}), lastTurn, conversation: true, workflowAgent: ctx.workflowAgent },
+      );
+      if (state.cancelled || state.askPark || this.idleParks(runId, state)) return 'done';
+      if (failure) return { failure };
+      proposed = endsWithStageDoneMarker(lastTurn.text);
+    }
+  }
+
+  /** `POST /cards` — compile the framework and queue the run, held in the Backlog unless `ready`. */
+  async createCard(input: CreateCardBody): Promise<RunRecord> {
+    const frameworkId = input.framework ?? resolveProjectFramework(this.repoRoot, this.dataDir).id;
+    const loaded = loadFrameworkSync(this.dataDir, frameworkId);
+    if (!loaded) throw new CardOperationError(`no framework "${frameworkId}"`, 404);
+    if (!loaded.framework) throw new CardOperationError(`framework "${frameworkId}" is invalid: ${loaded.error ?? 'unreadable'}`, 422);
+    const fw = loaded.framework;
+    const ids = fw.stages.map((s) => s.id);
+    for (const id of [...(input.startAt ? [input.startAt] : []), ...(input.skip ?? []), ...Object.keys(input.overrides ?? {})]) {
+      if (!ids.includes(id)) throw new CardOperationError(`"${id}" is not a stage of ${fw.name}`, 422);
+    }
+    const requires = frameworkRequires(fw);
+    await this.assertRequiresOnForkBase(fw.name, requires);
+    const title = input.title.trim();
+    const fields = this.validCardFields(fw, title, input.fields);
+    const { graph, included, skipped } = this.compileCardGraph(fw, {
+      title,
+      ...(input.brief ? { brief: input.brief } : {}),
+      fields,
+      ...(input.autonomous ? { autonomous: true } : {}),
+      ...(input.startAt ? { startAt: input.startAt } : {}),
+      ...(input.skip ? { skip: input.skip } : {}),
+      ...(input.overrides ? { overrides: input.overrides } : {}),
+    });
+    const ready = input.ready === true;
+    const card: RunCard = {
+      framework: fw.id,
+      frameworkHash: loaded.hash,
+      title,
+      stage: included[0]!.id,
+      stages: initialCardStages(fw, skipped),
+      stageOrder: ids,
+      held: !ready,
+      order: this.nextCardOrder(),
+      ...(input.autonomous ? { autonomous: true } : {}),
+      fields,
+      ...(input.issue ? { issue: input.issue } : {}),
+      ...stateDefOf(fw),
+      ...(requires.length ? { requires } : {}),
+      history: [{ at: new Date().toISOString(), text: ready ? 'created · Ready' : 'created in the Backlog' }],
+    };
+    const workflow: WorkflowDef = { name: `framework:${fw.id}`, description: fw.name, source: 'built-in', steps: graphToSteps(graph), graph };
+    // A card always gets its own branch: every stage commits to it (one branch per change).
+    const run = this.startRun(workflow, { task: cardTask(title, input.brief), worktree: true, card });
+    // The task's own spend ceiling, enforced by the same turn-end brake as a dispatched task's.
+    if (input.budgetUsd !== undefined) {
+      this.store.updateRun(run.id, { dispatch: { ...(this.store.getRun(run.id)?.dispatch ?? { rootRunId: run.id }), budgetUsd: input.budgetUsd } });
+    }
+    return this.store.getRun(run.id) ?? run;
+  }
+
+  /** A card forks from the base ref, so a framework installed only in the checkout (or not at
+   *  all) is invisible to it: refuse up front rather than let its first agent improvise. */
+  private async assertRequiresOnForkBase(name: string, requires: readonly string[]): Promise<void> {
+    if (!requires.length) return;
+    const ref = await cardForkBase(this.repoRoot, (await loadConfig(this.repoRoot)).baseBranch);
+    if (!ref) return;
+    const missing = await missingOnRef(this.repoRoot, ref, requires);
+    if (missing.length) throw new CardOperationError(notInstalledOnRefMessage(name, ref, missing, this.repoRoot), 409);
+  }
+
+  private nextCardOrder(): number {
+    let max = 0;
+    for (const run of this.store.listRuns()) if (run.card?.order !== undefined && run.card.order > max) max = run.card.order;
+    return max + 1;
+  }
+
+  /** `PATCH /cards/:runId` (D2/D12). Title, brief and fields change only in the Backlog, where the
+   *  card recompiles; Backlog ↔ Ready only while queued. */
+  patchCard(runId: string, patch: PatchCardBody): RunRecord {
+    const run = this.store.getRun(runId);
+    const card = run?.card;
+    if (!run || !card) throw new CardOperationError('card not found', 404);
+    // Not started = queued with no cursor: a card re-queued mid-walk (restart, re-run, usage-limit
+    // send-back) must neither go back to the Backlog nor recompile under its live cursor.
+    const notStarted = cardNotStarted(run) && !this.starting.has(runId) && !this.active.has(runId);
+    const inBacklog = notStarted && card.held === true;
+    const content = patch.title !== undefined || patch.brief !== undefined || patch.fields !== undefined;
+    if (content && !inBacklog) throw new CardOperationError('title, brief and fields change only while the card is in the Backlog', 409);
+    if (patch.held !== undefined && patch.held !== (card.held === true) && !notStarted) {
+      throw new CardOperationError('only a card that has not started moves between the Backlog and Ready', 409);
+    }
+    let next: RunCard = { ...card };
+    if (patch.order !== undefined) next.order = patch.order;
+    if (patch.autonomous !== undefined) {
+      if (patch.autonomous) next.autonomous = true;
+      else delete next.autonomous;
+      if (patch.autonomous !== (card.autonomous === true)) next = withHistory(next, patch.autonomous ? 'the agent decides from here' : 'conversation stages wait for you again');
+    }
+    const recompile = inBacklog && (content || (patch.autonomous !== undefined && patch.autonomous !== (card.autonomous === true)));
+    if (recompile) {
+      const loaded = loadFrameworkSync(this.dataDir, card.framework);
+      if (!loaded?.framework) throw new CardOperationError(`framework "${card.framework}" is no longer available`, 422);
+      const fw = loaded.framework;
+      const title = patch.title?.trim() ?? card.title;
+      const brief = patch.brief ?? cardBrief(run.task, card.title);
+      const fields = this.validCardFields(fw, title, { ...card.fields, ...patch.fields });
+      // Explicit skips survive; a `skipUnless` skip follows the (possibly changed) field.
+      const skip = Object.entries(card.stages)
+        .filter(([id, status]) => status === 'skipped' && !fw.stages.find((s) => s.id === id)?.skipUnless)
+        .map(([id]) => id);
+      const overrides: Record<string, { model?: string; runner?: RunnerId }> = {};
+      for (const n of run.workflowDef?.graph?.nodes ?? []) {
+        if (n.type === 'agent' && n.stage && (n.model || n.runner)) overrides[n.stage] = { ...(n.model ? { model: n.model } : {}), ...(n.runner ? { runner: n.runner } : {}) };
+      }
+      const { graph, included, skipped } = this.compileCardGraph(fw, {
+        title, brief, fields, ...(next.autonomous ? { autonomous: true } : {}), skip, overrides,
+      });
+      const workflow: WorkflowDef = { name: `framework:${fw.id}`, description: fw.name, source: 'built-in', steps: graphToSteps(graph), graph };
+      const { frameworkStateDef: _old, ...rest } = next;
+      next = { ...rest, ...stateDefOf(fw), title, fields, frameworkHash: loaded.hash, stage: included[0]!.id, stages: initialCardStages(fw, skipped) };
+      if (content) next = withHistory(next, 'edited in the Backlog');
+      this.store.replacePendingSteps(runId, graphRailSteps(graph));
+      this.store.updateRun(runId, { workflowDef: workflow, task: cardTask(title, brief), ...(patch.title ? { title } : {}) });
+      const job = this.pendingJobs.get(runId);
+      if (job) this.pendingJobs.set(runId, { ...job, workflow, input: { ...job.input, task: cardTask(title, brief) } });
+    }
+    if (patch.held !== undefined && patch.held !== (card.held === true)) {
+      next.held = patch.held;
+      next = withHistory(next, patch.held ? 'moved to the Backlog' : 'moved to Ready');
+      // Ready competes by the time it became Ready, not by when it was written down.
+      const at = this.queue.indexOf(runId);
+      if (!patch.held && at >= 0) {
+        this.queue.splice(at, 1);
+        this.queue.push(runId);
+      }
+    }
+    this.updateCard(runId, () => next);
+    if (next.held !== true) void this.pump();
+    // Let the agent decide (D10): a parked conversation stage takes one unattended turn, then ends.
+    if (patch.autonomous) this.active.get(runId)?.graphDecide?.();
+    return this.store.getRun(runId) ?? run;
+  }
+
+  /** `POST /cards/:runId/finish-stage` (D10): the conversation stage is done; the walk moves on. */
+  finishStage(runId: string): void {
+    const run = this.store.getRun(runId);
+    if (!run?.card) throw new CardOperationError('card not found', 404);
+    const state = this.active.get(runId);
+    if (state?.graphStageFinish) {
+      this.store.appendEvent(runId, { type: 'lifecycle', message: 'stage finished by user' });
+      state.graphStageFinish();
+      return;
+    }
+    if (state?.conversationNodeId && state.currentStepId === state.conversationNodeId) {
+      // Mid-turn: the stage ends when this turn does, instead of parking again.
+      state.stageFinishRequested = true;
+      this.store.appendEvent(runId, { type: 'lifecycle', message: 'stage finishes after this turn' });
+      return;
+    }
+    throw new CardOperationError('the card is not in a conversation stage', 409);
+  }
+
+  /**
+   * D9: approve the framework gate the card is parked at, in the card's worktree, then read the
+   * result back from the framework (the watcher's recheck is the only thing that advances it).
+   */
+  async approveCardGate(runId: string, by: string): Promise<{ ok: true } | { ok: false; error: string }> {
+    const waiter = this.stageWaiters.get(runId);
+    const card = this.store.getRun(runId)?.card;
+    if (!card || !waiter || waiter.kind !== 'gate' || waiter.node.type !== 'gate.framework') {
+      return { ok: false, error: 'this card is not waiting at a framework gate' };
+    }
+    const node = waiter.node;
+    const def = card.frameworkStateDef;
+    if (!def) return { ok: false, error: `${card.framework} has no state to approve in` };
+    if (node.approve === null) {
+      return { ok: false, error: `"${node.stage}" is confirmed by the framework's own "done ${node.stage}", not by an approval` };
+    }
+    let changeId = card.frameworkState?.changeId;
+    if (!changeId) {
+      const state = await readFrameworkState(def, card.stageOrder, waiter.cwd);
+      changeId = state.ok ? state.status.changeId : undefined;
+      if (!changeId) return { ok: false, error: state.ok ? 'the framework reported no change id for this card' : state.error };
+    }
+    const name = by.trim() || 'cezar user';
+    const result = await approveSdd(waiter.cwd, node.approve, changeId, name);
+    if (!result.ok) {
+      this.store.appendEvent(runId, { type: 'note', stepId: node.id, message: `approve ${node.approve} failed: ${result.error}`, tone: 'danger' });
+      return { ok: false, error: result.error };
+    }
+    this.updateCard(runId, (current) => withHistory(current, `${node.stage} approved by ${name} in cezar (non-interactive)`));
+    this.store.appendEvent(runId, { type: 'note', stepId: node.id, message: `approved ${node.approve} for ${changeId} as ${name}` });
+    // A person released it: the walk continues in place (#347), not through the queue.
+    this.humanWakes.add(runId);
+    try {
+      await this.recheckFrameworkState(runId);
+    } finally {
+      this.humanWakes.delete(runId);
+    }
+    return { ok: true };
+  }
+
+  /** The framework-state watcher tick (D7), also run on cockpit focus and after an approve: every
+   *  parked card (or just `runId`) re-reads its framework's state and its WIP place. */
+  async recheckFrameworkState(runId?: string): Promise<void> {
+    const waiters = [...this.stageWaiters.values()].filter((w) => runId === undefined || w.runId === runId);
+    await Promise.all(waiters.map((w) => w.recheck()));
+  }
+
+  /**
+   * Where a revived card resumes its walk: the cursor, or for a walk that ended `failed`, the last
+   * agent it ran. Undefined means an ordinary continuation — every ad-hoc run, and a card whose
+   * walk completed (it rests at the run's review gate).
+   */
+  private cardWalkResumeNode(run: RunRecord): ExecutableNode | undefined {
+    if (!run.card || !run.workflowDef) return undefined;
+    const graph = run.workflowDef.graph ?? compileV1(run.workflowDef.steps);
+    const at = (id: string) => graph.nodes.find((n): n is ExecutableNode => n.id === id && isExecutableNode(n));
+    const cursor = run.graphState?.cursor;
+    if (cursor) return at(cursor);
+    if (run.status !== 'failed') return undefined;
+    for (const taken of [...(run.graphState?.taken ?? [])].reverse()) {
+      const from = taken.slice(0, taken.indexOf('->'));
+      const node = at(from.slice(0, from.lastIndexOf('.')));
+      if (node?.type === 'agent') return node;
+    }
+    return undefined;
+  }
+
+  /**
+   * Revive a card (an answer to an interrupted question, Continue, a message to an idle park, an
+   * automatic resume) by re-queueing its WALK at `node`, the way restart recovery does. The text
+   * becomes that node's next turn in its own session, so a conversation stage keeps its park and
+   * "Finish this stage?" semantics; a standalone continuation would strand the card (run 77481ca6).
+   */
+  private reviveCardWalk(runId: string, node: ExecutableNode, text: string, images: PastedContent[], userAuthored: boolean): { ok: true } {
+    this.adoptContinuationSession(runId, node.id);
+    const run = this.store.getRun(runId)!;
+    const at = new Date().toISOString();
+    for (const step of run.steps) {
+      if (step.id.startsWith('continue-')) {
+        if (step.status === 'pending') this.store.updateStep(runId, step.id, { status: 'cancelled' });
+        else if (step.status === 'running' || step.status === 'waiting') this.store.updateStep(runId, step.id, { status: 'done', finishedAt: at });
+      } else if (step.id === node.id || step.status === 'running' || step.status === 'waiting') {
+        this.store.updateStep(runId, step.id, { status: 'pending', ...(step.id === node.id ? { error: undefined, finishedAt: undefined } : {}) });
+      }
+    }
+    const outputs = { ...(run.graphState?.outputs ?? {}) };
+    if (node.type === 'agent') {
+      const { conversation: _conversation, proposed: _proposed, ...rest } = outputs[node.id] ?? {};
+      outputs[node.id] = { ...rest, [CARD_REVIVAL_REPLY]: text };
+      const attachments = userAuthored ? this.persistPastedAttachments(runId, images) : [];
+      const blocks = contentBlocksOf(images);
+      if (blocks.length || attachments.length) this.cardRevivals.set(runId, { blocks, attachments });
+      else this.cardRevivals.delete(runId);
+      if (userAuthored) {
+        this.store.appendEvent(runId, {
+          type: 'user-message',
+          stepId: node.id,
+          text,
+          imageCount: blocks.filter((b) => b.type === 'image').length,
+          ...(attachments.length ? { images: attachments.map((saved) => saved.url) } : {}),
+        });
+      }
+    } else if (userAuthored) {
+      this.store.appendEvent(runId, { type: 'note', stepId: node.id, message: `the card resumes at "${node.name ?? node.id}", which takes no message — yours was not delivered` });
+    }
+    this.store.updateRun(runId, {
+      status: 'queued',
+      error: undefined,
+      finishedAt: undefined,
+      startedAt: undefined,
+      currentStepId: undefined,
+      askParked: undefined,
+      attentionRequest: undefined,
+      awaitingAnswerSince: undefined,
+      idleClosedAt: undefined,
+      activity: undefined,
+      graphState: { loops: {}, taken: [], ...run.graphState, cursor: node.id, outputs },
+      ...(run.card ? { card: clearCardPark(run.card) } : {}),
+    });
+    this.store.appendEvent(runId, { type: 'lifecycle', message: `resuming the workflow at "${node.name ?? node.id}"` });
+    const queued = this.store.getRun(runId) ?? run;
+    this.pendingJobs.set(runId, { workflow: queued.workflowDef!, input: this.workflowInput(queued) });
+    this.enqueue(runId);
+    void this.pump();
+    return { ok: true };
+  }
+
+  /**
+   * A card session that ran OUTSIDE its walk (a standalone continuation, before revivals went
+   * through the walk) is newer than the node's own: hand it to the node, so its next turn
+   * resumes the conversation the user actually had.
+   */
+  private adoptContinuationSession(runId: string, nodeId: string): void {
+    const run = this.store.getRun(runId);
+    const own = run?.steps.find((s) => s.id === nodeId);
+    if (!run || !own) return;
+    const newest = [...run.steps].reverse().find((s) =>
+      s.id.startsWith('continue-') && s.sessionId && (!own.startedAt || (s.startedAt ?? '') >= own.startedAt));
+    if (!newest?.sessionId || newest.sessionId === own.sessionId) return;
+    this.store.updateStep(runId, nodeId, {
+      sessionId: newest.sessionId,
+      ...(newest.backend ? { backend: newest.backend } : {}),
+      ...(newest.profileId ? { profileId: newest.profileId } : {}),
+    });
+  }
+
+  /**
+   * Boot repair for a card whose session is a standalone continuation at its walk's agent node
+   * (the pre-fix shape of run 77481ca6): the walk takes it back. A conversation stage parks again
+   * — asking "Finish this stage?" when the last turn proposed it — and any other agent node resumes
+   * in its own (adopted) session. A question still open there keeps the interrupted-ask path.
+   */
+  private repairStrandedCardSession(run: RunRecord): RunRecord {
+    if (!run.card || !run.graphState?.cursor || !strandedCardSession(run)) return run;
+    const live = run.steps.filter((s) => s.id.startsWith('continue-') && (s.status === 'running' || s.status === 'waiting'));
+    const node = this.cardWalkResumeNode(run);
+    if (node?.type !== 'agent') return run;
+    this.adoptContinuationSession(run.id, node.id);
+    const ids = new Set(live.map((s) => s.id));
+    const lastText = [...this.store.readEvents(run.id)].reverse().find((e) => e.type === 'text' && ids.has(e.stepId ?? ''))?.text;
+    const at = new Date().toISOString();
+    for (const step of live) this.store.updateStep(run.id, step.id, { status: 'done', finishedAt: at });
+    if (run.status === 'waiting' && !run.askParked && !run.attentionRequest) {
+      if (node.mode === 'conversation' && run.card.autonomous !== true) {
+        const outputs = { ...(run.graphState.outputs ?? {}) };
+        const { proposed: _proposed, ...rest } = outputs[node.id] ?? {};
+        const proposed = typeof lastText === 'string' && endsWithStageDoneMarker(lastText);
+        outputs[node.id] = { ...rest, conversation: 1, ...(proposed ? { proposed: 1 } : {}) };
+        this.store.updateStep(run.id, node.id, { status: 'waiting' });
+        this.store.updateRun(run.id, { currentStepId: node.id, idleClosedAt: undefined, graphState: { ...run.graphState, outputs } });
+      } else {
+        // Treated like a node interrupted mid-turn: the walk reopens its session and moves on.
+        this.store.updateStep(run.id, node.id, { status: 'running' });
+        this.store.updateRun(run.id, { status: 'running', currentStepId: node.id, idleClosedAt: undefined });
+      }
+    }
+    this.store.appendEvent(run.id, { type: 'lifecycle', message: `the card's session at "${node.name ?? node.id}" was handed back to its workflow` });
+    return this.store.getRun(run.id) ?? run;
+  }
+
+  /**
+   * `POST /cards/:runId/rerun` (engine step 6): reset the graph cursor to the stage's first node
+   * and queue the run again. Loop counters are kept (graph spec D18), so a re-run cannot make the
+   * walk unbounded. A live card is stopped first, which is also the WIP exit for the stage it left.
+   */
+  async rerunCard(runId: string, fromStage: string): Promise<RunRecord> {
+    const run = this.store.getRun(runId);
+    const card = run?.card;
+    if (!run || !card) throw new CardOperationError('card not found', 404);
+    if (!['waiting', 'review', 'failed'].includes(run.status)) {
+      throw new CardOperationError(`a ${run.status} card cannot be re-run; it can be once it waits, fails or reaches review`, 409);
+    }
+    const graph = run.workflowDef?.graph;
+    const target = graph?.nodes.find((n) => n.type === 'stage.enter' && n.stage === fromStage)
+      ?? graph?.nodes.find((n) => isExecutableNode(n) && n.stage === fromStage);
+    if (!graph || !target) throw new CardOperationError(`"${fromStage}" is not a stage this card runs`, 422);
+    if (this.active.has(runId) || this.starting.has(runId)) {
+      if (!(await this.cancelAndWait(runId))) throw new CardOperationError('the card could not be stopped to re-run it', 409);
+    }
+    const now = this.store.getRun(runId);
+    if (!now?.card) throw new CardOperationError('card not found', 404);
+    const from = now.card.stageOrder.indexOf(fromStage);
+    const reopened = new Set(now.card.stageOrder.filter((_, i) => i >= from));
+    for (const n of graph.nodes) {
+      if (n.stage && reopened.has(n.stage) && now.steps.some((s) => s.id === n.id)) this.store.updateStep(runId, n.id, { status: 'pending', error: undefined, finishedAt: undefined });
+    }
+    // A Continue queued before the re-run is not this walk's work.
+    for (const s of now.steps) if (s.status === 'pending' && s.id.startsWith('continue-')) this.store.updateStep(runId, s.id, { status: 'cancelled' });
+    const stages = { ...now.card.stages };
+    for (const id of reopened) if (stages[id] !== 'skipped') stages[id] = 'pending';
+    this.store.updateRun(runId, {
+      status: 'queued',
+      error: undefined,
+      finishedAt: undefined,
+      startedAt: undefined,
+      currentStepId: undefined,
+      askParked: undefined,
+      attentionRequest: undefined,
+      awaitingAnswerSince: undefined,
+      idleClosedAt: undefined,
+      activity: undefined,
+      graphState: { loops: {}, taken: [], ...now.graphState, cursor: target.id },
+      card: withHistory({ ...clearCardPark(now.card), stage: fromStage, stages, blocked: undefined }, `re-run from ${fromStage}`),
+    });
+    this.store.appendEvent(runId, { type: 'lifecycle', message: `re-running from stage "${fromStage}"` });
+    const queued = this.store.getRun(runId);
+    if (queued) await this.reviveQueuedRun(queued, `re-run from stage "${fromStage}"`);
+    void this.pump();
+    return this.store.getRun(runId) ?? now;
+  }
+
   /** Ask the user through an ask card and park until they answer (see `parkGraphNode`). */
   private parkForUser(
     runId: string,
@@ -8582,12 +9724,13 @@ export class RunManager {
     nodeId: string,
     questions: { header: string; question: string; options: { label: string }[] }[],
     timeoutMs?: number,
+    conversation?: true,
   ): Promise<GraphParkOutcome> {
     state.currentStepId = nodeId;
     const requestId = randomUUID();
     this.makeUiSink(runId, nodeId).handle({ type: 'ask.requested', requestId, questions, source: 'workflow' });
     const attentionRequest = this.recordAttention(requestId, questions);
-    return this.parkGraphNode(runId, state, nodeId, { askParked: true, attentionRequest, timeoutMs }, (resolve) => {
+    return this.parkGraphNode(runId, state, nodeId, { askParked: true, attentionRequest, timeoutMs, conversation }, (resolve) => {
       state.graphAnswer = (text) => resolve({ kind: 'answer', text });
       return () => {
         state.graphAnswer = undefined;
@@ -8607,14 +9750,26 @@ export class RunManager {
     runId: string,
     state: ActiveRun,
     nodeId: string,
-    opts: { askParked?: boolean; attentionRequest?: WebhookAttentionRequest; activity?: 'monitoring'; timeoutMs?: number },
+    opts: {
+      askParked?: boolean;
+      attentionRequest?: WebhookAttentionRequest;
+      activity?: 'monitoring';
+      timeoutMs?: number;
+      /** A framework card's own wait (gate, WIP, conversation): `waiting`, but no ask card. */
+      waiting?: true;
+      /** A conversation stage: Finish stage and Let the agent decide resolve this park too. */
+      conversation?: true;
+    },
     arm: (resolve: (o: GraphParkOutcome) => void) => () => void,
   ): Promise<GraphParkOutcome> {
     if (state.cancelled) return { kind: 'cancelled' };
     this.store.updateRun(runId, opts.askParked
       ? { status: 'waiting', askParked: true, attentionRequest: opts.attentionRequest }
-      : { status: 'running', activity: opts.activity });
+      : opts.waiting
+        ? { status: 'waiting', activity: undefined }
+        : { status: 'running', activity: opts.activity });
     this.store.updateStep(runId, nodeId, { status: 'waiting' });
+    this.markCardPark(runId, nodeId, true);
     this.waiting.add(runId);
     this.releaseSlot();
     // An in-place dispatch run hands the working tree back while it waits, as an agent park does.
@@ -8622,7 +9777,7 @@ export class RunManager {
     const previousInterrupt = state.interrupt;
     let disarm: () => void = () => undefined;
     let timer: NodeJS.Timeout | undefined;
-    let outcome: GraphParkOutcome;
+    let outcome: GraphParkOutcome | undefined;
     try {
       outcome = await new Promise<GraphParkOutcome>((resolve) => {
         let settled = false;
@@ -8636,6 +9791,10 @@ export class RunManager {
           once({ kind: 'cancelled' });
         };
         state.graphFinish = () => once({ kind: 'finished' });
+        if (opts.conversation) {
+          state.graphStageFinish = () => once({ kind: 'stage-finished' });
+          state.graphDecide = () => once({ kind: 'decide' });
+        }
         if (opts.timeoutMs) {
           timer = setTimeout(() => once({ kind: 'timeout' }), opts.timeoutMs);
           timer.unref?.();
@@ -8647,12 +9806,17 @@ export class RunManager {
       if (timer) clearTimeout(timer);
       state.interrupt = previousInterrupt;
       state.graphFinish = undefined;
+      state.graphStageFinish = undefined;
+      state.graphDecide = undefined;
       this.waiting.delete(runId);
-      if (!state.cancelled && this.active.get(runId) === state) {
+      // A requeue stays `waiting` until `requeueReleasedWalk` writes `queued`.
+      if (!state.cancelled && this.active.get(runId) === state && outcome?.kind !== 'requeue') {
         this.store.updateRun(runId, { status: 'running', askParked: undefined, activity: undefined });
         this.store.updateStep(runId, nodeId, { status: 'running' });
+        this.markCardPark(runId, nodeId, false);
       }
     }
+    if (outcome.kind === 'requeue') return outcome;
     // Take the working tree back before the graph goes on (the `deliverMessage` twin).
     if (outcome.kind !== 'cancelled' && state.repoRootParked && !(state.repoRootResume === undefined && this.claimFreeRepoRoot(state, runId))) {
       const acquired = await (state.repoRootResume ??= this.resumeRepoRoot(runId, state));
@@ -8943,9 +10107,12 @@ export class RunManager {
       portableContext?: string;
       workflowAgent?: { agentProfile?: string; replaced: boolean };
       savedTools?: StepToolPolicy;
+      /** A conversation stage's turn (framework-board D10): its `CEZ:STAGE-DONE` is protocol. */
+      conversation?: boolean;
     },
   ): Promise<string | null> {
     const resumeStep = graphHooks?.usageLimitResume;
+    const cardRun = this.store.getRun(runId)?.card !== undefined;
     let systemPrompt: string | undefined;
     // An attachment-only task (telemetry 18c930de) — the note stands in for the missing text, so a
     // step template (`Review: {{task}}`) still reads as a sentence.
@@ -9085,9 +10252,11 @@ export class RunManager {
         // `CEZ:TITLE=` lines, so running it first lets the two trailing-marker strippers see a
         // `CEZ:MONITORING` / `CEZ:DONE` that an agent put ABOVE its task references. Outside-in
         // they saw those references and left the protocol marker in the transcript.
-        const text = stripVerdictMarker(
+        const stripped = stripVerdictMarker(
           stripAskMarker(stripMonitoringMarker(stripDoneMarker(stripTaskMarkers(withoutAskCloseMarkers(event.text))))),
         );
+        // A card's `CEZ:STAGE-DONE` is protocol on every node; ad-hoc transcripts are untouched.
+        const text = cardRun ? stripStageDoneMarker(stripped) : stripped;
         if (text) emit({ type: 'text', text, stepId: step.id });
         return;
       }
@@ -11110,12 +12279,9 @@ export class RunManager {
     // variable this run does not set is absent, never a stale value from somewhere else. The
     // login shell `runCheckStep` spawns sources the user's profile after this, so the guarantee
     // is about the server's environment, not about a profile that exports one of these names.
-    const base: NodeJS.ProcessEnv = { ...process.env };
-    // Parent task authority never belongs to a check, including trusted checks.
-    // Match case-insensitively as agent env filtering does (and Windows requires).
-    for (const name of Object.keys(base)) {
-      if (name.toUpperCase() === 'CEZ_TRACKER_CAPABILITY') delete base[name];
-    }
+    // Parent task authority and the framework approval (framework-board D9) never belong to a
+    // check, trusted or not; matched case-insensitively as agent env filtering does.
+    const base: NodeJS.ProcessEnv = scrubbedEnv();
     for (const name of CHECK_CONTEXT_VARS) {
       // `CEZ_PROJECT_ID` is the one context name that is ALSO a documented CLI input
       // (BACKWARD_COMPATIBILITY.md §1 — `cez task`/`cez automation` address a cockpit with it),
@@ -11531,4 +12697,10 @@ export function expandRegistrySlashSkill(
   const expanded = [...content];
   expanded[textIndex] = { type: 'text', text };
   return expanded;
+}
+
+/** A card whose session ran as a plain `continue-*` step outside its graph walk (pre-fix revival). */
+function strandedCardSession(run: RunRecord): boolean {
+  return Boolean(run.card && run.graphState?.cursor)
+    && run.steps.some((s) => s.id.startsWith('continue-') && (s.status === 'running' || s.status === 'waiting'));
 }

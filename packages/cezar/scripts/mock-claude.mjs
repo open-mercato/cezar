@@ -614,6 +614,12 @@ async function respond(userText, imageCount) {
     : nudgeMatch
       ? `\n\nCEZ:VERDICT ${nudgeMatch[1]}`
       : '';
+  // `mock:stage-done` → the reply ends with CEZ:STAGE-DONE, a conversation stage's "I think this
+  // stage is finished" (spec 2026-11-15-framework-board D10).
+  // `mock:stage-done-dot` → the same marker with trailing punctuation an agent may add.
+  const stageDoneMarker = userText.includes('mock:stage-done-dot')
+    ? '\n\n**CEZ:STAGE-DONE**.\n'
+    : userText.includes('mock:stage-done') ? '\n\nCEZ:STAGE-DONE' : '';
   // `mock:refs` → the reply carries the in-band task-reference markers
   // (spec 2026-07-18-task-ref-markers), so the declaration path is testable dry.
   const refsMarkers = userText.includes('mock:refs')
@@ -1006,7 +1012,7 @@ async function respond(userText, imageCount) {
       type: 'assistant',
       message: {
         role: 'assistant',
-        content: [{ type: 'text', text: `Done with the first pass — opened a draft PR: https://github.com/open-mercato/demo/pull/123. Anything to adjust? (dry-run mock)${refsMarkers}${doneMarker}${monitoringMarker}${askMarker}${verdictMarker}` }],
+        content: [{ type: 'text', text: `Done with the first pass — opened a draft PR: https://github.com/open-mercato/demo/pull/123. Anything to adjust? (dry-run mock)${refsMarkers}${doneMarker}${monitoringMarker}${askMarker}${verdictMarker}${stageDoneMarker}` }],
         usage: { input_tokens: 300, output_tokens: 90 },
       },
     });
@@ -1026,7 +1032,7 @@ async function respond(userText, imageCount) {
     type: 'assistant',
     message: {
       role: 'assistant',
-      content: [{ type: 'text', text: `Follow-up #${turn - 1} received: "${userText.slice(0, 100)}".${imgNote} Applied (dry run).${refsMarkers}${doneMarker}${monitoringMarker}${askMarker}${verdictMarker}` }],
+      content: [{ type: 'text', text: `Follow-up #${turn - 1} received: "${userText.slice(0, 100)}".${imgNote} Applied (dry run).${refsMarkers}${doneMarker}${monitoringMarker}${askMarker}${verdictMarker}${stageDoneMarker}` }],
       usage: { input_tokens: 200, output_tokens: 60 },
     },
   });

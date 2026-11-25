@@ -1,0 +1,135 @@
+{
+  "nodes": [
+    {
+      "id": "start",
+      "type": "start",
+      "stage": "plan"
+    },
+    {
+      "id": "plan-enter",
+      "type": "stage.enter",
+      "stage": "plan"
+    },
+    {
+      "id": "plan-agent",
+      "type": "agent",
+      "stage": "plan",
+      "name": "Plan",
+      "prompt": "# Tax rules engine v2\n\nRates per region.\n\nYou are working on stage 1/3 \"Plan\" of the Generic framework.\n\nRead the code involved and write an implementation plan for this card to .ai/cezar/plans/tax-rules-engine-v2.md. Do not change any other file.\n\nCard fields:\n- slug: tax-rules-engine-v2\n\nThis stage must leave these files (checked when you finish):\n- .ai/cezar/plans/tax-rules-engine-v2.md\n\nA person reviews this stage's result before the card moves on.\n\nIf a reviewer asked for changes, their comment:\n{{nodes.plan-gate.comment}}"
+    },
+    {
+      "id": "plan-exit",
+      "type": "stage.exit",
+      "stage": "plan",
+      "artifacts": [
+        ".ai/cezar/plans/tax-rules-engine-v2.md"
+      ]
+    },
+    {
+      "id": "plan-gate",
+      "type": "gate.human",
+      "stage": "plan",
+      "message": "Approve the plan for this card?"
+    },
+    {
+      "id": "plan-reject-loop",
+      "type": "loop",
+      "stage": "plan",
+      "max": 2
+    },
+    {
+      "id": "build-enter",
+      "type": "stage.enter",
+      "stage": "build"
+    },
+    {
+      "id": "build-agent",
+      "type": "agent",
+      "stage": "build",
+      "name": "Build",
+      "prompt": "# Tax rules engine v2\n\nRates per region.\n\nYou are working on stage 2/3 \"Build\" of the Generic framework.\n\nImplement the approved plan in .ai/cezar/plans/tax-rules-engine-v2.md, with tests, and commit the work.\n\nCard fields:\n- slug: tax-rules-engine-v2"
+    },
+    {
+      "id": "review-enter",
+      "type": "stage.enter",
+      "stage": "review"
+    },
+    {
+      "id": "review-agent",
+      "type": "agent",
+      "stage": "review",
+      "name": "Review",
+      "prompt": "# Tax rules engine v2\n\nRates per region.\n\nYou are working on stage 3/3 \"Review\" of the Generic framework.\n\nReview the changes on this branch against the plan in .ai/cezar/plans/tax-rules-engine-v2.md. Do not edit code; report what must change.\n\nCard fields:\n- slug: tax-rules-engine-v2\n\nYou are the reviewer: judge the work on this branch. Do not change the implementation.",
+      "verdicts": [
+        "approve",
+        "changes"
+      ]
+    },
+    {
+      "id": "review-changes-loop",
+      "type": "loop",
+      "stage": "review",
+      "max": 2
+    },
+    {
+      "id": "end",
+      "type": "end",
+      "status": "success",
+      "stage": "review"
+    }
+  ],
+  "edges": [
+    {
+      "from": "start.next",
+      "to": "plan-enter"
+    },
+    {
+      "from": "plan-enter.next",
+      "to": "plan-agent"
+    },
+    {
+      "from": "plan-agent.done",
+      "to": "plan-exit"
+    },
+    {
+      "from": "plan-exit.pass",
+      "to": "plan-gate"
+    },
+    {
+      "from": "plan-gate.reject",
+      "to": "plan-reject-loop"
+    },
+    {
+      "from": "plan-reject-loop.repeat",
+      "to": "plan-enter"
+    },
+    {
+      "from": "plan-gate.approve",
+      "to": "build-enter"
+    },
+    {
+      "from": "build-enter.next",
+      "to": "build-agent"
+    },
+    {
+      "from": "build-agent.done",
+      "to": "review-enter"
+    },
+    {
+      "from": "review-enter.next",
+      "to": "review-agent"
+    },
+    {
+      "from": "review-agent.changes",
+      "to": "review-changes-loop"
+    },
+    {
+      "from": "review-changes-loop.repeat",
+      "to": "build-enter"
+    },
+    {
+      "from": "review-agent.approve",
+      "to": "end"
+    }
+  ]
+}

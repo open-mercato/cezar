@@ -78,6 +78,7 @@ import {
   saveNowScope,
   type NowScope,
 } from './now-attention-model'
+import { runRoute } from '@/lib/task-route'
 
 const NO_RUNS: RunRecord[] = []
 const NO_KEYS: ReadonlySet<string> = new Set()
@@ -493,7 +494,7 @@ function NeedsYouRowView({
   const { run } = row
   const reference = taskReference(run)
   const cost = formatCost(run.costUsd)
-  const to = `/tasks/${run.id}`
+  const to = runRoute(run)
   const menu = useRowMenu()
   const triaged = triage && target ? { triage, target } : undefined
   const article = (
@@ -548,7 +549,7 @@ function NeedsYouRowView({
             <TriageMenu
               target={triaged.target}
               actions={triaged.triage}
-              href={row.action === 'answer' ? `/tasks/${run.id}#ask` : to}
+              href={row.action === 'answer' ? runRoute(run, { suffix: '#ask' }) : to}
               {...(projectId ? { copyHref: taskPath(projectId, run.id) } : {})}
               run={run}
               settled={settled}
@@ -569,10 +570,10 @@ function RowAction({ row, onRetry }: { row: NeedsYouRow; onRetry: (run: RunRecor
   const label = NEEDS_YOU_ACTION_LABEL[action]
   if (action === 'retry') return <RetryButton run={run} onRetry={onRetry} />
   const to =
-    action === 'review' ? `/tasks/${run.id}/changes`
-    : action === 'answer' ? `/tasks/${run.id}#ask`
-    : action === 'open' ? `/tasks/${run.id}`
-    : `/tasks/${run.id}#reply`
+    action === 'review' ? runRoute(run, { suffix: '/changes' })
+    : action === 'answer' ? runRoute(run, { suffix: '#ask' })
+    : action === 'open' ? runRoute(run)
+    : runRoute(run, { suffix: '#reply' })
   return (
     <Button asChild size="sm" variant={action === 'open' ? 'outline' : 'primary'}>
       <Link to={to} data-slot="now-action" data-action={action}>
@@ -592,7 +593,7 @@ function RetryButton({ run, onRetry }: { run: RunRecord; onRetry: (run: RunRecor
   if (!resumable) {
     return (
       <Button asChild size="sm" variant="outline">
-        <Link to={`/tasks/${run.id}`} data-slot="now-action" data-action="open">
+        <Link to={runRoute(run)} data-slot="now-action" data-action="open">
           Open
         </Link>
       </Button>
@@ -631,7 +632,7 @@ function RunningRowView({ row, queuePosition }: { row: RunningRow; queuePosition
         aria-label={row.label}
       />
       <div className="min-w-0">
-        <Link to={`/tasks/${run.id}`} className="block truncate text-ui font-medium text-foreground">
+        <Link to={runRoute(run)} className="block truncate text-ui font-medium text-foreground">
           {runTitle(run)}
         </Link>
         <div data-slot="now-why" className="mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-label text-muted-foreground">
@@ -685,7 +686,7 @@ function FinishedRowView({ run }: { run: RunRecord }) {
       <StatusMark attention={attention} />
       {/* Unread is weight, plus the word for a screen reader (#unread-done-items) — the table's rule. */}
       <Link
-        to={`/tasks/${run.id}`}
+        to={runRoute(run)}
         aria-describedby={statusId}
         data-unread={unread || undefined}
         className={cn(

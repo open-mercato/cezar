@@ -59,6 +59,11 @@ export const DATA_GITIGNORE_ENTRIES = [
   'automation-mutation.lock',
 ] as const;
 
+/** Entries under `.ai/cezar/` built to be COMMITTED, so never ignored: the project's workflows,
+ *  skills and frameworks (spec 2026-11-15-framework-board D15), its optional config, and this
+ *  `.gitignore` itself. `data-gitignore.test.ts` cross-checks both lists. */
+export const DATA_COMMITTABLE_ENTRIES = ['workflows', 'skills', 'frameworks', 'config.json', '.gitignore'] as const;
+
 /** cezar's own data directory as a git pathspec exclusion. An in-place task's Changes and its
  *  landing commit leave it out (spec 2026-10-20-trunk-based-projects): its config, ui-state and
  *  .gitignore are not untracked by default, but they are never the task's work. */

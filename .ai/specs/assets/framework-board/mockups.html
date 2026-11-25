@@ -1,0 +1,511 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>cezar · Frameworks & stage board — mockups</title>
+<style>
+:root{
+  --bg:#0b0d10;--panel:#12151a;--panel2:#171b21;--line:#242a33;--text:#e6e9ee;--mut:#8b94a3;--dim:#5d6676;
+  --acc:#a3e635;--accbg:rgba(163,230,53,.12);--blue:#60a5fa;--bluebg:rgba(96,165,250,.12);
+  --amber:#fbbf24;--amberbg:rgba(251,191,36,.13);--red:#f87171;--redbg:rgba(248,113,113,.12);
+  --violet:#c084fc;--violetbg:rgba(192,132,252,.12);--r:10px;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);font:13px/1.45 ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+code,.mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px}
+a{color:var(--blue);text-decoration:none}
+.top{display:flex;align-items:center;gap:14px;padding:14px 22px;border-bottom:1px solid var(--line);position:sticky;top:0;background:rgba(11,13,16,.92);backdrop-filter:blur(6px);z-index:5}
+.top h1{font-size:14px;margin:0;font-weight:600}
+.tabs{display:flex;gap:4px;flex-wrap:wrap}
+.tabs button{background:none;border:1px solid transparent;color:var(--mut);padding:6px 10px;border-radius:8px;cursor:pointer;font:inherit}
+.tabs button.on{background:var(--panel2);border-color:var(--line);color:var(--text)}
+.screen{display:none;padding:22px}
+.screen.on{display:block}
+.note{color:var(--mut);max-width:900px;margin:0 0 16px}
+.note b{color:var(--text)}
+/* shell */
+.app{display:grid;grid-template-columns:200px 1fr;border:1px solid var(--line);border-radius:14px;overflow:hidden;min-height:640px;background:var(--panel)}
+.side{border-right:1px solid var(--line);padding:14px 10px;background:#0f1216}
+.side .proj{font-weight:600;padding:4px 8px 12px}
+.side .it{padding:7px 9px;border-radius:7px;color:var(--mut);display:flex;justify-content:space-between}
+.side .it.on{background:var(--panel2);color:var(--text)}
+.pill{display:inline-flex;align-items:center;gap:5px;padding:2px 8px;border-radius:999px;font-size:11px;border:1px solid var(--line);color:var(--mut);white-space:nowrap}
+.pill.acc{background:var(--accbg);color:var(--acc);border-color:transparent}
+.pill.blue{background:var(--bluebg);color:var(--blue);border-color:transparent}
+.pill.amber{background:var(--amberbg);color:var(--amber);border-color:transparent}
+.pill.red{background:var(--redbg);color:var(--red);border-color:transparent}
+.pill.violet{background:var(--violetbg);color:var(--violet);border-color:transparent}
+.main{display:flex;flex-direction:column;min-width:0}
+.bar{display:flex;align-items:center;gap:10px;padding:12px 16px;border-bottom:1px solid var(--line)}
+.bar h2{font-size:15px;margin:0}
+.sp{flex:1}
+.btn{background:var(--panel2);border:1px solid var(--line);color:var(--text);padding:6px 11px;border-radius:8px;font:inherit;cursor:pointer;white-space:nowrap}
+.btn.pri{background:var(--acc);color:#111;border-color:var(--acc);font-weight:600}
+.btn.warn{color:var(--amber)}
+.btn.ghost{background:none}
+.kbd{border:1px solid var(--line);border-bottom-width:2px;border-radius:4px;padding:0 4px;font-size:10px;color:var(--dim)}
+/* board */
+.board{display:flex;gap:10px;padding:14px;overflow-x:auto;flex:1}
+.col{flex:0 0 212px;background:#0f1216;border:1px solid var(--line);border-radius:var(--r);display:flex;flex-direction:column}
+.col.stage{background:#10141a}
+.colh{padding:9px 10px;display:flex;align-items:center;gap:6px;border-bottom:1px solid var(--line);font-weight:600;font-size:12px}
+.colh .n{color:var(--dim);font-weight:400}
+.colh .wip{margin-left:auto;font-weight:400;color:var(--dim);font-size:11px}
+.colh .ix{width:18px;height:18px;border-radius:50%;display:grid;place-items:center;font-size:10px;background:var(--panel2);color:var(--mut)}
+.cards{padding:8px;display:flex;flex-direction:column;gap:8px}
+.card{background:var(--panel2);border:1px solid var(--line);border-radius:9px;padding:9px 10px;cursor:pointer}
+.card:hover{border-color:#36404d}
+.card.sel{outline:2px solid var(--acc);outline-offset:-1px}
+.card .t{font-weight:500;margin-bottom:6px}
+.card .m{display:flex;gap:6px;flex-wrap:wrap;align-items:center;color:var(--dim);font-size:11px}
+.prog{display:flex;gap:2px;margin:7px 0 2px}
+.prog i{flex:1;height:3px;border-radius:2px;background:var(--line)}
+.prog i.d{background:var(--acc)}.prog i.a{background:var(--blue)}.prog i.w{background:var(--amber)}.prog i.f{background:var(--red)}
+.drop{border:1px dashed #3a4350;border-radius:9px;padding:10px;color:var(--dim);text-align:center;font-size:11px}
+.spin{width:9px;height:9px;border-radius:50%;border:2px solid var(--blue);border-right-color:transparent;display:inline-block;animation:s 1s linear infinite}
+@keyframes s{to{transform:rotate(360deg)}}
+/* wizard */
+.stepper{display:flex;align-items:flex-start;padding:18px 18px 8px;gap:0;overflow-x:auto}
+.st{display:flex;flex-direction:column;align-items:center;gap:6px;min-width:108px;position:relative;cursor:pointer}
+.st:not(:last-child)::after{content:"";position:absolute;top:14px;left:calc(50% + 17px);right:calc(-50% + 17px);height:2px;background:var(--line)}
+.st.d:not(:last-child)::after{background:var(--acc)}
+.dot{width:28px;height:28px;border-radius:50%;display:grid;place-items:center;font-size:12px;font-weight:700;border:2px solid var(--line);color:var(--mut);background:var(--panel);z-index:1}
+.st.d .dot{background:var(--acc);border-color:var(--acc);color:#111}
+.st.a .dot{border-color:var(--blue);color:var(--blue)}
+.st.w .dot{border-color:var(--amber);color:var(--amber);background:var(--amberbg)}
+.st.f .dot{border-color:var(--red);color:var(--red)}
+.st .lb{font-size:11.5px;text-align:center;color:var(--mut)}
+.st.cur .lb{color:var(--text);font-weight:600}
+.st .sub{font-size:10px;color:var(--dim);margin-top:-4px}
+.wz{display:grid;grid-template-columns:1fr 280px;gap:0;border-top:1px solid var(--line);flex:1}
+.wz .body{padding:16px 18px;min-width:0}
+.wz .aside{border-left:1px solid var(--line);padding:16px;background:#0f1216}
+.sec{margin-bottom:16px}
+.sec h4{margin:0 0 8px;font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--dim);font-weight:600}
+.kv{display:grid;grid-template-columns:110px 1fr;gap:5px 10px;font-size:12px}
+.kv span:nth-child(odd){color:var(--dim)}
+.box{background:var(--panel2);border:1px solid var(--line);border-radius:9px}
+.file{display:flex;align-items:center;gap:8px;padding:8px 10px;border-bottom:1px solid var(--line)}
+.file:last-child{border-bottom:0}
+.file .add{color:var(--acc);margin-left:auto;font-size:11px}
+.gate{border:1px solid rgba(251,191,36,.4);background:linear-gradient(180deg,var(--amberbg),transparent);border-radius:11px;padding:14px}
+.gate h3{margin:0 0 4px;font-size:14px}
+.gate p{margin:0 0 12px;color:var(--mut)}
+.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+textarea,input,select{background:#0c0f13;border:1px solid var(--line);color:var(--text);border-radius:8px;padding:8px 10px;font:inherit;width:100%}
+textarea{min-height:64px;resize:vertical}
+.msg{display:flex;gap:10px;padding:10px 0;border-bottom:1px solid var(--line)}
+.av{width:24px;height:24px;border-radius:6px;display:grid;place-items:center;font-size:11px;font-weight:700;flex:none}
+.av.ag{background:var(--violetbg);color:var(--violet)}.av.me{background:var(--bluebg);color:var(--blue)}
+.ask{margin-top:8px;border:1px solid var(--line);border-radius:9px;padding:10px;background:#0f1216}
+.chips{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}
+.chip{border:1px solid var(--line);border-radius:999px;padding:4px 10px;font-size:12px;cursor:pointer}
+.chip.on{border-color:var(--acc);color:var(--acc)}
+.tl{font-size:12px;color:var(--mut)}
+.tl div{padding:4px 0 4px 14px;border-left:2px solid var(--line);position:relative}
+.tl div::before{content:"";position:absolute;left:-5px;top:9px;width:8px;height:8px;border-radius:50%;background:var(--line)}
+.tl div.ok::before{background:var(--acc)}.tl div.w::before{background:var(--amber)}
+/* modal */
+.scrim{background:rgba(0,0,0,.55);padding:30px;border-radius:14px;border:1px solid var(--line);display:flex;justify-content:center;min-height:640px}
+.modal{width:640px;background:var(--panel);border:1px solid var(--line);border-radius:14px;overflow:hidden;align-self:flex-start}
+.modal .hd{padding:14px 16px;border-bottom:1px solid var(--line);display:flex;align-items:center;gap:8px}
+.modal .bd{padding:16px;display:grid;gap:12px}
+.modal .ft{padding:12px 16px;border-top:1px solid var(--line);display:flex;gap:8px;align-items:center}
+label.f{display:grid;gap:5px;font-size:12px;color:var(--mut)}
+.mini{display:flex;gap:4px;flex-wrap:wrap}
+.mini span{font-size:11px;padding:3px 8px;border-radius:6px;background:var(--panel2);border:1px solid var(--line);color:var(--mut)}
+.toggle{width:32px;height:18px;border-radius:999px;background:var(--acc);position:relative;flex:none}
+.toggle::after{content:"";position:absolute;right:2px;top:2px;width:14px;height:14px;border-radius:50%;background:#111}
+.toggle.off{background:var(--line)}.toggle.off::after{left:2px;right:auto;background:var(--mut)}
+/* frameworks */
+.fw-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:12px;padding:16px}
+.fw{border:1px solid var(--line);border-radius:12px;padding:14px;background:var(--panel2);display:grid;gap:8px}
+.fw.sel{border-color:var(--acc);box-shadow:0 0 0 1px var(--acc) inset}
+.fw h3{margin:0;font-size:14px;display:flex;gap:8px;align-items:center}
+.fw p{margin:0;color:var(--mut)}
+.flow{display:flex;gap:4px;flex-wrap:wrap;align-items:center;font-size:11px;color:var(--mut)}
+.flow b{font-weight:500;color:var(--text);background:#0f1216;border:1px solid var(--line);border-radius:6px;padding:2px 7px}
+.flow b.g{border-color:rgba(251,191,36,.5)}
+.flow b.c{border-color:rgba(192,132,252,.5)}
+.banner{margin:16px 16px 0;padding:12px 14px;border-radius:11px;background:var(--accbg);border:1px solid rgba(163,230,53,.35);display:flex;gap:12px;align-items:center}
+table{border-collapse:collapse;width:100%;font-size:12px}
+th,td{text-align:left;padding:9px 10px;border-bottom:1px solid var(--line);vertical-align:top}
+th{color:var(--dim);font-weight:600;font-size:11px;text-transform:uppercase;letter-spacing:.05em}
+.legend{display:flex;gap:14px;flex-wrap:wrap;color:var(--mut);font-size:12px;margin:12px 0 0}
+.yaml{background:#0c0f13;border:1px solid var(--line);border-radius:10px;padding:12px;white-space:pre;overflow:auto;font-family:ui-monospace,Menlo,monospace;font-size:11.5px;color:#b9c2cf;margin:0}
+.yaml .k{color:var(--violet)}.yaml .s{color:var(--acc)}.yaml .c{color:var(--dim)}
+.seg{display:inline-flex;border:1px solid var(--line);border-radius:8px;overflow:hidden}
+.seg span{padding:5px 10px;color:var(--mut);cursor:pointer;font-size:12px}
+.seg span.on{background:var(--panel2);color:var(--text)}
+.seg span+span{border-left:1px solid var(--line)}
+.lrow{display:grid;grid-template-columns:22px 1fr 210px 130px 90px;gap:10px;align-items:center;padding:9px 16px;border-bottom:1px solid var(--line)}
+.lrow.child{padding-left:44px;color:var(--mut)}
+.lrow .tt{font-weight:500}
+.lgrp{padding:8px 16px;font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--dim);background:#0f1216;border-bottom:1px solid var(--line)}
+.dotc{width:8px;height:8px;border-radius:50%;background:var(--line)}
+.dotc.b{background:var(--blue)}.dotc.a{background:var(--amber)}.dotc.g{background:var(--acc)}.dotc.r{background:var(--red)}
+.asm{display:grid;grid-template-columns:1fr auto;gap:8px;align-items:center;padding:8px 10px;border-top:1px solid var(--line)}
+.asm:first-of-type{border-top:0}
+</style>
+</head>
+<body>
+<div class="top">
+  <h1>cezar · Frameworks &amp; stage board</h1>
+  <span class="pill">spec 2026-11-15-framework-board</span>
+  <div class="sp"></div>
+  <div class="tabs" id="tabs">
+    <button data-s="list">0 · Tasks — list</button>
+    <button data-s="board" class="on">1 · Tasks — board</button>
+    <button data-s="gate">2 · Card wizard — gate</button>
+    <button data-s="conv">3 · Card wizard — discovery</button>
+    <button data-s="new">4 · New card</button>
+    <button data-s="pick">5 · Choose framework</button>
+    <button data-s="fw">6 · Framework detail</button>
+  </div>
+</div>
+
+
+<!-- 0 LIST -->
+<section class="screen" id="list">
+  <p class="note"><b>Tasks — List.</b> Every task lives here: framework cards (◆, with a stage chip) <i>and</i> the small ad-hoc stuff that never goes on the board. Filter <b>All · Framework · Other</b>; Framework adds a stage filter. A child task dispatched by a card's stage nests under the card. Backlog cards that never started sit in a collapsed group.</p>
+  <div class="app">
+    <aside class="side">
+      <div class="proj">open-mercato/core</div>
+      <div class="it">Now</div>
+      <div class="it on">Tasks <span class="pill amber">3</span></div>
+      <div class="it">Workflows</div>
+      <div class="it">Automations</div>
+      <div class="it">Skills</div>
+      <div class="it">Settings</div>
+    </aside>
+    <div class="main">
+      <div class="bar">
+        <h2>Tasks</h2>
+        <div class="seg"><span class="on">☰ List</span><span>▦ Board</span></div>
+        <div class="sp"></div>
+        <div class="seg"><span class="on">All 23</span><span>◆ Framework 14</span><span>Other 9</span></div>
+        <span class="pill">Stage: any ▾</span>
+        <button class="btn pri">+ New</button>
+      </div>
+      <div class="lgrp">Needs you</div>
+      <div class="lrow"><span class="dotc a"></span><span class="tt">Tax rules engine v2 <span class="pill acc">◆</span></span><span class="pill amber">Spec review · 3/7 ⏸ approve</span><span class="tl">Opus 5.5</span><span class="tl">$2.41</span></div>
+      <div class="lrow"><span class="dotc a"></span><span class="tt">Multi-warehouse stock reservation <span class="pill acc">◆</span></span><span class="pill amber">Discovery · 1/7 💬 your turn</span><span class="tl">Opus 5.5</span><span class="tl">$0.31</span></div>
+      <div class="lrow"><span class="dotc a"></span><span class="tt">Why does the dev server leak file watchers?</span><span class="pill">ad-hoc · question</span><span class="tl">Claude</span><span class="tl">$0.12</span></div>
+      <div class="lgrp">Running</div>
+      <div class="lrow"><span class="dotc b"></span><span class="tt">Coupon stacking rules <span class="pill acc">◆</span></span><span class="pill blue">Implement · 4/7</span><span class="tl">Codex</span><span class="tl">$3.10</span></div>
+      <div class="lrow child"><span>↳</span><span>Migrate coupon fixtures (dispatched by Implement)</span><span class="pill">child of card</span><span class="tl">Codex</span><span class="tl">$0.44</span></div>
+      <div class="lrow"><span class="dotc b"></span><span class="tt">Customer self-service portal: order history <span class="pill acc">◆</span></span><span class="pill blue">Spec · 2/7</span><span class="tl">Opus 5.5</span><span class="tl">$0.84</span></div>
+      <div class="lrow"><span class="dotc b"></span><span class="tt">Bump eslint to v10 and fix lints</span><span class="pill">ad-hoc · quick-task</span><span class="tl">Codex</span><span class="tl">$0.20</span></div>
+      <div class="lrow"><span class="dotc b"></span><span class="tt">Nightly dependency audit</span><span class="pill">ad-hoc · automation</span><span class="tl">Haiku</span><span class="tl">$0.03</span></div>
+      <div class="lgrp">Review</div>
+      <div class="lrow"><span class="dotc g"></span><span class="tt">Fix typo in checkout email</span><span class="pill">ad-hoc · quick-task</span><span class="tl">Claude</span><span class="tl">$0.05</span></div>
+      <div class="lrow"><span class="dotc r"></span><span class="tt">Invoice PDF branding <span class="pill acc">◆</span></span><span class="pill red">QA · 6/7 ✕ failed</span><span class="tl">Claude</span><span class="tl">$4.02</span></div>
+      <div class="lgrp">▸ Backlog — 3 cards not started · 2 Ready</div>
+    </div>
+  </div>
+</section>
+
+<!-- 1 BOARD -->
+<section class="screen on" id="board">
+  <p class="note"><b>Tasks — Board.</b> The same Tasks view as the list, toggled with <b>List | Board</b>. Only framework cards appear here; ad-hoc tasks stay in the List (counter in the header). Columns = the project framework's stages (here: Open Mercato, provisional 7 steps). Backlog → <b>Ready</b> is the only human "go": Ready cards are picked up in order whenever a slot frees. Each card shows its stage progress strip; amber = waiting for you. Gates and discovery chats hold no agent slot.</p>
+  <div class="app">
+    <aside class="side">
+      <div class="proj">open-mercato/core</div>
+      <div class="it">Now</div>
+      <div class="it on">Tasks <span class="pill amber">3</span></div>
+      <div class="it">Workflows</div>
+      <div class="it">Automations</div>
+      <div class="it">Skills</div>
+      <div class="it">Settings</div>
+    </aside>
+    <div class="main">
+      <div class="bar">
+        <h2>Tasks</h2>
+        <div class="seg"><span>☰ List</span><span class="on">▦ Board</span></div>
+        <span class="pill acc">◆ Open Mercato framework</span>
+        <span class="pill">Autopick on · 3/4 slots</span>
+        <div class="sp"></div>
+        <a class="tl" href="#">+ 9 other tasks · show in list</a>
+        <span class="pill amber">⏸ 3 need you</span>
+        <button class="btn ghost">Filter</button>
+        <button class="btn pri">+ New card <span class="kbd">N</span></button>
+      </div>
+      <div class="board">
+        <div class="col"><div class="colh">Backlog <span class="n">3</span></div><div class="cards">
+          <div class="card"><div class="t">B2B price lists per customer group</div><div class="m"><span class="pill">#2291</span> draft</div></div>
+          <div class="card"><div class="t">Return labels (DHL)</div><div class="m">draft</div></div>
+          <div class="card"><div class="t">Audit log export to CSV</div><div class="m"><span class="pill">LIN-412</span></div></div>
+        </div></div>
+        <div class="col"><div class="colh">Ready <span class="n">2</span><span class="wip">pickup ↓</span></div><div class="cards">
+          <div class="card"><div class="t">Partial refunds on split shipments</div><div class="m"><span class="pill blue">next up</span> waiting for slot</div></div>
+          <div class="card"><div class="t">Webhook retries with backoff</div><div class="m">#2 in queue</div></div>
+          <div class="drop">Drop here to let an agent start it</div>
+        </div></div>
+        <div class="col stage"><div class="colh"><span class="ix">1</span>Discovery <span class="n">1</span></div><div class="cards">
+          <div class="card"><div class="t">Multi-warehouse stock reservation</div>
+            <div class="prog"><i class="w"></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
+            <div class="m"><span class="pill amber">💬 your answer</span> 4 questions</div></div>
+        </div></div>
+        <div class="col stage"><div class="colh"><span class="ix">2</span>Spec <span class="n">1</span></div><div class="cards">
+          <div class="card"><div class="t">Customer self-service portal: order history</div>
+            <div class="prog"><i class="d"></i><i class="a"></i><i></i><i></i><i></i><i></i><i></i></div>
+            <div class="m"><span class="spin"></span> om-spec-writing · $0.84</div></div>
+        </div></div>
+        <div class="col stage"><div class="colh"><span class="ix">3</span>Spec review <span class="n">1</span></div><div class="cards">
+          <div class="card sel"><div class="t">Tax rules engine v2</div>
+            <div class="prog"><i class="d"></i><i class="d"></i><i class="w"></i><i></i><i></i><i></i><i></i></div>
+            <div class="m"><span class="pill amber">⏸ approve spec</span> PR #2304</div></div>
+        </div></div>
+        <div class="col stage"><div class="colh"><span class="ix">4</span>Implement <span class="n">2</span><span class="wip">WIP 2/2</span></div><div class="cards">
+          <div class="card"><div class="t">Coupon stacking rules</div>
+            <div class="prog"><i class="d"></i><i class="d"></i><i class="d"></i><i class="a"></i><i></i><i></i><i></i></div>
+            <div class="m"><span class="spin"></span> codex · step 6/11 · $3.10</div></div>
+          <div class="card"><div class="t">Saved carts for guests</div>
+            <div class="prog"><i class="d"></i><i class="d"></i><i class="d"></i><i class="a"></i><i></i><i></i><i></i></div>
+            <div class="m"><span class="pill violet">↻ 1</span> back from review</div></div>
+        </div></div>
+        <div class="col stage"><div class="colh"><span class="ix">5</span>Code review <span class="n">0</span></div><div class="cards"><div class="drop">—</div></div></div>
+        <div class="col stage"><div class="colh"><span class="ix">6</span>QA <span class="n">1</span></div><div class="cards">
+          <div class="card"><div class="t">Invoice PDF branding</div>
+            <div class="prog"><i class="d"></i><i class="d"></i><i class="d"></i><i class="d"></i><i class="d"></i><i class="f"></i><i></i></div>
+            <div class="m"><span class="pill red">✕ QA failed</span> 2 screenshots</div></div>
+        </div></div>
+        <div class="col stage"><div class="colh"><span class="ix">7</span>Ship <span class="n">0</span></div><div class="cards"><div class="drop">Human decides merge</div></div></div>
+        <div class="col"><div class="colh">Done <span class="n">14</span></div><div class="cards">
+          <div class="card"><div class="t">Gift cards</div><div class="m"><span class="pill acc">merged #2270</span> $11.20</div></div>
+        </div></div>
+      </div>
+    </div>
+  </div>
+  <div class="legend"><span>Strip: <span class="pill acc">done</span> <span class="pill blue">running</span> <span class="pill amber">waiting for you</span> <span class="pill red">failed</span></span><span>Forward drag only across an open gate (= Approve). Backward drag = "Re-run from this stage".</span></div>
+</section>
+
+<!-- 2 WIZARD GATE -->
+<section class="screen" id="gate">
+  <p class="note"><b>Card wizard — a gate.</b> The stepper is the framework; the body is the selected stage. Discovery ran <b>autonomously</b> (the card has Autonomous on), so its assumptions are reviewed here, at the first gate. Spec review finished, the agent opened a design PR and cezar parked on the stage's <code>gate: approve</code>. Approve → stage 4 starts in a <b>fresh session</b> on the same branch. Request changes → stage 2 re-runs with your comment (bounded loop).</p>
+  <div class="app" style="grid-template-columns:1fr">
+    <div class="main">
+      <div class="bar">
+        <button class="btn ghost">← Board</button>
+        <h2>Tax rules engine v2</h2>
+        <span class="pill acc">◆ Open Mercato</span><span class="pill mono">cez/tax-rules-v2</span>
+        <div class="sp"></div><span class="tl">$2.41 · 38 min</span><button class="btn ghost">Open task view ↗</button>
+      </div>
+      <div class="stepper">
+        <div class="st d"><div class="dot">✓</div><div class="lb">Discovery</div><div class="sub">🤖 autonomous</div></div>
+        <div class="st d"><div class="dot">✓</div><div class="lb">Spec</div><div class="sub">$1.02</div></div>
+        <div class="st w cur"><div class="dot">⏸</div><div class="lb">Spec review</div><div class="sub">waiting for you</div></div>
+        <div class="st"><div class="dot">4</div><div class="lb">Implement</div><div class="sub">fresh session</div></div>
+        <div class="st"><div class="dot">5</div><div class="lb">Code review</div></div>
+        <div class="st"><div class="dot">6</div><div class="lb">QA</div></div>
+        <div class="st"><div class="dot">7</div><div class="lb">Ship</div><div class="sub">🧑 human</div></div>
+      </div>
+      <div class="wz">
+        <div class="body">
+          <div class="sec gate">
+            <h3>⏸ Approve the spec to start implementation</h3>
+            <div class="box" style="margin:8px 0 12px">
+              <div style="padding:8px 10px;border-bottom:1px solid var(--line)"><b>3 assumptions from Discovery</b> <span class="tl">— the card is autonomous, so Discovery ran without you. Accept or change each; a change becomes the Request-changes comment.</span></div>
+              <div class="asm"><span>Tax is computed per line, rounded half-up, then summed.</span><span class="row"><span class="chip on">Accept</span><span class="chip">Change…</span></span></div>
+              <div class="asm"><span>Existing <span class="mono">tax_rates</span> rows migrate to a single default rule set.</span><span class="row"><span class="chip on">Accept</span><span class="chip">Change…</span></span></div>
+              <div class="asm"><span>B2B reverse-charge is out of scope for v2.</span><span class="row"><span class="chip">Accept</span><span class="chip on" style="border-color:var(--amber);color:var(--amber)">Change…</span></span></div>
+            </div>
+            <p>The reviewer returned <b>approve</b> with 2 nits. Design PR <a href="#">#2304</a> is a draft. Implementation will run on <b>Codex · gpt-5.5</b> in a new session.</p>
+            <textarea placeholder="Comment (required for Request changes, optional for Approve)…"></textarea>
+            <div class="row" style="margin-top:10px">
+              <button class="btn pri">Approve &amp; continue → Implement</button>
+              <button class="btn warn">Request changes → re-run Spec (loop 1/2)</button>
+              <div class="sp"></div>
+              <button class="btn ghost">Re-run review</button>
+            </div>
+          </div>
+          <div class="sec"><h4>Stage 3 · Spec review — produced</h4>
+            <div class="box">
+              <div class="file">📄 <span class="mono">.ai/specs/2026-11-15-tax-rules-v2.md</span><span class="add">+214</span></div>
+              <div class="file">🖼 <span class="mono">.ai/specs/assets/tax-rules-v2/flow.png</span><span class="add">new</span></div>
+              <div class="file">🔗 Draft PR <a href="#">#2304 · spec: tax rules engine v2</a><span class="pill" style="margin-left:auto">design-only</span></div>
+            </div>
+          </div>
+          <div class="sec"><h4>Review verdict</h4>
+            <div class="box" style="padding:12px">
+              <span class="pill acc">approve</span>&nbsp; <b>om-auto-review-pr</b> (spec mode) · Opus 5.5 · 6 min
+              <ul style="margin:8px 0 0;color:var(--mut);padding-left:18px">
+                <li>Nit: name the rounding mode for multi-line invoices.</li>
+                <li>Nit: phase 3 should state the migration is additive.</li>
+              </ul>
+            </div>
+          </div>
+        </div>
+        <div class="aside">
+          <div class="sec"><h4>Stage</h4><div class="kv">
+            <span>Skill</span><span class="mono">om-auto-review-pr</span>
+            <span>Session</span><span>Fresh</span>
+            <span>Gate</span><span>Approve</span>
+            <span>Runner</span><span>Claude · Opus 5.5</span>
+            <span>Holds slot</span><span>No (parked)</span>
+          </div></div>
+          <div class="sec"><h4>Card</h4><div class="kv">
+            <span>Issue</span><span><a href="#">#2288</a></span>
+            <span>Created</span><span>Nov 14 · you</span>
+            <span>Total cost</span><span>$2.41</span>
+          </div></div>
+          <div class="sec"><h4>History</h4><div class="tl">
+            <div class="ok">Discovery ran autonomously · 3 assumptions · 09:12</div>
+            <div class="ok">Spec · 1 attempt · 09:31</div>
+            <div class="ok">Spec review → approve · 09:44</div>
+            <div class="w">Waiting at gate · 41 min</div>
+          </div></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- 3 WIZARD CONVERSATION -->
+<section class="screen" id="conv">
+  <p class="note"><b>Card wizard — a conversation stage.</b> Discovery is <code>mode: conversation</code>: the session parks after every turn (no slot held) and only ends when the agent proposes <code>CEZ:STAGE-DONE</code> and you confirm — or you press <b>Finish stage</b>. <b>Let the agent decide</b> switches the card to autonomous: the agent answers the rest itself and lists its assumptions for the next gate. Questions come as the existing ask cards.</p>
+  <div class="app" style="grid-template-columns:1fr">
+    <div class="main">
+      <div class="bar"><button class="btn ghost">← Board</button><h2>Multi-warehouse stock reservation</h2><span class="pill acc">◆ Open Mercato</span><div class="sp"></div><span class="tl">$0.31 · 14 min</span></div>
+      <div class="stepper">
+        <div class="st w cur"><div class="dot">💬</div><div class="lb">Discovery</div><div class="sub">your turn</div></div>
+        <div class="st"><div class="dot">2</div><div class="lb">Spec</div><div class="sub">fresh session</div></div>
+        <div class="st"><div class="dot">3</div><div class="lb">Spec review</div></div>
+        <div class="st"><div class="dot">4</div><div class="lb">Implement</div></div>
+        <div class="st"><div class="dot">5</div><div class="lb">Code review</div></div>
+        <div class="st"><div class="dot">6</div><div class="lb">QA</div></div>
+        <div class="st"><div class="dot">7</div><div class="lb">Ship</div></div>
+      </div>
+      <div class="wz">
+        <div class="body">
+          <div class="msg"><div class="av ag">AI</div><div>I read <span class="mono">modules/inventory</span> and the 3 open issues about reservations. Today stock is a single number per SKU; orders decrement it at payment. Before writing the spec I need four decisions.</div></div>
+          <div class="msg"><div class="av ag">AI</div><div style="flex:1">
+            <div class="ask"><b>When should stock be reserved?</b>
+              <div class="chips"><span class="chip">At add-to-cart (TTL)</span><span class="chip on">At checkout start</span><span class="chip">At payment</span></div></div>
+            <div class="ask"><b>Which warehouse fulfils a mixed order?</b>
+              <div class="chips"><span class="chip on">Fewest shipments</span><span class="chip">Nearest to customer</span><span class="chip">Fixed priority list</span></div></div>
+          </div></div>
+          <div class="msg"><div class="av me">Me</div><div>Checkout start, 15 min TTL. Fewest shipments, but never split a bundle.</div></div>
+          <div class="msg"><div class="av ag">AI</div><div>Got it. I have enough to write the spec. Summary saved to <span class="mono">.ai/specs/briefs/stock-reservation-discovery.md</span>.
+            <div class="ask" style="border-color:rgba(163,230,53,.4)"><b>Discovery looks complete — move on to Spec?</b><div class="chips"><span class="chip on">Yes, finish Discovery</span><span class="chip">Not yet — more questions</span></div></div></div></div>
+          <div style="margin-top:12px"><textarea placeholder="Reply to the agent…"></textarea>
+            <div class="row" style="margin-top:8px"><button class="btn">Send</button><div class="sp"></div><button class="btn ghost">🤖 Let the agent decide</button><button class="btn pri">Finish stage → Spec</button></div></div>
+        </div>
+        <div class="aside">
+          <div class="sec"><h4>Stage</h4><div class="kv"><span>Mode</span><span>💬 Conversation</span><span>Skill</span><span class="mono">om-discovery</span><span>Session</span><span>Fresh</span><span>Must leave</span><span class="mono">briefs/*-discovery.md</span><span>Holds slot</span><span>Only while typing back</span></div></div>
+          <div class="sec"><h4>Next</h4><p class="tl" style="margin:0">Spec starts in a new session. It reads the discovery brief and the card, not this chat.</p></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- 4 NEW CARD -->
+<section class="screen" id="new">
+  <p class="note"><b>New card.</b> The form adapts to the framework: its stage preview and the framework's own fields (OpenSpec asks for a change id, spec-kit for a feature short-name). <b>Ready</b> off = it lands in Backlog; on = an agent picks it up.</p>
+  <div class="scrim"><div class="modal">
+    <div class="hd"><b>New card</b><span class="pill acc">◆ Open Mercato</span><div class="sp"></div><button class="btn ghost">✕</button></div>
+    <div class="bd">
+      <label class="f">Title<input value="Partial refunds on split shipments"></label>
+      <label class="f">Brief<textarea>Customers can be refunded per shipment, not per order. Today a refund always targets the whole order…</textarea></label>
+      <div class="row" style="gap:12px">
+        <label class="f" style="flex:1">Framework<select><option>Open Mercato (project default)</option><option>spec-kit</option><option>OpenSpec</option><option>Generic</option></select></label>
+        <label class="f" style="flex:1">Linked issue<input value="#2299 · Refund per shipment"></label>
+      </div>
+      <div><div class="tl" style="margin-bottom:6px">Stages this card will go through</div>
+        <div class="flow"><b class="c">💬 Discovery</b>→<b class="g">Spec ⏸</b>→<b class="g">Spec review ⏸</b>→<b>Implement</b>→<b>Code review</b>→<b>QA</b>→<b class="g">🧑 Ship</b></div>
+        <div class="row" style="margin-top:8px;gap:6px"><span class="pill">Skip Discovery</span><span class="pill">Start at: Discovery ▾</span><span class="pill">Per-stage model overrides ▾</span></div>
+      </div>
+      <div class="row" style="gap:10px;padding:10px;border:1px solid var(--line);border-radius:9px"><div class="toggle off"></div><div><b>Autonomous</b><div class="tl">Discovery runs without you; its assumptions are shown at the Spec gate for review.</div></div></div>
+      <div class="row" style="gap:10px;padding:10px;border:1px solid var(--line);border-radius:9px"><div class="toggle"></div><div><b>Ready for an agent</b><div class="tl">Picked up in Ready order when a slot is free (3/4 busy now · 1 card ahead).</div></div></div>
+    </div>
+    <div class="ft"><span class="tl">Budget: none</span><div class="sp"></div><button class="btn ghost">Cancel</button><button class="btn">Save to Backlog</button><button class="btn pri">Create · Ready</button></div>
+  </div></div>
+</section>
+
+<!-- 5 PICK FRAMEWORK -->
+<section class="screen" id="pick">
+  <p class="note"><b>Choose a framework</b> (Settings → Project → Framework, and the board's empty state). Detection only <i>suggests</i>: cezar found <code>openspec/project.md</code>. Nothing is adopted until you click. No framework = Generic, so the board always works.</p>
+  <div class="app" style="grid-template-columns:1fr">
+    <div class="main">
+      <div class="bar"><h2>Framework for this project</h2><span class="tl">Applies to new cards. In-flight cards keep the framework they started with.</span></div>
+      <div class="banner"><span style="font-size:18px">🔎</span><div style="flex:1"><b>This repo looks like OpenSpec.</b> <span class="tl">Found <span class="mono">openspec/project.md</span>, <span class="mono">openspec/AGENTS.md</span>, commands <span class="mono">/openspec:proposal</span>, <span class="mono">/openspec:apply</span>.</span></div><button class="btn pri">Use OpenSpec</button></div>
+      <div class="fw-grid">
+        <div class="fw sel"><h3>OpenSpec <span class="pill acc">detected</span></h3><p>Change proposals under <span class="mono">openspec/changes/</span>, apply, archive into the living spec.</p>
+          <div class="flow"><b class="g">Proposal ⏸</b>→<b>Implement</b>→<b>Review</b>→<b class="g">Archive ⏸</b></div>
+          <div class="row"><span class="pill">4 stages · 2 gates</span><span class="pill acc">all commands found</span></div></div>
+        <div class="fw"><h3>Open Mercato <span class="pill violet">provisional</span></h3><p>Discovery-first, spec PR before implementation, review/QA loops, human ship.</p>
+          <div class="flow"><b class="c">💬 Discovery</b>→<b class="g">Spec ⏸</b>→<b class="g">Spec review ⏸</b>→<b>Implement</b>→<b>Code review</b>→<b>QA</b>→<b class="g">🧑 Ship</b></div>
+          <div class="row"><span class="pill">7 stages</span><span class="pill acc">om-* skills found</span></div></div>
+        <div class="fw"><h3>spec-kit</h3><p>Constitution, specify, clarify, plan, tasks, implement — GitHub's SDD toolkit.</p>
+          <div class="flow"><b>Constitution (once)</b>→<b>Specify</b>→<b class="c">💬 Clarify</b>→<b class="g">Plan ⏸</b>→<b>Tasks</b>→<b>Analyze</b>→<b class="g">Implement ⏸</b></div>
+          <div class="row"><span class="pill amber">.specify/ not found</span><span class="tl">Set up: <span class="mono">uvx --from git+https://github.com/github/spec-kit specify init</span></span></div></div>
+        <div class="fw"><h3>Generic <span class="pill">default</span></h3><p>Works on any repo with no framework installed.</p>
+          <div class="flow"><b class="g">Plan ⏸</b>→<b>Build</b>→<b>Review</b></div>
+          <div class="row"><span class="pill">3 stages</span></div></div>
+      </div>
+      <div style="padding:0 16px 16px" class="row"><button class="btn">+ New project framework (YAML)</button><button class="btn ghost">Duplicate OpenSpec as project framework</button><span class="tl">Saved to <span class="mono">.ai/cezar/frameworks/</span> — commit it to share with the team.</span></div>
+    </div>
+  </div>
+</section>
+
+<!-- 6 FRAMEWORK DETAIL -->
+<section class="screen" id="fw">
+  <p class="note"><b>Framework detail.</b> Read-only preview of the template with per-stage resolution: which skill/command, session policy, mode, gate, artifacts — and whether this repo actually has the command. The YAML is the source; "Open compiled graph" shows it in the existing node editor.</p>
+  <div class="app" style="grid-template-columns:1fr">
+    <div class="main">
+      <div class="bar"><h2>Open Mercato</h2><span class="pill violet">provisional</span><span class="pill mono">builtin/open-mercato.yaml</span><div class="sp"></div><button class="btn">Open compiled graph</button><button class="btn">Duplicate &amp; edit</button></div>
+      <div style="display:grid;grid-template-columns:1fr 360px">
+        <div style="padding:14px 16px">
+        <table>
+          <tr><th>#</th><th>Stage</th><th>Runs</th><th>Mode</th><th>Session</th><th>Gate / loop</th><th>Must leave</th></tr>
+          <tr><td>1</td><td><b>Discovery</b></td><td class="mono">om-discovery</td><td><span class="pill violet">💬 conversation</span></td><td>fresh</td><td>finish by user</td><td class="mono">briefs/*-discovery.md</td></tr>
+          <tr><td>2</td><td><b>Spec</b></td><td class="mono">om-spec-writing</td><td>autonomous</td><td>fresh</td><td><span class="pill amber">⏸ approve</span></td><td class="mono">.ai/specs/*.md</td></tr>
+          <tr><td>3</td><td><b>Spec review</b></td><td class="mono">om-auto-review-pr</td><td>autonomous · reviewer</td><td>fresh</td><td><span class="pill amber">⏸ approve</span> changes → 2</td><td>draft PR</td></tr>
+          <tr><td>4</td><td><b>Implement</b></td><td class="mono">om-auto-implement-spec</td><td>autonomous</td><td>fresh</td><td>checks: typecheck, test</td><td>commits</td></tr>
+          <tr><td>5</td><td><b>Code review</b></td><td class="mono">om-code-review</td><td>autonomous · reviewer</td><td>fresh</td><td>changes → 4 (max 2)</td><td>verdict</td></tr>
+          <tr><td>6</td><td><b>QA</b></td><td class="mono">om-auto-qa-pr</td><td>autonomous</td><td>fresh</td><td>fail → 4 (max 2)</td><td>screenshots</td></tr>
+          <tr><td>7</td><td><b>Ship</b></td><td class="mono">om-approve-merge-pr</td><td><span class="pill">🧑 human</span></td><td>—</td><td><span class="pill amber">⏸ approve</span></td><td>merged PR</td></tr>
+        </table>
+        </div>
+        <div style="padding:14px 16px;border-left:1px solid var(--line)">
+<pre class="yaml"><span class="k">id</span>: <span class="s">open-mercato</span>
+<span class="k">detect</span>:
+  - <span class="k">path</span>: <span class="s">.ai/agentic.config.json</span>
+<span class="k">stages</span>:
+  - <span class="k">id</span>: <span class="s">discovery</span>
+    <span class="k">mode</span>: <span class="s">conversation</span>
+    <span class="k">skill</span>: <span class="s">om-discovery</span>
+    <span class="k">artifacts</span>: [<span class="s">.ai/specs/briefs/*-discovery.md</span>]
+  - <span class="k">id</span>: <span class="s">spec</span>
+    <span class="k">skill</span>: <span class="s">om-spec-writing</span>
+    <span class="k">model</span>: <span class="s">claude-opus-5-5</span>
+    <span class="k">gate</span>: <span class="s">approve</span>
+  - <span class="k">id</span>: <span class="s">implement</span>
+    <span class="k">skill</span>: <span class="s">om-auto-implement-spec</span>
+    <span class="k">session</span>: <span class="s">fresh</span>     <span class="c"># or continue: spec</span>
+    <span class="k">runner</span>: <span class="s">codex</span>
+    <span class="k">checks</span>: [<span class="s">npm run typecheck</span>, <span class="s">npm test</span>]
+    <span class="k">wip</span>: 2
+  - <span class="k">id</span>: <span class="s">review</span>
+    <span class="k">skill</span>: <span class="s">om-code-review</span>
+    <span class="k">review</span>: true
+    <span class="k">verdicts</span>: [<span class="s">approve</span>, <span class="s">changes</span>]
+    <span class="k">onVerdict</span>: { <span class="k">changes</span>: <span class="s">implement</span> }
+  <span class="c"># …</span></pre>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<script>
+document.getElementById('tabs').addEventListener('click',e=>{
+  const b=e.target.closest('button');if(!b)return;
+  document.querySelectorAll('#tabs button').forEach(x=>x.classList.toggle('on',x===b));
+  document.querySelectorAll('.screen').forEach(s=>s.classList.toggle('on',s.id===b.dataset.s));
+});
+</script>
+</body>
+</html>

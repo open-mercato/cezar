@@ -19,6 +19,7 @@ import { shortAge } from '@/lib/format'
 import { availablePromptTemplates, insertTemplate, normalizePromptTemplates } from '@/lib/prompt-templates'
 import { isHttpUrl } from '@/lib/utils'
 import { trackMessageSent } from '@/lib/telemetry'
+import { runRoute } from '@/lib/task-route'
 
 /**
  * `/inbox` — the follow-up inbox rebuilt in React (R6 Step 1.2, spec §"Skills, Workflows,
@@ -209,7 +210,7 @@ function TodoCard({
       // wait for the file watcher's debounce.
       void queryClient.invalidateQueries({ queryKey: queryKeys.todos })
       void queryClient.invalidateQueries({ queryKey: queryKeys.runs.all })
-      void navigate(`/tasks/${run.id}`)
+      void navigate(runRoute(run))
     },
     onError: (error) => toast(error.message, { tone: 'danger' }),
   })

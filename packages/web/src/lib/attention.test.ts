@@ -377,3 +377,34 @@ describe('parked on an expired login (spec 2026-11-18-inline-account-reconnect)'
     expect(signInAccountKey(run({ status: 'waiting' }))).toBeUndefined()
   })
 })
+
+describe('a framework card parked by WIP or a refused precheck (spec 2026-11-15-framework-board)', () => {
+  const parked = (reason: 'wip' | 'precheck' | 'gate') =>
+    run({
+      status: 'waiting',
+      card: {
+        framework: 'generic',
+        frameworkHash: 'h',
+        title: 'Card',
+        stage: 'build',
+        stages: { build: 'waiting' },
+        stageOrder: ['build'],
+        blocked: { reason, since: '2026-11-23T10:00:00.000Z' },
+      },
+    })
+
+  it('is neutral — not "needs you", no notification', () => {
+    expect(deriveAttention(parked('wip'))).toEqual({ bucket: 'none', tone: 'pending', pulse: false, label: 'stage full' })
+    expect(deriveAttention(parked('precheck'))).toEqual({ bucket: 'none', tone: 'pending', pulse: false, label: 'precheck' })
+    expect(wantsAttention(parked('wip'))).toBe(false)
+    expect(wantsAttention(parked('precheck'))).toBe(false)
+    expect(isNeedsYouStatus(parked('wip'))).toBe(false)
+    expect(isNeedsYouStatus(parked('precheck'))).toBe(false)
+  })
+
+  // Guard (passes both ways): a gate park still needs you.
+  it('leaves a gate park on the "needs you" rung', () => {
+    expect(deriveAttention(parked('gate')).label).toBe('needs you')
+    expect(isNeedsYouStatus(parked('gate'))).toBe(true)
+  })
+})

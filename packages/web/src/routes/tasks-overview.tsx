@@ -135,6 +135,15 @@ import { LiveNowProvider, RelativeAge } from '@/lib/live-now'
 import { RowSpacer, WINDOWED_ROWS_THRESHOLD, useWindowedRows } from '@/lib/use-windowed-rows'
 import { cn } from '@/lib/utils'
 import { useAutomationsGate, useAutomationsQuery } from '@/routes/automations/use-automations'
+import { stageNamesOf, useFrameworks } from '@/api/frameworks'
+import { cardNotStarted, compareReady, humanizeStage, isCard, type CardRun, type StageNames } from '@/lib/cards'
+import { CardRowBadge, CardStageNamesContext, TasksLayoutToggle, useTasksLayout } from './cards/card-bits'
+import { runRoute } from '@/lib/task-route'
+
+const TasksBoardRoute = React.lazy(() => import('./cards/card-board').then((m) => ({ default: m.TasksBoardRoute })))
+
+/** The list's card filter (spec § Tasks view): rendered only once a card exists. */
+export type CardKindFilter = 'all' | 'framework' | 'other'
 
 const NO_RUNS: RunRecord[] = []
 const NO_PLAN_WINDOWS: PlanUsageConsumerWindow[] = []
@@ -182,7 +191,10 @@ export function TasksOverview({
   managersAvailable = false,
   planUsage,
   defaultRunner,
+  layoutToggle,
 }: {
+  /** The List | Board switch (spec 2026-11-15-framework-board), rendered in the header. */
+  layoutToggle?: React.ReactNode
   /** Plan-limit consumers (one query for the list); undefined until it answers or while folded. */
   planUsage?: PlanUsageConsumerWindow[]
   /** The project's default runner, for rows that did not pick one ("not reported" vs "not measured yet"). */
@@ -261,11 +273,21 @@ export function TasksOverview({
   const all = runs ?? NO_RUNS
   const viewHasRuns = React.useMemo(() => all.some((run) => (view === 'archived') === run.archived), [all, view])
   const automations = React.useMemo(() => automationIndex(all), [all])
+  // Framework cards (spec 2026-11-15-framework-board): with no card, `listed` IS `all` and the
+  // chips never render — today's rows, unchanged. Not-started cards fold into the Backlog group.
+  const [cardKind, setCardKind] = React.useState<CardKindFilter>('all')
+  const [cardStage, setCardStage] = React.useState<string[]>([])
+  const hasCards = React.useMemo(() => all.some(isCard), [all])
+  const { listed, backlog } = React.useMemo(
+    () => (hasCards ? splitCards(all, view, cardKind, cardStage) : { listed: all, backlog: NO_CARDS }),
+    [all, hasCards, view, cardKind, cardStage],
+  )
+  const cardFilterActive = hasCards && (cardKind !== 'all' || cardStage.length > 0)
   // Origin and facets narrow BEFORE everything else, so the tab counts, the queue-free rows and
   // the compare strips all describe the same list the table shows.
   const narrowed = React.useMemo(
-    () => filterTaskTable(all, origin, filters, automations),
-    [all, origin, filters, automations],
+    () => filterTaskTable(listed, origin, filters, automations),
+    [listed, origin, filters, automations],
   )
   const counts = React.useMemo(() => listCounts(narrowed), [narrowed])
   const planByRun = React.useMemo(() => (planUsage ? planWindowsByRun(planUsage) : undefined), [planUsage])
@@ -344,6 +366,7 @@ export function TasksOverview({
         className="sticky top-0 z-10 flex h-12 shrink-0 items-center gap-3 border-b border-border bg-background px-3 md:h-14 md:px-5"
       >
         <h1 className="hidden text-base font-semibold md:block">Tasks</h1>
+        {layoutToggle}
         {cacheStatus}
         <div className="inline-flex gap-0.5 rounded-md bg-muted p-[3px]">
           <OverviewTab view="active" current={view} onSelect={onViewChange} count={counts.active}>
@@ -408,6 +431,19 @@ export function TasksOverview({
         {/* No bar over the first-run hero: with nothing in this view to narrow, filters are noise —
             archived history alone must not bring the chrome back over the welcome page. The
             welcome-back card and setup pill live on Now, the landing page, so they show once. */}
+        {hasCards && viewHasRuns ? (
+          <CardFilterChips
+            runs={all}
+            view={view}
+            kind={cardKind}
+            onKindChange={(next) => {
+              setCardKind(next)
+              if (next !== 'framework') setCardStage([])
+            }}
+            stages={cardStage}
+            onStagesChange={setCardStage}
+          />
+        ) : null}
         {viewHasRuns ? (
           <TasksFilterBar
             runs={all}
@@ -439,13 +475,17 @@ export function TasksOverview({
             onToggleSelecting={() => setSelecting((current) => !current)}
           />
         ) : null}
-        {runs === undefined ? null : hasScheduledTasks && all.length === 0 ? <p className="text-sm text-muted-foreground">No tasks have started yet.</p> : visible.length === 0 ? (
+        {runs === undefined ? null : hasScheduledTasks && all.length === 0 ? <p className="text-sm text-muted-foreground">No tasks have started yet.</p> : visible.length === 0 && backlog.length === 0 ? (
           <TasksEmptyState
             managersAvailable={managersAvailable}
             view={view}
             query={query}
-            filtered={activeTaskFacetCount(filters) > 0}
-            onClearFilters={() => setFilters(NO_TASK_FILTERS)}
+            filtered={activeTaskFacetCount(filters) > 0 || cardFilterActive}
+            onClearFilters={() => {
+              setFilters(NO_TASK_FILTERS)
+              setCardKind('all')
+              setCardStage([])
+            }}
             origin={origin}
             hiddenByOrigin={
               origin !== 'all' &&
@@ -598,6 +638,8 @@ export function TasksOverview({
           </>
         )}
 
+        {backlog.length > 0 ? <CardBacklogGroup cards={backlog} /> : null}
+
         {strips.map((group) => (
           <div
             key={group.groupId}
@@ -620,6 +662,121 @@ export function TasksOverview({
       {!managersAvailable ? <ManualTaskFab /> : null}
     </div>
     </LiveNowProvider>
+  )
+}
+
+const NO_CARDS: CardRun[] = []
+
+/**
+ * The list half of the framework board (spec § Tasks view): the kind/stage filters, and the
+ * not-started cards (Backlog + Ready, `queued`) pulled out of the table into their own group.
+ */
+export function splitCards(
+  runs: readonly RunRecord[],
+  view: ListView,
+  kind: CardKindFilter,
+  stages: readonly string[],
+): { listed: RunRecord[]; backlog: CardRun[] } {
+  const listed: RunRecord[] = []
+  const backlog: CardRun[] = []
+  for (const run of runs) {
+    if (kind === 'framework' && !isCard(run)) continue
+    if (kind === 'other' && isCard(run)) continue
+    if (stages.length > 0 && (!isCard(run) || !stages.includes(run.card.stage))) continue
+    if (view === 'active' && isCard(run) && cardNotStarted(run) && !run.archived) backlog.push(run)
+    else listed.push(run)
+  }
+  backlog.sort(compareReady)
+  return { listed, backlog }
+}
+
+/** `All · ◆ Framework · Other`, and the stage filter Framework adds (mockup 0). */
+function CardFilterChips({
+  runs,
+  view,
+  kind,
+  onKindChange,
+  stages,
+  onStagesChange,
+}: {
+  runs: readonly RunRecord[]
+  view: ListView
+  kind: CardKindFilter
+  onKindChange: (kind: CardKindFilter) => void
+  stages: string[]
+  onStagesChange: (stages: string[]) => void
+}) {
+  const byFramework = React.useContext(CardStageNamesContext)
+  const inView = runs.filter((run) => (view === 'archived' ? run.archived : !run.archived))
+  const cards = inView.filter(isCard)
+  const stageIds = distinctValues(cards.map((run) => run.card.stage))
+  const nameOf = (id: string) => {
+    for (const names of byFramework?.values() ?? []) if (names.has(id)) return names.get(id)!
+    return humanizeStage(id)
+  }
+  return (
+    <div data-slot="card-filters" className="mb-2 flex flex-wrap items-center gap-1.5">
+      <Segmented
+        slot="card-kind"
+        label="Show framework cards or other tasks"
+        value={kind}
+        onChange={onKindChange}
+        options={[
+          { value: 'all', label: 'All', count: inView.length },
+          { value: 'framework', label: '◆ Framework', count: cards.length },
+          { value: 'other', label: 'Other', count: inView.length - cards.length },
+        ]}
+      />
+      {kind === 'framework' ? (
+        <FacetFilter
+          slot="card-stage-filter"
+          label="Stage"
+          selected={stages}
+          onToggle={(value) => onStagesChange(stages.includes(value) ? stages.filter((s) => s !== value) : [...stages, value])}
+          onClear={() => onStagesChange([])}
+          options={stageIds.map((id) => ({
+            value: id,
+            label: nameOf(id),
+            count: cards.filter((run) => run.card.stage === id).length,
+          }))}
+          emptyLabel="No cards to filter"
+        />
+      ) : null}
+    </div>
+  )
+}
+
+/** Cards nobody has started: collapsed by default, with the Ready count (mockup 0). */
+function CardBacklogGroup({ cards }: { cards: readonly CardRun[] }) {
+  const [open, setOpen] = React.useState(false)
+  const ready = cards.filter((run) => !run.card.held).length
+  return (
+    <section data-slot="card-backlog" className="mt-3.5 rounded-lg border border-border bg-card shadow-xs">
+      <button
+        type="button"
+        aria-expanded={open}
+        onClick={() => setOpen((current) => !current)}
+        className="flex w-full items-center gap-2 px-3.5 py-2.5 text-left text-label text-muted-foreground outline-none hover:bg-muted focus-visible:ring-[3px] focus-visible:ring-ring/50"
+      >
+        <span aria-hidden="true">{open ? '▾' : '▸'}</span>
+        <span>
+          <strong className="font-semibold text-foreground">Backlog</strong> — {cards.length}{' '}
+          {cards.length === 1 ? 'card' : 'cards'} not started · {ready} Ready
+        </span>
+      </button>
+      {open ? (
+        <ul className="border-t border-border">
+          {cards.map((run) => (
+            <li key={run.id} data-run-id={run.id} className="flex items-center gap-2 border-b border-border px-3.5 py-2 last:border-b-0">
+              <Link to={`/cards/${run.id}`} className="min-w-0 flex-1 truncate text-ui font-medium">
+                {run.card.title}
+              </Link>
+              <CardRowBadge run={run} />
+            </li>
+          ))}
+        </ul>
+      ) : null}
+    </section>
   )
 }
 
@@ -1221,7 +1378,7 @@ const TableRow = React.memo(function TableRow({
   const navigate = useNavigate()
   const attention = deriveAttention(run)
   const scheduled = scheduledResume(run)
-  const to = `/tasks/${run.id}`
+  const to = runRoute(run)
   const cost = formatCost(run.costUsd)
   const reference = taskReference(run)
 
@@ -1550,6 +1707,7 @@ function TitleCell({
         {quiet ? <StatusDescription id={statusId} attention={deriveAttention(run)} /> : null}
         {unread ? <UnreadMarker /> : null}
       </Link>
+      {isCard(run) ? <CardRowBadge run={run} /> : null}
       {/* What a DISPATCHED row is for — `review` or `implement` — so a tester can tell a child
           from a task a person typed without opening it. Null on every root. */}
       {dispatchKindLabel(run) ? (
@@ -1690,7 +1848,7 @@ const TaskCard = React.memo(function TaskCard({
   const navigate = useNavigate()
   const attention = deriveAttention(run)
   const scheduled = scheduledResume(run)
-  const to = `/tasks/${run.id}`
+  const to = runRoute(run)
   const reference = taskReference(run)
   // Read/unread (#unread-done-items) — the same promote-unread / dim-read treatment as the row.
   const unread = isUnread(run)
@@ -1751,6 +1909,7 @@ const TaskCard = React.memo(function TaskCard({
           </Pill>
         )}
         {quiet ? title : null}
+        {isCard(run) ? <CardRowBadge run={run} /> : null}
         {/* Same kind chip as the table's Task cell — what this dispatched card is for. */}
         {dispatchKindLabel(run) ? (
           <span
@@ -1900,7 +2059,33 @@ function useStatusSeed(location: ReturnType<typeof useLocation>): { key: string;
  * likely have patched each archived run already, but the endpoint's answer is the truth.
  */
 export function TasksOverviewRoute() {
+  const [layout, setLayout] = useTasksLayout()
+  if (layout === 'board') {
+    return (
+      <React.Suspense fallback={null}>
+        <TasksBoardRoute layoutToggle={<TasksLayoutToggle layout={layout} onChange={setLayout} />} />
+      </React.Suspense>
+    )
+  }
+  return <TasksListRoute layoutToggle={<TasksLayoutToggle layout={layout} onChange={setLayout} />} />
+}
+
+/** Stage names for card rows — asked for only once a card exists (default path: no request). */
+function useCardStageNames(runs: readonly RunRecord[] | undefined): ReadonlyMap<string, StageNames> | undefined {
+  const hasCards = React.useMemo(() => (runs ?? []).some(isCard), [runs])
+  const frameworks = useFrameworks(hasCards)
+  return React.useMemo(
+    () =>
+      frameworks.data
+        ? new Map(frameworks.data.frameworks.map((fw) => [fw.id, stageNamesOf(frameworks.data, fw.id) as StageNames]))
+        : undefined,
+    [frameworks.data],
+  )
+}
+
+function TasksListRoute({ layoutToggle }: { layoutToggle: React.ReactNode }) {
   const runs = useRuns()
+  const cardStageNames = useCardStageNames(runs.data)
   const location = useLocation()
   const search = new URLSearchParams(location.search)
   const initialQuery = search.get('q') ?? ''
@@ -2006,10 +2191,12 @@ export function TasksOverviewRoute() {
 
   return (
     <ReferenceStatusProvider projectId={projectId} requests={referenceRequests}>
+      <CardStageNamesContext.Provider value={cardStageNames}>
       <TasksOverview
         // A new `?status=` while already here (a quick action) re-seeds the facets.
         key={statusSeed?.key}
         initialStatuses={statusSeed?.statuses}
+        layoutToggle={layoutToggle}
         managersAvailable={health.data?.capabilities?.managers === true}
         scheduledTasks={view === 'active' ? <ScheduledTasks enabled={scheduledGate} /> : undefined}
         hasScheduledTasks={view === 'active' && !!automationsQuery.data?.automations.some(a => a.deferredStart)}
@@ -2038,6 +2225,7 @@ export function TasksOverviewRoute() {
         defaultRunner={defaultRunner}
         cacheStatus={<CacheStatusChip queryKey={queryKeys.runs.list()} isFetching={runs.isFetching} isError={runs.isError} />}
       />
+      </CardStageNamesContext.Provider>
     </ReferenceStatusProvider>
   )
 }

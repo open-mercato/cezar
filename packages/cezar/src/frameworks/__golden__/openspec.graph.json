@@ -1,0 +1,105 @@
+{
+  "nodes": [
+    {
+      "id": "start",
+      "type": "start",
+      "stage": "proposal"
+    },
+    {
+      "id": "proposal-enter",
+      "type": "stage.enter",
+      "stage": "proposal"
+    },
+    {
+      "id": "proposal-agent",
+      "type": "agent",
+      "stage": "proposal",
+      "name": "Proposal",
+      "prompt": "/openspec:proposal Tax rules engine v2\n\nRates per region.\n\nYou are working on stage 1/3 \"Proposal\" of the OpenSpec framework.\n\nOpenSpec needs `openspec/project.md` on this branch. If a framework file this stage relies on is missing, stop and report it with CEZ:ASK — never improvise the framework's steps or files by hand.\n\nA person reviews this stage's result before the card moves on.\n\nIf a reviewer asked for changes, their comment:\n{{nodes.proposal-gate.comment}}"
+    },
+    {
+      "id": "proposal-gate",
+      "type": "gate.human",
+      "stage": "proposal",
+      "message": "Approve the change proposal?"
+    },
+    {
+      "id": "proposal-reject-loop",
+      "type": "loop",
+      "stage": "proposal",
+      "max": 2
+    },
+    {
+      "id": "apply-enter",
+      "type": "stage.enter",
+      "stage": "apply"
+    },
+    {
+      "id": "apply-agent",
+      "type": "agent",
+      "stage": "apply",
+      "name": "Apply",
+      "prompt": "/openspec:apply Tax rules engine v2\n\nRates per region.\n\nYou are working on stage 2/3 \"Apply\" of the OpenSpec framework.\n\nOpenSpec needs `openspec/project.md` on this branch. If a framework file this stage relies on is missing, stop and report it with CEZ:ASK — never improvise the framework's steps or files by hand."
+    },
+    {
+      "id": "archive-enter",
+      "type": "stage.enter",
+      "stage": "archive"
+    },
+    {
+      "id": "archive-agent",
+      "type": "agent",
+      "stage": "archive",
+      "name": "Archive",
+      "prompt": "/openspec:archive Tax rules engine v2\n\nRates per region.\n\nYou are working on stage 3/3 \"Archive\" of the OpenSpec framework.\n\nOpenSpec needs `openspec/project.md` on this branch. If a framework file this stage relies on is missing, stop and report it with CEZ:ASK — never improvise the framework's steps or files by hand."
+    },
+    {
+      "id": "end",
+      "type": "end",
+      "status": "success",
+      "stage": "archive"
+    }
+  ],
+  "edges": [
+    {
+      "from": "start.next",
+      "to": "proposal-enter"
+    },
+    {
+      "from": "proposal-enter.next",
+      "to": "proposal-agent"
+    },
+    {
+      "from": "proposal-agent.done",
+      "to": "proposal-gate"
+    },
+    {
+      "from": "proposal-gate.reject",
+      "to": "proposal-reject-loop"
+    },
+    {
+      "from": "proposal-reject-loop.repeat",
+      "to": "proposal-enter"
+    },
+    {
+      "from": "proposal-gate.approve",
+      "to": "apply-enter"
+    },
+    {
+      "from": "apply-enter.next",
+      "to": "apply-agent"
+    },
+    {
+      "from": "apply-agent.done",
+      "to": "archive-enter"
+    },
+    {
+      "from": "archive-enter.next",
+      "to": "archive-agent"
+    },
+    {
+      "from": "archive-agent.done",
+      "to": "end"
+    }
+  ]
+}

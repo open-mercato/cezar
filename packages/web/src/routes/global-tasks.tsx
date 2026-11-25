@@ -94,6 +94,7 @@ import { usageMetricVisibility } from '@/lib/token-metrics'
 import { LiveNowProvider, RelativeAge } from '@/lib/live-now'
 import { RowSpacer, useWindowedRows } from '@/lib/use-windowed-rows'
 import { cn } from '@/lib/utils'
+import { runRoute } from '@/lib/task-route'
 
 /**
  * The global Tasks page at `/tasks` — every registered project's work in one table.
@@ -1027,7 +1028,7 @@ const TaskRow = React.memo(function TaskRow({
 }: TaskRowProps) {
   const { run } = task
   const attention = deriveAttention(run)
-  const to = scopeTo(run.projectId, `/tasks/${run.id}`)
+  const to = scopeTo(run.projectId, runRoute(run))
   const linkState = React.useContext(RowLinkStateContext)
   const unread = isUnread(run)
   const readDone = isReadDoneItem(run)

@@ -175,7 +175,7 @@ afterEach(() => {
   document.documentElement.classList.remove('light')
 })
 
-const PROJECT_SECTIONS = ['instructions', 'tracker', 'secrets', 'webhooks', 'agents', 'tasks', 'agent-config', 'worktrees', 'bookmarklets', 'integrations']
+const PROJECT_SECTIONS = ['instructions', 'tracker', 'secrets', 'webhooks', 'agents', 'tasks', 'framework', 'agent-config', 'worktrees', 'bookmarklets', 'integrations']
 /** The global nav, in rail order: "You", then "Workspace" (design doc, Proposal 8). */
 const YOU_SECTIONS = ['appearance', 'keyboard', 'notifications']
 const WORKSPACE_SECTIONS = ['agents', 'behaviour', 'data-privacy', 'projects']

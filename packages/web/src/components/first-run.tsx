@@ -87,6 +87,7 @@ import { githubTaskRef } from '@/lib/github-task'
 import { labelChipStyle } from '@/routes/github/github-filter'
 import { trackAddProjectOpened } from '@/lib/telemetry'
 import { cn } from '@/lib/utils'
+import { runRoute } from '@/lib/task-route'
 
 /**
  * First-run onboarding (spec 2026-10-26-first-run-onboarding, mockups in
@@ -1399,7 +1400,7 @@ export function WelcomeBack({ runs }: { runs: readonly RunRecord[] }) {
       <div className="grid shrink-0 auto-cols-fr grid-flow-col gap-2">
         {first ? (
           <Button asChild size="sm" className="w-full font-normal">
-            <Link to={`/tasks/${first.id}`} data-slot="welcome-back-waiting">
+            <Link to={runRoute(first)} data-slot="welcome-back-waiting">
               {waiting.length > 1 ? 'Open tasks' : first.status === 'review' ? 'Review task' : 'Open task'}
             </Link>
           </Button>

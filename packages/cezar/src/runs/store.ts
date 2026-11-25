@@ -41,6 +41,7 @@ import { workflowDefSchema } from '../workflows/types.ts';
 // A contract VALUE, like `workspaceUiStateSchema` in `workspace/migrations.ts`: the persisted
 // `dispatch` object and its wire half are literally the same schema, so they cannot drift.
 import type { RunArtifact, RunArtifactVersion } from '@open-mercato/cezar-contract';
+import { runCardSchema } from '@open-mercato/cezar-contract';
 import { dispatchSchema, runParkedSchema, runSubjectSchema, trackerAssociationSchema, trackerAutomationEventSchema, webhookAttentionRequestSchema, webhookCompletionReasonSchema, worktreeLifecycleProjectionSchema } from '@open-mercato/cezar-contract';
 
 import { foldReportedModel, foldRunModels } from './reported-model.ts';
@@ -592,6 +593,9 @@ export const runRecordSchema = z.object({
     })
     .optional()
     .catch(undefined),
+  /** Framework card metadata (spec 2026-11-15-framework-board); the contract's own schema. A
+   *  corrupt card drops to an ad-hoc run rather than failing the index parse. */
+  card: runCardSchema.optional().catch(undefined),
 });
 
 export type StepState = z.infer<typeof stepStateSchema>;

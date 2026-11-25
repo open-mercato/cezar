@@ -2705,3 +2705,68 @@ describe('the facts line reads cleanly on both sides of the breakpoint', () => {
     expect(reads('phone')).toEqual(['Needs review', '·', '1 of 1 done', '·', '+1 −0'])
   })
 })
+
+describe('a framework card in the task view (framework-board)', () => {
+  const CARD_STEPS: StepState[] = [
+    step({ id: 'discover-enter', name: 'Enter stage', kind: 'check', status: 'done' }),
+    step({ id: 'discover-agent', name: 'Discover', status: 'waiting' }),
+    step({ id: 'discover-exit', name: 'Exit stage', kind: 'check', status: 'pending' }),
+    step({ id: 'discover-gate', name: 'Framework gate', kind: 'check', status: 'pending' }),
+    step({ id: 'spec-enter', name: 'Enter stage', kind: 'check', status: 'pending' }),
+    step({ id: 'spec-agent', name: 'Spec + plan', status: 'pending' }),
+    step({ id: 'spec-check-loop', name: 'Loop', kind: 'check', status: 'pending' }),
+  ]
+  const cardRun = run('waiting', {
+    workflow: 'framework:open-mercato-sdd',
+    steps: CARD_STEPS,
+    card: {
+      framework: 'open-mercato-sdd',
+      frameworkHash: 'h',
+      title: 'Card',
+      stage: 'discover',
+      stages: { discover: 'waiting', spec: 'pending' },
+      stageOrder: ['discover', 'spec'],
+    },
+  })
+
+  it('says ◆ framework · Stage · n/N, rails one dot per stage, and offers Open card', async () => {
+    stubFetch({
+      '/api/v1/frameworks': () =>
+        jsonResponse({ frameworks: [{ id: 'open-mercato-sdd', name: 'Open Mercato SDD', stages: [{ id: 'discover', name: 'Discover' }, { id: 'spec', name: 'Spec' }] }] }),
+    })
+    renderHeader(cardRun)
+    await waitFor(() => expect(document.querySelector('[data-slot="card-meta"]')?.textContent).toBe('◆ Open Mercato SDD · Discover · 1/2'))
+    expect(document.body.textContent).not.toContain('framework:open-mercato-sdd')
+    expect(document.querySelector('[data-slot="step-tally"]')).toBeNull()
+
+    const dots = [...document.querySelectorAll('[data-slot="stage-dot"]')]
+    expect(dots.map((d) => [d.getAttribute('data-stage'), d.getAttribute('data-status')])).toEqual([
+      ['discover', 'waiting'],
+      ['spec', 'pending'],
+    ])
+    expect(document.querySelector('[data-slot="step-dots"]')).toBeNull()
+    expect(screen.getByRole('button', { name: 'Stages: Discover, stage 1 of 2' })).toBeTruthy()
+
+    // The compiled internals live only in the expanded detail, under their stage.
+    fireEvent.click(screen.getByRole('button', { name: 'Stages: Discover, stage 1 of 2' }))
+    const rowsByStage = [...document.querySelectorAll('[data-slot="card-stage-row"]')].map((row) => [
+      row.getAttribute('data-stage'),
+      [...row.querySelectorAll('[data-slot="step-row"]')].length,
+    ])
+    expect(rowsByStage).toEqual([
+      ['discover', 4],
+      ['spec', 3],
+    ])
+    expect(screen.getByRole('link', { name: /Open card/ }).getAttribute('href')).toBe('/cards/r1')
+  })
+
+  it('leaves an ad-hoc run exactly as it was: workflow, k of n done, the step rail, no Open card', () => {
+    stubFetch()
+    renderHeader(run('running', { steps: [step({ id: 'a', status: 'done' }), step({ id: 'b', name: 'Second', status: 'running' })] }))
+    expect(document.querySelector('[data-slot="step-tally"]')?.textContent).toBe('1 of 2 done')
+    expect(document.querySelector('[data-slot="step-dots"]')).not.toBeNull()
+    expect(document.querySelector('[data-slot="card-stage-rail"]')).toBeNull()
+    expect(document.querySelector('[data-slot="card-meta"]')).toBeNull()
+    expect(screen.queryByRole('link', { name: /Open card/ })).toBeNull()
+  })
+})

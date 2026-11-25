@@ -11,6 +11,7 @@ import {
   graphToSteps,
   isTerminalAgent,
   loopBodyIds,
+  NODE_CATALOG,
   parseVerdict,
   portsOfNode,
   renderNodeRefs,
@@ -405,5 +406,66 @@ describe('fork / join shape', () => {
     const issues = graphIssues(g).join('\n');
     expect(issues).toMatch(/only to an agent right after a fork/);
     expect(issues).toMatch(/join node "j" has no fork/);
+  });
+});
+
+describe('framework stage nodes (spec 2026-11-15-framework-board)', () => {
+  const STAGED: WorkflowGraph = {
+    nodes: [
+      { id: 'start', type: 'start', stage: 'spec' },
+      { id: 'spec-enter', type: 'stage.enter', stage: 'spec', wip: 2, precheck: 'node gate.mjs spec' },
+      { id: 'spec-agent', type: 'agent', stage: 'spec', skill: 'om-sdd-spec', mode: 'conversation' },
+      { id: 'spec-exit', type: 'stage.exit', stage: 'spec', artifacts: ['.ai/specs/*/spec.md'] },
+      { id: 'spec-gate', type: 'gate.framework', stage: 'spec', approve: 'spec' },
+      { id: 'end', type: 'end', status: 'success', stage: 'spec' },
+    ],
+    edges: [
+      { from: 'start', to: 'spec-enter' },
+      { from: 'spec-enter', to: 'spec-agent' },
+      { from: 'spec-agent', to: 'spec-exit' },
+      { from: 'spec-exit', to: 'spec-gate' },
+      { from: 'spec-gate', to: 'end' },
+    ],
+  };
+
+  it('parses with stage tags and conversation mode, and validates clean as a compiled card graph', () => {
+    const parsed = workflowGraphFileSchema.parse({ version: 2, name: 'staged', ...STAGED });
+    expect(parsed.nodes.find((n) => n.id === 'spec-agent')).toMatchObject({ stage: 'spec', mode: 'conversation' });
+    expect(graphIssues(STAGED, { frameworkNodes: true })).toEqual([]);
+  });
+
+  it('rejects framework stage nodes in a user workflow, where nothing would ever wake them', () => {
+    const issues = graphIssues(STAGED);
+    expect(issues).toHaveLength(3);
+    for (const id of ['spec-enter', 'spec-exit', 'spec-gate']) expect(issues.join('\n')).toContain(`node "${id}"`);
+    expect(NODE_CATALOG.filter((c) => c.internal).map((c) => c.type)).toEqual(['stage.enter', 'stage.exit', 'gate.framework']);
+  });
+
+  it('has the agreed ports; an unwired missing fails the run', () => {
+    const node = (id: string) => STAGED.nodes.find((n) => n.id === id)!;
+    expect(portsOfNode(node('spec-enter'))).toEqual(['next']);
+    expect(portsOfNode(node('spec-exit'))).toEqual(['pass', 'missing']);
+    expect(portsOfNode(node('spec-gate'))).toEqual(['approve']);
+    expect(advance(STAGED, 'spec-exit', 'missing', new Map())).toMatchObject({ kind: 'end', status: 'failed' });
+  });
+
+  it('rejects stage nodes without their stage, and a non-conversation mode', () => {
+    const bad = (node: unknown) =>
+      workflowGraphFileSchema.safeParse({ version: 2, name: 'x', nodes: [{ id: 'start', type: 'start' }, node], edges: [] }).success;
+    expect(bad({ id: 'e', type: 'stage.enter' })).toBe(false);
+    expect(bad({ id: 'g', type: 'gate.framework', stage: 's' })).toBe(false); // approve is required (null allowed)
+    expect(bad({ id: 'g', type: 'gate.framework', stage: 's', approve: null })).toBe(true);
+    expect(bad({ id: 'a', type: 'agent', prompt: 'x', mode: 'autonomous' })).toBe(false);
+    expect(bad({ id: 'a', type: 'agent', prompt: 'x', stage: 'has.dot' })).toBe(false);
+  });
+
+  it('keeps graph-only fields off v1 steps, and stage nodes ride the rail as check rows', () => {
+    expect(graphToSteps(STAGED)).toEqual([{ id: 'spec-agent', skill: 'om-sdd-spec' }]);
+    expect(graphRailSteps(STAGED).map((s) => [s.id, s.kind])).toEqual([
+      ['spec-enter', 'check'],
+      ['spec-agent', 'agent'],
+      ['spec-exit', 'check'],
+      ['spec-gate', 'check'],
+    ]);
   });
 });

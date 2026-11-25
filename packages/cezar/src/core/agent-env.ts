@@ -19,6 +19,11 @@
 import type { AgentBackend } from './agent-runner.ts';
 import { SECRET_NAME_RE } from './secret-redaction.ts';
 
+/** The framework approval variable (spec 2026-11-15-framework-board D9) is set only on cezar's
+ *  own approve spawn and never reaches an agent, whatever passthrough or full mode asks for.
+ *  Same name as `frameworks/state.ts` `SDD_APPROVAL_ENV`. */
+const NEVER_FORWARDED = new Set(['CEZ_TRACKER_CAPABILITY', 'SDD_NONINTERACTIVE_APPROVAL']);
+
 /**
  * Env var names are matched case-INSENSITIVELY (#427 review). Windows spells
  * the essentials `Path`, `SystemRoot`, `ComSpec`, `windir` — an exact-case
@@ -383,7 +388,7 @@ export function buildChildEnv(opts: BuildChildEnvOptions): NodeJS.ProcessEnv {
     const full: NodeJS.ProcessEnv = {};
     for (const [name, value] of Object.entries(source)) {
       // Task authority is per-launch even when full host inheritance is requested.
-      if (name.toUpperCase() === 'CEZ_TRACKER_CAPABILITY') continue;
+      if (NEVER_FORWARDED.has(name.toUpperCase())) continue;
       if (!overridden.has(name.toUpperCase())) full[name] = value;
     }
     return { ...full, ...extra };
@@ -432,7 +437,7 @@ export function buildChildEnv(opts: BuildChildEnvOptions): NodeJS.ProcessEnv {
     const key = name.toUpperCase();
     // A nested cockpit must not pass its parent's task authority into unrelated
     // agents. Only an explicit per-launch extraEnv grant may cross this boundary.
-    if (key === 'CEZ_TRACKER_CAPABILITY') return false;
+    if (NEVER_FORWARDED.has(key)) return false;
     // cezar's own namespace (CEZ_DRY_RUN plumbing, mock hooks, run wiring).
     if (key.startsWith('CEZ_')) return true;
     // Backend auth + gh handoff + the cloud creds an active Bedrock/Vertex

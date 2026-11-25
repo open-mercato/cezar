@@ -1,0 +1,327 @@
+{
+  "nodes": [
+    {
+      "id": "start",
+      "type": "start",
+      "stage": "discover"
+    },
+    {
+      "id": "discover-enter",
+      "type": "stage.enter",
+      "stage": "discover"
+    },
+    {
+      "id": "discover-agent",
+      "type": "agent",
+      "stage": "discover",
+      "name": "Discover",
+      "prompt": "# Tax rules engine v2\n\nRates per region.\n\nYou are working on stage 1/8 \"Discover\" of the Open Mercato SDD framework; follow the `om-sdd-discover` skill.\n\nOpen Mercato SDD needs `.ai/sdd/sdd.mjs`, `.ai/sdd/CONVENTIONS.md` on this branch. If a framework file this stage relies on is missing, stop and report it with CEZ:ASK — never improvise the framework's steps or files by hand.\n\nCard fields:\n- slug: tax-rules-engine-v2\n- ui: true\n\nThis stage must leave these files (checked when you finish):\n- .ai/specs/*-tax-rules-engine-v2/brief.md\n\nA person approves this stage. Never run the framework's approve command yourself.",
+      "skill": "om-sdd-discover",
+      "mode": "conversation"
+    },
+    {
+      "id": "discover-exit",
+      "type": "stage.exit",
+      "stage": "discover",
+      "artifacts": [
+        ".ai/specs/*-tax-rules-engine-v2/brief.md"
+      ]
+    },
+    {
+      "id": "discover-gate",
+      "type": "gate.framework",
+      "stage": "discover",
+      "approve": null
+    },
+    {
+      "id": "spec-enter",
+      "type": "stage.enter",
+      "stage": "spec",
+      "precheck": "node .ai/sdd/sdd.mjs gate spec"
+    },
+    {
+      "id": "spec-agent",
+      "type": "agent",
+      "stage": "spec",
+      "name": "Spec + plan",
+      "prompt": "# Tax rules engine v2\n\nRates per region.\n\nYou are working on stage 2/8 \"Spec + plan\" of the Open Mercato SDD framework; follow the `om-sdd-spec` skill.\n\nOpen Mercato SDD needs `.ai/sdd/sdd.mjs`, `.ai/sdd/CONVENTIONS.md` on this branch. If a framework file this stage relies on is missing, stop and report it with CEZ:ASK — never improvise the framework's steps or files by hand.\n\nCard fields:\n- slug: tax-rules-engine-v2\n- ui: true\n\nThis stage must leave these files (checked when you finish):\n- .ai/specs/*-tax-rules-engine-v2/spec.md\n\nA person approves this stage. Never run the framework's approve command yourself.",
+      "skill": "om-sdd-spec"
+    },
+    {
+      "id": "spec-exit",
+      "type": "stage.exit",
+      "stage": "spec",
+      "artifacts": [
+        ".ai/specs/*-tax-rules-engine-v2/spec.md"
+      ]
+    },
+    {
+      "id": "spec-gate",
+      "type": "gate.framework",
+      "stage": "spec",
+      "approve": "spec"
+    },
+    {
+      "id": "mockup-enter",
+      "type": "stage.enter",
+      "stage": "mockup",
+      "precheck": "node .ai/sdd/sdd.mjs gate mockup"
+    },
+    {
+      "id": "mockup-agent",
+      "type": "agent",
+      "stage": "mockup",
+      "name": "Mockup",
+      "prompt": "# Tax rules engine v2\n\nRates per region.\n\nYou are working on stage 3/8 \"Mockup\" of the Open Mercato SDD framework; follow the `om-sdd-mockup` skill.\n\nOpen Mercato SDD needs `.ai/sdd/sdd.mjs`, `.ai/sdd/CONVENTIONS.md` on this branch. If a framework file this stage relies on is missing, stop and report it with CEZ:ASK — never improvise the framework's steps or files by hand.\n\nCard fields:\n- slug: tax-rules-engine-v2\n- ui: true\n\nA person approves this stage. Never run the framework's approve command yourself.",
+      "skill": "om-sdd-mockup"
+    },
+    {
+      "id": "mockup-gate",
+      "type": "gate.framework",
+      "stage": "mockup",
+      "approve": "mockup"
+    },
+    {
+      "id": "secure-enter",
+      "type": "stage.enter",
+      "stage": "secure",
+      "precheck": "node .ai/sdd/sdd.mjs gate secure"
+    },
+    {
+      "id": "secure-agent",
+      "type": "agent",
+      "stage": "secure",
+      "name": "Secure",
+      "prompt": "# Tax rules engine v2\n\nRates per region.\n\nYou are working on stage 4/8 \"Secure\" of the Open Mercato SDD framework; follow the `om-sdd-secure` skill.\n\nOpen Mercato SDD needs `.ai/sdd/sdd.mjs`, `.ai/sdd/CONVENTIONS.md` on this branch. If a framework file this stage relies on is missing, stop and report it with CEZ:ASK — never improvise the framework's steps or files by hand.\n\nCard fields:\n- slug: tax-rules-engine-v2\n- ui: true\n\nA person approves this stage. Never run the framework's approve command yourself.",
+      "skill": "om-sdd-secure"
+    },
+    {
+      "id": "secure-gate",
+      "type": "gate.framework",
+      "stage": "secure",
+      "approve": "secure"
+    },
+    {
+      "id": "validate-enter",
+      "type": "stage.enter",
+      "stage": "validate",
+      "precheck": "node .ai/sdd/sdd.mjs gate validate"
+    },
+    {
+      "id": "validate-agent",
+      "type": "agent",
+      "stage": "validate",
+      "name": "Validate",
+      "prompt": "# Tax rules engine v2\n\nRates per region.\n\nYou are working on stage 5/8 \"Validate\" of the Open Mercato SDD framework; follow the `om-sdd-validate` skill.\n\nOpen Mercato SDD needs `.ai/sdd/sdd.mjs`, `.ai/sdd/CONVENTIONS.md` on this branch. If a framework file this stage relies on is missing, stop and report it with CEZ:ASK — never improvise the framework's steps or files by hand.\n\nCard fields:\n- slug: tax-rules-engine-v2\n- ui: true",
+      "skill": "om-sdd-validate",
+      "verdicts": [
+        "go",
+        "conditional",
+        "no-go"
+      ]
+    },
+    {
+      "id": "validate-no-go-loop",
+      "type": "loop",
+      "stage": "validate",
+      "max": 2
+    },
+    {
+      "id": "implement-enter",
+      "type": "stage.enter",
+      "stage": "implement",
+      "wip": 2,
+      "precheck": "node .ai/sdd/sdd.mjs gate implement"
+    },
+    {
+      "id": "implement-agent",
+      "type": "agent",
+      "stage": "implement",
+      "name": "Implement",
+      "prompt": "# Tax rules engine v2\n\nRates per region.\n\nYou are working on stage 6/8 \"Implement\" of the Open Mercato SDD framework; follow the `om-sdd-implement` skill.\n\nOpen Mercato SDD needs `.ai/sdd/sdd.mjs`, `.ai/sdd/CONVENTIONS.md` on this branch. If a framework file this stage relies on is missing, stop and report it with CEZ:ASK — never improvise the framework's steps or files by hand.\n\nCard fields:\n- slug: tax-rules-engine-v2\n- ui: true\n\nThese checks run after you finish:\n- node .ai/sdd/sdd.mjs run-gate\n\nIf a check failed on the previous attempt, its output:\n{{nodes.implement-check.output}}",
+      "skill": "om-sdd-implement"
+    },
+    {
+      "id": "implement-check",
+      "type": "check",
+      "stage": "implement",
+      "command": "node .ai/sdd/sdd.mjs run-gate"
+    },
+    {
+      "id": "implement-check-loop",
+      "type": "loop",
+      "stage": "implement",
+      "max": 2
+    },
+    {
+      "id": "verify-enter",
+      "type": "stage.enter",
+      "stage": "verify",
+      "precheck": "node .ai/sdd/sdd.mjs gate verify"
+    },
+    {
+      "id": "verify-agent",
+      "type": "agent",
+      "stage": "verify",
+      "name": "Verify",
+      "prompt": "# Tax rules engine v2\n\nRates per region.\n\nYou are working on stage 7/8 \"Verify\" of the Open Mercato SDD framework; follow the `om-sdd-verify` skill.\n\nOpen Mercato SDD needs `.ai/sdd/sdd.mjs`, `.ai/sdd/CONVENTIONS.md` on this branch. If a framework file this stage relies on is missing, stop and report it with CEZ:ASK — never improvise the framework's steps or files by hand.\n\nCard fields:\n- slug: tax-rules-engine-v2\n- ui: true\n\nYou are the reviewer: judge the work on this branch. Do not change the implementation.",
+      "skill": "om-sdd-verify",
+      "verdicts": [
+        "pass",
+        "fail"
+      ]
+    },
+    {
+      "id": "verify-fail-loop",
+      "type": "loop",
+      "stage": "verify",
+      "max": 2
+    },
+    {
+      "id": "archive-enter",
+      "type": "stage.enter",
+      "stage": "archive",
+      "precheck": "node .ai/sdd/sdd.mjs gate archive"
+    },
+    {
+      "id": "archive-agent",
+      "type": "agent",
+      "stage": "archive",
+      "name": "Archive",
+      "prompt": "# Tax rules engine v2\n\nRates per region.\n\nYou are working on stage 8/8 \"Archive\" of the Open Mercato SDD framework; follow the `om-sdd-archive` skill.\n\nOpen Mercato SDD needs `.ai/sdd/sdd.mjs`, `.ai/sdd/CONVENTIONS.md` on this branch. If a framework file this stage relies on is missing, stop and report it with CEZ:ASK — never improvise the framework's steps or files by hand.\n\nCard fields:\n- slug: tax-rules-engine-v2\n- ui: true",
+      "skill": "om-sdd-archive"
+    },
+    {
+      "id": "end",
+      "type": "end",
+      "status": "success",
+      "stage": "archive"
+    }
+  ],
+  "edges": [
+    {
+      "from": "start.next",
+      "to": "discover-enter"
+    },
+    {
+      "from": "discover-enter.next",
+      "to": "discover-agent"
+    },
+    {
+      "from": "discover-agent.done",
+      "to": "discover-exit"
+    },
+    {
+      "from": "discover-exit.pass",
+      "to": "discover-gate"
+    },
+    {
+      "from": "discover-gate.approve",
+      "to": "spec-enter"
+    },
+    {
+      "from": "spec-enter.next",
+      "to": "spec-agent"
+    },
+    {
+      "from": "spec-agent.done",
+      "to": "spec-exit"
+    },
+    {
+      "from": "spec-exit.pass",
+      "to": "spec-gate"
+    },
+    {
+      "from": "spec-gate.approve",
+      "to": "mockup-enter"
+    },
+    {
+      "from": "mockup-enter.next",
+      "to": "mockup-agent"
+    },
+    {
+      "from": "mockup-agent.done",
+      "to": "mockup-gate"
+    },
+    {
+      "from": "mockup-gate.approve",
+      "to": "secure-enter"
+    },
+    {
+      "from": "secure-enter.next",
+      "to": "secure-agent"
+    },
+    {
+      "from": "secure-agent.done",
+      "to": "secure-gate"
+    },
+    {
+      "from": "secure-gate.approve",
+      "to": "validate-enter"
+    },
+    {
+      "from": "validate-enter.next",
+      "to": "validate-agent"
+    },
+    {
+      "from": "validate-agent.no-go",
+      "to": "validate-no-go-loop"
+    },
+    {
+      "from": "validate-no-go-loop.repeat",
+      "to": "spec-enter"
+    },
+    {
+      "from": "validate-agent.go",
+      "to": "implement-enter"
+    },
+    {
+      "from": "validate-agent.conditional",
+      "to": "implement-enter"
+    },
+    {
+      "from": "implement-enter.next",
+      "to": "implement-agent"
+    },
+    {
+      "from": "implement-agent.done",
+      "to": "implement-check"
+    },
+    {
+      "from": "implement-check-loop.repeat",
+      "to": "implement-agent"
+    },
+    {
+      "from": "implement-check.fail",
+      "to": "implement-check-loop"
+    },
+    {
+      "from": "implement-check.pass",
+      "to": "verify-enter"
+    },
+    {
+      "from": "verify-enter.next",
+      "to": "verify-agent"
+    },
+    {
+      "from": "verify-agent.fail",
+      "to": "verify-fail-loop"
+    },
+    {
+      "from": "verify-fail-loop.repeat",
+      "to": "implement-enter"
+    },
+    {
+      "from": "verify-agent.pass",
+      "to": "archive-enter"
+    },
+    {
+      "from": "archive-enter.next",
+      "to": "archive-agent"
+    },
+    {
+      "from": "archive-agent.done",
+      "to": "end"
+    }
+  ]
+}

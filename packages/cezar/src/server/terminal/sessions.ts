@@ -5,6 +5,7 @@ import { foregroundCommand, hasForeground, type ProcessRow } from './foreground.
 import { descendantGroups, readProcessTreeSync, type TreeRow } from './process-tree.ts';
 import { loadPty, type PtyProcess } from './pty-module.ts';
 import { resolveShell } from './shells.ts';
+import { SDD_APPROVAL_ENV, scrubbedEnv } from '../../frameworks/state.ts';
 
 /**
  * Interactive terminal sessions, one PTY each, scoped to a task worktree (spec
@@ -485,9 +486,10 @@ function commandArgs(shell: string, command: string): string[] {
  *
  *  `TERM` is set because a PTY with no TERM makes programs fall back to dumb output — no colours,
  *  no cursor addressing — which would make the terminal look broken rather than plain. */
-function terminalEnv(): Record<string, string> {
+export function terminalEnv(): Record<string, string> {
   const env: Record<string, string> = {};
-  for (const [key, value] of Object.entries(process.env)) if (value !== undefined) env[key] = value;
+  // Set only on cezar's own framework approve spawn (spec 2026-11-15-framework-board D9), any case.
+  for (const [key, value] of Object.entries(scrubbedEnv(process.env, [SDD_APPROVAL_ENV]))) if (value !== undefined) env[key] = value;
   env.TERM = 'xterm-256color';
   env.COLORTERM = 'truecolor';
   return env;

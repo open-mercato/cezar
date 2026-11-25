@@ -7,6 +7,7 @@ import {
   FolderGit2Icon,
   FoldersIcon,
   KeyboardIcon,
+  LayersIcon,
   ListChecksIcon,
   MessageSquareTextIcon,
   PaletteIcon,
@@ -38,6 +39,7 @@ import { TrackerSection } from './tracker-section'
 import { ProjectSecretsSection } from './secrets-section'
 import { WebhooksSection } from './webhooks-section'
 import { IntegrationsSection } from './integrations-section'
+import { FrameworkSection } from './framework-section'
 
 /**
  * The Settings section registry (R6 Step 1.3, spec §"Settings"): the ONE place a section is
@@ -63,6 +65,7 @@ export type SettingsSectionId =
   | 'instructions'
   | 'global-instructions'
   | 'tasks'
+  | 'framework'
   | 'resources'
   | 'worktrees'
   | 'projects'
@@ -171,6 +174,14 @@ export const SETTINGS_SECTIONS: SettingsSection[] = [
     description: 'Development model, landing, required checks, base branch, review, live titles.',
     icon: ListChecksIcon,
     component: TasksSection,
+    scope: 'project',
+  },
+  {
+    id: 'framework',
+    title: 'Framework',
+    description: 'The spec-driven framework new board cards go through — detected, or your choice.',
+    icon: LayersIcon,
+    component: FrameworkSection,
     scope: 'project',
   },
   {
