@@ -33,8 +33,8 @@ keeps two settled-run pools (regular, automation), each sized from Settings.
 
 ### Phase 1: Server
 
-- [ ] 1.1 Retention module and split pruning in the run store
-- [ ] 1.2 Workspace config keys, contract and API wiring
+- [x] 1.1 Retention module and split pruning in the run store — e00f36a5e
+- [x] 1.2 Workspace config keys, contract and API wiring — 3ef2ddc82
 
 ### Phase 2: Cockpit and docs
 
