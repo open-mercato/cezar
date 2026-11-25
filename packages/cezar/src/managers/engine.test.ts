@@ -4830,4 +4830,241 @@ describe('ManagerEngine', () => {
       expect(notices(two).map((message) => message.activity?.change)).toEqual(['deactivated', 'reactivated']);
     });
   });
+
+  describe('agent chain (spec 2026-11-25-manager-agent-chain)', () => {
+    let clock = Date.parse('2026-11-10T14:00:00Z');
+    const limited: Script = {
+      play: (emit) => emit({ type: 'text', text: 'You’ve hit your session limit · resets 4:10pm (Europe/Warsaw)' }),
+      fail: 'claude CLI exited with code 1',
+    };
+    const resetAt = '2026-11-10T15:11:00.000Z';
+    const notices = (id: string) => store.messages(id).filter((message): message is Extract<ManagerMessage, { kind: 'notice' }> => message.kind === 'notice');
+    const switches = (id: string) => notices(id).flatMap((notice) => (notice.agentSwitch ? [notice.agentSwitch] : []));
+    beforeEach(() => { clock = Date.parse('2026-11-10T14:00:00Z'); });
+
+    const withBackup = async (engine: ManagerEngine, extra: Parameters<ManagerEngine['update']>[1] = {}) => {
+      const id = await create(engine, 0);
+      const updated = await engine.update(id, { backups: [{ runner: 'codex', model: 'gpt-5.5', effort: 'medium' }], ...extra });
+      if ('error' in updated) throw new Error(updated.error);
+      return id;
+    };
+
+    it('a manager without backups behaves exactly as before: same reply, no chain state, no shared hold', async () => {
+      const engine = makeEngine({ now: () => clock });
+      const id = await create(engine, 0);
+      backend.scripts.push(limited);
+      engine.send(id, 'rebase the stack');
+      await settled(engine);
+      expect(backend.specs).toHaveLength(1);
+      expect(assistants(id)[0]).toMatchObject({ resumeAt: resetAt, streaming: false });
+      expect(assistants(id)[0]).not.toHaveProperty('agent');
+      expect(assistants(id)[0]).not.toHaveProperty('cutOff');
+      expect(switches(id)).toEqual([]);
+      expect(store.state(id).chain).toBeUndefined();
+      expect(store.state(id).parkedSessions).toBeUndefined();
+      expect((await engine.summary(id))).not.toHaveProperty('activeAgent');
+      expect([...engine.accountHolds().deadlines]).toEqual([]);
+      expect(store.get(id)).not.toHaveProperty('backups');
+      expect(store.get(id)).not.toHaveProperty('failback');
+    });
+
+    it('an emptied chain is stored as none, and a duplicate row is refused', async () => {
+      const engine = makeEngine();
+      const id = await withBackup(engine);
+      expect(store.get(id)?.backups).toEqual([{ runner: 'codex', model: 'gpt-5.5', effort: 'medium' }]);
+      const duplicate = await engine.update(id, { backups: [{ runner: 'codex' }, { runner: 'codex' }] });
+      expect(duplicate).toMatchObject({ status: 400 });
+      const sameAsFirst = await engine.update(id, { backups: [{ runner: 'claude' }] });
+      expect(sameAsFirst).toMatchObject({ status: 400 });
+      await engine.update(id, { backups: [] });
+      expect(store.get(id)).not.toHaveProperty('backups');
+    });
+
+    it('a usage limit on #1 hands the same message to #2, says so, and shares the limit with tasks', async () => {
+      const engine = makeEngine({ now: () => clock });
+      const id = await withBackup(engine);
+      backend.scripts.push(limited, say('Rebased on codex.'));
+      engine.send(id, 'rebase the stack');
+      await settled(engine);
+      expect(backend.specs).toHaveLength(2);
+      expect(backend.specs[1]).toMatchObject({ model: 'gpt-5.5' });
+      expect(backend.specs[1]?.userPrompt).toContain('rebase the stack');
+      expect(switches(id)).toEqual([expect.objectContaining({
+        from: expect.objectContaining({ slot: 0, runner: 'claude' }),
+        to: expect.objectContaining({ slot: 1, runner: 'codex' }),
+        reason: 'usage-limit',
+        until: resetAt,
+      })]);
+      const replies = assistants(id);
+      expect(replies).toHaveLength(1);
+      expect(replies[0]).toMatchObject({ text: 'Rebased on codex.', agent: { slot: 1, runner: 'codex' } });
+      expect(replies[0]).not.toHaveProperty('resumeAt');
+      expect(replies[0]).not.toHaveProperty('error');
+      // The notice reads above the answer it explains.
+      const notice = notices(id).find((message) => message.agentSwitch)!;
+      expect(notice.seq).toBeLessThan(replies[0]!.seq);
+      const summary = await engine.summary(id);
+      expect(summary?.activeAgent).toMatchObject({ agent: { slot: 1 }, reason: 'usage-limit', primaryBackAt: resetAt, primary: { slot: 0, runner: 'claude' } });
+      expect(engine.accountHolds().deadlines.get('claude:default')).toBe(Date.parse(resetAt));
+    });
+
+    it('goes back to #1 on the first turn after its reset, resuming its young session', async () => {
+      // Close enough to the reset that #1's transcript is still warm when it comes back.
+      clock = Date.parse('2026-11-10T14:40:00Z');
+      const engine = makeEngine({ now: () => clock });
+      const id = await withBackup(engine);
+      backend.scripts.push(say('first'), limited, say('on codex'));
+      engine.send(id, 'one');
+      await settled(engine);
+      const firstSession = backend.specs[0]?.sessionId;
+      engine.send(id, 'two');
+      await settled(engine);
+      expect(backend.specs).toHaveLength(3);
+
+      // Still before the reset: #2 keeps answering, no new notice.
+      clock = Date.parse('2026-11-10T14:50:00Z');
+      backend.scripts.push(say('still codex'));
+      engine.send(id, 'three');
+      await settled(engine);
+      expect(backend.specs[3]).toMatchObject({ model: 'gpt-5.5' });
+      expect(switches(id)).toHaveLength(1);
+
+      clock = Date.parse(resetAt) + 60_000;
+      backend.scripts.push(say('back on claude'));
+      engine.send(id, 'four');
+      await settled(engine);
+      expect(backend.specs[4]).not.toHaveProperty('model');
+      expect(backend.specs[4]).toMatchObject({ sessionId: firstSession, resume: true });
+      expect(switches(id).at(-1)).toMatchObject({ reason: 'back', to: { slot: 0 } });
+      expect(assistants(id).at(-1)).toMatchObject({ text: 'back on claude', agent: { slot: 0 } });
+      expect((await engine.summary(id))).not.toHaveProperty('activeAgent');
+      expect([...engine.accountHolds().deadlines]).toEqual([]);
+    });
+
+    it('with "only when I switch" it stays on the backup until Switch back now', async () => {
+      const engine = makeEngine({ now: () => clock });
+      const id = await withBackup(engine, { failback: 'manual' });
+      backend.scripts.push(limited, say('on codex'));
+      engine.send(id, 'one');
+      await settled(engine);
+      clock = Date.parse(resetAt) + 60_000;
+      backend.scripts.push(say('still codex'));
+      engine.send(id, 'two');
+      await settled(engine);
+      expect(backend.specs[2]).toMatchObject({ model: 'gpt-5.5' });
+
+      await engine.update(id, { switchToPrimary: true });
+      await vi.waitFor(() => expect(switches(id).at(-1)).toMatchObject({ reason: 'manual', to: { slot: 0 } }));
+      backend.scripts.push(say('claude again'));
+      engine.send(id, 'three');
+      await settled(engine);
+      expect(backend.specs[3]).not.toHaveProperty('model');
+    });
+
+    it('every row out of limits waits for the first reset, as a single agent does', async () => {
+      const engine = makeEngine({ now: () => clock });
+      const id = await withBackup(engine);
+      const codexLimited: Script = {
+        play: (emit) => emit({ type: 'text', text: 'You’ve hit your usage limit · resets 5:30pm (Europe/Warsaw)' }),
+        fail: 'codex exited with code 1',
+      };
+      backend.scripts.push(limited, codexLimited);
+      engine.send(id, 'rebase the stack');
+      await settled(engine);
+      expect(backend.specs).toHaveLength(2);
+      const reply = assistants(id).at(-1);
+      expect(reply).toMatchObject({ resumeAt: resetAt });
+      expect(reply).not.toHaveProperty('error');
+      expect(store.state(id).resume?.at).toBe(resetAt);
+    });
+
+    it('a reply cut off after it acted stays, and the backup is told what already ran', async () => {
+      const engine = makeEngine({ now: () => clock });
+      const id = await withBackup(engine);
+      backend.scripts.push({
+        play: (emit) => {
+          emit({ type: 'text', text: 'Starting the task.' });
+          emit({ type: 'tool-call', id: 't1', tool: 'Bash', input: { command: 'cez-manager task create alpha "fix it"' } });
+          emit({ type: 'tool-result', toolCallId: 't1', result: 'run 1a2b3c4d', isError: false });
+          emit({ type: 'error', message: 'You’ve hit your session limit · resets 4:10pm (Europe/Warsaw)' });
+        },
+        fail: 'claude CLI exited with code 1',
+      }, say('The task is already running.'));
+      engine.send(id, 'start a task');
+      await settled(engine);
+      const replies = assistants(id);
+      expect(replies).toHaveLength(2);
+      expect(replies[0]).toMatchObject({ text: 'Starting the task.', cutOff: true, agent: { slot: 0 } });
+      expect(replies[1]).toMatchObject({ text: 'The task is already running.', agent: { slot: 1 } });
+      expect(backend.specs[1]?.userPrompt).toContain('Do not repeat them');
+      expect(backend.specs[1]?.userPrompt).toContain('cez-manager task create alpha');
+    });
+
+    it('a rejected login fails over with the reconnect attached, and a reconnect reopens #1', async () => {
+      const engine = makeEngine({ now: () => clock });
+      const id = await withBackup(engine);
+      backend.scripts.push({ fail: SIGNED_OUT }, say('on codex'));
+      engine.send(id, 'hello');
+      await settled(engine);
+      expect(switches(id)[0]).toMatchObject({ reason: 'auth', reconnect: { provider: 'claude', profileId: 'default' } });
+      expect(assistants(id).at(-1)).not.toHaveProperty('authFailure');
+      expect(store.state(id).chain?.holds['claude|default']).toMatchObject({ reason: 'auth', streak: 1 });
+      // Auth holds are not usage limits: tasks keep the account.
+      expect([...engine.accountHolds().deadlines]).toEqual([]);
+      engine.resumeAuthFailed('claude', 'default');
+      expect(store.state(id).chain?.holds['claude|default']).toBeUndefined();
+    });
+
+    it('a passing failure stays on #1: no switch for a busy server', async () => {
+      const engine = makeEngine({ now: () => clock });
+      const id = await withBackup(engine);
+      backend.scripts.push({ fail: 'API Error: 529 Overloaded' }, { fail: 'API Error: 529 Overloaded' });
+      engine.send(id, 'hello');
+      await settled(engine);
+      expect(switches(id)).toEqual([]);
+      expect(backend.specs.every((spec) => spec.model === undefined)).toBe(true);
+    });
+
+    it('a watch check fails over too', async () => {
+      const engine = makeEngine({ github: readyPrGithub, now: () => clock });
+      const id = await create(engine);
+      await engine.update(id, { backups: [{ runner: 'codex', model: 'gpt-5.5' }] });
+      store.updateState(id, (state) => ({ ...state, lastCheckAt: '2026-01-01T00:00:00.000Z' }));
+      backend.scripts.push(limited, say('PR 7 is ready'));
+      engine.tick();
+      await settled(engine);
+      expect(backend.specs).toHaveLength(2);
+      expect(assistants(id).at(-1)).toMatchObject({ turn: 'watch', text: 'PR 7 is ready', agent: { slot: 1 } });
+      expect(switches(id)).toHaveLength(1);
+    });
+
+    it('a row its account is already held for is skipped before any call', async () => {
+      const engine = makeEngine({
+        now: () => clock,
+        accountLimit: async (runner, agentProfile) => ({
+          account: agentProfile ?? 'default', label: 'Main',
+          ...(runner === 'claude' ? { until: Date.parse(resetAt) } : {}),
+        }),
+      });
+      const id = await withBackup(engine);
+      backend.scripts.push(say('on codex'));
+      engine.send(id, 'hello');
+      await settled(engine);
+      expect(backend.specs).toHaveLength(1);
+      expect(backend.specs[0]).toMatchObject({ model: 'gpt-5.5' });
+      expect(switches(id)[0]).toMatchObject({ reason: 'held', until: resetAt, from: { label: 'Main' } });
+    });
+
+    it('editing the chain answers with #1 again', async () => {
+      const engine = makeEngine({ now: () => clock });
+      const id = await withBackup(engine);
+      backend.scripts.push({ fail: SIGNED_OUT }, say('on codex'));
+      engine.send(id, 'hello');
+      await settled(engine);
+      expect(store.state(id).chain?.active?.slot).toBe(1);
+      await engine.update(id, { backups: [{ runner: 'codex', model: 'gpt-5.4' }] });
+      expect(store.state(id).chain?.active).toBeUndefined();
+      expect(store.state(id).chain?.holds).toEqual({});
+    });
+  });
 });

@@ -56,6 +56,37 @@ export function managerAccessOf(
 export const managerEffortSchema = z.enum(['low', 'medium', 'high']);
 export type ManagerEffort = z.infer<typeof managerEffortSchema>;
 
+/** A backup in the manager's agent chain: row #2–#4 (spec 2026-11-25-manager-agent-chain). */
+export const managerBackupAgentSchema = z.object({
+  runner: runnerSchema,
+  /** Absent follows the runner's default account. */
+  agentProfile: z.string().min(1).max(64).optional(),
+  model: modelInput.optional(),
+  effort: managerEffortSchema.optional(),
+});
+export type ManagerBackupAgent = z.infer<typeof managerBackupAgentSchema>;
+export const MANAGER_BACKUPS_MAX = 3;
+export const managerBackupsSchema = z.array(managerBackupAgentSchema).max(MANAGER_BACKUPS_MAX);
+
+/** After a backup took over: back to #1 once it can answer, or only when the user switches. */
+export const managerFailbackSchema = z.enum(['available', 'manual']);
+export type ManagerFailback = z.infer<typeof managerFailbackSchema>;
+
+/** Why the chain moved: a backup took over, or the manager went back to #1. */
+export const managerAgentSwitchReasonSchema = z.enum(['usage-limit', 'held', 'auth', 'billing', 'missing-cli', 'back', 'manual']);
+export type ManagerAgentSwitchReason = z.infer<typeof managerAgentSwitchReasonSchema>;
+
+/** One row of the chain as the chat names it: `slot` 0 is #1. */
+export const managerAgentRefSchema = z.object({
+  slot: z.number().int().min(0).max(MANAGER_BACKUPS_MAX),
+  runner: z.string(),
+  profileId: z.string(),
+  /** The account's display label, when it has one. */
+  label: z.string().optional(),
+  model: z.string().optional(),
+});
+export type ManagerAgentRef = z.infer<typeof managerAgentRefSchema>;
+
 /** The watch check's cadence ("Chron" in the design). 0 = no watching. */
 export const MANAGER_CRON_MINUTES = [0, 5, 15, 30, 60, 240, 1440] as const;
 export const managerCronMinutesSchema = z.union([
@@ -214,6 +245,10 @@ export const managerSchema = z.object({
   effort: managerEffortSchema.optional(),
   /** Agent account id ("Account" in the design); absent = the runner's default. */
   agentProfile: z.string().max(64).optional(),
+  /** Rows #2–#4 of the agent chain; `runner`/`agentProfile`/`model`/`effort` above are #1. Absent = no failover. */
+  backups: managerBackupsSchema.optional(),
+  /** Absent = `available`. */
+  failback: managerFailbackSchema.optional(),
   cronMinutes: managerCronMinutesSchema,
   /** false silences system notifications; the chat and unread dot stay. Absent = on. */
   notify: z.boolean().optional(),
@@ -272,6 +307,16 @@ export const managerSummarySchema = managerSchema.extend({
   followedTasks: z.array(z.string()),
   /** Recently refused Bash commands; absent when there are none. */
   bashDenials: z.array(managerBashDenialSchema).optional(),
+  /** A backup is answering instead of #1. Absent = #1 (or no backups). */
+  activeAgent: z.object({
+    agent: managerAgentRefSchema,
+    reason: managerAgentSwitchReasonSchema,
+    since: z.string(),
+    /** When #1 is expected to answer again: its usage-limit reset, or the next retry. */
+    primaryBackAt: z.string().optional(),
+    /** #1 as it is configured now, for the popover. */
+    primary: managerAgentRefSchema,
+  }).optional(),
 });
 export type ManagerSummary = z.infer<typeof managerSummarySchema>;
 
@@ -287,6 +332,8 @@ export const createManagerInputSchema = z.object({
   model: modelInput.optional(),
   effort: managerEffortSchema.optional(),
   agentProfile: z.string().max(64).optional(),
+  backups: managerBackupsSchema.optional(),
+  failback: managerFailbackSchema.optional(),
   cronMinutes: managerCronMinutesSchema.optional(),
   avatar: z.number().int().min(0).max(63).optional(),
   mascot: managerMascotSchema.optional(),
@@ -308,6 +355,11 @@ export const updateManagerInputSchema = z.object({
   model: modelInput.nullable().optional(),
   effort: managerEffortSchema.nullable().optional(),
   agentProfile: z.string().max(64).nullable().optional(),
+  /** Replaces the whole list; `null` or `[]` removes every backup. */
+  backups: managerBackupsSchema.nullable().optional(),
+  failback: managerFailbackSchema.nullable().optional(),
+  /** Answer with #1 again from the next turn ("Switch back now"). */
+  switchToPrimary: z.literal(true).optional(),
   cronMinutes: managerCronMinutesSchema.optional(),
   avatar: z.number().int().min(0).max(63).optional(),
   mascot: managerMascotSchema.optional(),
@@ -460,6 +512,10 @@ export const managerMessageSchema = z.discriminatedUnion('kind', [
     turn: managerTurnKindSchema,
     jobName: z.string().optional(),
     streaming: z.boolean(),
+    /** The chain row that wrote it; absent on replies from before the chain existed. */
+    agent: managerAgentRefSchema.optional(),
+    /** A usage limit or a rejected login ended it and a backup took the turn over. */
+    cutOff: z.boolean().optional(),
     /** The manager's own judgement that this should interrupt the user. */
     important: z.boolean().optional(),
     headline: z.string().optional(),
@@ -518,6 +574,18 @@ export const managerMessageSchema = z.discriminatedUnion('kind', [
     text: z.string(),
     /** Set on the deactivate and reactivate lines (spec 2026-11-19-manager-deactivate); `text` says the same for older cockpits. */
     activity: managerActivityNoticeSchema.optional(),
+    /** Set when the agent chain moved; `text` says the same for older cockpits. */
+    agentSwitch: z.object({
+      from: managerAgentRefSchema,
+      to: managerAgentRefSchema,
+      reason: managerAgentSwitchReasonSchema,
+      /** #1's usage-limit reset, when the provider named one. */
+      until: z.string().optional(),
+      /** What the new agent cannot do here: connectors and file writes are Claude-only. */
+      lost: z.array(z.enum(['connectors', 'write'])).optional(),
+      /** The account to reconnect when a rejected login caused it. */
+      reconnect: z.object({ provider: runnerSchema, profileId: z.string() }).optional(),
+    }).optional(),
   }),
 ]);
 export type ManagerMessage = z.infer<typeof managerMessageSchema>;

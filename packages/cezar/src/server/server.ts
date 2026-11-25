@@ -9256,8 +9256,20 @@ export function createApp(deps: ServerDeps) {
     // An inactive manager's cards leave the Questions count (spec 2026-11-19-manager-deactivate).
     onActivityChange: () => refreshQuestions(),
     ...(deps.managerRunnerFor ? { runnerFor: deps.managerRunnerFor } : {}),
+    onAccountHoldsChanged: () => {
+      deps.semaphore?.notifyAccountHoldsChanged();
+      void deps.semaphore?.release();
+    },
   });
   deps.onManagerEngine?.(managerEngine);
+  // A manager's agent chain shares the usage limits it hits with the task queues (spec 2026-11-25-manager-agent-chain).
+  const unregisterManagerHolds = deps.semaphore?.register({
+    busySlots: () => 0,
+    pump: () => undefined,
+    oldestQueuedAt: () => null,
+    accountHolds: () => managerEngine.accountHolds(),
+  });
+  if (unregisterManagerHolds) deps.onDispose?.(unregisterManagerHolds);
   // A signed-in-again account resumes what was blocked on it (spec 2026-11-18-inline-account-reconnect).
   deps.onDispose?.(registerAuthResume({
     contexts,

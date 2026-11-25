@@ -745,6 +745,8 @@ describe('/manager/:id', () => {
     expect(screen.queryByRole('button', { name: 'Model and effort' })).toBeNull()
     fireEvent.click(screen.getByRole('button', { name: 'Manager agent…' }))
     const dialog = await screen.findByRole('dialog', { name: 'Manager agent' })
+    // The chain's #1 row opens on its pickers (spec 2026-11-25-manager-agent-chain).
+    fireEvent.click(dialog.querySelector<HTMLElement>('[data-slot="manager-chain-row"]')!)
     for (const name of ['Model and effort', 'Agent for new tasks', 'Agent account']) {
       expect(dialog.contains(screen.getByRole('button', { name }))).toBe(true)
     }
@@ -1335,6 +1337,7 @@ describe('/manager/:id', () => {
     expect(screen.queryByRole('button', { name: 'Agent account' })).toBeNull()
     fireEvent.click(within(menu).getByRole('button', { name: 'Manager agent…' }))
     const dialog = await screen.findByRole('dialog', { name: 'Manager agent' })
+    fireEvent.click(dialog.querySelector<HTMLElement>('[data-slot="manager-chain-row"]')!)
     for (const name of ['Model and effort', 'Agent account', 'Agent for new tasks']) {
       expect(dialog.contains(screen.getByRole('button', { name }))).toBe(true)
     }
@@ -1783,6 +1786,70 @@ describe('/manager/:id', () => {
     const menu = await waitFor(() => document.querySelector<HTMLElement>('[data-slot="manager-settings-menu"]')!)
     fireEvent.click(within(menu).getByRole('button', { name: 'Check now' }))
     await waitFor(() => expect(posted('/global/check')).toHaveLength(1))
+  })
+
+  describe('agent chain (spec 2026-11-25-manager-agent-chain)', () => {
+    const ref = (slot: number, runner: string, label: string) => ({ slot, runner, profileId: label.toLowerCase(), label })
+    const patches = () => calls.filter((call) => call.method === 'PATCH').map((call) => call.body)
+
+    it('a manager without backups shows no (i), no reply labels, and one #1 row', async () => {
+      seedChat()
+      renderAt('/manager/global')
+      await screen.findByRole('heading', { name: 'Global Manager' })
+      expect(document.querySelector('[data-slot="manager-active-agent"]')).toBeNull()
+      expect(document.querySelector('[data-slot="manager-reply-agent"]')).toBeNull()
+      fireEvent.click(screen.getByRole('button', { name: 'Manager settings' }))
+      fireEvent.click(within(await waitFor(() => document.querySelector<HTMLElement>('[data-slot="manager-settings-menu"]')!)).getByRole('button', { name: 'Manager agent…' }))
+      const dialog = await screen.findByRole('dialog', { name: 'Manager agent' })
+      expect(dialog.querySelectorAll('[data-slot="manager-chain-row"]')).toHaveLength(1)
+      expect(dialog.querySelector('[data-slot="manager-chain-failback"]')).toBeNull()
+      expect(within(dialog).getByRole('button', { name: 'Add backup agent' })).toBeTruthy()
+    })
+
+    it('lists the chain, swaps a backup into #1 in one PATCH, and sets failback', async () => {
+      seedChat({ runner: 'claude', model: 'opus', backups: [{ runner: 'codex', model: 'gpt-5.5' }] })
+      renderAt('/manager/global')
+      fireEvent.click(await screen.findByRole('button', { name: 'Manager settings' }))
+      fireEvent.click(within(await waitFor(() => document.querySelector<HTMLElement>('[data-slot="manager-settings-menu"]')!)).getByRole('button', { name: 'Manager agent…' }))
+      const dialog = await screen.findByRole('dialog', { name: 'Manager agent' })
+      const rows = dialog.querySelectorAll<HTMLElement>('[data-slot="manager-chain-row"]')
+      expect(rows).toHaveLength(2)
+      expect(rows[0]!.textContent).toContain('claude')
+      expect(rows[1]!.textContent).toContain('codex')
+      expect(rows[0]!.textContent).toContain('answering')
+      fireEvent.click(rows[1]!)
+      fireEvent.click(within(dialog).getByRole('button', { name: 'Make primary' }))
+      await waitFor(() => expect(patches()).toContainEqual({
+        runner: 'codex', agentProfile: null, model: 'gpt-5.5', effort: null,
+        backups: [{ runner: 'claude', model: 'opus' }],
+      }))
+      fireEvent.pointerDown(within(dialog).getByRole('button', { name: 'When it’s available' }))
+      fireEvent.click(await screen.findByRole('menuitemradio', { name: 'Only when I switch' }))
+      await waitFor(() => expect(patches()).toContainEqual({ failback: 'manual' }))
+    })
+
+    it('a backup answering shows a quiet (i) whose popover explains it and switches back', async () => {
+      seedChat({
+        backups: [{ runner: 'codex' }],
+        activeAgent: { agent: ref(1, 'codex', 'Work'), reason: 'usage-limit', since: '2026-11-25T16:12:00.000Z', primaryBackAt: '2026-11-25T18:40:00.000Z', primary: ref(0, 'claude', 'Automations') },
+      })
+      server.messages = [
+        { id: 'n1', seq: 1, at: '2026-11-25T16:12:00.000Z', kind: 'notice', text: 'switched', agentSwitch: { from: ref(0, 'claude', 'Automations'), to: ref(1, 'codex', 'Work'), reason: 'usage-limit', until: '2026-11-25T18:40:00.000Z' } },
+        assistantMessage(2, { text: 'From the backup', agent: ref(1, 'codex', 'Work') }),
+        assistantMessage(3, { text: 'From #1', agent: ref(0, 'claude', 'Automations') }),
+      ]
+      renderAt('/manager/global')
+      const info = await screen.findByRole('button', { name: 'Answering with backup #2' })
+      await screen.findByText('From the backup')
+      expect(document.querySelectorAll('[data-slot="manager-reply-agent"]')).toHaveLength(1)
+      expect(document.querySelector('[data-slot="manager-reply-agent"]')?.textContent).toBe('#2 · codex Work')
+      expect(document.querySelector('[data-slot="manager-agent-switch"]')?.textContent).toContain('#1 · claude Automations is out of usage limits until')
+      fireEvent.click(info)
+      const popover = await waitFor(() => document.querySelector<HTMLElement>('[data-slot="manager-active-agent-popover"]')!)
+      expect(popover.textContent).toContain('#1 claude · Automations is out of usage limits until')
+      fireEvent.click(within(popover).getByRole('button', { name: 'Switch back now' }))
+      await waitFor(() => expect(patches()).toContainEqual({ switchToPrimary: true }))
+    })
   })
 })
 
