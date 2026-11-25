@@ -15,6 +15,8 @@
  * kept there would take every secret with it on the next restart.
  */
 
+import { handoffKeyring } from './secret-handoff.ts';
+
 export interface DataKeyring {
   /** The stored data key, or `null` when none was ever stored. Throws when the store is locked. */
   get(): Promise<Buffer | null>;
@@ -41,6 +43,8 @@ export function keyringPlatformPackage(platform = process.platform, arch = proce
  * store on this machine. A locked or refused store is not decided here: it throws from `get`.
  */
 export async function keychainStatus(env: NodeJS.ProcessEnv = process.env, account = KEYCHAIN_ACCOUNT): Promise<KeychainStatus> {
+  const handed = handoffKeyring(env);
+  if (handed) return handed;
   if (env.CEZ_SECRETS_KEYCHAIN === '0') return { keyring: null, reason: 'the keychain is disabled by CEZ_SECRETS_KEYCHAIN=0' };
   if (env.VITEST || process.env.VITEST) return { keyring: null, reason: 'the keychain is not used in a test run' };
   let keyring: typeof import('@napi-rs/keyring');
