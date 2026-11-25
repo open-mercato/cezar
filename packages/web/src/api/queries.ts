@@ -37,6 +37,7 @@ import {
   getGithubChecks,
   getGithubSearch,
   getGithubComments,
+  getGithubReviewComments,
   getGithubPrChanges,
   getGithubRefStatus,
   getGroup,
@@ -337,6 +338,7 @@ export const queryKeys = {
   githubComments: (kind: 'issue' | 'pr', number: number) =>
     [queryScope(), 'github', 'comments', kind, number] as const,
   githubMergeState: (number: number) => [queryScope(), 'github', 'merge-state', number] as const,
+  githubReviewComments: (number: number) => [queryScope(), 'github', 'review-comments', number] as const,
   get openTargets() {
     return [queryScope(), 'open-targets'] as const
   },
@@ -2978,6 +2980,18 @@ export function useGithubComments(kind: 'issue' | 'pr', number: number, enabled 
     queryFn: ({ signal }) => getGithubComments(kind, number, {}, { signal }),
     enabled,
     staleTime: 60_000,
+  })
+}
+
+/** A PR's inline review comments for the task Changes tab; idle without a PR. `staleTime`
+ *  matches the 60 s server cache. */
+export function useGithubReviewComments(number: number | undefined) {
+  return useQuery({
+    queryKey: queryKeys.githubReviewComments(number ?? 0),
+    queryFn: ({ signal }) => getGithubReviewComments(number as number, {}, { signal }),
+    enabled: number !== undefined,
+    staleTime: 60_000,
+    retry: false,
   })
 }
 

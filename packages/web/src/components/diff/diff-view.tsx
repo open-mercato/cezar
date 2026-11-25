@@ -37,6 +37,7 @@ import {
   useLineComments,
   type FileLines,
   type LineCommentsApi,
+  type LineMark,
   type LineSelection,
 } from './line-comments'
 
@@ -55,6 +56,7 @@ import {
   type UnifiedRow,
 } from './parse-patch'
 import type {
+  DiffExternalThread,
   DiffFileChange,
   DiffLineAnchor,
   DiffLineComment,
@@ -81,6 +83,7 @@ const HIGHLIGHT_MAX_LINES = 1500
 
 /** Stable empty map, so a file with no expanded gaps keeps prop identity across renders. */
 const NO_GAPS: ExpandedGaps = new Map()
+const NO_EXTERNAL: readonly DiffExternalThread[] = []
 
 /**
  * The card element for a path, matched on `dataset` rather than an attribute selector: a
@@ -135,8 +138,11 @@ export function DiffView({
   onAddComment,
   onEditComment,
   onRemoveComment,
+  externalThreads: externalThreadsProp,
+  renderExternalThread,
   className,
 }: DiffProps) {
+  const externalThreads = renderExternalThread ? (externalThreadsProp ?? NO_EXTERNAL) : NO_EXTERNAL
   const stat: DiffStat = useMemo(
     () => ({
       adds: files.reduce((sum, file) => sum + file.adds, 0),
@@ -156,7 +162,10 @@ export function DiffView({
 
   // A large file opens collapsed (`isLargeDiff`) — unless it carries comments, which the reader
   // must see.
-  const commentedPaths = useMemo(() => new Set((comments ?? []).map((comment) => comment.path)), [comments])
+  const commentedPaths = useMemo(
+    () => new Set([...(comments ?? []), ...externalThreads].map((comment) => comment.path)),
+    [comments, externalThreads],
+  )
   const opensByDefault = useCallback(
     (file: DiffFileChange) => !isLargeDiff(file) || commentedPaths.has(file.path),
     [commentedPaths],
@@ -284,15 +293,23 @@ export function DiffView({
     return () => window.removeEventListener('mouseup', finish)
   }, [openEditor, selecting])
   const commentsApi = useMemo((): LineCommentsApi | null => {
-    if (!onAddComment && (comments?.length ?? 0) === 0) return null
+    if (!onAddComment && (comments?.length ?? 0) === 0 && externalThreads.length === 0) return null
     const byKey = new Map<string, DiffLineComment[]>()
     for (const comment of comments ?? []) {
       const key = anchorKey(comment)
       byKey.set(key, [...(byKey.get(key) ?? []), comment])
     }
+    const externalByKey = new Map<string, DiffExternalThread[]>()
+    for (const thread of externalThreads) {
+      const key = anchorKey(thread)
+      externalByKey.set(key, [...(externalByKey.get(key) ?? []), thread])
+    }
     return {
       comments: comments ?? [],
       byKey,
+      external: externalThreads,
+      externalByKey,
+      renderExternal: renderExternalThread,
       editing,
       selection,
       canAdd: onAddComment !== undefined,
@@ -344,7 +361,7 @@ export function DiffView({
       pendingText,
       focusRequest,
     }
-  }, [comments, editing, onAddComment, onEditComment, onRemoveComment, openEditor, pendingText, selection])
+  }, [comments, editing, externalThreads, onAddComment, onEditComment, onRemoveComment, openEditor, pendingText, renderExternalThread, selection])
 
   // Over EVERY file, open or not: opening one must never swap the flat list for the virtualized one
   // (or back), which remounts the list and moves the reader away from the file they just loaded.
@@ -833,19 +850,22 @@ function DiffFileBody({
       if (at) orderByKey.set(anchorKey(at), order)
     })
     const orderOf = (end: DiffLineEnd) => orderByKey.get(anchorKey({ path: file.path, side: end.side, line: end.line }))
-    const marks = new Map<number, 'selected' | 'commented'>()
-    const mark = (a: number, b: number, kind: 'selected' | 'commented') => {
+    const marks = new Map<number, LineMark>()
+    const mark = (a: number, b: number, kind: LineMark) => {
       for (let order = Math.min(a, b); order <= Math.max(a, b); order++) {
         if (kind === 'selected' || !marks.has(order)) marks.set(order, kind)
       }
     }
-    const markEnds = (end: DiffLineEnd, start: DiffLineEnd | undefined, kind: 'selected' | 'commented') => {
+    const markEnds = (end: DiffLineEnd, start: DiffLineEnd | undefined, kind: LineMark) => {
       const to = orderOf(end)
       if (to === undefined) return
       mark(start ? (orderOf(start) ?? to) : to, to, kind)
     }
     for (const comment of commentsApi.comments) {
       if (comment.path === file.path) markEnds(comment, comment.start, 'commented')
+    }
+    for (const thread of commentsApi.external) {
+      if (thread.path === file.path) markEnds(thread, thread.start, 'external')
     }
     const { editing, selection } = commentsApi
     if (editing && editing.anchor.path === file.path) markEnds(editing.anchor, editing.start, 'selected')

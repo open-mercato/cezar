@@ -7,12 +7,14 @@ export { Diff } from './diff'
 export { canPreviewMarkdown, isMarkdownPath } from './markdown'
 export { COMMENT_MAX } from './types'
 export { describeLines } from './line-label'
+export { createAnchorResolver } from './anchors'
 export type {
   DiffFileChange,
   DiffHandle,
   DiffLineAnchor,
   DiffLineComment,
   DiffLineEnd,
+  DiffExternalThread,
   DiffMode,
   DiffNewLineComment,
   DiffProps,

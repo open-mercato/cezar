@@ -66,6 +66,7 @@ import { orderSkillsByUsage } from '@/lib/skills'
 import { cn, isHttpUrl } from '@/lib/utils'
 
 import { ImpactControl } from '../task-assets/impact-control'
+import { GithubAvatar as Avatar } from './github-avatar'
 import { GithubMarkdown as Markdown } from './github-markdown'
 import {
   allLabels,
@@ -1848,34 +1849,6 @@ function ThreadEntry({ comment }: { comment: GithubComment }) {
   )
 }
 
-/** A 16 px comment avatar. Falls back to a letter block when no URL is known or the image fails to
- *  load (private-repo attachments, deleted avatars) — never a broken-image glyph. */
-function Avatar({ url, login }: { url?: string; login: string }) {
-  const [failed, setFailed] = useState(false)
-  if (url && !failed) {
-    return (
-      <img
-        src={url}
-        alt=""
-        width={16}
-        height={16}
-        loading="lazy"
-        onError={() => setFailed(true)}
-        data-slot="gh-avatar"
-        className="size-4 shrink-0 rounded-full"
-      />
-    )
-  }
-  return (
-    <span
-      data-slot="gh-avatar-fallback"
-      aria-hidden="true"
-      className="flex size-4 shrink-0 items-center justify-center rounded-full bg-muted text-[8px] font-semibold text-muted-foreground uppercase"
-    >
-      {login.slice(0, 1) || '?'}
-    </span>
-  )
-}
 
 /** Glyph + tone shared by the list row's compact indicator and the detail pane's full badge
  *  (#400) — one source of truth so the two surfaces can't drift out of sync. */
