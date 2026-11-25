@@ -1,5 +1,7 @@
 #!/usr/bin/env node
 import { initCommand } from './init.ts';
+import { installCrashLogging } from './crash-logging.ts';
+import { guardChildProcessKill } from './core/child-kill-guard.ts';
 import { sweepOrphanedServers } from './core/opencode-server-registry.ts';
 import { WebhookCoordinator } from './webhooks/coordinator.ts';
 import { webhooksEnabled } from './webhooks/service.ts';
@@ -49,7 +51,7 @@ import { initServeWorkspace, initWorkspace } from './workspace/boot.ts';
 import { loadWorkspaceConfig } from './workspace/config.ts';
 import { runProjectsCommand } from './workspace/projects-cli.ts';
 import { WorkspaceSemaphore } from './workspace/semaphore.ts';
-import { flushTelemetry, initTelemetry, installCrashReporter, registerDailyInventory, registerTelemetryContext, startDailyPing, track } from './telemetry.ts';
+import { flushTelemetry, initTelemetry, installCrashReporter, registerDailyInventory, reportError, registerTelemetryContext, startDailyPing, track } from './telemetry.ts';
 import { collectFeatureInventory } from './feature-telemetry.ts';
 import { runTaskCommand } from './dispatch/task-cli.ts';
 import { runAutomationCommand } from './automations/automation-cli.ts';
@@ -347,6 +349,8 @@ async function serveCommand(
   openBrowser: boolean,
   bindHost?: string,
 ): Promise<void> {
+  // A failing request or task must not take the whole cockpit down, and must leave a trace.
+  installCrashLogging({ report: (reason) => reportError(reason, { source: 'process', handler: 'unhandledRejection' }) });
   const runtimeId = newRuntimeId();
   let cockpitLease: CockpitLease | undefined;
   let runtimeReleased = false;
@@ -1097,6 +1101,9 @@ function firstLine(s: string): string {
   const line = s.split('\n')[0] ?? '';
   return line.length > 120 ? `${line.slice(0, 117)}…` : line;
 }
+
+// Before anything spawns: a kill of a child that failed to start must never reach our group.
+guardChildProcessKill();
 
 main().catch((err: unknown) => {
   console.error(err instanceof Error ? err.message : String(err));

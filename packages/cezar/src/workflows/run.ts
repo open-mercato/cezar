@@ -12,7 +12,7 @@ import { probeCodexIdentity, probeCodexUsageWindows } from '../core/codex-usage-
 import { TrackerAgentBindingError } from '../server/tracker/agent-credentials.ts';
 import { trackerBindingComplete, trackerContextPath, trackerPrompt, trackerTaskContext } from '../server/tracker/task-access.ts';
 import { createHash, randomUUID } from 'node:crypto';
-import { spawn } from 'node:child_process';
+import { signalCheck, spawnCheck } from './check-process.ts';
 import { existsSync, renameSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { mkdir, realpath, access, writeFile } from 'node:fs/promises';
 import { assertCezarHomeWriteIsSandboxed, cezarHomeDir, cezBinPath } from '../paths.ts';
@@ -11341,8 +11341,8 @@ export class RunManager {
     if (state.cancelled) return { ok: false, output: 'cancelled', exitCode: -1 };
     return new Promise((resolve) => {
       // Check steps run in the same cwd as the agent steps — the worktree.
-      const child = spawn('bash', ['-lc', command], { cwd: state.cwd, env });
-      state.interrupt = () => child.kill('SIGTERM');
+      const child = spawnCheck(command, state.cwd, env);
+      state.interrupt = () => signalCheck(child, 'SIGTERM');
 
       let output = '';
       const collect = (chunk: Buffer) => {
