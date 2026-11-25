@@ -25,7 +25,7 @@ function serve(uiState: Record<string, unknown> = {}) {
     branding: { name: 'cezar', logoUrl: null as string | null },
     browseRoot: '~/', projectsDir: '~/cezar/projects', skillsAutoUpdate: null, effectiveSkillsAutoUpdate: true,
     composerDefaults: { autonomous: null, worktree: null, inheritedAutonomous: 'source-dependent', inheritedWorktree: true },
-    resources: { maxParallel: 2, maxMonitoringSessions: 2, idleTimeoutMinutes: 15, monitoringWakeIntervalMinutes: 5, autoResumeOnUsageLimit: true, memoryLimitMb: null, worktreeRetentionDefault: 10 },
+    resources: { maxParallel: 2, maxMonitoringSessions: 2, idleTimeoutMinutes: 15, monitoringWakeIntervalMinutes: 5, autoResumeOnUsageLimit: true, memoryLimitMb: null, worktreeRetentionDefault: 10, worktreeIdleDaysDefault: 7, archivedTaskDeleteDaysDefault: 90, diskGuard: { minFreePercent: 10, minFreeGb: 5, maxWorktreesGb: 20 }, },
     agentDefaults: {},
   }
   const json = (payload: unknown) =>

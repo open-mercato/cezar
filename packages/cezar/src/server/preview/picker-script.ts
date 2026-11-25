@@ -29,17 +29,30 @@ export const PICK_TEXT_MAX = 200;
 
 export interface PickerConfig {
   /** The cockpit's origin — the only window this script posts to or obeys. */
-  parentOrigin: string;
+  parentOrigin?: string;
+  /** Several candidate cockpit origins (an artifact served behind a TLS proxy): posts to each, obeys any. */
+  parentOrigins?: string[];
   /** The app's real origin, so a reported address names the dev server and not the proxy. */
   upstreamOrigin: string;
 }
 
-export function pickerScript(config: PickerConfig): string {
-  // `<` cannot end a script here (this is served as a .js file, not inlined), but escaping it
-  // costs nothing and keeps the config inert if that ever changes.
+function pickerCore(config: PickerConfig): string {
+  // `<` cannot end a script in a .js file, and is escaped so the config stays inert when inlined.
   const json = JSON.stringify({ ...config, htmlMax: PICK_HTML_MAX, textMax: PICK_TEXT_MAX }).replace(/</g, '\\u003c');
+  return PICKER_SOURCE.replace('__CEZAR_DESIGN_CONFIG__', () => json);
+}
+
+export function pickerScript(config: { parentOrigin: string; upstreamOrigin: string }): string {
   // The page's address rides along, so the Preview's bar follows in-page moves through the mirror.
-  return PICKER_SOURCE.replace('__CEZAR_DESIGN_CONFIG__', () => json) + locationReporterScript(config.parentOrigin);
+  return pickerCore(config) + locationReporterScript(config.parentOrigin);
+}
+
+/**
+ * The picker for an HTML artifact (`?picker=1`): no location reporter — an artifact does not
+ * navigate — and no upstream, so a reported URL is the page's own path.
+ */
+export function artifactPickerScript(parentOrigins: string[]): string {
+  return pickerCore({ parentOrigins, upstreamOrigin: '' });
 }
 
 const PICKER_SOURCE = String.raw`(function () {
@@ -50,6 +63,7 @@ const PICKER_SOURCE = String.raw`(function () {
   if (window.parent === window) return;
 
   var cfg = __CEZAR_DESIGN_CONFIG__;
+  var origins = cfg.parentOrigins || [cfg.parentOrigin];
   var active = false;
   var box = null;
   var tag = null;
@@ -66,7 +80,9 @@ const PICKER_SOURCE = String.raw`(function () {
 
   function post(message) {
     message.source = 'cezar-design';
-    try { window.parent.postMessage(message, cfg.parentOrigin); } catch (e) { /* parent gone */ }
+    for (var i = 0; i < origins.length; i++) {
+      try { window.parent.postMessage(message, origins[i]); } catch (e) { /* parent gone */ }
+    }
   }
 
   function pageUrl() {
@@ -475,7 +491,7 @@ const PICKER_SOURCE = String.raw`(function () {
   }
 
   window.addEventListener('message', function (event) {
-    if (event.origin !== cfg.parentOrigin || event.source !== window.parent) return;
+    if (origins.indexOf(event.origin) === -1 || event.source !== window.parent) return;
     var data = event.data;
     if (!data || data.source !== 'cezar-design-host') return;
     if (data.type === 'set-active') setActive(!!data.active);

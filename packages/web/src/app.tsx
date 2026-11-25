@@ -1,10 +1,12 @@
 import { QueryClientProvider } from '@tanstack/react-query'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { BrowserRouter } from 'react-router'
 
 import { GlobalEventsProvider } from './api/global-events'
+import { AddAccountProvider } from './components/add-account/add-account-host'
 import { HostUsageProvider } from './api/host-usage'
 import { createQueryClient } from './api/query-client'
+import { keepFirstScreenPersisted, restoreFirstScreen } from './api/query-persist'
 import { AppShellContainer } from './components/app-shell-container'
 import { AppearanceProvider } from './components/appearance-provider'
 import { LastLocationController } from './components/last-location-controller'
@@ -32,7 +34,10 @@ export function App() {
   // Lazy initial state rather than a module-level constant: one client per App instance, so a
   // test (or a remount) never inherits another's cache, and StrictMode's double-invoke of the
   // component body still yields exactly one client.
-  const [queryClient] = useState(createQueryClient)
+  // Restored synchronously, so the first render already paints the last-known first screen.
+  const [persisted] = useState(() => restoreFirstScreen(createQueryClient()))
+  const queryClient = persisted.queryClient
+  useEffect(() => keepFirstScreenPersisted(persisted), [persisted])
 
   return (
     <QueryClientProvider client={queryClient}>
@@ -42,10 +47,6 @@ export function App() {
             card or route) is live per viewport. Muted here at the root because the widget lives in
             the shell for the session, above every route. */}
         <HostUsageProvider>
-          {/* Beside the stream on purpose: it watches the run-list cache the stream patches
-              (and reconciliation refetches), turning attention transitions into browser
-              notifications when the tab is hidden (R6 1.7). Renders nothing. */}
-          <RunNotifications />
           {/* And beside it for the same reason: the star ask's one-time toast watches the same
               run-list cache for the user's first successful run. Once per browser, ever, and
               silent when promos are off (`CEZ_NO_BANNER=1`). Renders nothing. */}
@@ -55,22 +56,28 @@ export function App() {
                 half of the same boot contract — mirror pre-paints, server truth reconciles. */}
             <AppearanceProvider>
               <BrowserRouter>
-                <LastLocationController />
-                {/* Page views + error hooks; the server forwards them only after the user opted in
-                    (docs/telemetry.md). Renders nothing. */}
-                <Telemetry />
-                {/* At the root for the same reason the event stream is: the sidebar, the task table
-                    and an open run header all paint PR/issue chips, often the SAME ones, and each
-                    asking for itself was several round trips and a staggered wave of colour. They
-                    register what they are painting here instead, and it goes out as one request per
-                    project. */}
-                <ReferenceStatusRegistry>
-                  <AppShellContainer>
-                    <AppRoutes />
-                  </AppShellContainer>
-                </ReferenceStatusRegistry>
-                {/* One toast outlet for the whole app — `toast()` is a module-level call. */}
-                <Toaster />
+                <AddAccountProvider>
+                  <LastLocationController />
+                  {/* Watches the run-list cache the stream patches (and reconciliation refetches),
+                      turning attention transitions into browser notifications when the tab is
+                      hidden (R6 1.7). In the router so a click opens the task or chat. */}
+                  <RunNotifications />
+                  {/* Page views + error hooks; the server forwards them only after the user opted in
+                      (docs/telemetry.md). Renders nothing. */}
+                  <Telemetry />
+                  {/* At the root for the same reason the event stream is: the sidebar, the task table
+                      and an open run header all paint PR/issue chips, often the SAME ones, and each
+                      asking for itself was several round trips and a staggered wave of colour. They
+                      register what they are painting here instead, and it goes out as one request per
+                      project. */}
+                  <ReferenceStatusRegistry>
+                    <AppShellContainer>
+                      <AppRoutes />
+                    </AppShellContainer>
+                  </ReferenceStatusRegistry>
+                  {/* One toast outlet for the whole app — `toast()` is a module-level call. */}
+                  <Toaster />
+                </AddAccountProvider>
               </BrowserRouter>
             </AppearanceProvider>
           </ThemeProvider>

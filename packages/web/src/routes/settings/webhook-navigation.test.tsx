@@ -83,6 +83,20 @@ it('links an available task inside the active project', async () => {
  fireEvent.click(await screen.findByRole('button', { name: /Task finished/ }))
  expect(screen.getByRole('link', { name: 'task-123' }).getAttribute('href')).toBe('/p/alpha/tasks/task-123')
 })
+it('shows a delivery status as a StatusDot in the attention tone, not coloured text', async () => {
+ api.deliveries.mockResolvedValue({ receiver, items: [
+  { deliveryId: 'ok', eventType: 'task.finished', status: 'delivered', createdAt: '2026-10-13T12:00:00Z', attempts: 1 },
+  { deliveryId: 'bad', eventType: 'task.failed', status: 'failed', createdAt: '2026-10-13T12:00:00Z', attempts: 3 },
+  { deliveryId: 'again', eventType: 'task.failed', status: 'retrying', createdAt: '2026-10-13T12:00:00Z', attempts: 2 },
+ ], total: 3, hasMore: false, timezone: 'UTC' })
+ mount('?endpoint=r&tab=deliveries')
+ await screen.findByText(/Showing 1–3 of 3/)
+ const tone = (status: string) => document.querySelector(`[data-slot="delivery-status"][data-status="${status}"] [data-slot="status-dot"]`)?.getAttribute('data-tone')
+ expect(tone('delivered')).toBe('success')
+ expect(tone('failed')).toBe('danger')
+ expect(tone('retrying')).toBe('pending')
+ for (const el of document.querySelectorAll('[data-slot="delivery-status"]')) expect(el.className).not.toMatch(/text-(success|danger|warning)/)
+})
 it('renders the Result filter at the same control height as Task ID and Find', async () => {
  mount('?endpoint=r&tab=deliveries')
  // A native <select> renders as a shorter system control in the macOS WebView.

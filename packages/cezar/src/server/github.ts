@@ -12,6 +12,7 @@ export {
   fetchGithubPrDiff,
   fetchGithubRefStatus,
   forgetRefStatus,
+  readCachedPrEnds,
   readCachedRefStatuses,
   refNumberFromUrl,
   GithubPrNotFoundError,

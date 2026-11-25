@@ -20,7 +20,12 @@
  *                 Kimi Code (both ACP over stdio).
  */
 
-import { runnerSchema, type Runner } from '@open-mercato/cezar-contract';
+import {
+  REASONING_EFFORT_RUNNERS,
+  runnerSchema,
+  runnerSupportsReasoningEffort,
+  type Runner,
+} from '@open-mercato/cezar-contract';
 import type { UsageWindowsObservation } from '@open-mercato/cezar-contract';
 import type { UiEvent } from './ui-events.ts';
 import type { PrivateMcpServer } from './private-mcp.ts';
@@ -45,6 +50,23 @@ export function isRunnerId(value: string): value is RunnerId {
   return (RUNNER_IDS as readonly string[]).includes(value);
 }
 
+/** Historical default: unrestricted shell access, not a capability boundary. */
+export const DEFAULT_ALLOWED_TOOLS = ['Read', 'Edit', 'Write', 'Grep', 'Glob', 'Bash'];
+
+/** A shell command a restricted Codex broker may run: one argv per pipe stage, plus a heredoc body. */
+export type BrokeredShellPlan = { ok: true; pipeline: string[][]; stdin?: string } | { ok: false; reason: string };
+
+export interface BrokeredShell {
+  verify(command: string): BrokeredShellPlan;
+  /** The environment approved commands run in; the broker adds nothing to it. */
+  env: Record<string, string | undefined>;
+  /** What the model is told the shell is for, appended to the tool description. */
+  describe: string;
+  /** Programs that reach nothing beyond the loopback cockpit. Under `CEZ_CODEX_NETWORK=0` a
+   *  pipeline runs only when every stage is one of these; absent, every command is refused then. */
+  offlinePrograms?: readonly string[];
+}
+
 export interface AgentRunSpec {
   /** Optional account usage metadata from ordinary activity. Bind to the resolved step account. */
   onUsageWindows?: (observation: UsageWindowsObservation) => void;
@@ -63,18 +85,42 @@ export interface AgentRunSpec {
   allowedTools?: string[];
   /** When `Bash` is allowed, restrict it to commands starting with one of these. */
   bashAllowlist?: string[];
+  /** Claude only: a PreToolUse hook command that allows or denies each Bash call. `bashAllowlist`
+   *  stays the floor when the hook gives no answer or cannot run. Other backends ignore it. */
+  bashHookCommand?: string;
+  /** Codex only: the shell a restricted session's broker may run on the host — a manager's
+   *  `cez-manager` and read-only `gh` (the fence Claude enforces through `bashHookCommand`).
+   *  `verify` is the whole policy: it returns the argv pipeline to spawn, never a shell string. */
+  brokeredShell?: BrokeredShell;
+  /** Claude only: skip every permission prompt (`--permission-mode bypassPermissions`), the
+   *  project's opt-in `bypassPermissions`. `enforceReadOnly` wins. Other backends ignore it. */
+  bypassPermissions?: boolean;
+  /** Claude only: `sandbox.excludedCommands` patterns, for a command that must reach the loopback
+   *  cockpit the user's Bash sandbox blocks (a manager's `cez-manager`). Other backends ignore it. */
+  sandboxExcludedCommands?: string[];
   /** Extra directories the agent may read/write besides `cwd`. */
   additionalDirectories?: string[];
+  /** Must not change the repository or publish anything, enforced by each backend's own control
+   *  (AGENT_PROTOCOL.md); a runner that cannot has to fail the run. Set only for a manager's
+   *  read-only work: an Ask task's read-only tools are not this (spec 2026-10-31-managers). */
+  enforceReadOnly?: boolean;
   /** Extra env vars for the agent process (merged over `process.env`) —
    *  e.g. CEZ_HANDOFF_FILE / CEZ_TODOS_FILE / CEZ_TASK_ID (spec 007). */
   env?: Record<string, string>;
   /** The project's private MCP servers (`.ai/cezar/mcp.local.json`), injected at launch through
    *  each backend's own channel — never written into `cwd` (spec 2026-10-07-private-project-mcp). */
   mcpServers?: PrivateMcpServer[];
+  /** Claude only: load no MCP server and no claude.ai connector (`--strict-mcp-config` with no
+   *  config). For a manager turn that may call none: their tool lists and instructions otherwise
+   *  fill its context on every turn (spec 2026-11-21-manager-short-sessions-and-memory § 2.4). */
+  noMcpServers?: boolean;
+  /** Claude only: extra settings (e.g. a `PreToolUse` hook) for `--settings`, written to a `0600`
+   *  temp file, never inline in argv. Other backends ignore it, so never rely on it elsewhere. */
+  claudeSettings?: Record<string, unknown>;
   model?: string;
   /**
-   * Codex App Server reasoning effort for this turn. Omitted preserves the
-   * native agent default; backends other than Codex reject an explicit value.
+   * Reasoning effort for this session (Codex `turn/start.effort`, Claude `--effort`). Omitted
+   * preserves the native agent default; other backends reject an explicit value.
    */
   reasoningEffort?: string;
   /** Inactivity kill switch for the run (ms): no output for this long stops it; 0 disables. */
@@ -92,7 +138,7 @@ export interface AgentRunSpec {
 }
 
 /**
- * Backends without a dedicated system-prompt channel (codex app-server,
+ * Backends without a replaceable system-prompt channel (codex app-server,
  * opencode serve) deliver `spec.systemPrompt` as a leading block of the
  * opening user message — the documented per-backend mapping (spec §protocol
  * v2: claude = `--append-system-prompt`, codex/opencode = prepended here).
@@ -101,14 +147,16 @@ export function prependSystemPrompt(systemPrompt: string | undefined, userPrompt
   return systemPrompt ? `${systemPrompt}\n\n---\n\n${userPrompt}` : userPrompt;
 }
 
-export const REASONING_EFFORT_UNSUPPORTED_ERROR = 'reasoning effort is only supported by the Codex runner';
+export { REASONING_EFFORT_RUNNERS, runnerSupportsReasoningEffort };
+
+export const REASONING_EFFORT_UNSUPPORTED_ERROR = 'reasoning effort is only supported by the Codex and Claude runners';
 
 /** Keep the backend-specific setting from being silently ignored at the runner seam. */
 export function assertReasoningEffortSupported(
   backend: AgentBackend,
   reasoningEffort: string | undefined,
 ): void {
-  if (reasoningEffort && backend !== 'codex') {
+  if (reasoningEffort && !runnerSupportsReasoningEffort(backend)) {
     throw new Error(REASONING_EFFORT_UNSUPPORTED_ERROR);
   }
 }
@@ -196,6 +244,9 @@ export type AgentEvent =
    *  sessions mint their own id, so the run manager persists this to enable
    *  resume ("Continue") and "open in CLI". Claude's equals `spec.sessionId`. */
   | { type: 'session'; sessionId: string }
+  /** The MCP servers and tool names the session loaded (Claude's `system/init`). Claude only; a
+   *  manager reads it for connectors (spec 2026-11-12-manager-connectors), a task ignores it. */
+  | { type: 'mcp-servers'; servers: Array<{ name: string; status: string }>; tools: string[] }
   | { type: 'turn-end'; reason?: TurnEndReason }
   | { type: 'note'; message: string }
   | { type: 'done' }
@@ -214,8 +265,12 @@ export interface AgentUsageWindow {
 export interface AgentUsageStatus {
   /** Tokens in the main agent's context after its latest message. */
   contextTokens?: number;
+  /** Of `contextTokens`, what that request wrote to the prompt cache (Claude only). */
+  cacheWriteTokens?: number;
   contextWindow?: number;
   limits?: AgentUsageWindow[];
+  /** A finished turn's own totals (Claude's result frame): what a manager turn's stats record. */
+  turnTokens?: { cacheReadTokens: number; cacheWriteTokens: number; outputTokens: number };
 }
 
 export interface AgentToolCallRecord {
@@ -242,6 +297,9 @@ export interface SessionOptions {
    *  ALONGSIDE the v1 `AgentEvent`s (additive — v1 keeps flowing unchanged).
    *  RunManager consumption lands in R2 step 2.1. */
   onUiEvent?: (event: UiEvent) => void;
+  /** Can a human answer a backend permission prompt right now? Read when one arrives, so an
+   *  Autonomous toggle mid-run counts. Absent = nobody can: the runner answers it itself (#2042). */
+  canAskPermission?: () => boolean;
 }
 
 /**

@@ -9,6 +9,7 @@ import {
   readStoredTreePaneWidth,
   writeStoredTreePaneWidth,
 } from '@/lib/tree-pane-width'
+import { IconTooltip } from '@/components/ui/icon-tooltip'
 import { cn } from '@/lib/utils'
 
 /**
@@ -125,25 +126,28 @@ export function TreePaneResizeHandle({
 
   return (
     <div data-slot="tree-pane-resize" className={cn('relative -mr-5 w-0 shrink-0', className)}>
-      <div
-        data-slot="tree-pane-resize-handle"
-        role="separator"
-        aria-orientation="vertical"
-        aria-label="Resize the file tree"
-        aria-valuenow={width ?? undefined}
-        aria-valuemin={MIN_TREE_PANE_WIDTH}
-        aria-valuemax={MAX_TREE_PANE_WIDTH}
-        tabIndex={0}
-        onPointerDown={onPointerDown}
-        onPointerMove={onPointerMove}
-        onPointerUp={endDrag}
-        onPointerCancel={endDrag}
-        onKeyDown={onKeyDown}
-        onDoubleClick={() => onWidthChange(null)}
-        title="Drag to resize the file tree — double-click to reset"
-        // `touch-none`: without it a touch drag pans the page instead of resizing.
-        className="absolute inset-y-0 -left-[14px] z-10 w-2 cursor-col-resize touch-none rounded-full bg-transparent transition-colors hover:bg-violet/40 focus-visible:bg-violet/60 focus-visible:outline-none"
-      />
+      {/* The double-click reset is invisible without a hint (main showed it on hover). */}
+      <IconTooltip label="Drag to resize — double-click to reset" side="right">
+        <div
+          data-slot="tree-pane-resize-handle"
+          role="separator"
+          aria-orientation="vertical"
+          aria-label="Resize the file tree"
+          aria-valuenow={width ?? undefined}
+          aria-valuemin={MIN_TREE_PANE_WIDTH}
+          aria-valuemax={MAX_TREE_PANE_WIDTH}
+          tabIndex={0}
+          onPointerDown={onPointerDown}
+          onPointerMove={onPointerMove}
+          onPointerUp={endDrag}
+          onPointerCancel={endDrag}
+          onKeyDown={onKeyDown}
+          onDoubleClick={() => onWidthChange(null)}
+          aria-description="Drag to resize the file tree — double-click to reset"
+          // `touch-none`: without it a touch drag pans the page instead of resizing.
+          className="absolute inset-y-0 -left-[14px] z-10 w-2 cursor-col-resize touch-none rounded-full bg-transparent transition-colors hover:bg-violet/40 focus-visible:bg-violet/60 focus-visible:outline-none"
+        />
+      </IconTooltip>
     </div>
   )
 }

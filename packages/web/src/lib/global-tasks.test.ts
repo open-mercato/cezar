@@ -28,6 +28,8 @@ import {
   toggleGroupBy,
   truncatedProjectNames,
   lastActivityAt,
+  managerTaskCount,
+  managerTasksPath,
   type GlobalTaskFilters,
   type GlobalTasksUrlState,
 } from './global-tasks'
@@ -143,7 +145,7 @@ describe('filterGlobalTasks', () => {
   })
 
   it('has no project facet — picking a project is a link to its own page, not a filter', () => {
-    expect(Object.keys(NO_FILTERS)).toEqual(['query', 'tags', 'statuses', 'workflows'])
+    expect(Object.keys(NO_FILTERS)).toEqual(['query', 'tags', 'statuses', 'workflows', 'managers'])
   })
 
   it('ANDs across facets', () => {
@@ -338,6 +340,7 @@ describe('URL state', () => {
         tags: ['storefront', 'infra'],
         statuses: ['running', 'review'],
         workflows: ['plan-first'],
+        managers: ['mgr-1'],
       },
       groupBy: 'tag' as const,
       view: 'archived' as const,
@@ -392,6 +395,55 @@ describe('URL state', () => {
     expect(urlStateFromSearchParams(new URLSearchParams('untagged=yes')).filters.tags).toEqual([])
     // Anything but the exact flag is the default view.
     expect(urlStateFromSearchParams(new URLSearchParams('archived=yes')).view).toBe('active')
+  })
+})
+
+describe('manager facet', () => {
+  const managers = [
+    { id: 'mobile', followedTasks: ['api/a1', 'web/w1', 'api/a2', 'api/gone'] },
+    { id: 'ops', followedTasks: ['api/a1', 'infra/i1'] },
+  ]
+  const tasks = toGlobalTasks(
+    [
+      run({ id: 'a1', projectId: 'api' }),
+      run({ id: 'w1', projectId: 'web', status: 'failed' }),
+      run({ id: 'a2', projectId: 'api', archived: true }),
+      run({ id: 'i1', projectId: 'infra' }),
+      run({ id: 'x', projectId: 'api' }),
+      run({ id: 'auto', projectId: 'web', automationId: 'nightly' }),
+    ],
+    PROJECTS,
+    [...managers, { id: 'auto-follower', followedTasks: ['web/auto'] }],
+  )
+  const ids = (list: readonly { run: RunIndexEntry }[]) => list.map((task) => task.run.id)
+
+  it('tags each row with every manager that started or follows it, across projects', () => {
+    expect(Object.fromEntries(tasks.map((task) => [task.run.id, task.managers]))).toEqual({
+      a1: ['mobile', 'ops'], w1: ['mobile'], a2: ['mobile'], i1: ['ops'], x: [], auto: ['auto-follower'],
+    })
+  })
+
+  it('keeps finished and failed tasks, and the archived ones behind the Archived view', () => {
+    const only = { ...NO_FILTERS, managers: ['mobile'] }
+    expect(ids(filterGlobalTasks(tasks, only, 'active'))).toEqual(['a1', 'w1'])
+    expect(ids(filterGlobalTasks(tasks, only, 'archived'))).toEqual(['a2'])
+    expect(ids(filterGlobalTasks(tasks, { ...only, statuses: ['failed'] }, 'active'))).toEqual(['w1'])
+    expect(ids(filterGlobalTasks(tasks, { ...NO_FILTERS, managers: ['mobile', 'ops'] }, 'active'))).toEqual(['a1', 'w1', 'i1'])
+    expect(activeFacetCount(only)).toBe(1)
+  })
+
+  it('counts what the linked table opens on, under the remembered origin', () => {
+    expect(managerTaskCount(tasks, 'mobile', 'regular')).toBe(2)
+    expect(managerTaskCount(tasks, 'auto-follower', 'regular')).toBe(0)
+    expect(managerTaskCount(tasks, 'auto-follower', 'all')).toBe(1)
+    expect(managerTaskCount(tasks, 'nobody', 'all')).toBe(0)
+  })
+
+  it('links to /tasks with the facet in the URL, and reads it back', () => {
+    const path = managerTasksPath('mobile app')
+    expect(path).toBe('/tasks?manager=mobile+app')
+    const state = urlStateFromSearchParams(new URLSearchParams(path.split('?')[1]))
+    expect(state).toEqual({ ...DEFAULT_URL_STATE, filters: { ...NO_FILTERS, managers: ['mobile app'] } })
   })
 })
 

@@ -6,6 +6,7 @@ import {
   HistoryIcon,
   LayersIcon,
   LoaderCircleIcon,
+  MessageSquarePlusIcon,
   PanelLeftCloseIcon,
   PanelLeftOpenIcon,
   RotateCwIcon,
@@ -19,8 +20,10 @@ import { runArtifactRawUrl } from '@/api/client'
 import { useRunArtifacts, useRunArtifactText } from '@/api/queries'
 import type { ApiRun, RunArtifact, RunArtifactVersion } from '@open-mercato/cezar-api-client'
 import { CenteredState } from '@/components/centered-state'
+import { CommentCount } from '@/components/comment-count'
 import { useResolvedTheme } from '@/components/theme-provider'
 import { Button } from '@/components/ui/button'
+import { IconTooltip } from '@/components/ui/icon-tooltip'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -36,6 +39,7 @@ import { cn } from '@/lib/utils'
 
 import { CodeLines } from '../task-git/file-preview'
 import { Markdown } from '../task-thread/markdown'
+import { useDiffComments } from '../task-thread/diff-comments'
 import {
   ARTIFACT_IFRAME_SANDBOX,
   artifactLabel,
@@ -47,6 +51,7 @@ import {
 } from './assets-model'
 import { useArtifactRefBridge, type ArtifactReference } from './artifact-bridge'
 import { AssetsAskComposer } from './ask-composer'
+import { AssetCommentsLayer, withPicker } from './asset-comments'
 
 export const ASSETS_EMPTY_TITLE = 'No assets yet'
 export const ASSETS_EMPTY_SUBTITLE =
@@ -95,6 +100,19 @@ export function AssetsView({ runId, routed, run }: { runId: string; routed: bool
   const [reference, setReference] = useState<ArtifactReference | null>(null)
   useArtifactRefBridge(frameRef, setReference)
 
+  // Comment mode (HTML only, current version only): the run's review comments, pinned to elements.
+  const comments = useDiffComments(run ? runId : '')
+  const commentable = run !== undefined && current?.kind === 'html' && viewing === undefined
+  const [commenting, setCommenting] = useState<{ name: string } | null>(null)
+  const commentMode = commentable && commenting?.name === current?.name
+  const setCommentMode = useCallback(
+    (on: boolean) => setCommenting(on && current ? { name: current.name } : null),
+    [current],
+  )
+  const countsByAsset = new Map<string, number>()
+  for (const comment of comments.assetComments) countsByAsset.set(comment.asset, (countsByAsset.get(comment.asset) ?? 0) + 1)
+  const frameKey = current ? `${current.name}@${current.updatedAt}#${reloads}v${viewing ?? ''}` : ''
+
   if (listing.isPending) {
     return (
       <CenteredState
@@ -126,19 +144,21 @@ export function AssetsView({ runId, routed, run }: { runId: string; routed: bool
         className="flex h-10 shrink-0 items-center gap-1.5 border-b border-border px-2 sm:px-3"
       >
         {current ? (
-          <AssetSwitcher artifacts={artifacts} current={current} onSelect={select} />
+          <AssetSwitcher artifacts={artifacts} current={current} onSelect={select} counts={countsByAsset} />
         ) : (
           <span className="px-1 text-xs text-muted-foreground">Assets</span>
         )}
         {current?.kind === 'html' ? (
-          <span
-            data-slot="assets-sandboxed"
-            title="Runs in a sandbox: no access to cezar, your cookies or the network beyond pinned CDN scripts"
-            className="hidden items-center gap-1 rounded-sm border border-border px-1.5 py-px text-meta text-muted-foreground sm:inline-flex"
-          >
-            <ShieldCheckIcon aria-hidden="true" className="size-3" />
-            sandboxed
-          </span>
+          <IconTooltip label="Runs in a sandbox: no access to cezar, your cookies or the network beyond pinned CDN scripts">
+            <span
+              data-slot="assets-sandboxed"
+              tabIndex={0}
+              className="hidden items-center gap-1 rounded-sm border border-border px-1.5 py-px text-meta text-muted-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none sm:inline-flex"
+            >
+              <ShieldCheckIcon aria-hidden="true" className="size-3" />
+              sandboxed
+            </span>
+          </IconTooltip>
         ) : null}
         {current && versions.length > 1 ? (
           <VersionMenu
@@ -166,23 +186,44 @@ export function AssetsView({ runId, routed, run }: { runId: string; routed: bool
             Showing the newest {listing.data.artifacts.length} files; the folder has more
           </span>
         ) : null}
+        {/* One height for the whole row (h-[30px] `sm`); the secondary actions carry their
+            names from `sm` up — only Focus, a maximize-like toggle, stays icon-only. */}
         <div className="ml-auto flex shrink-0 items-center gap-0.5">
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon-sm"
-            data-action="assets-focus"
-            aria-pressed={focus}
-            aria-label={focus ? 'Leave focus' : 'Focus'}
-            title={focus ? 'Leave focus — bring the sidebar back' : 'Focus — fold the sidebar to icons while Assets is open'}
-            className={cn('text-muted-foreground', focus && 'bg-muted text-foreground')}
-            onClick={() => setFocus(!focus)}
-          >
-            {focus ? <PanelLeftOpenIcon aria-hidden="true" /> : <PanelLeftCloseIcon aria-hidden="true" />}
-          </Button>
+          {commentable && current ? (
+            <IconTooltip label={commentMode ? 'Stop commenting (Esc)' : 'Comment — click an element of the page to leave a comment for the agent'}>
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                data-action="assets-comment"
+                aria-pressed={commentMode}
+                disabled={!comments.ready}
+                className={cn('text-muted-foreground max-sm:px-1.5', commentMode && 'bg-muted text-foreground')}
+                onClick={() => setCommentMode(!commentMode)}
+              >
+                <MessageSquarePlusIcon aria-hidden="true" />
+                <span className="max-sm:sr-only">Comment</span>
+                <CommentCount count={countsByAsset.get(current.name) ?? 0} />
+              </Button>
+            </IconTooltip>
+          ) : null}
+          <IconTooltip label={focus ? 'Leave focus — bring the sidebar back' : 'Focus — fold the sidebar to icons while Assets is open'}>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon-sm"
+              data-action="assets-focus"
+              aria-pressed={focus}
+              aria-label={focus ? 'Leave focus' : 'Focus'}
+              className={cn('text-muted-foreground', focus && 'bg-muted text-foreground')}
+              onClick={() => setFocus(!focus)}
+            >
+              {focus ? <PanelLeftOpenIcon aria-hidden="true" /> : <PanelLeftCloseIcon aria-hidden="true" />}
+            </Button>
+          </IconTooltip>
           {current ? (
             <>
-              <Button asChild variant="ghost" size="icon-sm" className="text-muted-foreground">
+              <Button asChild variant="ghost" size="sm" className="text-muted-foreground max-sm:size-[30px] max-sm:px-0">
                 <a
                   data-action="assets-open"
                   href={runArtifactRawUrl(runId, current.name, viewing)}
@@ -192,43 +233,59 @@ export function AssetsView({ runId, routed, run }: { runId: string; routed: bool
                   title="Open in new tab (still sandboxed)"
                 >
                   <ExternalLinkIcon aria-hidden="true" />
+                  <span className="max-sm:sr-only">Open in new tab</span>
                 </a>
               </Button>
-              <Button asChild variant="ghost" size="icon-sm" className="text-muted-foreground">
+              <Button asChild variant="ghost" size="sm" className="text-muted-foreground max-sm:size-[30px] max-sm:px-0">
                 <a
                   data-action="assets-download"
                   href={runArtifactRawUrl(runId, current.name, viewing)}
                   download={current.name}
                   aria-label="Download"
-                  title="Download"
                 >
                   <DownloadIcon aria-hidden="true" />
+                  <span className="max-sm:sr-only">Download</span>
                 </a>
               </Button>
               <Button
                 type="button"
                 variant="ghost"
-                size="icon-sm"
+                size="sm"
                 data-action="assets-reload"
                 aria-label="Reload"
-                title="Reload"
-                className="text-muted-foreground"
+                className="text-muted-foreground max-sm:size-[30px] max-sm:px-0"
                 onClick={() => setReloads((count) => count + 1)}
               >
                 <RotateCwIcon aria-hidden="true" />
+                <span className="max-sm:sr-only">Reload</span>
               </Button>
             </>
           ) : null}
         </div>
       </div>
-      {current ? (
-        <AssetBody
-          key={`${current.name}@${current.updatedAt}#${reloads}v${viewing ?? ''}`}
-          runId={runId}
-          artifact={current}
-          version={viewing}
-          frameRef={frameRef}
-        />
+      {current && commentable ? (
+        // The popup is placed over the frame, in the frame's own coordinates.
+        <div data-slot="assets-comment-area" className="relative flex min-h-0 flex-1 flex-col">
+          <AssetBody key={frameKey} runId={runId} artifact={current} version={viewing} frameRef={frameRef} picker />
+          <AssetCommentsLayer
+            frameRef={frameRef}
+            frameKey={frameKey}
+            asset={current.name}
+            store={comments}
+            active={commentMode}
+            onActiveChange={setCommentMode}
+          />
+          {commentMode ? (
+            <p
+              data-slot="assets-comment-hint"
+              className="pointer-events-none absolute bottom-3 left-1/2 z-10 -translate-x-1/2 rounded-full border border-border bg-background/95 px-3 py-1 text-label whitespace-nowrap text-muted-foreground shadow-sm"
+            >
+              Click an element to comment · Esc to stop
+            </p>
+          ) : null}
+        </div>
+      ) : current ? (
+        <AssetBody key={frameKey} runId={runId} artifact={current} version={viewing} frameRef={frameRef} />
       ) : (
         <CenteredState
           icon={<LayersIcon />}
@@ -239,7 +296,12 @@ export function AssetsView({ runId, routed, run }: { runId: string; routed: bool
         />
       )}
       {run && current ? (
-        <AssetsAskComposer run={run} reference={reference} onClearReference={() => setReference(null)} />
+        <AssetsAskComposer
+          run={run}
+          reference={reference}
+          onClearReference={() => setReference(null)}
+          comments={comments}
+        />
       ) : null}
     </section>
   )
@@ -313,10 +375,13 @@ function AssetSwitcher({
   artifacts,
   current,
   onSelect,
+  counts,
 }: {
   artifacts: readonly RunArtifact[]
   current: RunArtifact
   onSelect: (name: string) => void
+  /** Unsent comments per asset name. */
+  counts?: ReadonlyMap<string, number>
 }) {
   const sorted = byNewest(artifacts)
   return (
@@ -343,7 +408,10 @@ function AssetSwitcher({
           {sorted.map((artifact) => (
             <DropdownMenuRadioItem key={artifact.name} value={artifact.name} data-asset={artifact.name}>
               <span className="flex min-w-0 flex-1 flex-col">
-                <span className="truncate">{artifactLabel(artifact)}</span>
+                <span className="flex min-w-0 items-center gap-1.5">
+                  <span className="truncate">{artifactLabel(artifact)}</span>
+                  <CommentCount count={counts?.get(artifact.name) ?? 0} />
+                </span>
                 <span className="truncate font-mono text-meta text-muted-foreground">
                   {artifact.name} · {KIND_LABELS[artifact.kind]} · {shortAge(artifact.updatedAt)}
                 </span>
@@ -363,12 +431,15 @@ function AssetBody({
   artifact,
   version,
   frameRef,
+  picker = false,
 }: {
   runId: string
   artifact: RunArtifact
   /** A kept revision (`?v=`), or undefined for the current file. */
   version?: number
   frameRef?: RefObject<HTMLIFrameElement | null>
+  /** Serve the page with the element picker, for comment mode. */
+  picker?: boolean
 }) {
   const theme = useResolvedTheme()
   const raw = runArtifactRawUrl(runId, artifact.name, version)
@@ -381,7 +452,7 @@ function AssetBody({
           ref={frameRef}
           data-slot="assets-frame"
           title={artifactLabel(artifact)}
-          src={`${raw}#theme=${theme}`}
+          src={`${picker ? withPicker(raw) : raw}#theme=${theme}`}
           sandbox={ARTIFACT_IFRAME_SANDBOX}
           referrerPolicy="no-referrer"
           className="min-h-0 w-full flex-1 border-0 bg-background"
@@ -420,7 +491,7 @@ function AssetBody({
 function TextAsset({ runId, artifact }: { runId: string; artifact: RunArtifact }) {
   const text = useRunArtifactText(runId, artifact.name, artifact.updatedAt)
   if (text.isPending) {
-    return <p className="px-4 py-6 text-center text-xs text-soft-foreground">Loading {artifact.name}…</p>
+    return <p className="px-4 py-6 text-center text-label text-soft-foreground">Loading {artifact.name}…</p>
   }
   if (text.isError) {
     return (

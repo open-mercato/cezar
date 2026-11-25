@@ -21,6 +21,10 @@ export const skillSchema = z.object({
    *  (only while automations are on and reachable, spec 2026-09-13-automations-from-prompt) and
    *  the package's `skills/` directory (`change-impact`, spec 2026-10-22-html-artifacts-and-impact). */
   source: z.enum(['ai', 'cezar', 'agents', 'global', 'team', 'builtin']),
+  /** A repo-local agent command (spec-kit's `.claude/commands/…`), not a skill: delivered inline only. */
+  kind: z.literal('command').optional(),
+  /** Commands only: every definition of this name, one per agent that ships it. */
+  variants: z.array(z.object({ runner: runnerSchema, path: z.string() })).optional(),
   /** Team skills only: where the definition lives in its skills repo. */
   team: z
     .object({
@@ -38,6 +42,12 @@ export const skillSchema = z.object({
       commit: z.string().optional(),
     })
     .optional(),
+  /** A repo-local extension (`.ai/skills/<name>/SKILL.md`) layered on this shared skill: the
+   *  entry IS the shared skill, the extension is applied on top of it. */
+  extension: z.object({ path: z.string() }).optional(),
+  /** This entry is a repo extension whose shared skill cezar could not load: running it alone
+   *  would only half-run the skill, so the cockpit offers "Install skills". */
+  missingShared: z.literal(true).optional(),
 });
 export type Skill = z.infer<typeof skillSchema>;
 

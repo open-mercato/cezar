@@ -16,6 +16,7 @@ import {
   openDeepLink as openDeepLinkOn,
   openInBrowser as openInBrowserOn,
   defaultState,
+  firstVisitState,
   renameLayout as renameLayoutOf,
   resizeColumns as resizeColumnsOf,
   reviveState,
@@ -28,6 +29,12 @@ import {
   type WorkspaceLayout,
   type WorkspaceState,
 } from './layout-state'
+
+/** A task the host has never stored layouts for opens on Chat alone. Read at the moment the host
+ *  answers, never stored: the first change saves the state as the user left it. */
+function neverOpenedState(): WorkspaceState {
+  return firstVisitState()
+}
 
 /**
  * The React half of the saved layouts (spec `.ai/specs/2026-10-07-task-workspace.md` §5.3): the
@@ -178,7 +185,7 @@ export function useWorkspaceLayouts(taskId: string): WorkspaceLayouts {
       // user deleted all layouts … reopening that task creates a fresh default `Czat` layout."
       // The emptiness that DOES survive is a card with no columns (§10), which is a layout and
       // revives as one. `reviveState` repairs anything malformed rather than failing.
-      adopt(answer.layouts === null ? defaultState() : reviveState(answer.layouts))
+      adopt(answer.layouts === null ? neverOpenedState() : reviveState(answer.layouts))
       if (failures > 0) setReplaced((count) => count + 1)
     }
     void read(0)

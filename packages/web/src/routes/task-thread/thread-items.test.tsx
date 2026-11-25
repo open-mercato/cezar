@@ -1,4 +1,4 @@
-import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { QueryClientProvider } from '@tanstack/react-query'
 import type { ReactNode } from 'react'
 import { MemoryRouter } from 'react-router'
@@ -6,8 +6,9 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import type { RunEvent } from '@open-mercato/cezar-api-client'
 import type { UiToolItem } from '@open-mercato/cezar-api-client'
+import { ProjectScopeProvider } from '@/api/project-scope-context'
 import { createQueryClient } from '@/api/query-client'
-import { workspaceQueryKeys } from '@/api/queries'
+import { queryKeys, workspaceQueryKeys } from '@/api/queries'
 
 import bashAndScreenshot from '../../../../cezar/src/core/__fixtures__/claude/bash-and-screenshot.expected.json'
 import failedAndDenied from '../../../../cezar/src/core/__fixtures__/claude/failed-and-denied.expected.json'
@@ -18,48 +19,87 @@ import { groupThreadItems } from './thread-groups'
 import {
   AgentUpdateRequiredCard,
   ContextGroup,
+  AssistantMessage,
   isNearBottom,
+  NoteLine,
   OUTPUT_CLAMP_LINES,
   ProviderAuthRequiredCard,
   ReasoningItem,
+  THREAD_PROSE_MEASURE,
   ToolCard,
   ToolStreak,
   UserBubble,
   WorkingIndicator,
 } from './thread-items'
-import { reduceThread } from './thread-state'
+import { reduceThread, type ThreadProviderAuthRequired } from './thread-state'
 import { SessionTranscript } from './session-transcript'
 
-afterEach(cleanup)
+afterEach(() => {
+  cleanup()
+  Reflect.deleteProperty(navigator, 'clipboard')
+})
 
-describe('ProviderAuthRequiredCard', () => {
-  it.each([
-    ['claude', 'Claude Code'],
-    ['codex', 'Codex'],
-    ['opencode', 'OpenCode'],
-  ] as const)('renders accessible fixed recovery guidance for %s', (provider, label) => {
-    render(
-      <MemoryRouter initialEntries={['/p/acme/tasks/r1']}>
-        <ProviderAuthRequiredCard incident={{
-          kind: 'provider-auth-required',
-          id: 'v1:2',
-          provider,
-          authFailureId: 'incident-1',
-        }} />
-      </MemoryRouter>,
-    )
+describe('NoteLine skill recovery', () => {
+  const note = {
+    kind: 'note', id: 'v1:1', text: 'Shared skill unavailable', tone: 'danger', action: 'install-skills',
+  } as const
 
-    expect(screen.getByRole('alert').textContent).toContain(`This run needed ${label} authorization`)
-    expect(screen.getByRole('alert').textContent).toContain(
-      `Review ${label} settings before retrying.`,
-    )
-    expect(screen.getByRole('alert').textContent).not.toContain(`${label} needs authorization`)
-    const link = screen.getByRole('link', { name: 'Open provider settings' })
-    expect(link.getAttribute('href')).toBe('/p/acme/settings/agents#providers')
-    expect(link.getAttribute('tabindex')).not.toBe('-1')
+  it('refreshes the current project, updates both catalog queries, and reports still-missing skills', async () => {
+    let respond!: (response: Response) => void
+    const fetchMock = vi.fn(() => new Promise<Response>((resolve) => { respond = resolve }))
+    vi.stubGlobal('fetch', fetchMock)
+    try {
+      const client = createQueryClient()
+      const renderNote = (projectId: string) => (
+        <QueryClientProvider client={client}>
+          <ProjectScopeProvider projectId={projectId}>
+            <NoteLine note={{ ...note, skillNames: ['om-review', 'om-engine'] }} />
+          </ProjectScopeProvider>
+        </QueryClientProvider>
+      )
+      const { rerender } = render(renderNote('acme'))
+      const { skills, skillsReady } = queryKeys
+      const catalog = [{ name: 'om-review', source: 'ai', path: '/acme/om-review.md', body: '', missingShared: true }]
+
+      fireEvent.click(screen.getByRole('button', { name: 'Install skills' }))
+      const pending = await screen.findByRole<HTMLButtonElement>('button', { name: 'Refreshing skills…' })
+      expect(pending.disabled).toBe(true)
+      await waitFor(() => expect(fetchMock).toHaveBeenCalledWith('/api/v1/p/acme/skills/refresh', expect.objectContaining({ method: 'POST' })))
+
+      rerender(renderNote('other'))
+      respond(Response.json(catalog))
+      expect((await screen.findByRole('status')).textContent)
+        .toBe('Skills catalog refreshed. The catalog is still missing om-review, om-engine.')
+      expect(client.getQueryData(skills)).toEqual(catalog)
+      expect(client.getQueryData(skillsReady)).toEqual(catalog)
+      expect(client.getQueryData(queryKeys.skills)).toBeUndefined()
+      expect(client.getQueryData(queryKeys.skillsReady)).toBeUndefined()
+    } finally {
+      vi.unstubAllGlobals()
+    }
   })
 
-  it('names the rejected agent account and links to Agent accounts (telemetry 9e4a95db)', () => {
+  it('reports a failed refresh and lets the user retry', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(Response.json({ error: 'Project unavailable' }, { status: 409 }))
+      .mockResolvedValueOnce(Response.json([]))
+    vi.stubGlobal('fetch', fetchMock)
+    try {
+      render(<QueryClientProvider client={createQueryClient()}><NoteLine note={note} /></QueryClientProvider>)
+
+      fireEvent.click(screen.getByRole('button', { name: 'Install skills' }))
+      expect((await screen.findByRole('alert')).textContent).toContain('Could not refresh skills. Project unavailable')
+      fireEvent.click(screen.getByRole('button', { name: 'Install skills' }))
+      expect((await screen.findByRole('status')).textContent).toBe('Skills catalog refreshed.')
+      expect(screen.queryByRole('alert')).toBeNull()
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
+})
+
+describe('ProviderAuthRequiredCard', () => {
+  const renderIncident = (incident: Partial<ThreadProviderAuthRequired> = {}) => {
     // The listing never answers, so the label below can only come from the seeded cache.
     vi.stubGlobal('fetch', vi.fn(() => new Promise(() => {})))
     const client = createQueryClient()
@@ -67,7 +107,7 @@ describe('ProviderAuthRequiredCard', () => {
       { id: 'work', provider: 'codex', label: 'Codex work' },
       { id: 'work', provider: 'claude', label: 'Work login' },
     ] })
-    render(
+    return render(
       <QueryClientProvider client={client}>
         <MemoryRouter initialEntries={['/p/acme/tasks/r1']}>
           <ProviderAuthRequiredCard incident={{
@@ -75,16 +115,40 @@ describe('ProviderAuthRequiredCard', () => {
             id: 'v1:2',
             provider: 'claude',
             authFailureId: 'incident-1',
-            profileId: 'work',
+            ...incident,
           }} />
         </MemoryRouter>
       </QueryClientProvider>,
     )
+  }
+  afterEach(() => vi.unstubAllGlobals())
 
-    expect(screen.getByRole('alert').textContent).toContain('This run needed Claude Code account “Work login” to be signed in')
-    expect(screen.queryByRole('link', { name: 'Open provider settings' })).toBeNull()
-    expect(screen.getByRole('link', { name: 'Open agent accounts' }).getAttribute('href')).toBe('/settings/global/accounts')
-    vi.unstubAllGlobals()
+  it.each([
+    ['claude', 'Claude Code'],
+    ['codex', 'Codex'],
+    ['opencode', 'OpenCode'],
+  ] as const)('draws the reconnect card for the default %s login', (provider, label) => {
+    renderIncident({ provider })
+    const card = screen.getByRole('group', { name: `${label} · Default is signed out` })
+    expect(card.textContent).toContain('Login expired')
+    expect(card.textContent).toContain('continues from the same session')
+    expect(screen.getByRole('button', { name: 'Reconnect Default' })).toBeTruthy()
+  })
+
+  it('names the rejected agent account and keeps Agent accounts one click away (telemetry 9e4a95db)', () => {
+    renderIncident({ profileId: 'work' })
+    expect(screen.getByRole('group', { name: 'Claude Code · Work login is signed out' })).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'More options' }))
+    expect(screen.getByRole('link', { name: 'Open Settings → Agent accounts' }).getAttribute('href')).toBe('/settings/global/accounts')
+  })
+
+  it('collapses an older occurrence and a reconnected one to quiet lines', () => {
+    const older = renderIncident({ profileId: 'work', state: 'older' })
+    expect(screen.queryByRole('group')).toBeNull()
+    expect(screen.getByText(/Claude Code · Work login was signed out here/)).toBeTruthy()
+    older.unmount()
+    renderIncident({ profileId: 'work', state: 'reconnected', reconnectedAt: '2026-11-18T10:51:00Z' })
+    expect(screen.getByText(/Reconnected Claude Code · Work login · resumed/)).toBeTruthy()
   })
 })
 
@@ -201,7 +265,8 @@ describe('ToolCard — states', () => {
     expect(commands).toHaveLength(1)
     expect(commands[0]?.textContent).toBe(long)
     expect(codeTexts()).toEqual([long]) // printed once, never alongside the capped title
-    expect(screen.getByRole('button', { name: 'Copy command' })).toBeTruthy()
+    // Expanded, the copy button is always visible — never hover-hidden.
+    expect(screen.getByRole('button', { name: 'Copy command' }).className).not.toContain('opacity-0')
   })
 
   it('a running command too long for the header is expandable before any output arrives', () => {
@@ -214,11 +279,54 @@ describe('ToolCard — states', () => {
     expect(document.querySelector('[data-slot="tool-command"]')?.textContent).toBe(long)
   })
 
-  it('a short command that fits the header shows no copy button when expanded', () => {
+  it('a short command that fits the header is not repeated when expanded, but stays copyable', () => {
     const item = goldenItem(bashAndScreenshot, 'toolu_mock_1', 'completed')
     render(<ToolCard item={item} />)
     fireEvent.click(trigger(/Ran.*git status --short/))
     expect(document.querySelector('[data-slot="tool-command"]')).toBeNull()
+    expect(screen.getByRole('button', { name: 'Copy command' })).toBeTruthy()
+  })
+
+  it('copies a short command from a collapsed card with nothing to expand, without toggling it', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    vi.stubGlobal('navigator', { ...navigator, clipboard: { writeText } })
+    try {
+      const item = goldenItem(bashAndScreenshot, 'toolu_mock_1', 'completed')
+      render(<ToolCard item={{ ...item, title: 'Ran git status', input: { command: 'git status' }, output: undefined }} />)
+      expect((trigger(/Ran.*git status/) as HTMLButtonElement).disabled).toBe(true) // no detail to expand
+      const copy = screen.getByRole('button', { name: 'Copy command' })
+      expect(copy.className).toContain('opacity-0') // hover-revealed while collapsed
+      await act(async () => {
+        fireEvent.click(copy)
+      })
+      expect(writeText).toHaveBeenCalledWith('git status')
+      expect(card().getAttribute('data-state')).toBe('closed')
+      expect(screen.getByRole('button', { name: 'Copied' })).toBeTruthy()
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
+
+  it('a collapsed long command copies the raw input, not the capped title', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    vi.stubGlobal('navigator', { ...navigator, clipboard: { writeText } })
+    try {
+      const item = goldenItem(bashAndScreenshot, 'toolu_mock_1', 'completed')
+      const long = `echo ${'q'.repeat(200)}`
+      render(<ToolCard item={{ ...item, title: `Ran ${long.slice(0, 119)}…`, input: { command: long } }} />)
+      expect(card().getAttribute('data-state')).toBe('closed')
+      await act(async () => {
+        fireEvent.click(screen.getByRole('button', { name: 'Copy command' }))
+      })
+      expect(writeText).toHaveBeenCalledWith(long)
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
+
+  it('non-execute tools carry no copy button', () => {
+    const item = goldenItem(bashAndScreenshot, 'toolu_mock_1', 'completed')
+    render(<ToolCard item={{ ...item, toolKind: 'read', title: 'Read src/a.ts' }} />)
     expect(screen.queryByRole('button', { name: 'Copy command' })).toBeNull()
   })
 
@@ -512,6 +620,69 @@ describe('UserBubble attachments', () => {
     expect(screen.getByText('pasted-1.md')).toBeTruthy()
     expect(screen.getByText('pasted-2.txt')).toBeTruthy()
   })
+
+  it('does not offer copy for an attachment-only user bubble', () => {
+    render(withQueries(
+      <MemoryRouter>
+        <UserBubble text="" imageCount={1} images={['/api/v1/runs/r1/images/pasted-1.png']} />
+      </MemoryRouter>,
+    ))
+    expect(screen.queryByRole('button', { name: 'Copy message' })).toBeNull()
+  })
+})
+
+describe('message copy controls', () => {
+  const source = '# Keep Markdown\n\n```ts\nconst answer = true\n```'
+
+  const clipboard = (writeText?: (text: string) => Promise<void>) => {
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: writeText === undefined ? undefined : { writeText },
+    })
+  }
+
+  const withQueries = (child: ReactNode) => (
+    <QueryClientProvider client={createQueryClient()}>{child}</QueryClientProvider>
+  )
+
+  it('copies the exact source for user and assistant messages with keyboard-operable controls', async () => {
+    const writeText = vi.fn<(text: string) => Promise<void>>().mockResolvedValue(undefined)
+    clipboard(writeText)
+    render(withQueries(
+      <MemoryRouter>
+        <UserBubble text={source} />
+        <AssistantMessage text={source} />
+      </MemoryRouter>,
+    ))
+
+    const buttons = screen.getAllByRole('button', { name: 'Copy message' })
+    expect(buttons).toHaveLength(2)
+    expect(buttons.every((button) => button.getAttribute('tabindex') !== '-1')).toBe(true)
+    fireEvent.click(buttons[0]!)
+    buttons[1]!.focus()
+    fireEvent.keyDown(buttons[1]!, { key: 'Enter' })
+    fireEvent.keyUp(buttons[1]!, { key: 'Enter' })
+    fireEvent.click(buttons[1]!)
+    await waitFor(() => expect(writeText).toHaveBeenCalledTimes(2))
+    expect(writeText).toHaveBeenNthCalledWith(1, source)
+    expect(writeText).toHaveBeenNthCalledWith(2, source)
+    // setFeedback lands a microtask after writeText resolves — wait for it, don't race it.
+    await waitFor(() => expect(screen.getAllByRole('status', { name: 'Message copied' })).toHaveLength(2))
+  })
+
+  it('reports a rejected clipboard write without throwing', async () => {
+    clipboard(vi.fn<(text: string) => Promise<void>>().mockRejectedValue(new Error('denied')))
+    render(<AssistantMessage text={source} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Copy message' }))
+    expect(await screen.findByRole('status', { name: 'Could not copy message' })).toBeTruthy()
+  })
+
+  it('reports unavailable clipboard support without throwing', async () => {
+    clipboard()
+    render(withQueries(<MemoryRouter><UserBubble text={source} /></MemoryRouter>))
+    fireEvent.click(screen.getByRole('button', { name: 'Copy message' }))
+    expect(await screen.findByRole('status', { name: 'Could not copy message' })).toBeTruthy()
+  })
 })
 
 describe('WorkingIndicator — live clock', () => {
@@ -539,5 +710,24 @@ describe('WorkingIndicator — live clock', () => {
     expect(screen.getByRole('status', { name: 'Working' })).toBeTruthy()
     expect(document.querySelector('[data-slot="working-elapsed"]')).toBeNull()
     expect(document.querySelector('[data-slot="working-last-activity"]')).toBeNull()
+  })
+})
+
+describe('the thread reading measure (redesign 2026-11, type scale)', () => {
+  it('assistant prose is text-lead with a 72ch measure on its prose blocks, not on the column', () => {
+    render(<AssistantMessage text="Hello **there**" />)
+    const message = document.querySelector<HTMLElement>('[data-slot="assistant-message"]')!
+    expect(message.className).toContain('text-lead')
+    expect(message.className).toContain('max-w-[72ch]')
+    // The cap targets the Markdown's p/ul/ol/headings — diffs, tables and code keep the column.
+    expect(THREAD_PROSE_MEASURE).toMatch(/\[&_\.thread-markdown>:is\(p,ul,ol,blockquote,h1,h2,h3,h4,h5,h6\)\]:max-w-\[72ch\]/)
+    expect(THREAD_PROSE_MEASURE).not.toMatch(/(^|\s)max-w-\[72ch\]/)
+  })
+
+  it('reasoning reads with the same measure once expanded', () => {
+    render(<ReasoningItem text={'first line\nmore'} />)
+    fireEvent.click(screen.getByRole('button'))
+    const body = document.querySelector<HTMLElement>('[data-slot="reasoning"] [data-state="open"] > div')!
+    expect(body.className).toContain('max-w-[72ch]')
   })
 })

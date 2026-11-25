@@ -7,6 +7,7 @@ import { repoChipOf } from '@/components/app-shell-container'
 import { BookmarkletRow } from '@/components/bookmarklet-row'
 import { CenteredState } from '@/components/centered-state'
 import { Input } from '@/components/ui/input'
+import { LoadingState, SettingsSkeleton } from '@/components/loading-state'
 import { bookmarkletUrl } from '@/lib/bookmarklet'
 import { useActiveProjectId } from '@/lib/project-router'
 import { orderSkills } from '@/lib/skills'
@@ -20,9 +21,7 @@ export function BookmarkletsSection() {
   // user "(no skills yet)" — a claim that is simply false while the fetch is still running.
   if (skillsQuery.isPending) {
     return (
-      <p data-slot="bookmarklets-loading" className="p-4 text-ui text-soft-foreground md:p-6">
-        Loading bookmarklets…
-      </p>
+      <LoadingState label="Loading bookmarklets…" data-slot="bookmarklets-loading"><SettingsSkeleton /></LoadingState>
     )
   }
   if (skillsQuery.isError) {
@@ -91,7 +90,7 @@ export function BookmarkletPanel({ skills }: { skills: readonly Skill[] }) {
   const shown = skills.filter((skill) => skill.name.toLowerCase().includes(needle))
 
   return (
-    <div data-slot="bookmarklet-panel" className="mx-auto w-full max-w-2xl">
+    <div data-slot="bookmarklet-panel" className="w-full">
       <h2 className="text-base font-semibold">Run from GitHub</h2>
       <p className="mt-2 text-ui leading-relaxed text-muted-foreground">
         Drag a button below to your browser&apos;s bookmarks bar. On any GitHub PR or issue, click it
@@ -138,7 +137,7 @@ export function BookmarkletPanel({ skills }: { skills: readonly Skill[] }) {
             />
           ))
         ) : (
-          <p className="text-xs text-soft-foreground">
+          <p className="text-label text-muted-foreground">
             {skills.length > 0
               ? '(no skills match)'
               : '(no skills yet — the generic launcher above still works)'}

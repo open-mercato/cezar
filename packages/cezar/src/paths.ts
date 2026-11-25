@@ -135,6 +135,31 @@ export function agentAccountsPath(): string {
   return join(cezarHomeDir(), 'agent-accounts.json');
 }
 
+/** Folders cezar creates for accounts added from the cockpit (spec 2026-11-24-add-account-in-cockpit). */
+export function agentHomesDir(): string {
+  return join(cezarHomeDir(), 'agent-homes');
+}
+
+/** Manager definitions (spec 2026-10-31-managers). */
+export function managersPath(): string {
+  return join(cezarHomeDir(), 'managers.json');
+}
+
+/** Per-manager state: `<id>/chat.ndjson`, `state.json`, `workdir/`, and `bin/` for the shim. */
+export function managersDir(): string {
+  return join(cezarHomeDir(), 'managers');
+}
+
+/** Dismissed, snoozed and kept attention items (spec 2026-11-23-needs-you-triage). */
+export function attentionOverridesPath(): string {
+  return join(cezarHomeDir(), 'attention-overrides.json');
+}
+
+/** Pull requests cezar has seen end, so a Probably done verdict outlives the forge cache. */
+export function attentionPrEndsPath(): string {
+  return join(cezarHomeDir(), 'attention-pr-ends.json');
+}
+
 /** Per-project automatic agent fallback policy. Kept separate from account credentials. */
 export function agentFallbackPolicyPath(): string {
   return join(cezarHomeDir(), 'agent-fallback.json');

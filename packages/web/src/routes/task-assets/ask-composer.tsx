@@ -2,11 +2,14 @@ import { AtSignIcon, LoaderCircleIcon, SendIcon, XIcon } from 'lucide-react'
 import { useId, useState, type FormEvent, type KeyboardEvent } from 'react'
 
 import type { ApiRun } from '@open-mercato/cezar-api-client'
+import { IconTooltip } from '@/components/ui/icon-tooltip'
 import { Button } from '@/components/ui/button'
 
 import { useActiveProviderAvailability } from '../task-thread/active-provider'
 import { useDeliverPrompt } from '../task-thread/deliver-prompt'
 import { useContinueAction } from '../task-thread/follow-up-engine'
+import { DiffCommentChips } from '../task-thread/diff-comment-chips'
+import { commentsRideWith, messageWithReview, type DiffComments } from '../task-thread/diff-comments'
 import { askMessage, type ArtifactReference } from './artifact-bridge'
 
 /**
@@ -19,10 +22,13 @@ export function AssetsAskComposer({
   run,
   reference,
   onClearReference,
+  comments,
 }: {
   run: ApiRun
   reference: ArtifactReference | null
   onClearReference: () => void
+  /** The run's review comments: they ride this message like the chat composer's (diff + asset). */
+  comments?: Pick<DiffComments, 'all' | 'remove' | 'submit'>
 }) {
   const continueAction = useContinueAction(run)
   const deliver = useDeliverPrompt(run, continueAction.continueWith)
@@ -44,7 +50,8 @@ export function AssetsAskComposer({
     sessionOpen && !activeProvider.usable ? activeProvider.reason
     : hasContinuation && !continueAction.canContinue ? (continueAction.reason ?? 'No provider can continue this task.')
     : undefined
-  const canSend = !blockedReason && !sending && text.trim() !== ''
+  const pending = comments?.all.length ?? 0
+  const canSend = !blockedReason && !sending && (text.trim() !== '' || pending > 0)
 
   const send = async (event?: FormEvent) => {
     event?.preventDefault()
@@ -52,7 +59,13 @@ export function AssetsAskComposer({
     setSending(true)
     setError(null)
     try {
-      await deliver(askMessage(reference, text.trim()), [])
+      const message = text.trim() === '' ? '' : askMessage(reference, text.trim())
+      // A backend slash command takes the rest as its arguments: the comments wait for the next one.
+      if (comments && pending > 0 && commentsRideWith(message, undefined)) {
+        await comments.submit((held) => deliver(messageWithReview(message, held), []))
+      } else {
+        await deliver(message, [])
+      }
       setText('')
       onClearReference()
     } catch (failure) {
@@ -79,9 +92,11 @@ export function AssetsAskComposer({
           className="mb-1.5 inline-flex max-w-full items-center gap-1 rounded-full border border-border bg-muted py-0.5 pr-0.5 pl-2 text-meta"
         >
           <AtSignIcon aria-hidden="true" className="size-3 shrink-0 text-muted-foreground" />
-          <span className="truncate" title={`${reference.ref} — ${reference.label}`}>
-            <span className="font-mono text-muted-foreground">{reference.ref}</span> {reference.label}
-          </span>
+          <IconTooltip label={`${reference.ref} — ${reference.label}`}>
+            <span className="truncate">
+              <span className="font-mono text-muted-foreground">{reference.ref}</span> {reference.label}
+            </span>
+          </IconTooltip>
           <button
             type="button"
             data-action="assets-ask-ref-remove"
@@ -93,6 +108,11 @@ export function AssetsAskComposer({
           </button>
         </span>
       ) : null}
+      {comments && pending > 0 ? (
+        <div data-slot="assets-ask-comments" className="mb-1.5 flex flex-wrap gap-1.5">
+          <DiffCommentChips runId={run.id} comments={comments.all} onRemove={comments.remove} />
+        </div>
+      ) : null}
       <div className="flex items-end gap-2">
         <textarea
           data-slot="assets-ask-input"
@@ -103,7 +123,11 @@ export function AssetsAskComposer({
           onChange={(event) => setText(event.target.value)}
           onKeyDown={onKeyDown}
           disabled={Boolean(blockedReason)}
-          placeholder={reference ? 'Ask or correct — ⌘↵ to send' : 'Ask the agent about this report — click an element to reference it'}
+          placeholder={
+            reference ? 'Ask or correct — ⌘↵ to send'
+            : pending > 0 ? `Add a message, or send the ${pending === 1 ? 'comment' : `${pending} comments`} as they are — ⌘↵`
+            : 'Ask the agent about this report — click an element to reference it'
+          }
           className="max-h-32 min-h-9 flex-1 resize-y rounded-md border border-border bg-card px-2.5 py-2 text-ui focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none disabled:opacity-60"
         />
         <Button type="submit" size="sm" data-action="assets-ask-send" disabled={!canSend} aria-busy={sending || undefined}>
@@ -116,7 +140,7 @@ export function AssetsAskComposer({
         </Button>
       </div>
       {blockedReason || error ? (
-        <p id={reasonId} data-slot="assets-ask-reason" className="mt-1 text-xs text-soft-foreground">
+        <p id={reasonId} data-slot="assets-ask-reason" className="mt-1 text-label text-muted-foreground">
           {error ?? blockedReason}
         </p>
       ) : null}

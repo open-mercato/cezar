@@ -1,5 +1,5 @@
 import { constants, closeSync, openSync, renameSync, writeSync } from 'node:fs';
-import { open, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { open, rm, writeFile } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { atomicWrite, readState, statePath, syncDirectory, prepareText } from './storage.ts';
@@ -26,44 +26,61 @@ export class Outbox {
     const box = new Outbox(directory, installationId, capacity);
     const path = statePath(directory, 'outbox.ndjson');
     let data: Buffer;
+    let reader: Awaited<ReturnType<typeof open>> | undefined;
+    let identity: { dev: bigint; ino: bigint } | undefined;
     try {
-      if ((await stat(path)).size > capacity) throw new OutboxIntegrityError('Webhook outbox exceeds capacity');
-      data = await readFile(path);
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
-      data = Buffer.from(box.header(highWater));
-      await writeFile(path, data, { flag: 'wx', mode: 0o600 });
-    }
-    const firstEnd = data.indexOf(10) + 1;
-    if (!firstEnd) throw new OutboxIntegrityError('Invalid webhook outbox header');
-    let header: z.infer<typeof headerSchema>;
-    try { header = headerSchema.parse(JSON.parse(data.subarray(0, firstEnd).toString())); }
-    catch { throw new OutboxIntegrityError('Invalid webhook outbox header'); }
-    if (header.installationId !== installationId) throw new OutboxIntegrityError('Webhook outbox installation mismatch');
-    box.segment = header.segment; box.highWater = Math.max(highWater, header.highWater); box.headerEnd = firstEnd;
-    let cursor = firstEnd;
-    let previousSequence = 0;
-    while (cursor < data.length) {
-      const end = data.indexOf(10, cursor) + 1;
-      if (!end) {
-        const evidence = await prepareText(directory, 'outbox-tail-latest.quarantine', data.subarray(cursor, cursor + 65536));
-        try { evidence.publish(); await evidence.finish(); } finally { await evidence.discard(); }
-        const file = await open(path, constants.O_WRONLY | constants.O_NOFOLLOW);
-        try { await file.truncate(cursor); await file.sync(); } finally { await file.close(); }
-        data = data.subarray(0, cursor); box.captureGap = true; break;
+      try {
+        // #1981 / CodeQL81–83: check and read one no-follow descriptor, not a mutable path.
+        reader = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+        const checked = await reader.stat({ bigint: true });
+        if (!checked.isFile()) throw new OutboxIntegrityError('Invalid webhook outbox file');
+        if (checked.size > capacity) throw new OutboxIntegrityError('Webhook outbox exceeds capacity');
+        identity = checked;
+        data = await reader.readFile();
+        if (data.length > capacity) throw new OutboxIntegrityError('Webhook outbox exceeds capacity');
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+        data = Buffer.from(box.header(highWater));
+        await writeFile(path, data, { flag: 'wx', mode: 0o600 });
       }
-      let source: WebhookSource;
-      try { source = webhookSourceSchema.parse(JSON.parse(data.subarray(cursor, end).toString())); }
-      catch { throw new OutboxIntegrityError('Invalid webhook outbox record'); }
-      if (source.installationId !== installationId || source.sequence <= previousSequence) throw new OutboxIntegrityError('Invalid webhook outbox order');
-      previousSequence = source.sequence;
-      box.highWater = Math.max(box.highWater, source.sequence);
-      box.entries.push({ source, start: cursor, end }); cursor = end;
-    }
-    box.bytes = data.length;
-    const saved = await readState(directory, 'cursor.json', cursorSchema).catch(() => undefined);
-    box.offset = saved?.segment === box.segment && (saved.offset === firstEnd || box.entries.some(entry => entry.end === saved.offset)) ? saved.offset : firstEnd;
-    return box;
+      const firstEnd = data.indexOf(10) + 1;
+      if (!firstEnd) throw new OutboxIntegrityError('Invalid webhook outbox header');
+      let header: z.infer<typeof headerSchema>;
+      try { header = headerSchema.parse(JSON.parse(data.subarray(0, firstEnd).toString())); }
+      catch { throw new OutboxIntegrityError('Invalid webhook outbox header'); }
+      if (header.installationId !== installationId) throw new OutboxIntegrityError('Webhook outbox installation mismatch');
+      box.segment = header.segment; box.highWater = Math.max(highWater, header.highWater); box.headerEnd = firstEnd;
+      let cursor = firstEnd;
+      let previousSequence = 0;
+      while (cursor < data.length) {
+        const end = data.indexOf(10, cursor) + 1;
+        if (!end) {
+          const evidence = await prepareText(directory, 'outbox-tail-latest.quarantine', data.subarray(cursor, cursor + 65536));
+          try { evidence.publish(); await evidence.finish(); } finally { await evidence.discard(); }
+          const file = await open(path, constants.O_WRONLY | constants.O_NOFOLLOW);
+          try {
+            const target = await file.stat({ bigint: true });
+            // Keep the reader alive until this comparison: its inode cannot be recycled.
+            if (!identity || target.dev !== identity.dev || target.ino !== identity.ino) {
+              throw new OutboxIntegrityError('Webhook outbox changed during recovery');
+            }
+            await file.truncate(cursor); await file.sync();
+          } finally { await file.close(); }
+          data = data.subarray(0, cursor); box.captureGap = true; break;
+        }
+        let source: WebhookSource;
+        try { source = webhookSourceSchema.parse(JSON.parse(data.subarray(cursor, end).toString())); }
+        catch { throw new OutboxIntegrityError('Invalid webhook outbox record'); }
+        if (source.installationId !== installationId || source.sequence <= previousSequence) throw new OutboxIntegrityError('Invalid webhook outbox order');
+        previousSequence = source.sequence;
+        box.highWater = Math.max(box.highWater, source.sequence);
+        box.entries.push({ source, start: cursor, end }); cursor = end;
+      }
+      box.bytes = data.length;
+      const saved = await readState(directory, 'cursor.json', cursorSchema).catch(() => undefined);
+      box.offset = saved?.segment === box.segment && (saved.offset === firstEnd || box.entries.some(entry => entry.end === saved.offset)) ? saved.offset : firstEnd;
+      return box;
+    } finally { await reader?.close(); }
   }
   private header(highWater: number, segment = this.segment): string {
     return JSON.stringify({ version: 1, segment, installationId: this.installationId, highWater }) + '\n';

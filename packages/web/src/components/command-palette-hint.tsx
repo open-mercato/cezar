@@ -28,10 +28,9 @@ export function CommandPaletteHint({ className }: { className?: string }) {
     <button
       type="button"
       data-slot="command-palette-hint"
-      title="Search — command palette (⌘K / Ctrl+K)"
       onClick={() => openCommandPalette()}
       className={cn(
-        'flex w-full items-center gap-1.5 rounded-md border border-border bg-muted/30 px-2 py-1 text-left text-xs font-medium text-soft-foreground transition-colors hover:bg-muted hover:text-foreground',
+        'flex w-full items-center gap-1.5 rounded-md border border-border bg-muted/30 px-2 py-1 text-left text-label font-medium text-soft-foreground transition-colors hover:bg-muted hover:text-foreground',
         className,
       )}
     >

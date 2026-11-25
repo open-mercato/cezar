@@ -134,3 +134,38 @@ describe('spawnableCommand (telemetry a330744e)', () => {
     expect(file).not.toBe(shim);
   });
 });
+
+describe('spawnableCommand bare names (#1948)', () => {
+  let dir: string;
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'cez shim bare-'));
+  });
+  afterEach(() => rmSync(dir, { recursive: true, force: true }));
+
+  function npmCodex(): string {
+    const script = join(dir, 'node_modules', '@openai', 'codex', 'bin', 'codex.js');
+    mkdirSync(join(script, '..'), { recursive: true });
+    writeFileSync(script, '');
+    writeFileSync(join(dir, 'codex.cmd'), NPM_SHIM);
+    return script;
+  }
+
+  it('finds an npm codex.cmd on PATH for a bare `codex` and unwraps it', () => {
+    const script = npmCodex();
+    const env = { Path: `C:\\Windows;${dir}` };
+    expect(spawnableCommand('codex', ['--version'], { platform: 'win32', nodePath: 'node.exe', env })).toEqual([
+      'node.exe',
+      [script, '--version'],
+    ]);
+  });
+
+  it('leaves a bare name alone when a native .exe is on PATH, nothing is found, or off Windows', () => {
+    npmCodex();
+    writeFileSync(join(dir, 'codex.exe'), '');
+    const env = { PATH: dir };
+    expect(spawnableCommand('codex', ['-v'], { platform: 'win32', env })).toEqual(['codex', ['-v']]);
+    expect(spawnableCommand('nope', ['-v'], { platform: 'win32', env })).toEqual(['nope', ['-v']]);
+    rmSync(join(dir, 'codex.exe'));
+    expect(spawnableCommand('codex', ['-v'], { platform: 'linux', env })).toEqual(['codex', ['-v']]);
+  });
+});

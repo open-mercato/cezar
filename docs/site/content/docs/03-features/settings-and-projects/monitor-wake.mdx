@@ -27,3 +27,5 @@ Settings → Resources → Monitoring wake-up
 3. Check the task's next wake-up time.
 
 > **Good to know**: By default, Re-check checks every 5 minutes, with a maximum of 40 automatic wake-ups. Park stops automatic checking without starting further model turns.
+
+> **Good to know**: When the waiting task has a pull request, each Re-check first reads that PR through `gh`. If nothing changed since the task parked — same commit, same checks, no new review or comment — the check is noted in the timeline and no model turn starts. A change wakes the agent at once, and after five quiet checks in a row it wakes anyway. Quiet checks count toward the 40 wake-ups. Without `gh` the task wakes on every interval as before; `CEZ_MONITORING_PR_WATCH=0` restores that everywhere.

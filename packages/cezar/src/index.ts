@@ -1,11 +1,13 @@
 #!/usr/bin/env node
+import { initCommand } from './init.ts';
+import { sweepOrphanedServers } from './core/opencode-server-registry.ts';
 import { WebhookCoordinator } from './webhooks/coordinator.ts';
 import { webhooksEnabled } from './webhooks/service.ts';
 import { allocateProjectSlug, listProjects, shouldRegisterProject } from './workspace/projects.ts';
 import { listServerInstances as webhookServerInstances } from './server-install/state.ts';
 import { parseArgs } from 'node:util';
 import { spawn, execFileSync } from 'node:child_process';
-import { mkdirSync, writeFileSync, existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { detectEnvironment } from './core/backend-detect.ts';
@@ -17,14 +19,16 @@ import { applyProviderEnablement } from './core/provider-availability.ts';
 import { ensureDataGitignore } from './data-gitignore.ts';
 import { pruneOrphans } from './git-worktree.ts';
 import { getRepoInfo } from './server/git.ts';
-import { DEFAULT_WORKTREE_RETENTION, loadConfig, resolveWorktreeRetention } from './config.ts';
-import { reclaimWorktrees } from './runs/retention.ts';
+import { loadConfig } from './config.ts';
+import { enforceWorktreeRetention } from './runs/retention.ts';
 import { armRepoHandle } from './runs/arm-repo-handle.ts';
-import { RunStore } from './runs/store.ts';
+import { isIdleParked, RunStore } from './runs/store.ts';
 import { RunManager } from './workflows/run.ts';
 import { loadWorkflows } from './workflows/load.ts';
 import { resolveCapabilities } from './server/capabilities.ts';
+import { narrowForRelay } from './relay/scope.ts';
 import { startServer, WorkspaceEventBus } from './server/server.ts';
+import { registerRunningInstance } from './worktree-in-use.ts';
 import {
   ProviderRuntimeAuthObserver,
   recoverWithProviderRuntimeAuthObservation,
@@ -39,7 +43,7 @@ import { SelfUpdateService } from './self-update/service.ts';
 import { runsFromCheckout } from './self-update/layout.ts';
 import { devVersion } from './self-update/semver.ts';
 import { isSupervised, restartProcess } from './self-update/restart.ts';
-import { runSelfUpdateCommand } from './self-update/cli.ts';
+import { runSelfUpdateCommand, runVersionsPruneCommand } from './self-update/cli.ts';
 import { writeLaunchers } from './self-update/launcher.ts';
 import { initServeWorkspace, initWorkspace } from './workspace/boot.ts';
 import { loadWorkspaceConfig } from './workspace/config.ts';
@@ -49,13 +53,16 @@ import { flushTelemetry, initTelemetry, installCrashReporter, registerDailyInven
 import { collectFeatureInventory } from './feature-telemetry.ts';
 import { runTaskCommand } from './dispatch/task-cli.ts';
 import { runAutomationCommand } from './automations/automation-cli.ts';
+import { runManagerCommand } from './managers/manager-cli.ts';
 import { runHandoffCommand } from './handoff-cli.ts';
 import { apiOrigin } from './api-origin.ts';
 import { pickStartupPort } from './startup-port.ts';
 import { runTelemetryCommand } from './telemetry-cli.ts';
 import { reportInconclusiveProbe } from './server/provider-telemetry.ts';
 import { runRunsCommand } from './runs/runs-cli.ts';
+import { runWorktreesCommand } from './worktrees-cli.ts';
 import { runImpactCommand } from './impact/impact-cli.ts';
+import { runUsageCommand } from './usage-ledger/cli.ts';
 
 import { runTrackerConnectionsCommand } from './server/tracker/connections-cli.ts';
 import { runTrackerCommand } from './server/tracker/task-cli.ts';
@@ -73,7 +80,7 @@ import {
   type CockpitLease,
   type CockpitRuntimeRecord,
 } from './runtime/cockpit-runtime.ts';
-import { handoffProject } from './runtime/cockpit-handoff.ts';
+import { handoffMarkerLine, handoffProject } from './runtime/cockpit-handoff.ts';
 
 const HELP = `cezar — local cockpit for AI agent tasks in your repo
 
@@ -82,8 +89,14 @@ Usage:
   cezar run "<task>"        run a task headless in the terminal
   cezar task <create|report|list>  dispatch or report from inside a running task (CEZ_DISPATCH=0 turns it off)
   cezar automation <add|create|check|run|list|…>  create and manage automations (GitHub polls, schedules) on a running cockpit
+  cezar manager <status|tasks|merge|…>  the tools a manager's agent calls on a running cockpit (needs CEZ_MANAGER_ID)
   cezar handoff <log|resume>  update a running task's handoff file (CEZ_HANDOFF_FILE)
   cezar runs list           list a running cockpit's tasks from a shell (CEZ_API_URL=http://127.0.0.1:4321)
+  cezar worktrees <list|reclaim|prune|remove>  task worktrees on disk: sizes, reclaim idle ones
+                            (reclaim [--older-than 7d] [--all-inactive] [--dry-run] · remove <runId> ·
+                            prune [--archived-older-than 90d] [--dry-run]);
+                            uses the running cockpit when one serves the project, else the repo directly
+  cezar usage [--json]      which tasks and managers used your Claude/Codex plan limits (\`cezar usage --help\`)
   cezar impact <evidence|render>  collect evidence for, and render, an impact report
                             (local, no cockpit; paths default to $CEZ_ARTIFACTS_DIR)
   cezar init                scaffold .ai/cezar/ (example workflow + skill)
@@ -101,6 +114,8 @@ Usage:
   cezar update              update the managed install to the channel's newest version
                             (--channel stable|nightly, --version <x> to pin or downgrade)
   cezar versions            list installed versions and cezar worktrees (\`cezar use <id>\` switches)
+  cezar versions prune      remove old versions, keeping the running one + 2 previous
+                            (--keep <n>, --dry-run, --backups for ~/.cezar/versions.backup-*)
   cezar link [<dir>]        run a cezar checkout/worktree (default: cwd) as a version — a
                             link, not a copy, so rebuilds are live (--use to switch to it now);
                             the desktop app runs it after a restart or from Cezar ▸ Versions
@@ -112,7 +127,7 @@ Options:
       --repo <dir>            repo to operate on (default: cwd)
       --workflow <name>       workflow for \`run\` (default: quick-task)
       --model <model>         model override for \`run\`
-      --effort <value>        Codex reasoning-effort override for \`run\`
+      --effort <value>        Codex/Claude reasoning-effort override for \`run\`
       --no-open               don't open the browser
       --platform <id>         server-install target (ubuntu-vps | macosx-ngrok)
       --domain <host>         server-install (ubuntu-vps): host a SECOND, independent
@@ -161,9 +176,19 @@ async function main(): Promise<void> {
     process.exitCode = await runAutomationCommand(process.argv.slice(3));
     return;
   }
+  // `cez manager …` (spec 2026-10-31-managers): the tools of a manager's agent, same shape again.
+  if (process.argv[2] === 'manager') {
+    process.exitCode = await runManagerCommand(process.argv.slice(3));
+    return;
+  }
   // `cez handoff …`: an agent's own handoff file (CEZ_HANDOFF_FILE), no server involved.
   if (process.argv[2] === 'handoff') {
     process.exitCode = await runHandoffCommand(process.argv.slice(3));
+    return;
+  }
+  // `cez versions prune` has its own flags (--keep, --dry-run, --backups); no server, no repo.
+  if (process.argv[2] === 'versions' && process.argv[3] === 'prune') {
+    process.exitCode = await runVersionsPruneCommand(process.argv.slice(4), { entry: resolve(process.argv[1] ?? fileURLToPath(import.meta.url)) });
     return;
   }
   // Opt-in telemetry's terminal switch (docs/telemetry.md): no server, no repo needed.
@@ -174,6 +199,23 @@ async function main(): Promise<void> {
   // `cez runs …` (#1080): the read-only twin for a person at a shell, same addressing.
   if (process.argv[2] === 'runs') {
     process.exitCode = await runRunsCommand(process.argv.slice(3));
+    return;
+  }
+  // `cez worktrees …` (spec 2026-11-19-worktree-disk-usage): the cockpit's API when one serves the
+  // project, else the project's store directly — for SSH-only installs.
+  if (process.argv[2] === 'worktrees') {
+    process.exitCode = await runWorktreesCommand(process.argv.slice(3), {
+      fetch,
+      log: (line) => console.log(line),
+      error: (line) => console.error(line),
+      cwd: process.cwd(),
+      env: process.env,
+    });
+    return;
+  }
+  // `cez usage` (plan-limit usage, design rev 3): reads the local ledger, no server, own flags.
+  if (process.argv[2] === 'usage') {
+    process.exitCode = await runUsageCommand(process.argv.slice(3));
     return;
   }
   // `cez impact …` (spec 2026-10-22-html-artifacts-and-impact): local, no server, own flags.
@@ -323,6 +365,7 @@ async function serveCommand(
     const url = launchPageUrl(runtime.origin);
     console.log(`  cockpit already running (pid ${runtime.owner.pid}) — launch root is not registrable`);
     console.log(`  cockpit → ${url}`);
+    console.log(handoffMarkerLine(url));
     if (openBrowser) openUrl(url);
   };
 
@@ -379,6 +422,8 @@ async function serveCommand(
   }
 
   const bootProjectId = await initServeWorkspace(repoRoot);
+  // Lets a second cezar on this machine see which worktree this one runs from (worktree-in-use.ts).
+  await registerRunningInstance();
   // ONE workspace semaphore for the whole process (spec 2026-07-20, step 2.5):
   // the boot manager and every lazily-built project context count their runs
   // against the same `resources.maxParallel`. The boot refresh() below is the
@@ -388,7 +433,11 @@ async function serveCommand(
   // keepLive + recover() (#367): runs that were queued/running/waiting when
   // the previous process exited are re-queued or resumed instead of failed.
   const store = openStore(repoRoot, { keepLive: true });
-  const manager = new RunManager(store, repoRoot, { semaphore, projectId: bootProjectId });
+  const manager = new RunManager(store, repoRoot, {
+    semaphore,
+    projectId: bootProjectId,
+    hosted: () => !resolveCapabilities(process.env, bindHost).localHandoff,
+  });
   let httpServer: ReturnType<typeof startServer> | null = null;
   let stopping = false;
   // Owned lifecycle scripts drain first; then the store and telemetry flush as before.
@@ -428,6 +477,14 @@ async function serveCommand(
   const checks = await detectEnvironment();
   const repo = await getRepoInfo(repoRoot);
 
+  // Task files whose task is gone (spec 2026-11-19-worktree-disk-usage); never blocks boot.
+  setImmediate(() => {
+    try {
+      const swept = store.sweepOrphanTaskFiles();
+      const count = swept.artifacts.length + swept.dispatch.length;
+      if (count > 0) console.log(`  removed ${count} leftover task file set(s) of deleted tasks`);
+    } catch { /* best effort */ }
+  });
   // Startup reconcile (spec 006): sweep worktrees whose run no longer exists.
   if (repo) {
     const orphans = await pruneOrphans(repoRoot, new Set(store.listRuns().map((r) => r.id)), id => manager.lifecycle.allowOrphanPrune(id)).catch(
@@ -439,8 +496,9 @@ async function serveCommand(
     // Count-based worktree retention (#483): reclaim finished worktrees beyond
     // the keep-limit (directory only — `cez/<id8>` branch kept, so recoverable).
     // Best-effort; never blocks boot.
-    const keep = await resolveWorktreeRetention(repoRoot).catch(() => DEFAULT_WORKTREE_RETENTION);
-    const reclaimed = await reclaimWorktrees(repoRoot, store, keep, {lifecycle: manager.lifecycle}).catch(() => [] as string[]);
+    const reclaimed = await enforceWorktreeRetention(repoRoot, store, {lifecycle: manager.lifecycle, isLive: (id) => manager.isActive(id)});
+    // Archived-task deletion may ask `gh` per task: queued off the boot path, with the rest of a pass.
+    manager.scheduleRetention();
     if (reclaimed.length > 0) {
       console.log(`  reclaimed ${reclaimed.length} old worktree(s), branch kept: ${reclaimed.map((id) => id.slice(0, 8)).join(', ')}`);
     }
@@ -460,7 +518,7 @@ async function serveCommand(
   }
   const recovered = store
     .listRuns()
-    .filter((r) => ['queued', 'waiting', 'running'].includes(r.status)).length;
+    .filter((r) => ['queued', 'waiting', 'running'].includes(r.status) && !isIdleParked(r)).length;
   await recoverWithProviderRuntimeAuthObservation(
     store,
     () => manager.recover(),
@@ -480,7 +538,7 @@ async function serveCommand(
     runs: semaphore,
     // The server's own predicate, not a second spelling of it: the `/apply` guard decides hosted
     // mode through `resolveCapabilities`, and the two must never disagree (they did, on 127.0.0.2).
-    trimPaths: () => !resolveCapabilities(process.env, bindHost).localHandoff,
+    trimPaths: () => !narrowForRelay(resolveCapabilities(process.env, bindHost)).localHandoff,
     restart: () => {
       void (httpServer?.shutdownLifecycle() ?? manager.lifecycle.shutdown()).then(() => {
         store.flush({ pretty: true });
@@ -495,6 +553,7 @@ async function serveCommand(
       });
     },
   });
+  selfUpdate.startVersionPruning((line) => console.log(`  ${line}`));
   void selfUpdate.updateAvailable().then((latest) => {
     if (!latest) return;
     update.latest = latest;
@@ -530,6 +589,14 @@ async function serveCommand(
   // Set before the first run can start, read by every manager's `agentEnv` while dispatch is on.
   process.env.CEZ_API_URL = apiOrigin(bindHost, port);
   process.env.CEZ_BIN = resolve(process.argv[1] ?? fileURLToPath(import.meta.url));
+  // #1498: reap `opencode serve` processes a dead cezar left behind (provable ones only).
+  if (process.env.CEZ_DRY_RUN !== '1') {
+    try {
+      sweepOrphanedServers();
+    } catch {
+      // best effort
+    }
+  }
   httpServer = startServer({
     repoRoot,
     store,
@@ -708,7 +775,7 @@ async function runCommand(
   // 2.5) — one refreshed semaphore, even with just one manager in play.
   const semaphore = new WorkspaceSemaphore();
   await semaphore.refresh();
-  const manager = new RunManager(store, repoRoot, { semaphore });
+  const manager = new RunManager(store, repoRoot, { semaphore, parkOnAuth: false });
   let shuttingDown = false;
   const shutdown = (exitCode: number) => {
     if (shuttingDown) return;
@@ -940,58 +1007,6 @@ async function serverCommand(
     console.error(err instanceof Error ? err.message : String(err));
     process.exitCode = 1;
   }
-}
-
-// ---- init --------------------------------------------------------------------
-
-function initCommand(repoRoot: string): void {
-  const workflowsDir = join(repoRoot, '.ai/cezar', 'workflows');
-  const skillsDir = join(repoRoot, '.ai/cezar', 'skills');
-  mkdirSync(workflowsDir, { recursive: true });
-  mkdirSync(skillsDir, { recursive: true });
-
-  const examples: Array<{ path: string; content: string }> = [
-    {
-      path: join(workflowsDir, 'fix-and-verify.yaml'),
-      content: `name: fix-and-verify
-description: Implement the task, then run your test command; on failure the agent retries with the failing output.
-steps:
-  - id: implement
-    name: Implement
-    prompt: "{{task}}"
-  - id: verify
-    name: Verify
-    command: "echo 'replace me with: npm test / yarn test / pytest'"
-    onFail:
-      retry: implement
-      max: 2
-`,
-    },
-    {
-      path: join(skillsDir, 'project-conventions.md'),
-      content: `---
-name: project-conventions
-description: House rules the agent should follow in this repo.
----
-
-# Project conventions
-
-- Describe your stack, style and testing conventions here.
-- Reference this skill from a workflow step via \`skill: project-conventions\`.
-`,
-    },
-  ];
-
-  for (const example of examples) {
-    if (existsSync(example.path)) {
-      console.log(`  = ${example.path} (exists, left untouched)`);
-    } else {
-      writeFileSync(example.path, example.content, 'utf8');
-      console.log(`  + ${example.path}`);
-    }
-  }
-  ensureDataGitignore(repoRoot);
-  console.log('\nDone. Start the cockpit with: npx cezar');
 }
 
 // ---- helpers -----------------------------------------------------------------

@@ -15,6 +15,7 @@ import type { GithubItem, Skill, WorkflowDef } from '@open-mercato/cezar-api-cli
 import { EnginePills, engineRunBody, useResolvedEngine, type EnginePick } from '@/components/engine-pills'
 import { WorkflowPicker, SkillsPicker } from '@/components/agent-task-pickers'
 import { Button } from '@/components/ui/button'
+import { IconTooltip } from '@/components/ui/icon-tooltip'
 import { Textarea } from '@/components/ui/textarea'
 import { toast } from '@/components/ui/toaster'
 import { PromptTemplateMenu } from '@/components/prompt-template-menu'
@@ -264,18 +265,19 @@ export function HandToAgent({
       {validSkills.length > 0 ? (
         <div data-slot="gh-skill-chips" className="mt-2.5 flex flex-wrap gap-1.5">
           {validSkills.map((name) => (
-            <button
-              key={name}
-              type="button"
-              data-slot="gh-skill-chip"
-              data-skill={name}
-              onClick={() => toggleSkill(name)}
-              title="Remove this skill"
-              className="inline-flex items-center gap-1 rounded-full border border-border bg-muted px-2 py-px font-mono text-meta font-medium text-foreground transition-colors hover:bg-danger/10 hover:text-danger"
-            >
-              {name}
-              <XIcon aria-hidden="true" className="size-3" />
-            </button>
+            <IconTooltip key={name} label="Remove this skill">
+              <button
+                type="button"
+                data-slot="gh-skill-chip"
+                data-skill={name}
+                aria-label={`Remove skill ${name}`}
+                onClick={() => toggleSkill(name)}
+                className="inline-flex h-[26px] items-center gap-1 rounded-full border border-border bg-muted px-2 font-mono text-meta font-medium text-foreground transition-colors hover:bg-danger/10 hover:text-danger"
+              >
+                {name}
+                <XIcon aria-hidden="true" className="size-3" />
+              </button>
+            </IconTooltip>
           ))}
         </div>
       ) : null}
@@ -310,14 +312,15 @@ export function HandToAgent({
         </kbd>
         {queuedRunId ? (
           <>
-            <span data-slot="gh-queued" className="flex items-center gap-1 text-xs font-medium text-success">
+            {/* Queued is grey in the status grammar (owner: queued = neutral); the link is the accent. */}
+            <span data-slot="gh-queued" className="flex items-center gap-1 text-label font-medium text-muted-foreground">
               <CheckIcon aria-hidden="true" className="size-3.5" />
               queued
             </span>
             <Link
               to={`/tasks/${queuedRunId}`}
               data-slot="gh-view-run"
-              className="text-xs font-semibold text-violet hover:underline"
+              className="text-label font-semibold text-violet hover:underline"
             >
               View task →
             </Link>

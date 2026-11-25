@@ -1,0 +1,3 @@
+# The relay client plus the shell classes it plugs into.
+ios/App/App/Shell/*.swift
+ios/App/App/Shell/Relay/*.swift

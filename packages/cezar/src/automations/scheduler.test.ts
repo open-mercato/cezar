@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { AutomationStore } from './store.ts';
-import { ProjectAutomationScheduler, WorkspaceAutomationScheduler } from './scheduler.ts';
+import { ProjectAutomationScheduler, WorkspaceAutomationScheduler, type ProjectAutomationHandle } from './scheduler.ts';
 import type { GithubAutomationDefinition } from './types.ts';
 
 const dirs: string[] = [];
@@ -40,6 +40,19 @@ describe('ProjectAutomationScheduler', () => {
       result: 'preview',
       reason: 'Bounded preview found 1 match; no tasks were launched.',
     });
+  });
+
+  it('hands every merged or closed PR a poll saw to onPullRequestClosed', async () => {
+    const { store, definition } = await setup();
+    const onPullRequestClosed = vi.fn();
+    const candidates = [
+      candidate,
+      { ...reviewCandidate, event: 'pull_request.merged' as const, eventId: 'merged' },
+      { ...reviewCandidate, number: 9, event: 'pull_request.closed' as const, eventId: 'closed' },
+    ];
+    const scheduler = new ProjectAutomationScheduler({ projectId: 'p', timeZone: 'UTC', store, github: { owner: 'acme', repo: 'demo', poller: { poll: async () => ({ candidates, truncated: false, pages: 1 }) } as never, onPullRequestClosed }, launch: async () => ({ runId: 'run' }) });
+    await scheduler.check(definition, 'preview');
+    expect(onPullRequestClosed.mock.calls).toEqual([[8, 'merged'], [9, 'closed']]);
   });
 
   it('reserves before launch and deduplicates the overlap window', async () => {
@@ -844,5 +857,50 @@ describe('WorkspaceAutomationScheduler — long waits (#1340)', () => {
       scheduler.stop();
       vi.useRealTimers();
     }
+  });
+});
+
+describe('WorkspaceAutomationScheduler — a project the handle map never heard of (#2041)', () => {
+  async function unseen() {
+    const dir = await mkdtemp(join(tmpdir(), 'cezar-scheduler-unseen-')); dirs.push(dir);
+    const store = AutomationStore.open(dir);
+    store.create({ name: 'Nightly', enabled: true, kind: 'schedule', schedule: { type: 'daily', hour: 4, minute: 0 }, task: { prompt: 'Bump' } }, 'nightly');
+    // The server's map, filled only at boot and on the in-process `project-added` event.
+    const handles = new Map<string, ProjectAutomationHandle>();
+    const coordinator = { refresh: async () => undefined, enabledProjectIds: () => ['b'], store: () => store } as never;
+    return { store, handles, coordinator };
+  }
+
+  it('resolves the missing handle on reschedule and arms the project', async () => {
+    const { store, handles, coordinator } = await unseen();
+    const warn = vi.fn();
+    const scheduler = new WorkspaceAutomationScheduler({
+      coordinator, warn,
+      handle: (projectId) => handles.get(projectId),
+      resolveHandle: async (projectId) => { handles.set(projectId, { projectId, store, timeZone: 'UTC' }); },
+    });
+    await scheduler.start();
+    expect(scheduler.hasTimer()).toBe(true);
+    expect(warn).not.toHaveBeenCalled();
+    scheduler.stop();
+  });
+
+  it('logs once, instead of skipping silently, when no handle can be built', async () => {
+    const { coordinator } = await unseen();
+    const warn = vi.fn();
+    const scheduler = new WorkspaceAutomationScheduler({
+      coordinator, warn,
+      handle: () => undefined,
+      resolveHandle: async () => { throw new Error('git exploded'); },
+    });
+    await scheduler.start();
+    await scheduler.reschedule();
+    expect(scheduler.hasTimer()).toBe(false);
+    expect(warn.mock.calls.map(([message]) => message)).toEqual([
+      expect.stringContaining('git exploded'),
+      expect.stringContaining('cannot be scheduled'),
+      expect.stringContaining('git exploded'),
+    ]);
+    scheduler.stop();
   });
 });

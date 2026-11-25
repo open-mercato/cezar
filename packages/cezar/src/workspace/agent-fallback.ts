@@ -15,12 +15,40 @@ import { agentFallbackPolicyPath, assertCezarHomeWriteIsSandboxed } from '../pat
 import { atomicWriteJsonSync } from './config.ts';
 import { PROVIDER_IDS, type ProviderId } from '../core/provider-auth.ts';
 import { DEFAULT_AGENT_ACCOUNT_ID, loadAgentAccounts, type AgentAccountStore } from './agent-accounts.ts';
+import { resolveAccountId } from './agent-profiles.ts';
 
 export type AgentFallbackCandidate = { provider: ProviderId; profileId: string; model?: string };
 export type AgentFallbackPolicy = {
   enabled: boolean; candidates: AgentFallbackCandidate[]; revision: number;
   incarnation: string | null; revocation: string | null;
+  /** `manager`: built from the starting manager's allowed task accounts (no project consent). */
+  source?: 'manager';
+  /** The manager whose current list a `manager` policy is re-checked against. */
+  managerId?: string;
 };
+
+/** A manager's current task accounts; `null` = the manager is gone or no longer limits tasks. */
+export type ManagerTaskAccountsLookup = (managerId: string) => ReadonlyArray<{ runner: string; agentProfile?: string }> | null;
+let managerTaskAccounts: ManagerTaskAccountsLookup | undefined;
+/** Installed by the server, which owns the manager store; absent (`cezar run`, tests) keeps the snapshot. */
+export function setManagerTaskAccountsLookup(lookup: ManagerTaskAccountsLookup | undefined): void {
+  managerTaskAccounts = lookup;
+}
+/** The manager's list now, or `undefined` when it cannot be asked (keep the snapshot). */
+function currentManagerList(snapshot: AgentFallbackPolicy) {
+  return snapshot.managerId && managerTaskAccounts ? managerTaskAccounts(snapshot.managerId) : undefined;
+}
+/** A bare `{ runner }` entry is that runner's resolved default account — the one the manager engine
+ *  resolves for it (`resolveAccountId`, as the queue's key does) — never every account on the runner. */
+function inManagerList(
+  list: ReadonlyArray<{ runner: string; agentProfile?: string }>,
+  c: AgentFallbackCandidate,
+  accounts: AgentAccountStore | null,
+  repoRoot: string | undefined,
+): boolean {
+  return list.some((entry) => entry.runner === c.provider && (entry.agentProfile
+    ?? (accounts ? resolveAccountId(accounts, { provider: c.provider, ...(repoRoot ? { repoRoot } : {}) }) : DEFAULT_AGENT_ACCOUNT_ID)) === c.profileId);
+}
 
 const candidateSchema = z.object({
   provider: z.enum(PROVIDER_IDS),
@@ -233,9 +261,26 @@ export async function putAgentFallbackPolicy(root: string, input: {
   } finally { lock(); }
 }
 
-/** A snapshot still carries the consent that is live now. */
+/** A snapshot still carries the consent that is live now. A manager's snapshot carries its own:
+ *  the user listed those accounts in the manager's settings. */
 export function fallbackConsentCurrent(snapshot: AgentFallbackPolicy, live: AgentFallbackPolicy): boolean {
+  // Withdrawn like a project policy: the manager was deleted or stopped limiting new tasks.
+  if (snapshot.source === 'manager') return snapshot.enabled && currentManagerList(snapshot) !== null;
   return live.enabled && live.incarnation === snapshot.incarnation && live.revocation === snapshot.revocation;
+}
+
+/** The fallback snapshot for a task a manager starts: its other allowed accounts, in order. */
+export function managerFallbackPolicy(
+  candidates: readonly AgentFallbackCandidate[],
+  managerId: string,
+): AgentFallbackPolicy {
+  // An empty remainder is recorded, disabled, so the task and its dispatched children never take the
+  // project's policy and leave the manager's list.
+  return {
+    enabled: candidates.length > 0,
+    candidates: candidates.slice(0, 10).map((c) => ({ provider: c.provider, profileId: c.profileId, ...(c.model ? { model: c.model } : {}) })),
+    revision: 0, incarnation: null, revocation: null, source: 'manager', managerId,
+  };
 }
 
 export type FallbackSkip = { candidate: AgentFallbackCandidate; reason: string };
@@ -250,13 +295,19 @@ export function eligibleFallbackCandidates(
   attempted: ReadonlySet<string>,
   heldAccounts: ReadonlySet<string>,
   accounts: AgentAccountStore | null,
+  /** The task's project: a bare manager entry resolves to this project's default account. */
+  repoRoot?: string,
 ): { eligible: AgentFallbackCandidate[]; skipped: FallbackSkip[] } {
   const eligible: AgentFallbackCandidate[] = [];
   const skipped: FallbackSkip[] = [];
   if (!policy.enabled) return { eligible, skipped };
+  const managerList = policy.source === 'manager' ? currentManagerList(policy) : undefined;
   for (const candidate of policy.candidates) {
     const key = candidateKey(candidate);
     if (attempted.has(key)) continue;
+    if (managerList === null || (managerList && !inManagerList(managerList, candidate, accounts, repoRoot))) {
+      skipped.push({ candidate, reason: 'no longer in the manager’s settings for new tasks' }); continue;
+    }
     if (heldAccounts.has(key)) { skipped.push({ candidate, reason: 'waiting out its own usage limit' }); continue; }
     if (candidate.profileId !== DEFAULT_AGENT_ACCOUNT_ID) {
       // Fail closed: an account we cannot confirm is never swapped for the default login.

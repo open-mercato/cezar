@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 
+import { isEditableTarget } from './use-command-shortcut'
+
 /**
  * The iOS virtual-keyboard adapter (spec iOS checklist; tech research §7): Safari does NOT
  * resize the layout viewport when the keyboard opens, so a bottom-docked composer gets
@@ -78,76 +80,6 @@ export function watchKeyboardInset(
 }
 
 /**
- * How much of the layout viewport is OUTSIDE the visual viewport, per edge. Floating layers
- * (Radix popovers) position against the layout viewport, so on iOS an open keyboard (bottom)
- * or a panned-down visual viewport (top) can hide them while their math says "visible".
- * Feeding these to Radix as `collisionPadding` makes collision avoidance work against the
- * viewport the user can actually see.
- */
-export interface ViewportInsets {
-  top: number
-  bottom: number
-}
-
-export function viewportInsets(win: KeyboardWindow): ViewportInsets {
-  const viewport = win.visualViewport
-  if (!viewport) return { top: 0, bottom: 0 }
-  return { top: Math.max(0, Math.round(viewport.offsetTop)), bottom: keyboardInset(win) }
-}
-
-/**
- * Merge the visual-viewport insets into a Radix `collisionPadding` value (number or per-side
- * object, default 0 — Radix's own default), preserving the caller's left/right padding.
- */
-export function keyboardAwareCollisionPadding(
-  insets: ViewportInsets,
-  padding: number | Partial<Record<'top' | 'right' | 'bottom' | 'left', number>> = 0,
-): Record<'top' | 'right' | 'bottom' | 'left', number> {
-  const base = typeof padding === 'number' ? { top: padding, right: padding, bottom: padding, left: padding } : padding
-  return {
-    top: (base.top ?? 0) + insets.top,
-    right: base.right ?? 0,
-    bottom: (base.bottom ?? 0) + insets.bottom,
-    left: base.left ?? 0,
-  }
-}
-
-/** Watch the visual viewport and publish both insets. Same event surface as
- *  {@link watchKeyboardInset}; no settle debounce — positioning wants every frame. */
-export function watchViewportInsets(
-  win: KeyboardWindow,
-  apply: (insets: ViewportInsets) => void,
-): () => void {
-  const viewport = win.visualViewport
-  if (!viewport) {
-    apply({ top: 0, bottom: 0 })
-    return () => {}
-  }
-  const onChange = () => apply(viewportInsets(win))
-  onChange()
-  viewport.addEventListener('resize', onChange)
-  viewport.addEventListener('scroll', onChange)
-  return () => {
-    viewport.removeEventListener('resize', onChange)
-    viewport.removeEventListener('scroll', onChange)
-  }
-}
-
-/** The React binding: the current visual-viewport insets as state ({0,0} on engines without
- *  `visualViewport` — desktop and jsdom stay exactly where they were). */
-export function useViewportInsets(): ViewportInsets {
-  const [insets, setInsets] = useState<ViewportInsets>({ top: 0, bottom: 0 })
-  useEffect(() => {
-    return watchViewportInsets(window as unknown as KeyboardWindow, (next) =>
-      setInsets((current) =>
-        current.top === next.top && current.bottom === next.bottom ? current : next,
-      ),
-    )
-  }, [])
-  return insets
-}
-
-/**
  * The React binding: keeps `--kb` on `:root` while mounted. `onSettle` is read through a ref,
  * so callers can hand a fresh closure every render without re-subscribing to the viewport.
  */
@@ -162,4 +94,89 @@ export function useKeyboardInsetVar(onSettle?: (px: number) => void): void {
       (px) => onSettleRef.current?.(px),
     )
   }, [])
+}
+
+/** Below any docked keyboard, above an iOS hardware-keyboard bar or a URL bar coming back. */
+const KEYBOARD_MIN_PX = 120
+
+/** What {@link watchKeyboardOpen} reads beyond the inset math. */
+export interface KeyboardOpenWindow extends KeyboardWindow {
+  innerWidth: number
+  addEventListener(type: 'resize', listener: () => void): void
+  removeEventListener(type: 'resize', listener: () => void): void
+  matchMedia?(query: string): { matches: boolean }
+}
+
+export interface KeyboardOpenDocument {
+  activeElement: Element | null
+  addEventListener(type: 'focusin' | 'focusout', listener: () => void): void
+  removeEventListener(type: 'focusin' | 'focusout', listener: () => void): void
+}
+
+/**
+ * Whether a software keyboard is up. iOS shrinks the visual viewport; engines honoring
+ * `interactive-widget=resizes-content` shrink `innerHeight` as well, read
+ * against the tallest height seen at this width (rotating changes the width). Touch and a focused
+ * field gate both: pinch zoom, a resized desktop window and a keyboard dismissed by Android's back
+ * button (focus stays, height returns) are not an open keyboard.
+ */
+export function watchKeyboardOpen(
+  win: KeyboardOpenWindow,
+  doc: KeyboardOpenDocument,
+  apply: (open: boolean) => void,
+): () => void {
+  const tallest = new Map<number, number>()
+  const onChange = () => {
+    const tall = Math.max(tallest.get(win.innerWidth) ?? 0, win.innerHeight)
+    tallest.set(win.innerWidth, tall)
+    // Not `keyboardInset`: iOS pans to reveal the field, and `offsetTop` hides the keyboard from it.
+    const shrunk = win.visualViewport ? win.innerHeight - win.visualViewport.height : 0
+    const covered = Math.max(shrunk, tall - win.innerHeight)
+    apply(
+      covered >= KEYBOARD_MIN_PX &&
+        isEditableTarget(doc.activeElement) &&
+        (win.matchMedia?.('(pointer: coarse)').matches ?? false),
+    )
+  }
+  // A blur does not close it at once: a tap blurs the field on mousedown, and chrome coming back
+  // before the click moved the tapped button from under the finger. The keyboard leaving resizes
+  // the viewport, which re-reads at once; the timer is for a blur that resizes nothing.
+  let blurTimer: ReturnType<typeof setTimeout> | undefined
+  const onViewport = () => {
+    clearTimeout(blurTimer)
+    onChange()
+  }
+  const onFocusOut = () => {
+    clearTimeout(blurTimer)
+    blurTimer = setTimeout(onChange, BLUR_SETTLE_MS)
+  }
+  // The tapped button takes focus between mousedown and click: only a field re-reads at once.
+  const onFocusIn = () => {
+    if (isEditableTarget(doc.activeElement)) onViewport()
+  }
+  onChange()
+  const viewport = win.visualViewport
+  win.addEventListener('resize', onViewport)
+  viewport?.addEventListener('resize', onViewport)
+  viewport?.addEventListener('scroll', onViewport)
+  doc.addEventListener('focusin', onFocusIn)
+  doc.addEventListener('focusout', onFocusOut)
+  return () => {
+    clearTimeout(blurTimer)
+    win.removeEventListener('resize', onViewport)
+    viewport?.removeEventListener('resize', onViewport)
+    viewport?.removeEventListener('scroll', onViewport)
+    doc.removeEventListener('focusin', onFocusIn)
+    doc.removeEventListener('focusout', onFocusOut)
+  }
+}
+
+/** Longer than a tap's mousedown→click, shorter than a keyboard's close animation. */
+const BLUR_SETTLE_MS = 400
+
+/** The React binding, for chrome that steps aside while typing. */
+export function useKeyboardOpen(): boolean {
+  const [open, setOpen] = useState(false)
+  useEffect(() => watchKeyboardOpen(window as unknown as KeyboardOpenWindow, document, setOpen), [])
+  return open
 }

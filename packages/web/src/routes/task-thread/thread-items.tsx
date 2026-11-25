@@ -3,6 +3,7 @@ import {
   BrainIcon,
   CheckIcon,
   ChevronRightIcon,
+  ClipboardIcon,
   CopyIcon,
   FileTextIcon,
   FolderInputIcon,
@@ -22,9 +23,11 @@ import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'rea
 import { useMutation } from '@tanstack/react-query'
 import { Link as GlobalLink } from 'react-router'
 import { ApiError, updateProvider } from '@/api/client'
-import { useAgentProfiles } from '@/api/queries'
+import { useAgentProfiles, useRefreshSkillCatalog } from '@/api/queries'
+import { ReconnectCard, ReconnectedLine } from '@/components/reconnect/reconnect-card'
 import { Button } from '@/components/ui/button'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
+import { IconTooltip } from '@/components/ui/icon-tooltip'
 import { toast } from '@/components/ui/toaster'
 import { ZoomableImage } from '@/components/zoomable-image'
 import { Link } from '@/lib/project-router'
@@ -51,6 +54,15 @@ import { writeClipboard } from '@/lib/clipboard'
 // The stick rule lives with the rest of the scroll math now; re-exported because this is
 // where the live tail below consumes it.
 export { isNearBottom }
+
+/**
+ * The thread's reading measure (redesign 2026-11, type scale): prose is `text-lead` and no
+ * paragraph runs wider than 72ch. The cap sits on the Markdown's prose BLOCKS, not the
+ * container, so diffs, tables and code blocks keep the full column. One string, so every
+ * reading surface (assistant turns, reasoning, notes, skill and issue bodies) measures alike.
+ */
+export const THREAD_PROSE_MEASURE =
+  'text-lead [&_.thread-markdown>:is(p,ul,ol,blockquote,h1,h2,h3,h4,h5,h6)]:max-w-[72ch]'
 
 /**
  * The thread's per-entry building blocks (mockup: docs/mockups/thread.html). Presentational
@@ -239,32 +251,41 @@ export function UserBubble({
       data-slot="user-bubble"
       className="group max-w-[78%] min-w-0 self-end rounded-2xl rounded-br-md bg-muted px-[15px] py-2.5 text-ui leading-[1.55] md:max-w-[70%]"
     >
-      {onEdit || onRemove ? (
+      {text.trim() !== '' || onEdit || onRemove ? (
         <span
           data-slot="bubble-actions"
-          className="mb-1 flex justify-end gap-0.5 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100"
+          className="mb-1 flex justify-end gap-0.5"
         >
-          {onEdit ? (
-            <button
-              type="button"
-              aria-label={editLabel}
-              onClick={startEditing}
-              disabled={busy}
-              className="rounded-sm p-1 text-soft-foreground hover:bg-background hover:text-foreground focus-visible:opacity-100 focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none"
-            >
-              <SquarePenIcon className="size-3.5" />
-            </button>
-          ) : null}
-          {onRemove ? (
-            <button
-              type="button"
-              aria-label={removeLabel}
-              onClick={() => void remove()}
-              disabled={busy}
-              className="rounded-sm p-1 text-soft-foreground hover:bg-background hover:text-danger focus-visible:opacity-100 focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none"
-            >
-              <Trash2Icon className="size-3.5" />
-            </button>
+          {text.trim() !== '' ? <CopyMessageButton text={text} /> : null}
+          {onEdit || onRemove ? (
+            <span className="flex gap-0.5 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
+              {onEdit ? (
+                <IconTooltip label={editLabel}>
+                  <button
+                    type="button"
+                    aria-label={editLabel}
+                    onClick={startEditing}
+                    disabled={busy}
+                    className="rounded-sm p-1 text-soft-foreground hover:bg-background hover:text-foreground focus-visible:opacity-100 focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none"
+                  >
+                    <SquarePenIcon className="size-3.5" />
+                  </button>
+                </IconTooltip>
+              ) : null}
+              {onRemove ? (
+                <IconTooltip label={removeLabel}>
+                  <button
+                    type="button"
+                    aria-label={removeLabel}
+                    onClick={() => void remove()}
+                    disabled={busy}
+                    className="rounded-sm p-1 text-soft-foreground hover:bg-background hover:text-danger focus-visible:opacity-100 focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none"
+                  >
+                    <Trash2Icon className="size-3.5" />
+                  </button>
+                </IconTooltip>
+              ) : null}
+            </span>
           ) : null}
         </span>
       ) : null}
@@ -299,7 +320,7 @@ export function UserBubble({
         </span>
       ) : null}
       {missing > 0 ? (
-        <span className="mt-1 block text-xs text-soft-foreground">
+        <span className="mt-1 block text-label text-muted-foreground">
           {missing} image{missing > 1 ? 's' : ''} attached
         </span>
       ) : null}
@@ -331,9 +352,66 @@ function UserText({ text }: { text: string }) {
 /** An assistant message item, as markdown. */
 export function AssistantMessage({ text }: { text: string }) {
   return (
-    <div data-slot="assistant-message" className="min-w-0 text-lead leading-[1.65]">
+    <div data-slot="assistant-message" className={cn('group min-w-0 leading-[1.65]', THREAD_PROSE_MEASURE)}>
+      {text.trim() !== '' ? (
+        <div className="mb-1 flex justify-end"><CopyMessageButton text={text} /></div>
+      ) : null}
       <Markdown>{text}</Markdown>
     </div>
+  )
+}
+
+/**
+ * Copies the original message source, rather than the rendered Markdown. The control is always
+ * in the tab order (including touch and keyboard use); only edit/remove remain hover-revealed.
+ * Clipboard support is optional in local/embedded browsers, so every access is guarded and
+ * rejected writes become honest, non-throwing feedback.
+ */
+export function CopyMessageButton({ text }: { text: string }) {
+  const [feedback, setFeedback] = useState<'idle' | 'success' | 'failure'>('idle')
+  const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
+
+  useEffect(() => () => {
+    if (timer.current !== undefined) clearTimeout(timer.current)
+  }, [])
+
+  const copy = async () => {
+    if (timer.current !== undefined) clearTimeout(timer.current)
+    try {
+      const writeText = typeof navigator !== 'undefined' ? navigator.clipboard?.writeText : undefined
+      if (typeof writeText !== 'function') throw new Error('Clipboard unavailable')
+      await writeText.call(navigator.clipboard, text)
+      setFeedback('success')
+    } catch {
+      setFeedback('failure')
+    }
+    timer.current = setTimeout(() => setFeedback('idle'), 2200)
+  }
+
+  const label =
+    feedback === 'success' ? 'Message copied' : feedback === 'failure' ? 'Could not copy message' : 'Copy message'
+  return (
+    <span className="inline-flex items-center gap-1">
+      <IconTooltip label="Copy message">
+        <button
+          type="button"
+          aria-label="Copy message"
+          onClick={() => void copy()}
+          className="rounded-sm p-1 text-soft-foreground hover:bg-muted hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none"
+        >
+          {feedback === 'success' ? (
+            <CheckIcon aria-hidden className="size-3.5" />
+          ) : (
+            <ClipboardIcon aria-hidden className="size-3.5" />
+          )}
+        </button>
+      </IconTooltip>
+      {feedback !== 'idle' ? (
+        <span role="status" aria-live="polite" aria-label={label} className="text-meta text-soft-foreground">
+          {label}
+        </span>
+      ) : null}
+    </span>
   )
 }
 
@@ -344,12 +422,42 @@ export function NoteLine({ note }: { note: ThreadNote }) {
       data-slot="note-line"
       data-tone={note.tone}
       className={cn(
-        'px-0.5 text-xs',
+        'px-0.5 text-label',
         note.tone === 'danger' ? 'text-danger' : note.tone === 'info' ? 'text-foreground' : 'text-soft-foreground',
       )}
     >
       {note.tone === 'danger' ? '✗ ' : note.tone === 'info' ? '⇄ ' : '· '}
       {note.text}
+      {note.action === 'install-skills' ? <InstallSkillsAction skillNames={note.skillNames} /> : null}
+    </div>
+  )
+}
+
+function InstallSkillsAction({ skillNames }: { skillNames?: readonly string[] }) {
+  const refresh = useRefreshSkillCatalog()
+  const catalog = refresh.data ?? []
+  const stillMissing = skillNames?.filter((name) => !catalog.some((skill) => skill.name === name && !skill.kind && !skill.missingShared))
+
+  return (
+    <div className="mt-1.5 flex flex-wrap items-center gap-2">
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        className="text-foreground"
+        disabled={refresh.isPending}
+        onClick={() => refresh.mutate()}
+      >
+        {refresh.isPending ? 'Refreshing skills…' : 'Install skills'}
+      </Button>
+      {refresh.isSuccess ? (
+        <span role="status" className="text-soft-foreground">
+          Skills catalog refreshed.
+          {stillMissing?.length ? ` The catalog is still missing ${stillMissing.join(', ')}.` : null}
+          {!skillNames && catalog.some((skill) => skill.missingShared) ? ' Some shared skills are still unavailable.' : null}
+        </span>
+      ) : null}
+      {refresh.isError ? <span role="alert">Could not refresh skills. {refresh.error.message}</span> : null}
     </div>
   )
 }
@@ -368,69 +476,27 @@ const PROVIDER_LABEL: Record<ThreadProviderAuthRequired['provider'], string> = {
   kimi: 'Kimi Code',
 }
 
-/** Persisted recovery guidance for an authoritative runtime authentication rejection. */
+/**
+ * An authoritative runtime authentication rejection: the inline reconnect card (spec
+ * 2026-11-18-inline-account-reconnect). An older rejection on the same account, or one the
+ * account already came back from, is a quiet line instead.
+ */
 export function ProviderAuthRequiredCard({
   incident,
 }: {
   incident: ThreadProviderAuthRequired
 }) {
-  if (incident.profileId !== undefined) return <AccountAuthRequiredCard incident={incident} profileId={incident.profileId} />
-  const label = PROVIDER_LABEL[incident.provider]
+  const profileId = incident.profileId ?? 'default'
+  if (incident.state !== undefined) {
+    return (
+      <div data-slot="provider-auth-required" data-state={incident.state} data-profile-id={profileId}>
+        <ReconnectedLine provider={incident.provider} profileId={profileId} at={incident.reconnectedAt} signedOutHere={incident.state === 'older'} />
+      </div>
+    )
+  }
   return (
-    <div
-      role="alert"
-      data-slot="provider-auth-required"
-      className="rounded-md border border-danger/30 bg-danger/5 px-3.5 py-3"
-    >
-      <p className="text-ui font-semibold text-foreground">
-        This run needed {label} authorization
-      </p>
-      <p className="mt-1 text-xs text-muted-foreground">
-        Review {label} settings before retrying.
-      </p>
-      <Link
-        to="/settings/agents#providers"
-        className="mt-2 inline-flex text-xs font-medium text-foreground underline-offset-2 hover:underline"
-      >
-        Open provider settings
-      </Link>
-    </div>
-  )
-}
-
-/** A named account was rejected, not the default login (telemetry 9e4a95db): name it and send the
- *  user to the pane that can sign it in — the Providers card describes the default login only. */
-function AccountAuthRequiredCard({
-  incident,
-  profileId,
-}: {
-  incident: ThreadProviderAuthRequired
-  profileId: string
-}) {
-  const profiles = useAgentProfiles()
-  const label = PROVIDER_LABEL[incident.provider]
-  const account = profiles.data?.profiles
-    .find((p) => p.id === profileId && p.provider === incident.provider)?.label ?? profileId
-  return (
-    <div
-      role="alert"
-      data-slot="provider-auth-required"
-      data-profile-id={profileId}
-      className="rounded-md border border-danger/30 bg-danger/5 px-3.5 py-3"
-    >
-      <p className="text-ui font-semibold text-foreground">
-        This run needed {label} account “{account}” to be signed in
-      </p>
-      <p className="mt-1 text-xs text-muted-foreground">
-        Sign that account in again before retrying.
-      </p>
-      {/* Global settings sit outside every project scope — react-router's own Link. */}
-      <GlobalLink
-        to="/settings/global/accounts"
-        className="mt-2 inline-flex text-xs font-medium text-foreground underline-offset-2 hover:underline"
-      >
-        Open agent accounts
-      </GlobalLink>
+    <div data-slot="provider-auth-required" data-profile-id={profileId}>
+      <ReconnectCard provider={incident.provider} profileId={profileId} place="task" />
     </div>
   )
 }
@@ -542,7 +608,7 @@ export function ReasoningItem({ text }: { text: string }) {
         />
       </div>
       <CollapsibleContent>
-        <div className="px-6 py-1.5 text-ui leading-[1.6] text-soft-foreground">
+        <div className={cn('px-6 py-1.5 leading-[1.6] text-muted-foreground', THREAD_PROSE_MEASURE)}>
           <Markdown>{text}</Markdown>
         </div>
       </CollapsibleContent>
@@ -576,14 +642,18 @@ export function WorkingIndicator({ since, lastActivityAt }: { since?: string; la
       <LoaderCircleIcon role="status" aria-label="Working" className="size-3.5 shrink-0 animate-spin" />
       <span className="shimmer font-medium">Working…</span>
       {elapsed !== undefined ? (
-        <span data-slot="working-elapsed" title={`Started ${exactLabel(since)}`} className="font-mono text-xs tabular-nums">
-          {elapsed}
-        </span>
+        <IconTooltip label={`Started ${exactLabel(since)}`}>
+          <span data-slot="working-elapsed" className="font-mono text-label tabular-nums">
+            {elapsed}
+          </span>
+        </IconTooltip>
       ) : null}
       {quiet !== undefined && lastClock !== undefined ? (
-        <span data-slot="working-last-activity" title={exactLabel(lastActivityAt)} className="text-xs">
-          · last activity {lastClock} ({quiet} ago)
-        </span>
+        <IconTooltip label={exactLabel(lastActivityAt) ?? ''}>
+          <span data-slot="working-last-activity" className="text-label">
+            · last activity {lastClock} ({quiet} ago)
+          </span>
+        </IconTooltip>
       ) : null}
     </div>
   )
@@ -745,25 +815,34 @@ export function toolCommand(item: UiToolItem): string | undefined {
   return command !== undefined && command.trim() !== '' ? command : undefined
 }
 
-/** Copy for an expanded command — a sibling of the header trigger, since a button cannot nest one. */
-function CopyCommandButton({ command }: { command: string }) {
+/** Copy for any command — a sibling of the header trigger, since a button cannot nest one.
+ *  `reveal` hides it until the row is hovered or focused (pointer devices only), so a collapsed
+ *  row stays quiet; touch screens always show it. */
+function CopyCommandButton({ command, reveal = false }: { command: string; reveal?: boolean }) {
   const [copied, setCopied] = useState(false)
   return (
-    <button
-      type="button"
-      aria-label={copied ? 'Copied' : 'Copy command'}
-      onClick={() => {
-        void writeClipboard(command)
-          .then(() => {
-            setCopied(true)
-            setTimeout(() => setCopied(false), 1500)
-          })
-          .catch(() => toast(`Copy failed — select the command to copy it.`, { tone: 'danger' }))
-      }}
-      className="mt-[3px] mr-1.5 shrink-0 rounded p-1 text-soft-foreground hover:bg-muted hover:text-foreground"
-    >
-      {copied ? <CheckIcon aria-hidden className="size-3.5" /> : <CopyIcon aria-hidden className="size-3.5" />}
-    </button>
+    <IconTooltip label={copied ? 'Copied' : 'Copy command'}>
+      <button
+        type="button"
+        aria-label={copied ? 'Copied' : 'Copy command'}
+        onClick={() => {
+          void writeClipboard(command)
+            .then(() => {
+              setCopied(true)
+              setTimeout(() => setCopied(false), 1500)
+            })
+            .catch(() => toast('Copy failed — the browser blocked clipboard access.', { tone: 'danger' }))
+        }}
+        className={cn(
+          'mt-[3px] mr-1.5 shrink-0 rounded p-1 text-soft-foreground hover:bg-muted hover:text-foreground',
+          reveal &&
+            !copied &&
+            '[@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover/tool-row:opacity-100 [@media(hover:hover)]:group-focus-within/tool-row:opacity-100',
+        )}
+      >
+        {copied ? <CheckIcon aria-hidden className="size-3.5" /> : <CopyIcon aria-hidden className="size-3.5" />}
+      </button>
+    </IconTooltip>
   )
 }
 
@@ -834,7 +913,7 @@ export function ToolCard({
         item.status === 'failed' ? 'border-danger/25' : 'border-border',
       )}
     >
-      <div className="flex min-w-0 items-start">
+      <div className="group/tool-row flex min-w-0 items-start">
       <CollapsibleTrigger
         disabled={!hasDetail}
         className={cn(
@@ -877,8 +956,8 @@ export function ToolCard({
           {busy ? (
             <LoaderCircleIcon role="status" aria-label="Running" className="size-3.5 animate-spin text-soft-foreground" />
           ) : null}
-          {item.status === 'failed' ? <span className="text-xs text-muted-foreground">failed</span> : null}
-          {item.status === 'declined' ? <span className="text-xs text-soft-foreground">declined</span> : null}
+          {item.status === 'failed' ? <span className="text-label text-muted-foreground">failed</span> : null}
+          {item.status === 'declined' ? <span className="text-label text-muted-foreground">declined</span> : null}
           {item.toolKind === 'execute' && typeof item.exitCode === 'number' ? (
             <span
               data-slot="tool-exit"
@@ -892,7 +971,9 @@ export function ToolCard({
           ) : null}
         </span>
       </CollapsibleTrigger>
-      {expandedCommand !== undefined ? <CopyCommandButton command={expandedCommand} /> : null}
+      {/* Every command is copyable, short ones too: the header text sits inside a button and
+          cannot be reliably selected. Copies the raw input, never the capped title. */}
+      {command !== undefined ? <CopyCommandButton command={command} reveal={expandedCommand === undefined} /> : null}
       </div>
       <CollapsibleContent>
         <div className="border-t border-border bg-card-2 empty:hidden">
@@ -944,7 +1025,7 @@ export function ContextGroup({ group, scope }: { group: ContextGroupBlock; scope
 export function ToolStreak({ count, children }: { count: number; children: ReactNode }) {
   return (
     <Collapsible data-slot="tool-streak" className="min-w-0">
-      <CollapsibleTrigger className="group flex items-center gap-1.5 rounded-md p-0.5 text-left text-xs text-soft-foreground hover:text-muted-foreground">
+      <CollapsibleTrigger className="group flex items-center gap-1.5 rounded-md p-0.5 text-left text-label text-muted-foreground hover:text-foreground">
         <ChevronRightIcon
           aria-hidden
           className="size-3.5 shrink-0 transition-transform group-data-[state=open]:rotate-90"

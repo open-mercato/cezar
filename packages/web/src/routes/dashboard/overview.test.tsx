@@ -1,4 +1,4 @@
-import { afterEach, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { QueryClientProvider } from '@tanstack/react-query'
 import { MemoryRouter, useLocation } from 'react-router'
@@ -63,6 +63,12 @@ function setup(active = true, entry = '', initial = fixture) {
   const result = render(view(active))
   return { calls, expire: () => { expired = true }, remount: (clearCache = false) => { result.rerender(<></>); if (clearCache) client.clear(); result.rerender(view(active)) }, rerender: (isActive: boolean) => result.rerender(view(isActive)) }
 }
+beforeEach(() => {
+  Element.prototype.scrollIntoView = vi.fn()
+  Element.prototype.hasPointerCapture = vi.fn(() => false)
+  Element.prototype.releasePointerCapture = vi.fn()
+  vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} })
+})
 afterEach(() => {
   cleanup()
   vi.unstubAllGlobals()
@@ -104,8 +110,17 @@ it('closes the outcome Sheet when the view goes inactive, so it never reopens on
 it('writes the reporting period into the URL', async () => {
   setup()
   await screen.findByRole('button', { name: 'Completed: 5' })
-  fireEvent.change(screen.getByLabelText('Outcomes period'), { target: { value: '30d' } })
+  // Radix Select in jsdom: open from the keyboard, then click the option (there is no real pointer).
+  fireEvent.keyDown(screen.getByRole('combobox', { name: 'Outcomes period' }), { key: 'ArrowDown' })
+  fireEvent.click(await screen.findByRole('option', { name: 'Last 30 days' }))
   expect(screen.getByTestId('overview-location').textContent).toBe('?period=30d')
+})
+
+it('offers the period through the cockpit select, not a native one', async () => {
+  setup()
+  await screen.findByRole('button', { name: 'Completed: 5' })
+  expect(document.querySelector('select')).toBeNull()
+  expect(screen.getByRole('combobox', { name: 'Outcomes period' }).textContent).toContain('Last 7 days')
 })
 
 it.each(['task', 'project'])('disables historical outcome navigation after %s removal', async (kind) => {

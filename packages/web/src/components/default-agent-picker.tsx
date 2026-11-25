@@ -30,7 +30,8 @@ export interface AgentPickerRow {
 /** Build the rows once, so the caller's `checked` logic and the render agree by construction. */
 export function agentPickerRows(profiles: readonly AgentProfile[]): AgentPickerRow[] {
   return RUNNERS.flatMap((runner) => {
-    const logins = profiles.filter((p) => p.provider === runner.id)
+    // A pending account (sign-in never finished) is not a choice yet.
+    const logins = profiles.filter((p) => p.provider === runner.id && !p.pending)
     // One login is not a choice, so the agent is the row.
     if (logins.length < 2) {
       return [{ runner, account: null, label: runner.label, desc: runner.desc, missing: false }]

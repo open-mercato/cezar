@@ -1,3 +1,9 @@
+import { unwrapJsonErrorEnvelope } from './agent-errors.ts';
+import { CodexToolPolicyError } from './codex-tool-policy.ts';
+import { compileCodexRestrictedPolicy, type CodexRestrictedPolicy } from './codex-restricted-policy.ts';
+import { prepareRestrictedCodexHome, type RestrictedCodexHome } from './codex-restricted-home.ts';
+import { CodexReadBroker, codexReadTool } from './codex-restricted-tools.ts';
+import { codexFeaturesToDisable, parseCodexFeaturePage, verifyRestrictedCodexFeatures, verifyRestrictedCodexIdentity, verifyRestrictedCodexConfig, verifyRestrictedCodexRequirements, verifyRestrictedCodexServices, verifyRestrictedCodexThread, type CodexFeature } from './codex-restricted-preflight.ts';
 import { emitUsageWindows, normalizeCodexUsageWindows } from './usage-windows.ts';
 import type { ChildProcessWithoutNullStreams } from 'node:child_process';
 import type {
@@ -39,6 +45,7 @@ import {
 } from './codex-ui-mapper.ts';
 import { armInactivityDeadline, inactivityTimeoutMessage } from './inactivity-deadline.ts';
 import { explainCodexModelError } from './agent-errors.ts';
+import { holdForOwnShutdown, ownShutdownExitMessage, ownSignalBehindExit, watchOwnSignals } from './process-signals.ts';
 
 export interface CodexRunnerOptions {
   /** Override the binary name/path; defaults to `codex` on PATH. */
@@ -63,8 +70,8 @@ const RESUME_LOCK_RETRY_MS: readonly number[] = [250, 500, 1_000, 2_000, 4_000, 
  * Auth = the host's logged-in ChatGPT/Codex session (or CODEX_API_KEY). The
  * agent runs autonomously via `sandbox: danger-full-access` +
  * `approvalPolicy: never`, matching cezar's default auto permission mode
- * (spec 2026-07-17-permission-modes). Codex has no per-tool allowlist, so
- * `spec.allowedTools` is ignored. `CEZ_CODEX_NETWORK=0` retains the previous
+ * (spec 2026-07-17-permission-modes). Supported read grants use an isolated home,
+ * no native execution environment, and cezar's read broker; unsupported grants refuse. `CEZ_CODEX_NETWORK=0` retains the previous
  * network-blocked `workspace-write` sandbox as an explicit restriction.
  */
 /**
@@ -75,7 +82,7 @@ const RESUME_LOCK_RETRY_MS: readonly number[] = [250, 500, 1_000, 2_000, 4_000, 
  * publish (spec 2026-10-22-html-artifacts-and-impact).
  */
 export function codexThreadOverrides(
-  spec: Pick<AgentRunSpec, 'model' | 'cwd' | 'env'>,
+  spec: Pick<AgentRunSpec, 'model' | 'cwd' | 'env' | 'enforceReadOnly'>,
   mcpConfig: Record<string, unknown> | undefined,
   env: NodeJS.ProcessEnv = process.env,
 ): Record<string, unknown> {
@@ -89,7 +96,7 @@ export function codexThreadOverrides(
   return {
     model: spec.model,
     cwd: spec.cwd,
-    sandbox: sandboxed ? 'workspace-write' : 'danger-full-access',
+    sandbox: spec.enforceReadOnly ? 'read-only' : sandboxed ? 'workspace-write' : 'danger-full-access',
     approvalPolicy: 'never',
     config,
   };
@@ -109,7 +116,7 @@ export class CodexAppServerRunner implements AgentRunner {
     this.resumeLockRetryMs = opts.resumeLockRetryMs ?? RESUME_LOCK_RETRY_MS;
   }
 
-  run(spec: AgentRunSpec, onEvent?: (event: AgentEvent) => void): Promise<AgentRunResult> {
+  async run(spec: AgentRunSpec, onEvent?: (event: AgentEvent) => void): Promise<AgentRunResult> {
     return this.startSession(spec, onEvent, { autoEndAfterFirstTurn: true }).result;
   }
 
@@ -122,7 +129,8 @@ export class CodexAppServerRunner implements AgentRunner {
     onEvent?: (event: AgentEvent) => void,
     opts: SessionOptions = {},
   ): AgentSession {
-    const session = new CodexSession(this.bin, this.timeoutMs, this.resumeLockRetryMs, spec, onEvent, opts);
+    const policy = compileCodexRestrictedPolicy(spec);
+    const session = new CodexSession(this.bin, this.timeoutMs, this.resumeLockRetryMs, spec, onEvent, opts, policy);
     this.lastSession = session;
     return session;
   }
@@ -138,6 +146,9 @@ class CodexSession implements AgentSession {
   readonly result: Promise<AgentRunResult>;
 
   private readonly child!: ChildProcessWithoutNullStreams;
+  private readonly restrictedHome?: RestrictedCodexHome;
+  private readonly readBroker?: CodexReadBroker;
+  private enforcementActive = false;
   private readonly rpc!: CodexAppServerRpc;
   private stdinOpen = true;
   /** Teardown rejects follow-up RPCs after the owning run may have gone away.
@@ -147,6 +158,10 @@ class CodexSession implements AgentSession {
   private followUpDeliveryOpen = true;
   private threadId: string | undefined;
   private activeTurnId: string | undefined;
+  /** Codex reports provider failures in a standalone `error` notification immediately before
+   *  the terminal `turn/completed` frame. Keep it until that boundary so the v1 error event
+   *  carries the provider's real message (and reset time) instead of a generic fallback. */
+  private pendingTurnError: { message: string; codexErrorInfo?: string } | undefined;
   private pendingUserInput: PendingUserInput | undefined;
   private readonly toolCalls: AgentToolCallRecord[] = [];
   private readonly textChunks: string[] = [];
@@ -179,6 +194,8 @@ class CodexSession implements AgentSession {
    *  codex handles the signal and exits 143, so without this the runner reads
    *  its own teardown as a codex failure (#703). */
   private terminatedByCezar = false;
+  /** When this session spawned: a signal cezar itself received after it names the child's exit. */
+  private readonly startedAt = Date.now();
   /** "Has the app-server really terminated?" — the question `child.killed`
    *  does not answer: it flips on signal delivery, so the SIGTERM this runner
    *  sends would otherwise veto its own SIGKILL escalation (#844). */
@@ -195,9 +212,16 @@ class CodexSession implements AgentSession {
     private readonly spec: AgentRunSpec,
     private readonly onEvent: ((event: AgentEvent) => void) | undefined,
     private readonly opts: SessionOptions,
+    private readonly policy?: CodexRestrictedPolicy,
   ) {
+    if (policy) {
+      if (process.platform !== 'darwin' && process.platform !== 'linux') throw new CodexToolPolicyError('restricted execution is unavailable on this platform');
+      this.restrictedHome = prepareRestrictedCodexHome(spec);
+      this.readBroker = new CodexReadBroker(policy, spec, this.restrictedHome.toolEnv, this.restrictedHome.githubReadsAllowed);
+    }
+    watchOwnSignals();
     try {
-      this.child = spawnCodexAppServer(bin, spec.cwd, spec.env);
+      this.child = spawnCodexAppServer(bin, spec.cwd, spec.env, this.restrictedHome?.env);
       this.rpc = new CodexAppServerRpc(this.child);
     } catch (err) {
       throw codexSpawnError(err, bin);
@@ -205,6 +229,7 @@ class CodexSession implements AgentSession {
 
     this.hasExited = trackChildExit(this.child);
     this.child.once('exit', () => {
+      this.readBroker?.close();
       this.stdinOpen = false;
     });
     this.child.on('error', (err: NodeJS.ErrnoException) => {
@@ -256,7 +281,9 @@ class CodexSession implements AgentSession {
             // plan/reasoning state and resetting the current turn id. Child ITEM events still
             // flow, so nested sub-agent activity keeps rendering.
             if (this.isForeignTurnLifecycle(msg)) continue;
-            this.emitUi((state) => mapCodexNotification(msg, state));
+            // The thread RPC result supplies the model and identifies the main thread.
+            // Its notification can arrive first, so bootstrap alone publishes the session.
+            if (msg.method !== 'thread/started') this.emitUi((state) => mapCodexNotification(msg, state));
             this.dispatch(msg);
           }
         };
@@ -273,6 +300,7 @@ class CodexSession implements AgentSession {
           this.end();
         }
       } finally {
+        this.readBroker?.close();
         deadline.clear();
         if (killTimer) clearTimeout(killTimer);
         if (this.autoEndTimer) clearTimeout(this.autoEndTimer);
@@ -315,9 +343,18 @@ class CodexSession implements AgentSession {
         return base;
       }
 
+      // The signal reached cezar too: its shutdown, left for boot recovery (telemetry 3ac6bbe3).
+      const ownSignal = this.terminatedByCezar ? undefined : await ownSignalBehindExit(exitCode, this.startedAt);
+      if (ownSignal) {
+        await holdForOwnShutdown();
+        const message = ownShutdownExitMessage('codex app-server', ownSignal, exitCode!);
+        this.emit({ type: 'error', message });
+        throw new Error(message);
+      }
+
       if (exitCode !== 0 && exitCode !== null) {
         const stderr = stderrChunks.join('').trim();
-        const detail = stderr ? ` — ${stderr.split('\n').slice(-3).join(' | ')}` : '';
+        const detail = this.restrictedHome ? ' — isolated startup or account/provider configuration failed' : stderr ? ` — ${stderr.split('\n').slice(-3).join(' | ')}` : '';
         const message = `codex app-server exited with code ${exitCode}${detail}`;
         this.emit({ type: 'error', message });
         throw new Error(message);
@@ -400,6 +437,7 @@ class CodexSession implements AgentSession {
   }
 
   end(): void {
+    this.readBroker?.close();
     if (!this.stdinOpen) return;
     this.rejectPendingUserInput('session ended');
     this.stdinOpen = false;
@@ -421,6 +459,7 @@ class CodexSession implements AgentSession {
   }
 
   interrupt(): void {
+    this.readBroker?.close();
     this.stdinOpen = false;
     this.followUpDeliveryOpen = false;
     this.rejectPendingUserInput('turn interrupted');
@@ -451,28 +490,91 @@ class CodexSession implements AgentSession {
   // ---- protocol -----------------------------------------------------------
 
   private async bootstrap(): Promise<void> {
-    await this.rpc.initialize();
+    const identity = this.rpc.initialize();
 
-    const overrides = codexThreadOverrides(this.spec, this.privateMcpConfig());
-    if (this.spec.resume && this.spec.sessionId) {
-      this.threadId = await this.resumeThread(this.spec.sessionId, clean(overrides));
+    // The thread/* results name the model the thread actually runs on — what "auto" resolved to.
+    let model: string | undefined;
+    if (this.restrictedHome) {
+      let timer: NodeJS.Timeout | undefined;
+      // Preserve the writer-lock recovery window inside the bounded preflight.
+      const startupMs = 15_000 + (this.spec.resume ? this.resumeLockRetryMs.reduce((sum, delay) => sum + delay, 0) : 0);
+      try {
+        model = await Promise.race([identity.then(value => this.bootstrapRestricted(value)).catch(err => {
+          if (err instanceof CodexToolPolicyError) throw err;
+          if (err instanceof Error && /no rollout found/i.test(err.message)) throw new Error(`no rollout found for thread id ${this.spec.sessionId ?? ''}`);
+          throw new CodexToolPolicyError('isolated startup could not be verified; check the selected account and model provider');
+        }), new Promise<never>((_, reject) => {
+          timer = setTimeout(() => reject(new CodexToolPolicyError('isolated startup verification timed out; check the selected account and model provider')), startupMs);
+        })]);
+      } finally { if (timer) clearTimeout(timer); }
     } else {
-      const res = await this.rpc.request('thread/start', clean(overrides));
-      this.threadId = threadIdOf(res) ?? this.spec.sessionId;
+      await identity;
+      const overrides = codexThreadOverrides(this.spec, this.privateMcpConfig());
+      if (this.spec.resume && this.spec.sessionId) {
+        ({ threadId: this.threadId, model } = await this.resumeThread(this.spec.sessionId, clean(overrides)));
+      } else {
+        const res = await this.rpc.request('thread/start', clean(overrides));
+        this.threadId = threadIdOf(res) ?? this.spec.sessionId;
+        model = threadModelOf(res);
+      }
     }
+    if (!this.stdinOpen) throw new Error('codex: startup was interrupted');
     if (this.threadId) {
       this.emit({ type: 'session', sessionId: this.threadId });
-      // The result path (thread/start response, or thread/resume which sends
-      // no thread/started notification) — deduplicated inside the mapper.
       const threadId = this.threadId;
-      this.emitUi((state) => codexSessionStarted(threadId, state));
+      this.emitUi((state) => codexSessionStarted(threadId, state, model));
     }
 
-    // Seed the first turn. The system prompt (skill body + handoff contract)
-    // has no dedicated app-server field, so it rides along as a leading block
-    // of the opening message.
-    const first = prependSystemPrompt(this.spec.systemPrompt, this.spec.userPrompt);
-    await this.startOrSteerTurn(first);
+    // Native developerInstructions replaces config guidance and stays stale on resume/fork.
+    // Keep each invocation's current guidance in its opening turn instead.
+    this.enforcementActive = !!this.restrictedHome;
+    if (this.restrictedHome) this.emit({ type: 'note', message: 'codex: isolated read-only enforcement active; native execution disabled, reads handled by cezar' });
+    await this.startOrSteerTurn(prependSystemPrompt(this.spec.systemPrompt, this.spec.userPrompt));
+  }
+
+  private async bootstrapRestricted(identity: Record<string, unknown>): Promise<string | undefined> {
+    const home = this.restrictedHome!;
+    const { baseline } = verifyRestrictedCodexIdentity(identity, home);
+    verifyRestrictedCodexConfig(await this.rpc.request('config/read', { cwd: this.spec.cwd, includeLayers: true }), home);
+    verifyRestrictedCodexRequirements(await this.rpc.request('configRequirements/read', {}));
+    const absentServices = async (threadId?: string) => verifyRestrictedCodexServices(
+      await this.rpc.request('hooks/list', threadId ? { threadId } : { cwds: [this.spec.cwd] }),
+      await this.rpc.request('mcpServerStatus/list', threadId ? { threadId } : {}),
+    );
+    await absentServices();
+    // Past the 0.169.0 baseline, a feature this isolation has never heard of may be a native tool.
+    const unknownOn = baseline ? [] : codexFeaturesToDisable(await this.codexFeatures());
+    if (!this.stdinOpen) throw new Error('codex: isolated startup was interrupted');
+    const overrides = clean({ model: this.spec.model, cwd: this.spec.cwd, sandbox: 'read-only', approvalPolicy: 'never', config: {
+      ...Object.fromEntries(unknownOn.map(key => [`features.${key}`, false])),
+      ...Object.fromEntries(Object.entries(this.restrictedHome!.config.features as Record<string, boolean>).map(([key, value]) => [`features.${key}`, value])),
+      web_search: 'disabled',
+    } });
+    let model: string | undefined;
+    if (this.spec.resume && this.spec.sessionId) ({ threadId: this.threadId, model } = await this.resumeThread(this.spec.sessionId, overrides));
+    else {
+      const res = await this.rpc.request('thread/start', { ...overrides, environments: [], dynamicTools: [codexReadTool(this.policy!)] });
+      verifyRestrictedCodexThread(res, this.spec.cwd);
+      this.threadId = threadIdOf(res);
+      model = threadModelOf(res);
+    }
+    if (!this.threadId) throw new Error('codex: isolated thread did not return an id');
+    if (!baseline) verifyRestrictedCodexFeatures(await this.codexFeatures(this.threadId));
+    await absentServices(this.threadId);
+    return model;
+  }
+
+  /** Every page of `experimentalFeature/list`, for the thread's effective config when given. */
+  private async codexFeatures(threadId?: string): Promise<CodexFeature[]> {
+    const features: CodexFeature[] = [];
+    let cursor: string | null | undefined;
+    for (let page = 0; page < 20; page++) {
+      const result = parseCodexFeaturePage(await this.rpc.request('experimentalFeature/list', { limit: 500, ...(cursor ? { cursor } : {}), ...(threadId ? { threadId } : {}) }));
+      features.push(...result.data);
+      cursor = result.nextCursor;
+      if (!cursor) return features;
+    }
+    throw new CodexToolPolicyError('Codex reported too many native features to verify');
   }
 
   /**
@@ -481,11 +583,12 @@ class CodexSession implements AgentSession {
    * for it to let go; if it never does, fork the stored thread (forking takes no writer lock)
    * so the run keeps its history instead of failing on a lock it cannot break.
    */
-  private async resumeThread(threadId: string, overrides: Record<string, unknown>): Promise<string> {
+  private async resumeThread(threadId: string, overrides: Record<string, unknown>): Promise<{ threadId: string; model?: string }> {
     for (let attempt = 0; ; attempt++) {
       try {
-        await this.rpc.request('thread/resume', { threadId, ...overrides });
-        return threadId;
+        const res = await this.rpc.request('thread/resume', { threadId, ...overrides });
+        if (this.restrictedHome) verifyRestrictedCodexThread(res, this.spec.cwd);
+        return { threadId, model: threadModelOf(res) };
       } catch (err) {
         if (!isActiveWriterError(err) || !this.stdinOpen) throw err;
         const delay = this.resumeLockRetryMs[attempt];
@@ -495,13 +598,14 @@ class CodexSession implements AgentSession {
       }
     }
     const res = await this.rpc.request('thread/fork', { threadId, ...overrides });
+    if (this.restrictedHome) verifyRestrictedCodexThread(res, this.spec.cwd);
     const forkedId = threadIdOf(res);
     if (!forkedId) throw new Error(`codex: thread ${threadId} is open in another Codex process and could not be forked`);
     this.emit({
       type: 'note',
       message: `codex: thread ${threadId} is still open in another Codex process — continuing in a fork of it (${forkedId})`,
     });
-    return forkedId;
+    return { threadId: forkedId, model: threadModelOf(res) };
   }
 
   private async startOrSteerTurn(text: string): Promise<void> {
@@ -534,6 +638,7 @@ class CodexSession implements AgentSession {
       threadId: this.threadId,
       input,
       summary: reasoningSummary(),
+      ...(this.restrictedHome ? { approvalPolicy: 'never', sandboxPolicy: { type: 'readOnly', networkAccess: false }, environments: [] } : {}),
       ...(this.spec.reasoningEffort ? { effort: this.spec.reasoningEffort } : {}),
     });
     this.activeTurnId = turnIdOf(res) ?? this.activeTurnId;
@@ -543,6 +648,22 @@ class CodexSession implements AgentSession {
     if (this.rpc.dispatchResponse(msg)) return;
     if (msg.method === 'item/tool/requestUserInput' && (typeof msg.id === 'number' || typeof msg.id === 'string')) {
       this.handleUserInputRequest(msg.id, msg.params ?? {});
+      return;
+    }
+    if (this.restrictedHome && typeof msg.method === 'string' && (typeof msg.id === 'string' || typeof msg.id === 'number')) {
+      const params = msg.params ?? {};
+      if (msg.method === 'item/tool/call' && this.enforcementActive && params.threadId === this.threadId && (!this.activeTurnId || params.turnId === this.activeTurnId)) {
+        void this.readBroker!.call(params).then(result => this.rpc.respond({ id: msg.id, result }));
+      } else {
+        // Includes command/file/permission approvals, MCP elicitations, foreign threads and unknown requests.
+        const denial = msg.method === 'item/commandExecution/requestApproval' || msg.method === 'item/fileChange/requestApproval'
+          ? { decision: 'decline' }
+          : msg.method === 'item/permissions/requestApproval' ? { permissions: {}, scope: 'turn' }
+          : msg.method === 'mcpServer/elicitation/request' ? { action: 'decline' }
+          : msg.method === 'execCommandApproval' || msg.method === 'applyPatchApproval' ? { decision: 'denied' }
+          : undefined;
+        this.rpc.respond(denial ? { id: msg.id, result: denial } : { id: msg.id, error: { code: -32601, message: 'cezar: native or ungranted tools are disabled for this restricted step' } });
+      }
       return;
     }
     if (typeof msg.method === 'string') this.handleNotification(msg.method, msg.params ?? {});
@@ -593,6 +714,12 @@ class CodexSession implements AgentSession {
         if (this.isForeignThreadTurn(params)) break; // sub-agent child thread — not our turn (#600)
         this.activeTurnId = turnIdOf(params) ?? this.activeTurnId;
         this.compactionEndedTurn = false; // the boundary is turn-scoped (#955)
+        this.pendingTurnError = undefined;
+        break;
+      }
+      case 'error': {
+        if (this.isForeignThreadTurn(params)) break;
+        this.pendingTurnError = codexErrorDetails(params.error, params) ?? this.pendingTurnError;
         break;
       }
       case 'item/agentMessage/delta': {
@@ -630,7 +757,10 @@ class CodexSession implements AgentSession {
         if (type === 'agentMessage') {
           // One v1 `text` per finished message — the snapshot's full text when
           // present (also covers turns that send no deltas), else the deltas.
-          this.textCoalescer.complete(id || undefined, typeof item.text === 'string' ? item.text : undefined);
+          // A parent's final answer is the last block (#2197): drain abandoned commentary first.
+          this.textCoalescer.complete(id || undefined, typeof item.text === 'string' ? item.text : undefined, {
+            drainOlder: ownThread && stringField(item, 'phase') === 'final_answer',
+          });
         } else if (type && !NON_TOOL_ITEMS.has(type) && id) {
           this.emit({
             type: 'tool-result',
@@ -664,11 +794,20 @@ class CodexSession implements AgentSession {
         const compacted = turnError === undefined && this.compactionEndedTurn;
         this.compactionEndedTurn = false;
         if (turnError !== undefined && !this.terminatedByCezar) {
-          this.emit({ type: 'error', message: explainCodexModelError(turnError, this.spec.model) });
+          // The current protocol nests the authoritative failure in Turn.error.
+          // A retry notification can precede it; never let that stale message win.
+          const turn = params.turn as Record<string, unknown> | undefined;
+          const error = codexErrorDetails(turn?.error)
+            ?? codexErrorDetails(params.error)
+            ?? this.pendingTurnError;
+          const message = unwrapJsonErrorEnvelope(error?.message ?? turnError);
+          const codexErrorInfo = error?.codexErrorInfo;
+          this.emit({ type: 'error', message: explainCodexModelError(codexErrorInfo ? `${message} [${codexErrorInfo}]` : message, this.spec.model) });
         }
         // The bare event when there is nothing extra to say, so every existing consumer
         // and every golden recording sees the exact frame it saw before (§7 additive).
         this.emit(compacted ? { type: 'turn-end', reason: 'context-compaction' } : { type: 'turn-end' });
+        this.pendingTurnError = undefined;
         if (this.opts.autoEndAfterFirstTurn && this.stdinOpen && !this.autoEndTimer) {
           this.autoEndTimer = setTimeout(() => this.end(), AUTO_END_DELAY_MS);
           this.autoEndTimer.unref?.();
@@ -805,6 +944,17 @@ function clean<T extends Record<string, unknown>>(obj: T): Partial<T> {
   return out;
 }
 
+/** Keep each message and discriminator together when selecting an error source. */
+function codexErrorDetails(value: unknown, fallback: Record<string, unknown> = {}): { message: string; codexErrorInfo?: string } | undefined {
+  const record = value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown> : {};
+  const message = (typeof value === 'string' ? value : stringField(record, 'message'))
+    ?? stringField(fallback, 'message');
+  if (!message) return undefined;
+  const codexErrorInfo = stringField(record, 'codexErrorInfo') ?? stringField(fallback, 'codexErrorInfo');
+  return { message, ...(codexErrorInfo ? { codexErrorInfo } : {}) };
+}
+
 function stringField(obj: Record<string, unknown>, key: string): string | undefined {
   const v = obj[key];
   return typeof v === 'string' ? v : undefined;
@@ -818,6 +968,12 @@ function isActiveWriterError(err: unknown): boolean {
 function threadIdOf(res: Record<string, unknown>): string | undefined {
   const thread = res.thread as { id?: unknown } | undefined;
   return typeof thread?.id === 'string' ? thread.id : stringField(res, 'threadId');
+}
+
+/** `thread/start`/`thread/resume`/`thread/fork` results carry the thread's resolved `model`. */
+function threadModelOf(res: Record<string, unknown>): string | undefined {
+  const model = stringField(res, 'model');
+  return model === '' ? undefined : model;
 }
 
 function turnIdOf(obj: Record<string, unknown>): string | undefined {

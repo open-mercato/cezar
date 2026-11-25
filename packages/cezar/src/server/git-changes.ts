@@ -417,11 +417,11 @@ export type RunCommitsResult = { ok: true; commits: RunCommit[] } | { ok: false;
  * history even though `collectChanges` narrows its payload to uncommitted work in that case.
  * Empty (not an error) when the branch has no commits past base.
  */
-export async function collectRunCommits(dir: string, baseBranch: string): Promise<RunCommitsResult> {
-  if (!isSafeGitRef(baseBranch)) return { ok: false, error: 'refusing option-like base ref' };
-  const mergeBase = await git(dir, ['merge-base', baseBranch, 'HEAD']);
+export async function collectRunCommits(dir: string, baseBranch: string, head = 'HEAD'): Promise<RunCommitsResult> {
+  if (!isSafeGitRef(baseBranch) || !isSafeGitRef(head)) return { ok: false, error: 'refusing option-like base ref' };
+  const mergeBase = await git(dir, ['merge-base', baseBranch, head]);
   const base = mergeBase.ok && mergeBase.stdout.trim() ? mergeBase.stdout.trim() : baseBranch;
-  const log = await git(dir, ['log', '--pretty=format:%H%x1f%s%x1f%an%x1f%cr', `${base}..HEAD`]);
+  const log = await git(dir, ['log', '--pretty=format:%H%x1f%s%x1f%an%x1f%cr', `${base}..${head}`]);
   if (!log.ok) return { ok: false, error: gitReason(log, 'git log failed') };
   const commits = log.stdout
     .split('\n')
@@ -843,7 +843,15 @@ export async function commitAll(dir: string, message: string): Promise<CommitRes
 }
 
 export type GitStatusResult =
-  | { ok: true; uncommitted: number; unpushed: number | null; behind: number | null; ahead: number | null }
+  | {
+      ok: true
+      uncommitted: number
+      unpushed: number | null
+      behind: number | null
+      ahead: number | null
+      baseRemote?: string
+      baseTracked?: boolean
+    }
   | { ok: false; error: string };
 
 /** What has not left the worktree yet: the files `commitAll` would commit, and the commits the
@@ -864,12 +872,13 @@ export async function worktreeGitStatus(dir: string, baseBranch?: string): Promi
     uncommitted++;
     if (/^(?:[RC].|.[RC])/.test(entries[i] as string)) i++;
   }
-  const { behind, ahead } = await baseDivergence(dir, baseBranch);
+  const { behind, ahead, baseRemote, baseTracked } = await baseDivergence(dir, baseBranch);
+  const based = baseRemote ? { baseRemote, baseTracked: baseTracked === true } : {};
   const upstream = await git(dir, ['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{u}']);
-  if (!upstream.ok) return { ok: true, uncommitted, unpushed: null, behind, ahead };
+  if (!upstream.ok) return { ok: true, uncommitted, unpushed: null, behind, ahead, ...based };
   const count = await git(dir, ['rev-list', '--count', '@{u}..HEAD']);
   const unpushed = count.ok ? Number.parseInt(count.stdout.trim(), 10) : Number.NaN;
-  return { ok: true, uncommitted, unpushed: Number.isFinite(unpushed) ? unpushed : null, behind, ahead };
+  return { ok: true, uncommitted, unpushed: Number.isFinite(unpushed) ? unpushed : null, behind, ahead, ...based };
 }
 
 /** How the worktree's HEAD stands against the task's base branch: commits the base has that HEAD
@@ -882,7 +891,7 @@ export async function worktreeGitStatus(dir: string, baseBranch?: string): Promi
 export async function baseDivergence(
   dir: string,
   baseBranch: string | undefined,
-): Promise<{ behind: number | null; ahead: number | null }> {
+): Promise<{ behind: number | null; ahead: number | null; baseRemote?: string; baseTracked?: boolean }> {
   const unknown = { behind: null, ahead: null };
   if (!baseBranch || !isSafeGitRef(baseBranch) || /^[0-9a-f]{7,40}$/i.test(baseBranch)) return unknown;
   const remotes = await resolveTaskRemotes((args) => git(dir, args));
@@ -895,12 +904,39 @@ export async function baseDivergence(
     const count = await git(dir, ['rev-list', '--left-right', '--count', `HEAD...${ref}`]);
     if (!count.ok) return unknown;
     const [ahead, behind] = count.stdout.trim().split(/\s+/).map((n) => Number.parseInt(n, 10));
-    return {
+    const counted = {
       behind: Number.isFinite(behind) ? (behind as number) : null,
       ahead: Number.isFinite(ahead) ? (ahead as number) : null,
     };
+    if (!remote || ref === split.branch) return counted;
+    // The remote whose ref was counted: a land must push there, or `ahead` never reaches 0. Whether
+    // the local base tracks it too: `landInPlace` pushes to that upstream, never anywhere else.
+    const tracked = await git(dir, ['config', '--get', `branch.${split.branch}.remote`]);
+    return { ...counted, baseRemote: remote, baseTracked: tracked.ok && tracked.stdout.trim() === remote };
   }
   return unknown;
+}
+
+/** `--force-with-lease` pinned to the remote tip this branch once HELD (found in its own reflog),
+ *  for a push the remote refused as non-fast-forward because the branch was rebased (#1758).
+ *  null when the remote tip was never ours — someone else's commit — or the branch is the remote's
+ *  default or the task's base, which is never rewritten without the user typing it. */
+export async function rewriteLeaseArg(
+  dir: string,
+  remote: string,
+  branch: string,
+  baseBranches: readonly (string | undefined)[] = [],
+): Promise<string | null> {
+  // The task's own base counts too: a `develop`/`trunk` default with no `<remote>/HEAD` is otherwise unrecognised.
+  const bases = baseBranches.flatMap((b) => (b ? [b, b.startsWith(`${remote}/`) ? b.slice(remote.length + 1) : b] : []));
+  if (branch === 'main' || branch === 'master' || bases.includes(branch)) return null;
+  const remoteHead = await git(dir, ['symbolic-ref', '-q', '--short', `refs/remotes/${remote}/HEAD`]);
+  if (remoteHead.stdout.trim() === `${remote}/${branch}`) return null;
+  const tip = await git(dir, ['rev-parse', '--verify', '-q', `refs/remotes/${remote}/${branch}`]);
+  if (!tip.ok) return null;
+  const sha = tip.stdout.trim();
+  const log = await git(dir, ['reflog', 'show', '--format=%H', `refs/heads/${branch}`]);
+  return log.ok && log.stdout.split('\n').includes(sha) ? `--force-with-lease=${branch}:${sha}` : null;
 }
 
 export type PushResult =
@@ -909,7 +945,10 @@ export type PushResult =
 
 /** Push the current branch, setting upstream when it has none. No remote,
  *  detached HEAD and rejected pushes all degrade to `{ ok:false, error }`. */
-export async function pushCurrentBranch(dir: string): Promise<PushResult> {
+export async function pushCurrentBranch(
+  dir: string,
+  opts: { leaseRewrites?: boolean; baseBranch?: string } = {},
+): Promise<PushResult> {
   const branchRes = await git(dir, ['rev-parse', '--abbrev-ref', 'HEAD']);
   if (!branchRes.ok) return { ok: false, error: gitReason(branchRes, 'not a git repository') };
   const branch = branchRes.stdout.trim();
@@ -924,7 +963,12 @@ export async function pushCurrentBranch(dir: string): Promise<PushResult> {
   const remote = (await resolveTaskRemotes((args) => git(dir, args))).push ?? (remotes[0] as string);
   const upstream = await git(dir, ['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{u}']);
   const args = upstream.ok ? ['push'] : ['push', '-u', remote, branch];
-  const push = await git(dir, args);
+  let push = await git(dir, args);
+  // Only a task's own branch: the repo-root Push must keep refusing, it may be on the user's main.
+  if (opts.leaseRewrites && !push.ok && /\[rejected\]|non-fast-forward/.test(push.stderr)) {
+    const lease = await rewriteLeaseArg(dir, remote, branch, [opts.baseBranch]);
+    if (lease) push = await git(dir, ['push', lease, ...(upstream.ok ? [] : ['-u']), remote, branch]);
+  }
   if (!push.ok) return { ok: false, error: syncFailureReason(push, 'git push failed') };
   return { ok: true, branch, remote, upstreamSet: !upstream.ok };
 }

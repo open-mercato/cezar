@@ -1,6 +1,7 @@
-import { FileIcon } from 'lucide-react'
+import { FileIcon, MousePointerClickIcon } from 'lucide-react'
 import { useParams } from 'react-router'
 
+import { IconTooltip } from '@/components/ui/icon-tooltip'
 import { Link } from '@/lib/project-router'
 
 import type { ReviewItem } from './diff-comments'
@@ -18,7 +19,7 @@ export function ReviewCommentsBlock({ items }: { items: readonly ReviewItem[] })
   return (
     <div data-slot="review-comments" className="mt-1 flex flex-col gap-2 text-left">
       <p className="text-label font-medium text-muted-foreground">
-        {items.length} {items.length === 1 ? 'comment' : 'comments'} on the diff
+        {items.length} {items.length === 1 ? 'comment' : 'comments'} {whereLabel(items)}
       </p>
       {items.map((item, index) => (
         <div
@@ -27,19 +28,30 @@ export function ReviewCommentsBlock({ items }: { items: readonly ReviewItem[] })
           className="overflow-hidden rounded-lg border border-border bg-background/60"
         >
           <div className="flex min-w-0 items-center gap-1.5 border-b border-border/60 px-2.5 py-1.5 text-label">
-            <FileIcon aria-hidden="true" className="size-3.5 shrink-0 text-muted-foreground" />
+            {item.asset ? (
+              <MousePointerClickIcon aria-hidden="true" className="size-3.5 shrink-0 text-muted-foreground" />
+            ) : (
+              <FileIcon aria-hidden="true" className="size-3.5 shrink-0 text-muted-foreground" />
+            )}
             {id ? (
-              <Link
-                to={reviewTarget(id, item)}
-                className="min-w-0 truncate font-mono font-medium text-foreground underline-offset-2 hover:underline"
-                title={`Open ${item.path} on the Changes tab`}
-              >
-                {item.path}
-              </Link>
+              <IconTooltip label={`Open ${item.path} on the ${item.asset ? 'Assets' : 'Changes'} tab`}>
+                <Link
+                  to={item.asset ? assetCommentTarget(id, item.path) : reviewTarget(id, item)}
+                  className="min-w-0 truncate font-mono font-medium text-foreground underline-offset-2 hover:underline"
+                >
+                  {item.path}
+                </Link>
+              </IconTooltip>
             ) : (
               <span className="min-w-0 truncate font-mono font-medium">{item.path}</span>
             )}
-            <span className="shrink-0 text-muted-foreground">· {item.label}</span>
+            {item.asset ? (
+              <span data-slot="review-comment-element" className="min-w-0 truncate text-muted-foreground">
+                · element <span className="font-mono">{item.asset.selector}</span>
+              </span>
+            ) : (
+              <span className="shrink-0 text-muted-foreground">· {item.label}</span>
+            )}
           </div>
           {item.excerpt !== '' ? (
             <pre
@@ -56,6 +68,17 @@ export function ReviewCommentsBlock({ items }: { items: readonly ReviewItem[] })
       ))}
     </div>
   )
+}
+
+function whereLabel(items: readonly ReviewItem[]): string {
+  const assets = items.filter((item) => item.asset).length
+  if (assets === 0) return 'on the diff'
+  return assets === items.length ? (assets === 1 ? 'on an asset' : 'on assets') : 'on the diff and assets'
+}
+
+/** The Assets tab, opened on the asset a comment is pinned to. */
+export function assetCommentTarget(runId: string, asset: string): string {
+  return `/tasks/${runId}/assets/${encodeURIComponent(asset)}`
 }
 
 /** The Changes tab, asked to reveal this comment (or line) — it reads these params on arrival. */

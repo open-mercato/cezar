@@ -99,7 +99,7 @@ function CommitDiffView({ sha }: { sha: string }) {
       </div>
 
       {commit.isPending ? (
-        <p data-slot="commit-loading" className="px-4 py-6 text-center text-xs text-soft-foreground md:px-6">
+        <p data-slot="commit-loading" className="px-4 py-6 text-center text-label text-soft-foreground md:px-6">
           Loading commit…
         </p>
       ) : commit.isError ? (

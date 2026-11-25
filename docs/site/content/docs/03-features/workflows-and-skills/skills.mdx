@@ -9,6 +9,14 @@ sources:
     path: packages/cezar/src/skills.ts
     line: 69
     commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+  - label: "Task skill provisioning"
+    path: packages/cezar/src/workflows/run.ts
+    line: 8017
+    commit: b7b029bfc525b0c70dd88b72488f43f62f638e65
+  - label: "Agent account availability and repair"
+    path: packages/web/src/routes/settings/skills-section.tsx
+    line: 176
+    commit: 311c5b33b01eb65dd2a7f9398d9cb6fdb4d0e484
   - label: "Specification"
     path: .ai/specs/005-remote-skills.md
     commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
@@ -24,5 +32,13 @@ Skills
 1. Open Skills and read the instructions.
 2. Select a skill in a new task or workflow.
 3. Refresh the catalog after shared instructions change.
+
+Repo commands installed by tools such as spec-kit (`.claude/commands`, `.codex/prompts`, `.cursor/commands`, `.opencode/command`, and `*.prompt.md` in `.github/prompts`) are listed as project skills too, so `/speckit.specify` autocompletes in the composer. Cezar fills `$ARGUMENTS` with what you type after the command and uses the definition that matches the task's agent when several agents ship the same name. Global `~/.claude/commands` are not included.
+
+When a task runs in its own worktree, Cezar prepares the selected skill and its companion skills in the worktree's `.claude/skills` and `.agents/skills`. The files are available under any agent account. Cezar gives the agent the Open Mercato skill paths so it can read the files directly. You can select a skill, type `/name`, or ask in plain text, for example `Run om-auto-review-pr on #12`.
+
+A repository can extend a shared skill with its own `.ai/skills/<name>/SKILL.md`. Declare the extension by naming the shared skill, for example `This file extends the shared om-auto-review-pr skill.` Cezar prepares the shared skill and tells the agent to apply the repository's extension with it.
+
+Cezar uses `open-mercato/skills` as the default team repository, including on hosted installs. When you request an Open Mercato skill, Cezar gives the catalog time to load and retries if the skill is missing. If the skill stays unavailable, the task transcript shows **Install skills**. Select it to refresh the catalog, then ask the agent to run the skill again. **Settings → Agents → Skill repositories** shows Open Mercato skill availability by account for the default project. A hosted cockpit with hidden account details shows the shared catalog status. Select **Repair skill catalog** to refresh that catalog.
 
 > **Good to know**: Local skills also work without a network connection.

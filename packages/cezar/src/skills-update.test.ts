@@ -2,7 +2,7 @@ import { mkdtemp, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { isOpenMercatoSkillsSource, SkillsUpdateConflictError, SkillsUpdateCoordinator, SkillsUpdateService } from './skills-update.ts';
+import { isOpenMercatoSkillsSource, resolveWindowsNpxCli, SkillsUpdateConflictError, SkillsUpdateCoordinator, SkillsUpdateService } from './skills-update.ts';
 
 const oldDryRun = process.env.CEZ_DRY_RUN;
 afterEach(() => { if (oldDryRun === undefined) delete process.env.CEZ_DRY_RUN; else process.env.CEZ_DRY_RUN = oldDryRun; });
@@ -22,6 +22,30 @@ describe('SkillsUpdateService', () => {
   it('matches only canonical Open Mercato GitHub sources', () => {
     expect(['open-mercato/skills', 'https://github.com/open-mercato/skills', 'https://github.com/open-mercato/skills.git'].every(isOpenMercatoSkillsSource)).toBe(true);
     expect(['evil/open-mercato/skills', 'https://github.com.evil.test/open-mercato/skills', 'git@github.com:open-mercato/skills.git'].some(isOpenMercatoSkillsSource)).toBe(false);
+  });
+
+  it('reports tracked names even when every skill is current (#1905)', async () => {
+    const { home, repo } = await fixture({ skills: { b: { source: 'open-mercato/skills' }, a: { source: 'open-mercato/skills' } } });
+    const service = new SkillsUpdateService({ homeDir: home, resolveNpx: async () => 'npx', run: async () => ({ stdout: 'All project skills are up to date', stderr: '' }) });
+    const state = await service.check(repo);
+    expect(state.scopes[0]).toMatchObject({ status: 'current', skills: [], tracked: ['a', 'b'] });
+    expect(state.scopes[1]).not.toHaveProperty('tracked');
+  });
+
+  it('resolves npx-cli.js on Windows, global prefix first, never an npx.cmd (#1958)', async () => {
+    const env = { APPDATA: 'C:\\Users\\u\\AppData\\Roaming' };
+    const global = 'C:\\Users\\u\\AppData\\Roaming\\npm\\node_modules\\npm\\bin\\npx-cli.js';
+    const bundled = 'C:\\node\\node_modules\\npm\\bin\\npx-cli.js';
+    expect(await resolveWindowsNpxCli(env, 'C:\\node\\node.exe', async () => true)).toBe(global);
+    expect(await resolveWindowsNpxCli(env, 'C:\\node\\node.exe', async (p) => p === bundled)).toBe(bundled);
+    expect(await resolveWindowsNpxCli(env, 'C:\\node\\node.exe', async () => false)).toBeNull();
+  });
+
+  it('gives a launcher failure its own reason (#1958)', async () => {
+    const { home, repo } = await fixture({ skills: { om: { source: 'open-mercato/skills' } } });
+    const run = vi.fn(async () => { throw Object.assign(new Error('spawn EINVAL'), { code: 'EINVAL' }); });
+    const state = await new SkillsUpdateService({ homeDir: home, run, resolveNpx: async () => 'npx.cmd' }).check(repo);
+    expect(state.scopes[0]).toMatchObject({ status: 'error', reason: 'npx could not be launched' });
   });
 
   it('fails closed for malformed and unknown locks without executing', async () => {
@@ -167,8 +191,53 @@ describe('SkillsUpdateService', () => {
     const state = await service.update(repo);
     expect(state.status).toBe('error');
     expect(state.scopes[0]).toMatchObject({ scope: 'project', updatedAt: expect.any(String) });
-    expect(state.scopes[1]).toMatchObject({ scope: 'global', status: 'error', reason: 'update check failed' });
+    expect(state.scopes[1]).toMatchObject({ scope: 'global', status: 'error', reason: 'update apply failed' });
     expect(JSON.stringify(state)).not.toContain('secret');
+  });
+
+  describe('large pending batch (#2369)', () => {
+    const names = Array.from({ length: 74 }, (_, i) => `skill-${String(i).padStart(2, '0')}`);
+    const mk = async () => {
+      const lock = { skills: { ...Object.fromEntries(names.map((n) => [n, { source: 'open-mercato/skills' }])), other: { source: 'acme/skills' } } };
+      const raw = JSON.stringify(lock);
+      const { home, repo } = await fixture(undefined, raw);
+      return { home, repo, raw, lockPath: join(home, '.agents', '.skill-lock.json') };
+    };
+
+    it('applies in bounded chunks with the apply timeout, never touching other sources', async () => {
+      const { home, repo, raw, lockPath } = await mk();
+      const timeouts: Array<[string, number]> = []; const chunks: string[][] = []; let pending = true;
+      const run = vi.fn(async (_f: string, args: readonly string[], _c: string, timeoutMs: number) => {
+        timeouts.push([String(args[2]), timeoutMs]);
+        if (args[2] === 'update') { chunks.push(args.slice(3, -2) as string[]); if (chunks.length === 4) pending = false; }
+        return { stdout: args[2] === 'check' && pending ? names.map((n) => `${n} update available`).join('\n') : '', stderr: '' };
+      });
+      const service = new SkillsUpdateService({ homeDir: home, timeoutMs: 111, applyTimeoutMs: 999, resolveNpx: async () => 'npx', run });
+      await service.check(repo);
+      const state = await service.update(repo);
+      expect(chunks.map((c) => c.length)).toEqual([20, 20, 20, 14]);
+      expect(chunks.flat()).toEqual(names);
+      expect(chunks.flat()).not.toContain('other');
+      expect(timeouts.filter(([k]) => k === 'update').every(([, t]) => t === 999)).toBe(true);
+      expect(timeouts.filter(([k]) => k === 'check').every(([, t]) => t === 111)).toBe(true);
+      expect(state).toMatchObject({ status: 'current', available: false });
+      expect(await readFile(lockPath, 'utf8')).toBe(raw);
+    });
+
+    it('reports an apply timeout as apply, keeps finished chunks and refreshes the catalog', async () => {
+      const { home, repo } = await mk(); const invalidateCatalog = vi.fn(); let updates = 0;
+      const run = vi.fn(async (_f: string, args: readonly string[]) => {
+        if (args[2] === 'update' && ++updates === 2) throw Object.assign(new Error('Command failed'), { killed: true, signal: 'SIGTERM' });
+        return { stdout: args[2] === 'check' ? names.map((n) => `${n} update available`).join('\n') : '', stderr: '' };
+      });
+      const service = new SkillsUpdateService({ homeDir: home, resolveNpx: async () => 'npx', run, invalidateCatalog });
+      await service.check(repo);
+      const state = await service.update(repo);
+      expect(updates).toBe(2);
+      expect(state.status).toBe('error');
+      expect(state.scopes[1]).toMatchObject({ status: 'error', reason: 'update apply timed out' });
+      expect(invalidateCatalog).toHaveBeenCalledOnce();
+    });
   });
 
   it('deduplicates concurrent update calls and dry-run never executes', async () => {

@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { z } from 'zod';
 import { perRunner } from '@open-mercato/cezar-contract';
 import { worktreeLifecycleConfigSchema } from '@open-mercato/cezar-contract';
-import { loadWorkspaceConfig, type WorkspaceConfig } from './workspace/config.ts';
+import { DEFAULT_ARCHIVED_TASK_DELETE_DAYS, DEFAULT_WORKTREE_IDLE_DAYS, loadWorkspaceConfig, type WorkspaceConfig } from './workspace/config.ts';
 import { RUNNER_IDS } from './core/agent-runner.ts';
 
 /**
@@ -32,7 +32,7 @@ export const DEFAULT_WORKTREE_RETENTION = 10;
  *  schema enforces (and mirrors the workspace default's bounds). */
 const worktreeRetentionSchema = z.number().int().min(0).max(1000);
 
-const configSchema = z.object({
+export const configSchema = z.object({
   // Runtime lifecycle gates use the strict reader, never this boot-safe fallback.
   worktreeLifecycle: worktreeLifecycleConfigSchema.optional().catch(undefined),
   skillsRepos: z.array(skillsRepoSchema).default(DEFAULT_SKILLS_REPOS),
@@ -46,6 +46,12 @@ const configSchema = z.object({
    * bad value degrades to the default instead of discarding the rest.
    */
   worktreeRetention: worktreeRetentionSchema.default(DEFAULT_WORKTREE_RETENTION).catch(DEFAULT_WORKTREE_RETENTION),
+  /** Age retention: reclaim a non-active task's worktree after N days without activity (branch
+   *  kept); 0 = off. Absent = the workspace's `resources.worktreeIdleDaysDefault` (7). */
+  worktreeIdleDays: z.number().int().min(0).max(365).optional().catch(undefined),
+  /** Delete archived tasks after N days; 0 = never. Absent = the workspace's
+   *  `resources.archivedTaskDeleteDaysDefault` (90). */
+  archivedTaskDeleteDays: z.number().int().min(0).max(3650).optional().catch(undefined),
   /**
    * Per-task memory ceiling in MiB (whole process tree). When a running task's
    * RSS crosses this the engine pauses it with a warning and lets the queue
@@ -64,6 +70,11 @@ const configSchema = z.object({
   /** Model for the task namer (spec 2026-07-17-task-auto-naming) — the cheapest
    *  alias that answers strict JSON; naming is fire-and-forget and never blocks. */
   namerModel: z.string().min(1).default('haiku'),
+  /** Per-runner namer model (#2012). Unset for a runner = discovery's cheapest tier, else a
+   *  static default, else no LLM naming on that runner (`runs/namer-model.ts`). */
+  namerModels: perRunner(z.string().trim().min(1).max(200).optional())
+    .optional()
+    .catch(undefined),
   /** Live title updates: refresh the display title through the namer on each
    *  turn end. Absent = the `CEZ_TITLE_UPDATES` env decides (default ON — owner
    *  decision on PR #479). */
@@ -149,6 +160,9 @@ const configSchema = z.object({
   /** Skill the composer preselects for a new task, and for a read-only (Ask) task. */
   defaultSkill: z.string().trim().min(1).max(200).optional().catch(undefined),
   askSkill: z.string().trim().min(1).max(200).optional().catch(undefined),
+  /** Claude Code tasks skip every permission prompt (`--permission-mode bypassPermissions`).
+   *  Off by default; see `bypassPermissionsBlocked` for where it is not honored. */
+  bypassPermissions: z.boolean().optional().catch(undefined),
 });
 
 export type CezConfig = z.infer<typeof configSchema>;
@@ -294,4 +308,25 @@ export async function resolveWorktreeRetention(repoRoot: string): Promise<number
   if (own !== undefined) return own;
   const workspace = await loadWorkspaceConfig().catch(() => null);
   return workspace?.resources.worktreeRetentionDefault ?? DEFAULT_WORKTREE_RETENTION;
+}
+
+/**
+ * Effective age retention in days for a repo, same precedence as `resolveWorktreeRetention`: the
+ * repo's own `worktreeIdleDays`, else the workspace's `resources.worktreeIdleDaysDefault`, else 7.
+ * 0 = off.
+ */
+export async function resolveWorktreeIdleDays(repoRoot: string): Promise<number> {
+  const own = (await loadConfig(repoRoot).catch(() => null))?.worktreeIdleDays;
+  if (own !== undefined) return own;
+  const workspace = await loadWorkspaceConfig().catch(() => null);
+  return workspace?.resources.worktreeIdleDaysDefault ?? DEFAULT_WORKTREE_IDLE_DAYS;
+}
+
+/** Effective archived-task lifetime in days for a repo (0 = never), same precedence as
+ *  `resolveWorktreeIdleDays`. */
+export async function resolveArchivedTaskDeleteDays(repoRoot: string): Promise<number> {
+  const own = (await loadConfig(repoRoot).catch(() => null))?.archivedTaskDeleteDays;
+  if (own !== undefined) return own;
+  const workspace = await loadWorkspaceConfig().catch(() => null);
+  return workspace?.resources.archivedTaskDeleteDaysDefault ?? DEFAULT_ARCHIVED_TASK_DELETE_DAYS;
 }

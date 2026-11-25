@@ -70,6 +70,15 @@ describe('the github ref-status API', () => {
     expect(issuesOnly.prs).toEqual({});
   });
 
+  it('files a number asked as an issue under what it really is', async () => {
+    // As the real `issueOrPullRequest` batch does: #128 is a PR, #142 an issue.
+    const body = await refStatus('issues=128,142');
+    if (!body.available) throw new Error('expected available');
+    expect(body.prs[128]).toBe('ready');
+    expect(body.issues[128]).toBeUndefined();
+    expect(body.issues[142]).toBe('open');
+  });
+
   it('leaves an unknown number ABSENT rather than inventing a status', async () => {
     // The distinction the chip depends on: "not found" must not be paintable as "fine".
     const body = await refStatus('prs=99999');

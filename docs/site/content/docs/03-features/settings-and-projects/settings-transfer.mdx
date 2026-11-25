@@ -1,0 +1,49 @@
+---
+title: "Move your configuration to another machine"
+description: "Export Cezar's portable settings to one file and import it on another machine, with a preview before anything changes."
+nav_title: "Transfer settings"
+related:
+  links:
+    - features/settings-and-projects/local-project
+    - architecture/cli-and-configuration
+sources:
+  - label: "Settings section"
+    path: packages/web/src/routes/settings/transfer-section.tsx
+    line: 37
+    commit: 42bbd65a1f8658f9c73469b4e139559eeb2cc851
+  - label: "Bundle format"
+    path: packages/contract/src/transfer.ts
+    line: 114
+    commit: 42bbd65a1f8658f9c73469b4e139559eeb2cc851
+---
+A configuration bundle is one JSON file with the portable part of your Cezar setup. Import it on another machine to configure that Cezar without clicking through every settings page again.
+
+The bundle carries:
+
+- Workspace settings: resources, new task defaults, agent defaults, disabled providers, the global system prompt, model locks, organization skill repositories, and skill auto-update.
+- For each project you pick: its project settings (such as base branch, default runner and models, branch naming, review gate, and required checks), its prompt templates, and its automations.
+- Reminders: the names of your secrets and the issue tracker each project was connected to.
+
+The bundle never carries secret values, tracker connections, agent accounts, webhooks, or folder paths.
+
+## Where to find it
+
+Settings → Transfer
+
+## How to use it
+
+1. On the source machine, tick the projects to include under **Export** and click **Download**.
+2. On the target machine, click **Choose file…** under **Import** and pick the file. Cezar shows a preview: each section with every value it changes, from the current value to the imported one.
+3. Review the sections, map each unmatched project to a registered project or choose **Skip**, and click **Apply selected**.
+
+Cezar matches a project by its git remote. A project that matches no registered project, or more than one, stays unmatched until you map it. Import never adds, clones, or creates a project.
+
+When a value differs on both machines, the preview offers **Keep this machine’s** (the default) or **Take imported**. An automation whose name is already taken is skipped unless you choose **Rename** or **Replace (and pause)**.
+
+> **Good to know**:
+>
+> - Nothing is written until you click **Apply selected**. If anything changed since the preview, Cezar refuses the import and shows a fresh preview.
+> - Sections that run shell commands, such as required checks, start unticked and carry a **runs shell commands** badge. Tick them only for a file you trust.
+> - Imported automations always land paused. Enable them on each project's Automations page.
+> - After importing, re-enter the secrets and reconnect the trackers listed under **Re-enter these secrets**.
+> - Export works everywhere. Import works only on a local cockpit, because a bundle can carry commands. A file written by a newer Cezar is refused; update Cezar first.

@@ -70,7 +70,9 @@ jobs:
       - name: Cache cargo
         uses: swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
-          workspaces: packages/desktop/src-tauri
+          workspaces: |
+            packages/desktop/src-tauri
+            packages/desktop/test/rustls-security
 
       # The same list as desktop-release.yml's Linux leg.
       - name: Install Linux build dependencies
@@ -92,6 +94,9 @@ jobs:
       - name: cargo test against node and npm
         working-directory: packages/desktop/src-tauri
         run: cargo test --locked --lib -- --ignored --test-threads=1
+
+      - name: Rustls security and TLS compatibility regressions
+        run: node packages/desktop/scripts/test-rustls-security.mjs
 
       # The cockpit's own updater writes the same layout; its link handling is per-platform too.
       - name: Install workspace dependencies

@@ -150,7 +150,9 @@ describe('control space and empty decisions', () => {
   });
 });
 
-describe('throughput and idle cost', () => {
+// These flows commit batches to the real filesystem; wall time includes durable writes under
+// host load. Throughput is asserted by delivery and write counts below.
+describe('throughput and idle cost', { timeout: 20_000 }, () => {
   it('an idle service does not rewrite its state files every maintenance window', async () => {
     const x = await setup();
     const service = await x.open(); const store = x.attach(service);

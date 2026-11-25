@@ -7,7 +7,9 @@ import {
   clientSurface,
   errorToastReport,
   isBenignError,
+  isExtensionError,
   isForeignError,
+  isForeignRejection,
   isCanonicalRoute,
   routeShape,
   scrubToastMessage,
@@ -87,7 +89,60 @@ describe('isForeignError', () => {
     expect(isForeignError({ message: `Uncaught NotFoundError: ${removeChild.message}`, error: removeChild }, plain)).toBe(false)
     expect(isForeignError({ message: 'Uncaught TypeError: x is undefined', error: new TypeError('x is undefined') }, translated)).toBe(false)
   })
+
+  it('drops an error thrown entirely by a browser extension, never one with a cezar frame (e2eba2e1)', () => {
+    const extension = withStack(new TypeError("Cannot read properties of undefined (reading 'M_ID')"), [
+      '    at Y (chrome-extension://eppiocemhmnlbhjplcgkofciiegomcon/executors/200.js:1:761)',
+      '    at E (chrome-extension://eppiocemhmnlbhjplcgkofciiegomcon/executors/200.js:1:1442)',
+    ])
+    expect(isForeignError({ message: `Uncaught ${extension.message}`, error: extension }, plain)).toBe(true)
+    expect(isExtensionError(extension)).toBe(true)
+    expect(isExtensionError(withStack(new TypeError('x'), ['Y@moz-extension://1b2c/content.js:1:5']))).toBe(true)
+    expect(isExtensionError(withStack(new TypeError('x'), ['Y@safari-web-extension://1b2c/content.js:1:5']))).toBe(true)
+    const mixed = withStack(new TypeError('x'), [
+      '    at Y (chrome-extension://eppiocemhmnlbhjplcgkofciiegomcon/executors/200.js:1:761)',
+      '    at onClick (/assets/index-DUhrduZ3.js:2:9461)',
+    ])
+    expect(isExtensionError(mixed)).toBe(false)
+    expect(isForeignRejection(mixed, () => false)).toBe(false)
+    // No frames at all (a stackless or non-Error reason) is not evidence either way.
+    expect(isExtensionError(withStack(new TypeError('x'), []))).toBe(false)
+    expect(isExtensionError('chrome-extension://abc/x.js')).toBe(false)
+  })
 })
+
+describe('isForeignRejection', () => {
+  // The DOMException `abort()` creates, with the stack of its caller (45c6cc99, a4d1471e).
+  const aborted = (): DOMException => {
+    const controller = new AbortController()
+    controller.abort()
+    return controller.signal.reason as DOMException
+  }
+
+  it('drops an unhandled AbortError only while a foreign wrapper owns window.fetch', () => {
+    expect(isForeignRejection(aborted(), () => true)).toBe(true)
+    // With the browser's own fetch every cezar caller handles its abort, so one escaping is a bug.
+    expect(isForeignRejection(aborted(), () => false)).toBe(false)
+    expect(isForeignRejection(new TypeError('Failed to fetch'), () => true)).toBe(false)
+    expect(isForeignRejection(undefined, () => true)).toBe(false)
+  })
+
+  it('tells the native fetch from a wrapper', () => {
+    const native = window.fetch
+    try {
+      Object.defineProperty(window, 'fetch', { configurable: true, writable: true, value: Object.assign(() => undefined, { toString: () => 'function fetch() { [native code] }' }) })
+      // `Function.prototype.toString` is read, not the wrapper's own `toString`.
+      expect(isForeignRejection(aborted())).toBe(true)
+    } finally {
+      Object.defineProperty(window, 'fetch', { configurable: true, writable: true, value: native })
+    }
+  })
+})
+
+function withStack<E extends Error>(error: E, frames: string[]): E {
+  error.stack = [`${error.name}: ${error.message}`, ...frames].join('\n')
+  return error
+}
 
 describe('clientSurface', () => {
   it('reads the desktop shell stamp', () => {

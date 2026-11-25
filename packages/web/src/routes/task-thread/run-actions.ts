@@ -1,5 +1,7 @@
 import type { RunRecord, RunStatus, Runner } from '@open-mercato/cezar-api-client'
 import { cliTargetRunner } from '@/components/open-in-menu'
+import { isAwaitingAnswer, isIdleClosed } from '@/lib/attention'
+import type { GitAction } from '@/lib/git-actions'
 import { canBeUnread, isUnread } from '@/lib/read-state'
 import { queuePositions } from '@/lib/task-groups'
 import { isRunActive } from '@/lib/run-status'
@@ -198,6 +200,17 @@ export function inPlacePrPrompt(draft: boolean, base: string): string {
   return `${draft ? 'Create draft PR' : 'Create PR'} against ${base} instead of landing: move these changes to a new branch, commit and push it, open the PR, then switch the checkout back to ${base}`
 }
 
+/** Commit to the base from a worktree task in a trunk-based project: the server lands only in-place
+ *  tasks, so the agent does what `landInPlace` does — rebase, required checks, push. The remote is
+ *  the one `git/status` counted `ahead` against (`baseRemote`, the resolved PR target): pushing
+ *  anywhere else — a fork clone's `origin` — leaves the button offering the same land again. */
+export function landBranchPrompt(base: string, remote: string, requiredChecks: readonly string[] = []): string {
+  const checks = requiredChecks.length > 0
+    ? `run the required checks (${requiredChecks.map((check) => `\`${check}\``).join(', ')}) and stop without pushing if any fails`
+    : `run the project's checks and stop without pushing if any fails`
+  return `Commit to ${base}: commit what is left, fetch ${remote} and rebase this branch onto ${remote}/${base}, ${checks}, then push it with \`git push ${remote} HEAD:${base}\``
+}
+
 /** Update branch for an in-place task: bring the checkout up to date, keeping the task's changes. */
 export function inPlaceUpdatePrompt(base: string): string {
   return `Update branch: pull the latest ${base} into the checkout (rebase, keeping these uncommitted changes)`
@@ -216,4 +229,75 @@ export function finishTitle(status: RunStatus): string {
  */
 export function queuePosition(runs: RunRecord[], runId: string): number | undefined {
   return queuePositions(runs).get(runId)
+}
+
+/**
+ * The header's ONE contextual primary action (design 2026-11, Proposal 3) — what the task needs
+ * from its reader right now, first match wins: answer the open question; look at the work parked
+ * at the review gate; take the git step the policy chose (Create PR, Commit and push, Push, the
+ * PR's own fixes); open the PR that exists; stop what is running; retry what failed. Null for a
+ * closed task with nothing to offer, so a done task reads calm.
+ */
+export type PrimaryRunAction =
+  | { kind: 'answer' }
+  | { kind: 'review' }
+  | { kind: 'git'; action: GitAction }
+  | { kind: 'open-pr'; url: string }
+  | { kind: 'stop' }
+  | { kind: 'retry' }
+
+export const PRIMARY_ACTION_LABELS: Record<Exclude<PrimaryRunAction['kind'], 'git'>, string> = {
+  answer: 'Answer',
+  review: 'Review changes',
+  'open-pr': 'Open PR',
+  stop: 'Stop',
+  retry: 'Retry',
+}
+
+export function primaryRunAction(
+  run: RunRecord,
+  {
+    git,
+    prUrl,
+    changesShowing,
+  }: {
+    /** The policy's one git step (`useRunGitStep`), or null. */
+    git: GitAction | null
+    /** The task's own PR (`ownedTaskPr`), when it has one. */
+    prUrl?: string
+    /** A Changes view is on screen: "Review changes" would open what already shows. */
+    changesShowing: boolean
+  },
+): PrimaryRunAction | null {
+  const flags = runActionFlags(run)
+  // A worktree operation owns the task until it is resolved (#1358): its card carries the actions.
+  if (run.worktreeLifecycle?.activeOperationId) return null
+  if (run.status === 'waiting' || isAwaitingAnswer(run)) return { kind: 'answer' }
+  if (run.status === 'review' && !changesShowing) return { kind: 'review' }
+  if (git) return { kind: 'git', action: git }
+  if (prUrl && /^https?:\/\//.test(prUrl)) return { kind: 'open-pr', url: prUrl }
+  if (flags.cancel) return { kind: 'stop' }
+  // Retry resumes the session the failure left behind — the composer's continuation; an idle
+  // close is not a failure and a run with no session has nothing to resume.
+  if (run.status === 'failed' && !isIdleClosed(run) && flags.continueRun) return { kind: 'retry' }
+  return null
+}
+
+/** Beside the primary: the git step when a state action outranked it (the one git button never
+ *  leaves the header — Answer and Review changes sit beside Push or Create PR, not instead of
+ *  them); else Stop while the engine owns the run; else Continue (the composer) for a session
+ *  that can be picked up — never the same thing twice. */
+export type SecondaryRunAction = { kind: 'git'; action: GitAction } | { kind: 'stop' } | { kind: 'continue' }
+
+export function secondaryRunAction(
+  run: RunRecord,
+  primary: PrimaryRunAction | null,
+  git: GitAction | null = null,
+): SecondaryRunAction | null {
+  const flags = runActionFlags(run)
+  if (run.worktreeLifecycle?.activeOperationId) return null
+  if (git && primary?.kind !== 'git') return { kind: 'git', action: git }
+  if (flags.cancel && primary?.kind !== 'stop') return { kind: 'stop' }
+  if (flags.continueRun && primary?.kind !== 'retry' && primary?.kind !== 'answer') return { kind: 'continue' }
+  return null
 }

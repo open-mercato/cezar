@@ -113,22 +113,24 @@
   --sidebar: var(--card);
   --muted: #262626;
   --muted-foreground: #a3a3a3;
-  --soft-foreground: #7b7b7b;
-  --border: #262626;
+  /* AA on --card (5.2:1); the old #7b7b7b was 4.1:1 there (redesign 2026-11, Proposal 6). */
+  --soft-foreground: #8a8a8a;
+  --border: #2a2a2a;
   --input: #262626;
   --contrast: #ebebeb;
   --contrast-foreground: #171717;
 
-  /* accents — `--accent-lime` is the stable name for the brand lime; `--primary` points at
-   * whichever accent family is active (Settings → Appearance swaps it via [data-accent]). */
+  /* Violet is the ONLY accent (redesign 2026-11, "Violet only"): `--primary` is the FILL — deep
+   * enough for white ink (5.2:1) — and `--violet` the INK for dots, chips and links (5.8:1 on
+   * --card). `--accent-lime` survives only for the brand wash in star-promo. */
   --accent-lime: #a8f372;
-  --primary: var(--accent-lime);
-  --primary-foreground: #0d0d0d;
+  --primary: #6457e8;
+  --primary-foreground: #ffffff;
   --violet: #8f86e8;
   /* Text/icons printed *on* --violet (the Inbox count badge). White in both themes — the violet
    * never lightens enough for ink to pass AA against it. */
   --violet-foreground: #ffffff;
-  --ring: #a8f372;
+  --ring: var(--violet);
 
   /* status */
   --danger: #ef4444;
@@ -156,6 +158,17 @@
    * design guardian bans `text-pending` outright. This token is the sanctioned way to write amber
    * words — same hue, per-theme luminance, AA against each theme's background. */
   --pending-strong: #fbbf24;
+  /* The ink version of success, for the same reason: emerald-500 is a fill. */
+  --success-strong: #34d399;
+  /* The ink version of danger: red-500 as words on white is 3.8:1. Red-400 here (6.5:1 on --card). */
+  --danger-strong: #f87171;
+  /* A MERGED pull request or a completed issue — GitHub's merge purple, so the chip reads the way
+   * the forge it links to does. Redder than `--violet` so the accent is not mistaken for it, and
+   * never alone: the git-merge glyph and the label carry it too. Ink-only, 5.4:1 on --card. */
+  --merged: #a371f7;
+  /* A closed pull request or a not-planned issue: finished without landing. A step dimmer than the
+   * draft's --muted-foreground so the two greys stay apart; 4.9:1 on --card. */
+  --closed: #858585;
 
   /* diff tints */
   --diff-add-bg: rgba(16, 185, 129, 0.1);
@@ -211,13 +224,18 @@
   --sidebar: #fafafa;
   --muted: #f7f7f7;
   --muted-foreground: #5c5c5c;
-  --soft-foreground: #a3a3a3;
+  /* 4.5:1 on white; the old #a3a3a3 was 2.5:1. */
+  --soft-foreground: #767676;
   --border: #ebebeb;
   --input: #ebebeb;
   --contrast: #262626;
   --contrast-foreground: #ffffff;
 
-  --ring: #171717;
+  /* One darker violet for fill AND ink on white: #8f86e8 as text is 3.1:1, this is 6.0:1. */
+  --primary: #5b52c7;
+  --primary-foreground: #ffffff;
+  --violet: #5b52c7;
+  --ring: #5b52c7;
 
   /* blue-700, not blue-300 — the same per-theme darkening the syntax blue already makes. */
   --info: #1d4ed8;
@@ -225,6 +243,14 @@
   /* amber-700, not amber-400: the dot keeps `--pending` in both themes, but amber ink on white
    * has to come down this far to stay readable (~4.8:1 against #ffffff). */
   --pending-strong: #b45309;
+  /* emerald-700: emerald-500 as ink on white is ~2.5:1; this is ~5.5:1. */
+  --success-strong: #047857;
+  /* red-700, 6.5:1 on white. */
+  --danger-strong: #b91c1c;
+  /* GitHub's light-theme merge purple, 5.1:1 on white. */
+  --merged: #8250df;
+  /* Darker than the draft's #5c5c5c on light, 10.9:1 on white. */
+  --closed: #3d3d3d;
 
   /* orange-700, for the same reason the amber above darkens: orange-400 as ink on white is ~2:1.
    * Far enough from `--pending-strong` (amber-700) to stay a different colour, not a shade. */
@@ -245,21 +271,12 @@
   --syn-var: #111827;
 }
 
-/* ---------- appearance: accent + density (Settings → Appearance, redesign R6) ----------
- * `data-accent` / `data-density` land on <html> before first paint (the index.html pre-paint
+/* ---------- appearance: density + reading width (Settings → Appearance, redesign R6) ----------
+ * `data-density` / `data-width` land on <html> before first paint (the index.html pre-paint
  * script reads the localStorage mirror; ui-state.json is the authoritative store — see
- * src/lib/appearance.ts). The default (lime / comfortable) is the ABSENCE of the attribute,
- * so these blocks only name the deviations.
+ * src/lib/appearance.ts). The default (comfortable / full) is the ABSENCE of the attribute,
+ * so these blocks only name the deviations. The accent picker was retired with "Violet only".
  */
-
-/* Violet accent: the `--primary` family swaps onto the existing violet tokens. An accent is
- * exactly a `--primary` family swap — a new accent = a new block here + one entry in
- * ACCENT_OPTIONS (routes/settings/appearance.tsx). */
-:root[data-accent='violet'] {
-  --primary: var(--violet);
-  --primary-foreground: var(--violet-foreground);
-  --ring: var(--violet);
-}
 
 /* Compact density: Tailwind v4's whole numeric spacing scale keys off ONE token (`--spacing`,
  * default 0.25rem — every `p-4`/`gap-2`/`h-14` is `calc(var(--spacing) * n)`), so shrinking it
@@ -340,6 +357,18 @@
  */
 
 @theme inline {
+  /* A QR code stays black on white in both themes: a scanner needs the contrast and the quiet zone. */
+  --color-qr-ground: #fff;
+  --color-qr-module: #000;
+  /* A computer's automatic avatar colour, the same six on web, Android and iOS (CezarBot switcher),
+   * so it stays put across themes; white initials on every one. */
+  --color-device-1: #7c6cf0;
+  --color-device-2: #e0912a;
+  --color-device-3: #2fb862;
+  --color-device-4: #2a9fd8;
+  --color-device-5: #e05a73;
+  --color-device-6: #22b3a0;
+  --color-device-ink: #fff;
   --color-background: var(--background);
   --color-foreground: var(--foreground);
   --color-card: var(--card);
@@ -365,6 +394,10 @@
   --color-success: var(--success);
   --color-pending: var(--pending);
   --color-pending-strong: var(--pending-strong);
+  --color-success-strong: var(--success-strong);
+  --color-danger-strong: var(--danger-strong);
+  --color-merged: var(--merged);
+  --color-closed: var(--closed);
   /* Warning ink and borders — the readable amber, never the --pending fill. */
   --color-warning: var(--pending-strong);
   --color-info: var(--info);
@@ -442,6 +475,14 @@
     font-family: var(--mono);
   }
 
+  /* A long-pressed in-app link showed WebKit's preview card with the phone shell's loopback URL.
+   * External links keep the native menu: their URL is real and Copy Link is useful there. */
+  @media (pointer: coarse) {
+    a[href^="/"] {
+      -webkit-touch-callout: none;
+    }
+  }
+
   /* v3's preflight gave buttons `cursor: pointer`; v4 dropped that rule, so they fall back to the
    * user agent's arrow. In this cockpit anything clickable reads as clickable, so enabled buttons
    * and button-like roles opt back into the pointer. Disabled controls keep the arrow (and their
@@ -510,6 +551,11 @@
 .thread-markdown :is(p, ul, ol, h1, h2, h3, h4, h5, h6) {
   overflow-x: auto;
   overflow-y: hidden;
+}
+/* Prose wraps a long URL, id or inline code instead of scrolling it sideways on a phone; the
+ * scroll above stays a backstop for what cannot wrap. Tables and fences keep their own scroll. */
+.thread-markdown :is(p, li, blockquote, h1, h2, h3, h4, h5, h6) {
+  overflow-wrap: anywhere;
 }
 .thread-markdown :is(h1, h2, h3, h4, h5, h6) {
   margin: 0.9em 0 0.35em;
@@ -628,19 +674,8 @@
 }
 
 /* ---------- first-run onboarding (spec 2026-10-26-first-run-onboarding) ----------
- * The onboarding surfaces use the violet accent whatever the user's accent is: the `--primary`
- * family swap `[data-accent='violet']` makes, scoped to the first-run container. */
-[data-onboarding] {
-  /* Darker than --violet so white button text reaches AA (5.2:1); the button itself stays over
-   * 3:1 on the dark card. The violet text tokens keep #8f86e8 here (5.8:1 on the dark card). */
-  --primary: #6457e8;
-  --primary-foreground: #ffffff;
-  --ring: var(--violet);
-}
-/* On white, #8f86e8 text is only 3.1:1 — the darker violet carries the labels and links too. */
-.light [data-onboarding] {
-  --violet: #6457e8;
-}
+ * The onboarding surfaces were the first to wear the violet fill/ink pair; since "Violet only"
+ * that pair IS the token sheet, so `[data-onboarding]` no longer overrides anything. */
 
 /* The feature announcement: a violet wash fading into the card, a border that catches it. */
 .onboarding-announcement {
@@ -744,5 +779,53 @@
 @keyframes tip-blink {
   to {
     opacity: 0;
+  }
+}
+
+/* Intrinsic illustration colors: stable across cockpit themes, like the raster artwork. */
+:root {
+  --mascot-paper: #fff5df;
+  --mascot-outline: #8c5529;
+  --mascot-ink: #6b2436;
+  --mascot-gold: #9f692c;
+  --mascot-edge: #cb9847;
+  --mascot-symbol: #754e28;
+  --mascot-spark: #f5b82c;
+  --mascot-shadow: rgba(90, 43, 25, 0.13);
+}
+
+/* Agents' brand marks on the reconnect card (spec 2026-11-18-inline-account-reconnect): intrinsic,
+ * like the mascot, so a mark reads the same in both themes. */
+:root {
+  --runner-mark-ink: #ffffff;
+  --runner-mark-claude: #d97757;
+  --runner-mark-codex: #0f0f0f;
+  --runner-mark-cursor: #3b3b3b;
+  --runner-mark-copilot: #8250df;
+  --runner-mark-opencode: #2563eb;
+  --runner-mark-kimi: #111827;
+  --runner-mark-pi: #0d9488;
+  --runner-mark-gemini: #1a73e8;
+  --runner-mark-antigravity: #ea4335;
+  --runner-mark-junie: #21d789;
+  --runner-mark-omp: #7c3aed;
+}
+
+/* A message reached from "your messages" (spec 2026-11-17-my-message-navigation): the #2218
+ * ring, plus a short violet wash so the eye finds it after a long scroll. */
+[data-jump-highlight] {
+  outline: none;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--ring) 50%, transparent);
+  animation: jump-wash 1.8s ease-out;
+}
+@keyframes jump-wash {
+  0%,
+  25% {
+    background-color: color-mix(in srgb, var(--violet) 26%, var(--muted));
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  [data-jump-highlight] {
+    animation: none;
   }
 }

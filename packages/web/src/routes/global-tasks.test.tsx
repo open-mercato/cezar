@@ -1,7 +1,7 @@
 import { QueryClientProvider } from '@tanstack/react-query'
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
-import { MemoryRouter, useLocation } from 'react-router'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { MemoryRouter, Route, Routes, useLocation } from 'react-router'
+import { afterEach, describe, expect, it, onTestFinished, vi } from 'vitest'
 
 import { createQueryClient } from '@/api/query-client'
 import type { ProjectListEntry, RunIndexEntry } from '@open-mercato/cezar-api-client'
@@ -10,7 +10,12 @@ import { __clearRememberedStatusesForTests, workspaceQueryKeys } from '@/api/que
 import { Toaster, resetToasts } from '@/components/ui/toaster'
 import { deriveAttention } from '@/lib/attention'
 
+import { clearManagerOrigins } from '@/lib/managers'
+
+import { tasksScroll } from '@/lib/global-tasks'
+
 import { GlobalTasksRoute } from './global-tasks'
+import { ManagerBackLink } from './manager/manager-back-link'
 import { resolveConflictsPrompt } from './task-thread/run-actions'
 
 // Every row derives its attention once per render, which makes the call count a render count for
@@ -36,6 +41,8 @@ afterEach(() => {
   // must not blank the chips) — which in vitest means one case's statuses would otherwise be
   // remembered by the next one in this file.
   __clearRememberedStatusesForTests()
+  // Saved list scroll offsets live in sessionStorage.
+  sessionStorage.clear()
 })
 
 const PROJECTS: ProjectListEntry[] = [
@@ -126,6 +133,7 @@ function stubFetch({
   costMetrics = true,
   refStatus,
   indexStatuses,
+  managers,
 }: {
   runs?: RunIndexEntry[]
   projects?: ProjectListEntry[]
@@ -141,6 +149,8 @@ function stubFetch({
   >
   /** What the runs-index itself already knew — the free, no-round-trip path. */
   indexStatuses?: Record<string, { prs: Record<number, string>; issues: Record<number, string> }>
+  /** Set: managers are on, and the list answers these. */
+  managers?: { id: string; name: string; followedTasks: string[] }[]
 } = {}) {
   sent = []
   seenAt = undefined
@@ -173,8 +183,9 @@ function stubFetch({
       if (message && method === 'POST') return jsonResponse({ ok: true })
       if (path === '/api/v1/health') {
         // Only the slice `usageMetricVisibility` reads — the host's cost/token gate.
-        return jsonResponse({ capabilities: { costMetrics, tokenUsageMetrics: true } })
+        return jsonResponse({ capabilities: { costMetrics, tokenUsageMetrics: true, managers: managers !== undefined } })
       }
+      if (path === '/api/v1/workspace/managers' && managers) return jsonResponse({ managers })
       if (path === '/api/v1/projects') {
         return jsonResponse({ projects, bootProject: 'api', projectsDir: '/repos' })
       }
@@ -283,7 +294,22 @@ describe('global tasks page', () => {
     expect(screen.getByRole('link', { name: 'Checkout page' }).getAttribute('href')).toBe(
       '/p/web/tasks/w1',
     )
+    // The title truncates in its cell; the native title reveals it whole.
+    expect(screen.getByRole('link', { name: 'Add checkout endpoint' }).getAttribute('title')).toBe('Add checkout endpoint')
   })
+
+  it('keeps the Active/Archived switch reachable at phone width', async () => {
+    stubFetch()
+    renderPage()
+    await screen.findByText('Add checkout endpoint')
+    // No ancestor of the switch is display:none below `md` — archived tasks must stay restorable on a phone.
+    let el: HTMLElement | null = screen.getByRole('group', { name: 'Which tasks' })
+    while (el) {
+      expect(el.className.split(/\s+/)).not.toContain('hidden')
+      el = el.parentElement
+    }
+  })
+
 
   it('filters by tag across projects, and toggles back off', async () => {
     stubFetch()
@@ -298,6 +324,136 @@ describe('global tasks page', () => {
 
     fireEvent.click(storefront)
     await waitFor(() => expect(rowIds()).toEqual(['a1', 'w1', 'i1']))
+  })
+
+  it('narrows to one manager\'s tasks from the URL, as a removable "Started by" facet', async () => {
+    stubFetch({
+      runs: [...RUNS, { ...RUNS[2]!, id: 'i2', title: 'Old runner bump', status: 'failed', archived: true }],
+      managers: [
+        { id: 'mobile', name: 'Mobile app creator', followedTasks: ['web/w1', 'infra/i1', 'infra/i2'] },
+        { id: 'idle', name: 'Idle', followedTasks: [] },
+      ],
+    })
+    renderPage(createQueryClient(), '/tasks?manager=mobile')
+    await screen.findByText('Checkout page')
+    await waitFor(() => expect(rowIds()).toEqual(['w1', 'i1']))
+    const facet = document.querySelector<HTMLButtonElement>('[data-slot="facet-manager"]')!
+    expect(facet.textContent).toBe('Started byMobile app creator')
+
+    // The archived one is behind the table's own Archived view.
+    fireEvent.click(within(screen.getByRole('group', { name: 'Which tasks' })).getByRole('button', { name: 'Archived' }))
+    await waitFor(() => expect(rowIds()).toEqual(['i2']))
+    expect(search()).toBe('?manager=mobile&archived=1')
+
+    fireEvent.click(screen.getByRole('button', { name: /^Clear/ }))
+    await waitFor(() => expect(search()).toBe('?archived=1'))
+    // A manager with no tasks offers nothing to filter by.
+    Element.prototype.scrollIntoView ??= () => {}
+    fireEvent.click(document.querySelector<HTMLButtonElement>('[data-slot="facet-manager"]')!)
+    const menu = await screen.findByTestId('facet-manager-menu')
+    expect(menu.textContent).toContain('Mobile app creator')
+    expect(menu.textContent).not.toContain('Idle')
+  })
+
+  it('leads back to the manager, and its rows carry the way back to this list and to it', async () => {
+    onTestFinished(() => clearManagerOrigins())
+    stubFetch({ managers: [{ id: 'mobile', name: 'Mobile app creator', followedTasks: ['web/w1', 'infra/i1'] }] })
+    function Task() {
+      const location = useLocation()
+      return <ManagerBackLink runId={location.pathname.split('/').at(-1)!} />
+    }
+    render(
+      <QueryClientProvider client={createQueryClient()}>
+        <MemoryRouter initialEntries={['/tasks?manager=mobile']}>
+          <ListViewProvider>
+            <main data-slot="main">
+              <Routes>
+                <Route path="/tasks" element={<GlobalTasksRoute />} />
+                <Route path="/p/:projectId/tasks/:id" element={<Task />} />
+              </Routes>
+            </main>
+            <LocationProbe />
+          </ListViewProvider>
+        </MemoryRouter>
+      </QueryClientProvider>,
+    )
+    const back = await screen.findByRole('link', { name: 'Back to Mobile app creator' })
+    expect(back.getAttribute('href')).toBe('/manager/mobile')
+    await waitFor(() => expect(rowIds()).toEqual(['w1', 'i1']))
+
+    const main = document.querySelector<HTMLElement>('[data-slot="main"]')!
+    main.scrollTop = 420
+    fireEvent.scroll(main)
+    fireEvent.click(screen.getByRole('link', { name: 'Bump the runner' }))
+    // The task's header: Mobile app creator › Tasks started.
+    const crumbs = await screen.findByRole('navigation', { name: 'Breadcrumb' })
+    expect(within(crumbs).getByRole('link', { name: 'Back to Mobile app creator' }).getAttribute('href')).toBe('/manager/mobile')
+    main.scrollTop = 0
+    fireEvent.click(within(crumbs).getByRole('link', { name: 'Back to tasks started by Mobile app creator' }))
+    await waitFor(() => expect(rowIds()).toEqual(['w1', 'i1']))
+    expect(search()).toBe('?manager=mobile')
+    await waitFor(() => expect(main.scrollTop).toBe(420))
+  })
+
+  it('offers no way back to a manager for an unfiltered list', async () => {
+    stubFetch({ managers: [{ id: 'mobile', name: 'Mobile app creator', followedTasks: ['web/w1'] }] })
+    renderPage()
+    await screen.findByText('Checkout page')
+    expect(document.querySelector('[data-slot="global-tasks-manager-back"]')).toBeNull()
+  })
+
+  it('leads back to the manager, and its rows carry the way back to this list', async () => {
+    stubFetch({ managers: [{ id: 'mobile', name: 'Mobile app creator', followedTasks: ['web/w1', 'infra/i1'] }] })
+    const client = createQueryClient()
+    function StateProbe() {
+      const location = useLocation()
+      return <span data-testid="state">{JSON.stringify(location.state)}</span>
+    }
+    render(
+      <QueryClientProvider client={client}>
+        <MemoryRouter initialEntries={['/tasks?manager=mobile']}>
+          <ListViewProvider>
+            <Routes>
+              <Route path="/tasks" element={<GlobalTasksRoute />} />
+              <Route path="*" element={<StateProbe />} />
+            </Routes>
+          </ListViewProvider>
+        </MemoryRouter>
+      </QueryClientProvider>,
+    )
+    const back = await screen.findByRole('link', { name: 'Back to Mobile app creator' })
+    expect(back.getAttribute('href')).toBe('/manager/mobile')
+    await waitFor(() => expect(rowIds()).toEqual(['w1', 'i1']))
+    fireEvent.click(screen.getByRole('link', { name: 'Checkout page' }))
+    expect(JSON.parse(screen.getByTestId('state').textContent!)).toEqual({
+      manager: { id: 'mobile', name: 'Mobile app creator', tasks: '/tasks?manager=mobile' },
+    })
+  })
+
+  it('comes back at the scroll position it was left at', async () => {
+    stubFetch({ managers: [{ id: 'mobile', name: 'Mobile app creator', followedTasks: ['web/w1', 'infra/i1'] }] })
+    tasksScroll.save('?manager=mobile', 240)
+    render(
+      <QueryClientProvider client={createQueryClient()}>
+        {/* The initial entry is a POP: what browser Back lands on. */}
+        <MemoryRouter initialEntries={['/tasks?manager=mobile']}>
+          <ListViewProvider>
+            <main data-slot="main">
+              <GlobalTasksRoute />
+            </main>
+          </ListViewProvider>
+        </MemoryRouter>
+      </QueryClientProvider>,
+    )
+    await screen.findByText('Checkout page')
+    await waitFor(() => expect(document.querySelector<HTMLElement>('[data-slot="main"]')!.scrollTop).toBe(240))
+  })
+
+  it('offers no way back to a manager on an unfiltered list', async () => {
+    stubFetch({ managers: [{ id: 'mobile', name: 'Mobile app creator', followedTasks: ['web/w1'] }] })
+    renderPage()
+    await screen.findByText('Checkout page')
+    expect(document.querySelector('[data-slot="global-tasks-manager-back"]')).toBeNull()
   })
 
   it('finds the repos nobody has tagged yet', async () => {
@@ -855,8 +1011,12 @@ describe('global tasks page', () => {
     expect(chip.className).toContain('text-conflict')
 
     fireEvent.focus(chip)
-    const button = await waitFor(() => screen.getByRole('button', { name: 'Resolve conflicts' }))
-    await waitFor(() => expect(button.hasAttribute('disabled')).toBe(false))
+    // Re-queried each try: while the run record loads, a disabled placeholder carries the same name.
+    const button = await waitFor(() => {
+      const found = screen.getByRole('button', { name: 'Resolve conflicts' })
+      expect(found.hasAttribute('disabled')).toBe(false)
+      return found
+    })
     fireEvent.click(button)
 
     // Into the RUN'S OWN project — `queryScope()` would have named the boot project here, which
@@ -1213,6 +1373,8 @@ describe('global tasks page', () => {
     expect(
       await screen.findByText('Tasks across projects did not load', {}, { timeout: 5000 }),
     ).toBeTruthy()
+    // A cause line and one action, never a dead end (checklist: errors get a retry).
+    expect(screen.getByRole('button', { name: 'Try again' })).toBeTruthy()
   })
 })
 
@@ -1375,3 +1537,84 @@ describe('global tasks page — who started a task', () => {
   })
 })
 
+
+/**
+ * The status grammar (redesign 2026-11, Proposal 7) applied to the cross-project row — the
+ * per-project table's rules, so the two tables can never disagree about what a status looks like.
+ */
+describe('global tasks page — status grammar', () => {
+  const row = (id: string) => document.querySelector(`[data-slot="global-task-row"][data-run-id="${id}"]`)!
+
+  it('takes the dot tone from the attention model and keeps a word only for open states', async () => {
+    stubFetch()
+    renderPage()
+    await screen.findByText('Add checkout endpoint')
+
+    // Running: violet pulse, with its word — cezar is working.
+    const running = row('a1').querySelector('[data-slot="pill"]')!
+    expect(running.textContent).toContain(deriveAttention(RUNS[0]!).label)
+    expect(running.querySelector('[data-slot="status-dot"]')?.getAttribute('data-tone')).toBe('violet')
+    // Review: blue, waiting on a person — never violet, never green.
+    const review = row('w1').querySelector('[data-slot="pill"]')!
+    expect(review.textContent).toContain('needs review')
+    expect(review.querySelector('[data-slot="status-dot"]')?.getAttribute('data-tone')).toBe('info')
+  })
+
+  it('leaves a done row calm: a green check mark, no pill, no word', async () => {
+    stubFetch()
+    renderPage()
+    await screen.findByText('Bump the runner')
+
+    const done = row('i1') as HTMLElement
+    expect(done.querySelector('[data-slot="pill"]')).toBeNull()
+    const quiet = done.querySelector('[data-slot="status-quiet"] [data-slot="status-mark"]')
+    expect(quiet?.getAttribute('data-state')).toBe('done')
+    expect(quiet?.getAttribute('data-tone')).toBe('success')
+    expect(quiet?.getAttribute('role')).toBe('img')
+    expect(quiet?.getAttribute('aria-label')).toBe('done')
+    // Active view: the mark alone — the word is the Archived view's.
+    expect(done.querySelector('[data-slot="status-mark-label"]')).toBeNull()
+    // The title link keeps its name and is DESCRIBED by the state, so keyboard users hear it.
+    expect(within(done).getByRole('link', { name: 'Bump the runner', description: 'done' })).toBeTruthy()
+  })
+
+  it('prints the word beside the mark in the Archived view, where a failed and a done row would otherwise share a shape-less dot', async () => {
+    stubFetch({
+      runs: [
+        { ...RUNS[2]!, archived: true },
+        { ...RUNS[0]!, id: 'a9', title: 'Broke it', status: 'failed', archived: true },
+      ],
+    })
+    renderPage(createQueryClient(), '/tasks?archived=1')
+    await screen.findByText('Broke it')
+
+    const status = (id: string) => row(id).querySelector('[data-slot="status-quiet"]')!
+    expect(status('i1').textContent).toBe('done')
+    expect(status('a9').textContent).toBe('failed')
+    expect(status('a9').querySelector('[data-slot="status-mark"]')?.getAttribute('data-state')).toBe('failed')
+    expect(status('i1').querySelector('[data-slot="status-mark"]')?.getAttribute('data-state')).toBe('done')
+    expect(within(row('a9') as HTMLElement).getByRole('img', { name: 'failed' })).toBeTruthy()
+    expect(within(row('a9') as HTMLElement).getByRole('link', { name: 'Broke it', description: 'failed' })).toBeTruthy()
+  })
+
+  it('reveals the row actions on hover or focus rather than painting a column of icons', async () => {
+    stubFetch()
+    renderPage()
+    await screen.findByText('Bump the runner')
+
+    const controls = row('i1').querySelector('[data-slot="row-controls"]')!
+    expect(controls.className).toContain('opacity-0')
+    expect(controls.className).toContain('group-hover/row:opacity-100')
+    expect(controls.className).toContain('group-focus-within/row:opacity-100')
+    // Still in the DOM, so the keyboard reaches them.
+    expect(controls.querySelector('[data-action="archive-run"]')).toBeTruthy()
+  })
+
+  it('offers its views and filters through the cockpit controls — no native select anywhere', async () => {
+    stubFetch()
+    renderPage()
+    await screen.findByText('Add checkout endpoint')
+    expect(document.querySelector('select')).toBeNull()
+    expect(screen.getByRole('button', { name: 'Active' }).getAttribute('aria-pressed')).toBe('true')
+  })
+})

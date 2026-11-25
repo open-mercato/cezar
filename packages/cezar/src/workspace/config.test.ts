@@ -112,7 +112,7 @@ describe('workspace config', () => {
     expect(config.schemaVersion).toBe(0);
     expect(config.browseRoot).toBe('~/');
     expect(config.projectsDir).toBe('~/cezar/projects');
-    expect(config.resources).toEqual({ maxParallel: 2, maxMonitoringSessions: 2, idleTimeoutMinutes: 15, monitoringWakeIntervalMinutes: 5, autoResumeOnUsageLimit: true, memoryLimitMb: null, worktreeRetentionDefault: 10 });
+    expect(config.resources).toEqual({ maxParallel: 2, maxMonitoringSessions: 2, idleTimeoutMinutes: 15, monitoringWakeIntervalMinutes: 5, autoResumeOnUsageLimit: true, memoryLimitMb: null, worktreeRetentionDefault: 10, worktreeIdleDaysDefault: 7, archivedTaskDeleteDaysDefault: 90, diskGuard: { minFreePercent: 10, minFreeGb: 5, maxWorktreesGb: 20 } });
     expect(config.composerDefaults).toEqual({});
     expect(config.projects).toEqual([]);
     expect(warn).not.toHaveBeenCalled();
@@ -324,7 +324,7 @@ describe('workspace config', () => {
     expect(config.schemaVersion).toBe(0);
     expect(config.browseRoot).toBe('~/');
     expect(config.projectsDir).toBe('~/cezar/projects');
-    expect(config.resources).toEqual({ maxParallel: 2, maxMonitoringSessions: 2, idleTimeoutMinutes: 15, monitoringWakeIntervalMinutes: 5, autoResumeOnUsageLimit: true, memoryLimitMb: null, worktreeRetentionDefault: 10 });
+    expect(config.resources).toEqual({ maxParallel: 2, maxMonitoringSessions: 2, idleTimeoutMinutes: 15, monitoringWakeIntervalMinutes: 5, autoResumeOnUsageLimit: true, memoryLimitMb: null, worktreeRetentionDefault: 10, worktreeIdleDaysDefault: 7, archivedTaskDeleteDaysDefault: 90, diskGuard: { minFreePercent: 10, minFreeGb: 5, maxWorktreesGb: 20 } });
     expect(config.projects).toEqual([project('good')]);
   });
 

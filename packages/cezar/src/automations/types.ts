@@ -8,6 +8,7 @@ import {
   automationScheduleSchema,
   automationSchedulesSchema,
   automationScheduleIssue,
+  automationReportSchema,
   type AutomationSchedule,
 } from '@open-mercato/cezar-contract';
 import { RUNNER_IDS } from '../core/agent-runner.ts';
@@ -55,7 +56,7 @@ export const automationTaskSchema = z
      *  project's selection at launch time. */
     agentProfile: z.string().trim().min(1).max(64).optional(),
     model: z.string().trim().min(1).max(200).optional(),
-    /** Codex effort of the launched runs — `POST /runs`' own `reasoningEffort`. */
+    /** Codex/Claude effort of the launched runs — `POST /runs`' own `reasoningEffort`. */
     reasoningEffort: z.string().trim().min(1).max(64).optional(),
     variants: z.union([z.literal(1), z.literal(2), z.literal(3)]).optional(),
     worktree: z.boolean().optional(),
@@ -120,6 +121,9 @@ export const automationDefinitionObjectSchema = z
     schedules: automationSchedulesSchema.optional(),
     task: automationTaskSchema,
     deferredStart: deferredStartStateSchema.optional(),
+    /** A manager's chat the server posts each run to. A link this version cannot read is dropped,
+     *  never the definition: losing a report beats losing an automation. */
+    report: automationReportSchema.optional().catch(undefined),
     createdAt: z.string().datetime(),
     updatedAt: z.string().datetime(),
   })

@@ -120,7 +120,8 @@ function pushAction(state: GitActionState): GitAction {
     return disabled('Push unavailable — the agent is still working in this worktree')
   }
   if (state.unpushed === 0) return disabled('Push unavailable — the remote already has every commit')
-  return { id: 'push', label: 'Push', enabled: true }
+  // With a PR the push updates it; the label says so.
+  return { id: 'push', label: state.prUrl ? 'Push update' : 'Push', enabled: true }
 }
 
 function createPrAction(state: GitActionState): GitAction {
@@ -223,6 +224,33 @@ export function gitActionPolicy(state: GitActionState): GitAction | null {
   if (update) return update
   if (state.prStatus === 'checks-failing') return agentStep(state, 'fix-checks', 'Fix errors')
   return null
+}
+
+/**
+ * A task with its own worktree in an auto-land project (a dispatch root, a task started before the
+ * project went trunk-based): its work still belongs on the base, so the step is **Commit to <base>**,
+ * done by the agent (the server lands only in-place tasks). The branch policy's steps ride under the
+ * chevron; a task that already opened a PR keeps its PR steps.
+ */
+export function trunkBranchGitActionPolicy(state: GitActionState, base: string): GitAction | null {
+  const branchAction = gitActionPolicy(state)
+  if (state.prUrl || state.assessment || !state.hasWorktree) return branchAction
+  // Status unknown (loading, or the request failed): the branch's own step, as `gitActionPolicy`.
+  if (state.uncommitted === undefined) return branchAction
+  // Landed is measured against the base (`ahead`), never `unpushed`: that counts the branch's own
+  // upstream, which a `HEAD:<base>` push leaves behind. Landed means nothing left — not the branch's
+  // Push or Update branch, which would only re-publish work already on the base.
+  if (state.uncommitted === 0 && state.ahead === 0) return null
+  // An unknown base (`ahead` null) lands nothing it cannot see: a clean tree keeps the branch's step.
+  if (state.uncommitted === 0 && (state.ahead === null || state.ahead === undefined)) return branchAction
+  const label = `Commit to ${base}`
+  const alternatives = branchAction
+    ? [{ ...branchAction, alternatives: undefined }, ...(branchAction.alternatives ?? [])]
+    : []
+  if (state.status === 'running' || state.status === 'queued') {
+    return { id: 'land', label, enabled: false, reason: `${label} unavailable — the agent is still working`, alternatives }
+  }
+  return { ...agentStep(state, 'land', label), alternatives }
 }
 
 /** An in-place task in an auto-land project (spec 2026-10-20-trunk-based-projects). */

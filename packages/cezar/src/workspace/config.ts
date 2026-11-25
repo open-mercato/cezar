@@ -84,6 +84,24 @@ export const DEFAULT_MONITORING_WAKE_MINUTES = 5;
 /** Plain user-wait sessions retain a bounded liveness safeguard by default (#992). */
 export const DEFAULT_IDLE_TIMEOUT_MINUTES = 15;
 
+/** Days without activity before a non-active task's worktree is reclaimed (age retention). */
+export const DEFAULT_WORKTREE_IDLE_DAYS = 7;
+
+/** Days an archived task is kept before it is deleted. */
+export const DEFAULT_ARCHIVED_TASK_DELETE_DAYS = 90;
+
+/** The disk guard's shipped thresholds: act when free space drops below the SMALLER of
+ *  `minFreePercent` of the volume and `minFreeGb`, or when task worktrees exceed `maxWorktreesGb`. */
+export const DEFAULT_DISK_GUARD = { minFreePercent: 10, minFreeGb: 5, maxWorktreesGb: 20 } as const;
+
+const diskGuardSchema = z
+  .object({
+    minFreePercent: z.number().min(0).max(50).default(DEFAULT_DISK_GUARD.minFreePercent).catch(DEFAULT_DISK_GUARD.minFreePercent),
+    minFreeGb: z.number().min(0).max(10_000).default(DEFAULT_DISK_GUARD.minFreeGb).catch(DEFAULT_DISK_GUARD.minFreeGb),
+    maxWorktreesGb: z.number().min(0).max(100_000).default(DEFAULT_DISK_GUARD.maxWorktreesGb).catch(DEFAULT_DISK_GUARD.maxWorktreesGb),
+  })
+  .passthrough();
+
 const resourcesSchema = z
   .object({
     /** Workspace-wide parallel-task cap (moved from per-repo config.json). */
@@ -127,6 +145,14 @@ const resourcesSchema = z
     memoryLimitMb: z.number().int().min(0).max(1_048_576).nullable().default(null).catch(null),
     /** Default worktree retention for projects that don't override it. */
     worktreeRetentionDefault: z.number().int().min(0).max(1000).default(10).catch(10),
+    /** Reclaim a non-active task's worktree after this many days without activity (branch kept,
+     *  Continue restores it); 0 = off. Seeds projects that set no `worktreeIdleDays`. */
+    worktreeIdleDaysDefault: z.number().int().min(0).max(365).default(DEFAULT_WORKTREE_IDLE_DAYS).catch(DEFAULT_WORKTREE_IDLE_DAYS),
+    /** Delete archived tasks after this many days (record, files, worktree and a branch holding
+     *  nothing unique); 0 = never. Seeds projects that set no `archivedTaskDeleteDays`. */
+    archivedTaskDeleteDaysDefault: z.number().int().min(0).max(3650).default(DEFAULT_ARCHIVED_TASK_DELETE_DAYS).catch(DEFAULT_ARCHIVED_TASK_DELETE_DAYS),
+    /** Disk guard thresholds (runs/disk-guard.ts); each 0 = that trigger off. */
+    diskGuard: diskGuardSchema.prefault(() => ({})).catch(() => diskGuardSchema.parse({})),
   })
   .passthrough();
 
@@ -183,7 +209,7 @@ const orgSkillsRepoSchema = z
   .object({ repo: z.string().min(1).max(500), ref: z.string().min(1).max(200).default('main') })
   .passthrough();
 
-const workspaceConfigSchema = z
+export const workspaceConfigSchema = z
   .object({
     /** Optional instance name shown in the cockpit; absent keeps the product default. */
     branding: z.object({
@@ -223,6 +249,9 @@ const workspaceConfigSchema = z
      *  `development` → none: a worktree or PR preview picked by hand). Absent inherits
      *  `CEZ_UPDATE_CHANNEL`, then stable. */
     updateChannel: z.enum(['stable', 'nightly', 'development']).optional().catch(undefined),
+    /** Installed versions kept under `~/.cezar/versions` by the automatic prune, the running one
+     *  included (`self-update/versions-prune.ts`). Absent = 3; 0 = never prune automatically. */
+    versionRetention: z.number().int().min(0).max(100).optional().catch(undefined),
     /** The telemetry install id (random UUIDv7). Written on the first send after consent;
      *  removed when consent is withdrawn. */
     cezarId: z.string().uuid().optional().catch(undefined),
@@ -239,9 +268,13 @@ const workspaceConfigSchema = z
       .catch(undefined),
     /** Last UTC day (YYYY-MM-DD) cezar checked in — what keeps the daily ping to one a day. */
     lastActiveOn: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional().catch(undefined),
-    /** Global instructions: read by every agent step in every project, merged BEFORE the
-     *  project's own `systemPrompt`, which wins where they conflict (`resolveExtraSystemPrompt`). */
+    /** Global instructions: read by every agent step in every project and take precedence over
+     *  repository, project and workflow instructions (`resolveExtraSystemPrompt`). */
     systemPrompt: z.string().trim().min(1).max(20_000).optional().catch(undefined),
+    /** A custom phone relay, from Settings. Absent means the default, so a new default reaches
+     *  whoever never chose. `CEZ_RELAY_URL` wins over it. Checked where it is
+     *  read (`resolveRelayAddress`), not here, so a form a newer cezar accepts survives this one. */
+    relayAddress: z.string().max(300).optional().catch(undefined),
     /** Global opt-in model policy. The native coding-agent model becomes
      * authoritative while runner choice remains available. */
     modelsLocked: z.boolean().optional().catch(undefined),
@@ -373,10 +406,17 @@ export async function loadWorkspaceConfig(path: string = workspaceConfigPath()):
   return readWorkspaceConfig(path, false);
 }
 
+/** For a caller that must tell "not set" from "could not tell": a file that exists but
+ *  neither reads, parses nor restores throws, while a missing one is still the default. */
+export async function loadWorkspaceConfigOrThrow(path: string = workspaceConfigPath()): Promise<WorkspaceConfig> {
+  return readWorkspaceConfig(path, true, true);
+}
+
 /** `strict` (merge-writes): a file that exists but cannot be read throws
  *  instead of degrading to defaults, which the write would then persist over
- *  both the config and its snapshot — the Windows registry wipe this guards. */
-async function readWorkspaceConfig(path: string, strict: boolean): Promise<WorkspaceConfig> {
+ *  both the config and its snapshot — the Windows registry wipe this guards.
+ *  `refuseCorrupt` throws for a malformed file too; a merge-write replaces one. */
+async function readWorkspaceConfig(path: string, strict: boolean, refuseCorrupt = false): Promise<WorkspaceConfig> {
   let raw: string | null = null;
   let unreadable: { path: string; error: unknown } | undefined;
   try {
@@ -411,6 +451,7 @@ async function readWorkspaceConfig(path: string, strict: boolean): Promise<Works
     return defaultWorkspaceConfig();
   }
   if (raw === null) return defaultWorkspaceConfig();
+  if (refuseCorrupt) throw new WorkspaceConfigUnreadableError(`[cez] ${path} is corrupt`);
   console.warn(
     `[cez] workspace config ${path} is corrupt — using defaults (re-add projects with \`cezar projects add\`)`,
   );

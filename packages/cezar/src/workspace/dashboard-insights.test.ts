@@ -79,6 +79,18 @@ describe('dashboard insights', () => {
     expect(result.backends).toEqual([]);
   });
 
+  it('leaves an idle close out of the failure counts — nobody replied, nothing failed', () => {
+    const idle = run({
+      status: 'failed',
+      error: 'the session closed after inactivity before the task declared completion — continue to resume it',
+      idleClosedAt: '2026-09-30T11:00:00.000Z',
+    });
+    expect(projectInsightRow('p', idle).idleClosedAt).toBe('2026-09-30T11:00:00.000Z');
+    const result = build([idle]);
+    expect(result.failures.total).toBe(0);
+    expect(result.backends).toEqual([]);
+  });
+
   it('groups failures by classified reason and keeps the most recent example', () => {
     const result = build([
       run({ status: 'failed', error: 'HTTP 429: rate limit', finishedAt: '2026-09-29T09:00:00.000Z' }),
@@ -187,8 +199,33 @@ describe('dashboard insights', () => {
     ]);
     expect(result.backends.map((b) => [b.backend, b.model])).toEqual([
       ['claude', 'opus'],
-      ['codex', 'openai/gpt-5'],
+      ['codex', 'gpt-5'],
       ['mixed', undefined],
+    ]);
+  });
+
+  it('puts one model under one row whether a run requested it or reported it', () => {
+    const result = build([
+      // An older run, grouped by its request identity …
+      run({ runner: 'claude', model: 'claude-opus-4-8', modelIdentity: 'anthropic/claude-opus-4-8' }),
+      // … and newer ones by what the agent reported: init's `[1m]` and modelUsage's bare id.
+      run({ runner: 'claude', actualModel: 'claude-opus-4-8[1m]' }),
+      run({ runner: 'claude', actualModel: 'Claude-Opus-4-8' }),
+    ]);
+    expect(result.backends.map((b) => [b.backend, b.model, b.finished])).toEqual([['claude', 'claude-opus-4-8', 3]]);
+  });
+
+  it('groups by the model the agent reported running when known, else by the request', () => {
+    const result = build([
+      // "auto" and an alias both resolved to the same model: one group.
+      run({ runner: 'claude', actualModel: 'claude-opus-5-5' }),
+      run({ runner: 'claude', model: 'opus', modelIdentity: 'anthropic/opus', actualModel: 'claude-opus-5-5' }),
+      // Nothing reported (an older run): still grouped by what was asked for.
+      run({ runner: 'claude', model: 'opus' }),
+    ]);
+    expect(result.backends.map((b) => [b.backend, b.model, b.finished])).toEqual([
+      ['claude', 'claude-opus-5-5', 2],
+      ['claude', 'opus', 1],
     ]);
   });
 
