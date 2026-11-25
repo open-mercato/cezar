@@ -102,12 +102,13 @@ export const AGENT_RECIPES: Readonly<Record<RunnerId, AgentRecipe>> = {
     autoUpdates: false,
     methods: [
       npmMethod('@openai/codex', 'shipped'),
+      // The cask the Codex CLI itself names; the owner confirmed both commands work (2026-11-25).
       {
         id: 'brew',
-        trust: 'unverified',
+        trust: 'docs',
         needs: 'brew',
         install: { unix: 'brew install --cask codex' },
-        update: { command: { unix: 'brew upgrade --cask codex' }, trust: 'unverified' },
+        update: { command: { unix: 'brew upgrade --cask codex' }, trust: 'docs' },
       },
     ],
   },

@@ -185,7 +185,7 @@ describe('AgentUpdateRequiredCard', () => {
     }))
     return calls
   }
-  const renderCard = (provider: 'opencode' | 'codex') =>
+  const renderCard = (provider: 'opencode' | 'gemini') =>
     render(
       <QueryClientProvider client={createQueryClient()}>
         <AgentUpdateRequiredCard incident={{ kind: 'agent-update-required', id: 'v2:3:update', provider }} />
@@ -206,11 +206,11 @@ describe('AgentUpdateRequiredCard', () => {
     expect(JSON.parse(posted.body!)).toEqual({ provider: 'opencode', action: 'update' })
   })
 
-  it('shows an update cezar does not run as a command to copy, with no run button', async () => {
-    serve([entry('codex', { command: 'brew upgrade --cask codex', runnable: false, method: 'brew', sudo: false })])
-    renderCard('codex')
-    await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Update Codex' })))
-    expect(await screen.findByText('brew upgrade --cask codex')).toBeTruthy()
+  it('shows an update cezar does not run as a command to copy, with no run button (Gemini CLI from npm)', async () => {
+    serve([entry('gemini', { command: 'npm install -g @google/gemini-cli@latest', runnable: false, method: 'npm', sudo: false })])
+    renderCard('gemini')
+    await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Update Gemini CLI' })))
+    expect(await screen.findByText('npm install -g @google/gemini-cli@latest')).toBeTruthy()
     expect(screen.getByText(/has not verified this command/)).toBeTruthy()
     expect(screen.queryByRole('button', { name: 'Update' })).toBeNull()
     expect(screen.getByRole('button', { name: 'Copy' })).toBeTruthy()

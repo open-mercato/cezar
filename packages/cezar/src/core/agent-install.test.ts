@@ -51,8 +51,14 @@ describe('planInstall', () => {
     expect(plan.command).toBe('npm install -g @anthropic-ai/claude-code');
   });
 
-  it('prefers sudo npm, which cezar may run, over an unverified Homebrew line', () => {
-    expect(planInstall('codex', { ...mac, npmGlobalWritable: false })).toMatchObject({ command: 'sudo npm install -g @openai/codex', runnable: true, sudo: true });
+  it('prefers a Homebrew install that needs no password over sudo npm', () => {
+    expect(planInstall('codex', { ...mac, npmGlobalWritable: false })).toEqual({ command: 'brew install --cask codex', runnable: true, method: 'brew', sudo: false });
+    expect(planInstall('codex', mac)).toMatchObject({ command: 'npm install -g @openai/codex', method: 'npm' });
+  });
+
+  it('prefers sudo npm, which cezar may run, over an unverified line', () => {
+    expect(planInstall('codex', { ...mac, npmGlobalWritable: false, brew: false })).toMatchObject({ command: 'sudo npm install -g @openai/codex', runnable: true, sudo: true });
+    expect(planInstall('opencode', { ...mac, npmGlobalWritable: false })).toMatchObject({ command: 'sudo npm install -g opencode-ai@1', runnable: true, sudo: true });
   });
 });
 
@@ -75,8 +81,12 @@ describe('planUpdate', () => {
     expect(planUpdate('opencode', { executable: 'opencode', path: '/x/opencode', method: 'npm' }, mac)).toMatchObject({ command: "'opencode' upgrade", runnable: true });
   });
 
+  it('updates a Homebrew Codex with brew, which the owner verified', () => {
+    expect(planUpdate('codex', { executable: 'codex', path: '/x/codex', method: 'brew' }, mac)).toMatchObject({ command: 'brew upgrade --cask codex', runnable: true });
+  });
+
   it('shows an unverified update instead of running it', () => {
-    expect(planUpdate('codex', { executable: 'codex', path: '/x/codex', method: 'brew' }, mac)).toMatchObject({ command: 'brew upgrade --cask codex', runnable: false });
+    expect(planUpdate('gemini', { executable: 'gemini', path: '/x/gemini', method: 'npm' }, mac)).toMatchObject({ command: 'npm install -g @google/gemini-cli@latest', runnable: false });
     expect(planUpdate('kimi', { executable: 'kimi', path: '/x/kimi', method: null }, mac)).toBeNull();
   });
 

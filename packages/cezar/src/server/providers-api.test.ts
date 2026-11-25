@@ -813,16 +813,26 @@ describe('workspace provider API', () => {
 
     it('shows, and does not run, an update cezar has not verified (spec 2026-11-25)', async () => {
       const openTerminal = vi.fn(async () => true);
-      // A Homebrew cask install of Codex: `brew upgrade --cask codex` is copy-only for now.
-      const brew = (executable: string): InstalledCli => ({ executable, path: '/opt/homebrew/bin/codex', method: 'brew' });
-      const response = await update(app({ openTerminal, providerAuth: service({}, undefined, undefined, brew) }), 'codex');
+      // An npm install of Gemini CLI: its upgrade is not verified yet, so it is copy-only.
+      const npm = (executable: string): InstalledCli => ({ executable, path: '/usr/lib/node_modules/@google/gemini-cli/dist/index.js', method: 'npm' });
+      const response = await update(app({ openTerminal, providerAuth: service({}, undefined, undefined, npm) }), 'gemini');
 
       expect(response.status).toBe(409);
       expect(await response.json()).toEqual({
         error: 'cezar does not run this update itself. Run it in a terminal.',
-        command: 'brew upgrade --cask codex',
+        command: 'npm install -g @google/gemini-cli@latest',
       });
       expect(openTerminal).not.toHaveBeenCalled();
+    });
+
+    it('updates a Homebrew Codex with brew', async () => {
+      const openTerminal = vi.fn(async () => true);
+      const brew = (executable: string): InstalledCli => ({ executable, path: '/opt/homebrew/bin/codex', method: 'brew' });
+      const response = await update(app({ openTerminal, providerAuth: service({}, undefined, undefined, brew) }), 'codex');
+
+      expect(response.status).toBe(200);
+      expect(await response.json()).toEqual({ opened: true, command: 'brew upgrade --cask codex' });
+      expect(openTerminal).toHaveBeenCalledWith(root, 'brew upgrade --cask codex');
     });
 
     it.each([

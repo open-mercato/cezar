@@ -23,7 +23,7 @@ run failed with "X or newer is required". The install commands lived in three pl
   | Agent | cezar runs | Shown to copy |
   | --- | --- | --- |
   | Claude Code | native script, npm, brew cask (docs); `claude update` | — |
-  | Codex | npm install and `@latest` upgrade (shipped) | brew cask install and upgrade |
+  | Codex | npm install and `@latest` upgrade (shipped); `brew install --cask codex`, `brew upgrade --cask codex` (owner-verified 2026-11-25) | — |
   | OpenCode | `npm i -g opencode-ai@1`, `opencode upgrade` (shipped) | brew |
   | Cursor | install script, `agent update` (shipped) | — |
   | Copilot | npm install and `@latest` upgrade (shipped) | — |
