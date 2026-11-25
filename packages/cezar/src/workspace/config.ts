@@ -9,6 +9,7 @@ import { readFileWithRetry, renameSyncWithRetry, renameWithRetry } from '../fs-r
 import { PROJECT_TAGS_MAX, PROJECT_TAG_MAX_LENGTH, perRunner } from '@open-mercato/cezar-contract';
 import { PROVIDER_IDS, type ProviderId } from '../core/provider-auth.ts';
 import { assertCezarHomeWriteIsSandboxed, isAbsolutePath, workspaceConfigPath } from '../paths.ts';
+import { RUNS_KEPT_MAX } from '../runs/history-pools.ts';
 
 /**
  * `~/.cezar/config.json` — the per-user workspace config + project registry
@@ -151,6 +152,10 @@ const resourcesSchema = z
     /** Delete archived tasks after this many days (record, files, worktree and a branch holding
      *  nothing unique); 0 = never. Seeds projects that set no `archivedTaskDeleteDays`. */
     archivedTaskDeleteDaysDefault: z.number().int().min(0).max(3650).default(DEFAULT_ARCHIVED_TASK_DELETE_DAYS).catch(DEFAULT_ARCHIVED_TASK_DELETE_DAYS),
+    /** Settled tasks each project's index keeps, per origin (runs/history-pools.ts). Absent =
+     *  `CEZ_RUNS_KEEP` / `CEZ_AUTOMATION_RUNS_KEEP`, else 300. */
+    runsKept: z.number().int().min(1).max(RUNS_KEPT_MAX).optional().catch(undefined),
+    automationRunsKept: z.number().int().min(1).max(RUNS_KEPT_MAX).optional().catch(undefined),
     /** Disk guard thresholds (runs/disk-guard.ts); each 0 = that trigger off. */
     diskGuard: diskGuardSchema.prefault(() => ({})).catch(() => diskGuardSchema.parse({})),
   })

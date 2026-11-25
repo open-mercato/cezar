@@ -24,7 +24,7 @@ const CONFIG: WorkspaceConfigResponse = {
     monitoringWakeIntervalMinutes: null,
     autoResumeOnUsageLimit: true,
     memoryLimitMb: null,
-    worktreeRetentionDefault: 10, worktreeIdleDaysDefault: 7, archivedTaskDeleteDaysDefault: 90, diskGuard: { minFreePercent: 10, minFreeGb: 5, maxWorktreesGb: 20 },
+    worktreeRetentionDefault: 10, worktreeIdleDaysDefault: 7, archivedTaskDeleteDaysDefault: 90, runsKept: 300, automationRunsKept: 300, diskGuard: { minFreePercent: 10, minFreeGb: 5, maxWorktreesGb: 20 },
   },
   agentDefaults: {},
 }

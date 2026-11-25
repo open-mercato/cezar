@@ -67,6 +67,10 @@ export const workspaceConfigResponseSchema = z.object({
     worktreeIdleDaysDefault: z.number(),
     /** Archived tasks are deleted after this many days; 0 = never. */
     archivedTaskDeleteDaysDefault: z.number(),
+    /** Effective settled-task history kept per project for hand-started tasks. */
+    runsKept: z.number(),
+    /** Effective settled-task history kept per project for automation-launched tasks. */
+    automationRunsKept: z.number(),
     /** Disk guard thresholds; each 0 = that trigger off. */
     diskGuard: z.object({ minFreePercent: z.number(), minFreeGb: z.number(), maxWorktreesGb: z.number() }),
   }),
@@ -133,6 +137,8 @@ export const setWorkspaceConfigInputSchema = z.object({
       worktreeRetentionDefault: z.number().int().min(0).max(1000).optional(),
       worktreeIdleDaysDefault: z.number().int().min(0).max(365).optional(),
       archivedTaskDeleteDaysDefault: z.number().int().min(0).max(3650).optional(),
+      runsKept: z.number().int().min(1).max(100_000).optional(),
+      automationRunsKept: z.number().int().min(1).max(100_000).optional(),
       diskGuard: z
         .object({
           minFreePercent: z.number().min(0).max(50).optional(),

@@ -38,9 +38,19 @@ export function setConfiguredRunRetention(limits: { regular?: number | null; aut
 }
 
 export function runRetentionLimits(): RunRetentionLimits {
+  const pools = effectiveHistoryPools({ runsKept: configured.regular, automationRunsKept: configured.automation });
+  return { regular: pools.runsKept, automation: pools.automationRunsKept, archived: envLimit('CEZ_ARCHIVED_RUNS_KEEP', DEFAULT_ARCHIVED_RUNS_KEPT) };
+}
+
+/** The pool sizes a workspace `resources` slice resolves to — what Settings shows. */
+export function effectiveHistoryPools(resources: { runsKept?: number | null; automationRunsKept?: number | null }): {
+  runsKept: number;
+  automationRunsKept: number;
+} {
   return {
-    regular: configured.regular ?? envLimit('CEZ_RUNS_KEEP', DEFAULT_RUNS_KEPT),
-    automation: configured.automation ?? envLimit('CEZ_AUTOMATION_RUNS_KEEP', DEFAULT_AUTOMATION_RUNS_KEPT),
-    archived: envLimit('CEZ_ARCHIVED_RUNS_KEEP', DEFAULT_ARCHIVED_RUNS_KEPT),
+    runsKept: validLimit(resources.runsKept) ? resources.runsKept : envLimit('CEZ_RUNS_KEEP', DEFAULT_RUNS_KEPT),
+    automationRunsKept: validLimit(resources.automationRunsKept)
+      ? resources.automationRunsKept
+      : envLimit('CEZ_AUTOMATION_RUNS_KEEP', DEFAULT_AUTOMATION_RUNS_KEPT),
   };
 }
