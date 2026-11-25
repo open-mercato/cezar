@@ -294,7 +294,9 @@ function Confirm({
           ? interactive
             ? 'cezar runs this on this computer, in your home folder, with your user account.'
             : 'This runs on your computer, with your user account.'
-          : 'Run this in a terminal on the computer running cezar.'}
+          : command
+            ? 'Run this in a terminal on the computer running cezar.'
+            : 'Install it on the computer running cezar, following the vendor’s steps.'}
       </p>
       {command ? <CommandBox command={command} /> : null}
       <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-meta">
