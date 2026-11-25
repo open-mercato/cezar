@@ -37,6 +37,7 @@ import {
   type PrivateMcpServer,
 } from '../core/private-mcp.ts';
 import { onUsage, registerRunProcess, unregisterRunProcess, type ProcessUsage } from '../core/process-usage.ts';
+import { detachesProcessGroup, killProcessTree } from '../core/kill-process-tree.ts';
 import { describeReaped, reapTaskProcesses, taskProcessReapEnabled } from '../core/task-processes.ts';
 import { isUsageExhaustion, parseUsageLimit } from '../core/usage-limit.ts';
 import { diskFullAgentErrorText } from '../disk-space.ts';
@@ -11186,8 +11187,12 @@ export class RunManager {
     if (state.cancelled) return { ok: false, output: 'cancelled', exitCode: -1 };
     return new Promise((resolve) => {
       // Check steps run in the same cwd as the agent steps — the worktree.
-      const child = spawn('bash', ['-lc', command], { cwd: state.cwd, env });
-      state.interrupt = () => child.kill('SIGTERM');
+      // Own process group so cancel takes the whole tree, not just the wrapper shell (#2467).
+      const child = spawn('bash', ['-lc', command], { cwd: state.cwd, env, detached: detachesProcessGroup, windowsHide: true });
+      state.interrupt = () => {
+        if (!detachesProcessGroup) child.kill('SIGTERM');
+        killProcessTree(child.pid);
+      };
 
       let output = '';
       const collect = (chunk: Buffer) => {

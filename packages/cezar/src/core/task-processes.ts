@@ -12,6 +12,8 @@ import { execFile } from 'node:child_process';
 import { readdir, readFile } from 'node:fs/promises';
 
 const MARKER = 'CEZ_TASK_ID';
+// Check steps carry only the run id (CEZ_TASK_ID would hand them dispatch/report authority, #2467).
+const FALLBACK_MARKER = 'CEZ_RUN_ID';
 const SCAN_BATCH = 64;
 
 export interface TaskProcess {
@@ -29,10 +31,12 @@ export function taskProcessReapEnabled(env: NodeJS.ProcessEnv = process.env): bo
 
 /** The `CEZ_TASK_ID` value in a NUL-separated `/proc/<pid>/environ` blob. */
 export function taskIdFromEnviron(environ: string): string | undefined {
+  let fallback: string | undefined;
   for (const entry of environ.split('\0')) {
     if (entry.startsWith(`${MARKER}=`)) return entry.slice(MARKER.length + 1) || undefined;
+    if (entry.startsWith(`${FALLBACK_MARKER}=`)) fallback = entry.slice(FALLBACK_MARKER.length + 1) || undefined;
   }
-  return undefined;
+  return fallback;
 }
 
 /** The ppid field of `/proc/<pid>/stat`; the comm field may hold spaces and parens, so read after the LAST `)`. */
@@ -52,7 +56,8 @@ export function parsePsEnvOutput(text: string): { procs: TaskProcess[]; parents:
     const pid = Number(match[1]);
     parents.set(pid, Number(match[2]));
     const rest = match[3] ?? '';
-    const marker = new RegExp(`(?:^|\\s)${MARKER}=(\\S+)`).exec(rest);
+    const marker =
+      new RegExp(`(?:^|\\s)${MARKER}=(\\S+)`).exec(rest) ?? new RegExp(`(?:^|\\s)${FALLBACK_MARKER}=(\\S+)`).exec(rest);
     if (!marker?.[1]) continue;
     procs.push({ pid, taskId: marker[1], command: capCommand(rest.slice(0, marker.index)) });
   }
