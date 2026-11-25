@@ -88,7 +88,9 @@ function SecretsSection({ scope, list, save, remove, invalidate }: SecretsSectio
       <SettingsCard title={title} description={intro}>
         {list.isPending ? <LoadingState label="Loading secrets…" className="p-4"><RowsSkeleton rows={2} /></LoadingState> : null}
         {list.isError ? <p role="alert" className="px-4 py-3 text-ui text-danger">{list.error?.message}</p> : null}
-        {list.data && secrets.length === 0 ? <CardNote>No secrets stored.</CardNote> : null}
+        {list.data && secrets.length === 0 ? <CardNote slot="secrets-empty">
+          No secrets stored. Already have run-pi-in-colima credentials in ~/.sandcastle-secrets? Run <code className="font-mono">cezar secrets import-sandcastle{scope === 'workspace' ? ' --workspace' : ''}</code> in a terminal (a dry run until you add <code className="font-mono">--apply</code>).
+        </CardNote> : null}
         {list.data && secrets.length > 0 ? (
           <div className="overflow-x-auto">
             <table className="w-full border-collapse text-ui" aria-label={`Stored ${scope} secrets`}>

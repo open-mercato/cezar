@@ -256,4 +256,13 @@ describe('Secrets settings', () => {
       const expected = parts.length > 0 && parts.every((part) => secretHostIssue(part) === null)
       expect(parseBinding(fields).binding !== undefined).toBe(expected)
     })
+  it('points an empty store at the import command, and a stocked one does not', async () => {
+    setup({ secrets: [], scope: 'workspace' })
+    expect((await screen.findByText(/No secrets stored/)).textContent).toContain('cezar secrets import-sandcastle --workspace')
+    cleanup()
+    setup()
+    await screen.findByText('OPENAI_API_KEY')
+    expect(screen.queryByText(/import-sandcastle/)).toBeNull()
+  })
+
 })
