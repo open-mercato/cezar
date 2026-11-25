@@ -13,7 +13,8 @@ import { MANAGER_BASH_FILTERS, MANAGER_TEXT_IN_FILES } from './bash-policy.ts';
 import { compileCodexRestrictedPolicy } from '../core/codex-restricted-policy.ts';
 import { CodexReadBroker } from '../core/codex-restricted-tools.ts';
 import { ManagerEngine, managerWriteRules, type AutomationRunReport, type ManagerEngineDeps } from './engine.ts';
-import { followupPrompt, MANAGER_QUIET, managerSystemPrompt, watchPrompt } from './prompts.ts';
+import { followupPrompt, MANAGER_GLOBAL_INSTRUCTIONS_HEADING, MANAGER_QUIET, managerSystemPrompt, watchPrompt } from './prompts.ts';
+import { mergeWriteWorkspaceConfig } from '../workspace/config.ts';
 import { readColdRuns, type ManagerProjectSource } from './snapshot.ts';
 import type { RunRecord } from '../runs/store.ts';
 import { ManagerStore } from './store.ts';
@@ -251,6 +252,35 @@ describe('ManagerEngine', () => {
 
       expect(await engine.update(id, { clearBashDenials: true })).not.toHaveProperty('bashDenials');
       expect(await engine.update(id, { bashAllow: [] })).not.toHaveProperty('bashAllow');
+    });
+
+    it('carries the current global instructions into chat, watch and job turns, re-read on every turn', async () => {
+      await mergeWriteWorkspaceConfig((config) => { config.systemPrompt = 'Never run the full test suite.'; });
+      const engine = makeEngine();
+      const id = await create(engine);
+      engine.send(id, 'hi');
+      await settled(engine);
+      engine.check(id);
+      await settled(engine);
+      await engine.update(id, { jobs: [{ name: 'Sweep', prompt: 'p', everyMinutes: 5, enabled: true }] });
+      store.update(id, (manager) => ({ ...manager, jobs: manager.jobs.map((job) => ({ ...job, lastRunAt: '2000-01-01T00:00:00.000Z' })) }));
+      engine.tick();
+      await settled(engine);
+      expect(backend.specs.map((spec) => spec.env?.CEZ_MANAGER_TURN)).toEqual(['chat', 'watch', 'job']);
+      for (const spec of backend.specs) {
+        expect(spec.systemPrompt).toContain(MANAGER_GLOBAL_INSTRUCTIONS_HEADING);
+        expect(spec.systemPrompt).toContain('Never run the full test suite.');
+      }
+      await mergeWriteWorkspaceConfig((config) => { config.systemPrompt = 'Run only focused tests.'; });
+      engine.send(id, 'again');
+      await settled(engine);
+      const resumed = backend.specs.at(-1)!;
+      expect(resumed.systemPrompt).toContain('Run only focused tests.');
+      expect(resumed.systemPrompt).not.toContain('Never run the full test suite.');
+      await mergeWriteWorkspaceConfig((config) => { delete config.systemPrompt; });
+      engine.send(id, 'once more');
+      await settled(engine);
+      expect(backend.specs.at(-1)?.systemPrompt).not.toContain(MANAGER_GLOBAL_INSTRUCTIONS_HEADING);
     });
 
     it('lets Claude write only under files/: never .claude/ in its cwd, never a bare Write, Edit or Bash', async () => {
