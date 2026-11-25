@@ -47,8 +47,10 @@ describe('guardChildProcessKill', () => {
 
   // Real process groups: the hazard is POSIX `kill(0)`; Windows has no process group.
   describe.skipIf(process.platform === 'win32')('a child whose spawn failed', () => {
-    it('documented: unguarded, its kill() SIGKILLs the caller\'s whole process group', async () => {
+    it('documented: unguarded, its kill() SIGKILLs the caller\'s whole process group', async (ctx) => {
       const ended = await inOwnGroup('');
+      // A runtime whose libuv no longer sends kill(0) (Node 24.22, 26.13) has no hazard to document.
+      if (ended.signal === null && ended.stdout === 'survived\n') ctx.skip(`Node ${process.version} has no failed-spawn group kill`);
       expect(ended.signal).toBe('SIGKILL');
       expect(ended.stdout).not.toContain('survived');
     });

@@ -3,8 +3,9 @@
  * included, in a login `bash`. It gets a process group of its own, so a group signal from inside it
  * (`kill(0)`, `kill(-pgid)`) stays in the check. Sharing the cockpit's group, one test killed a
  * stage it never started and SIGKILLed the cockpit, its agents and the desktop app, twice on
- * 2026-11-25 (`core/child-kill-guard.ts`). Windows has no process group; `detached` there would
- * open a console window instead.
+ * 2026-11-25 (`core/child-kill-guard.ts`). `detached` is `setsid()`: the check also leaves the
+ * terminal of a cockpit started from one, so a prompt that opens `/dev/tty` (GPG pinentry) cannot.
+ * Windows has no process group; `detached` there would open a console window instead.
  */
 
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';

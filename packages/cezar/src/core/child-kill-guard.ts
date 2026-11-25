@@ -1,8 +1,8 @@
 /**
- * `ChildProcess.kill()` on a child whose spawn failed (ENOENT, EACCES) is a process-GROUP kill:
- * until Node emits the spawn error a tick later the handle's pid is 0, and libuv sends
- * `kill(0, signal)` — to every process in the caller's group. Under the desktop app that group
- * was the app itself: a check step's test suite killed a stage it could not start and SIGKILLed
+ * `ChildProcess.kill()` on a child whose spawn failed (ENOENT, EACCES) can be a process-GROUP
+ * kill: until Node emits the spawn error a tick later the handle's pid is 0, and a libuv that
+ * still sends `kill(0, signal)` signals every process in the caller's group (Node 24.22 and 26.13
+ * do not; `engines` admits older runtimes). Under the desktop app that group was the app itself: a check step's test suite killed a stage it could not start and SIGKILLed
  * the shell, the cockpit and every agent, twice on 2026-11-25.
  *
  * The guard makes `kill()` a no-op (`false`, as for an exited child) for any child without a

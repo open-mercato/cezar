@@ -1076,7 +1076,8 @@ fn supervise(app: AppHandle, shell: Arc<Shell>) {
                 fail(&window, "cezar stopped", &with_log_hint(&stopped_detail(code)), &tail, stopped_failure(code));
                 return;
             }
-            // No status: the app is quitting and took the child. A signal is a stop, not silence.
+            // No exit code: a signal death (a stop, not silence), or no status at all because the
+            // app is quitting and took the child.
             None => {
                 if let Some(signal) = status.and_then(exit_signal) {
                     let tail = log.lock().unwrap().iter().cloned().collect::<Vec<_>>().join("\n");
@@ -2374,7 +2375,15 @@ impl SidecarLog {
             let _ = std::fs::rename(&self.path, PathBuf::from(rotated));
         }
         self.written = size(&self.path);
-        self.file = std::fs::OpenOptions::new().create(true).append(true).open(&self.path).ok();
+        let mut options = std::fs::OpenOptions::new();
+        options.create(true).append(true);
+        // Owner-only, like the rest of `~/.cezar`: it holds task output, paths and stacks.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        self.file = options.open(&self.path).ok();
     }
 
     fn line(&mut self, text: &str, now: std::time::SystemTime) {
@@ -2598,6 +2607,11 @@ mod tests {
         assert!(rotated.contains("1970-01-01T00:00:00.000Z first line of output\n"));
         assert!(rotated.contains("second line, past the cap"));
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "1970-01-01T00:00:00.000Z third\n");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(std::fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o600);
+        }
         let _ = std::fs::remove_dir_all(&dir);
     }
 

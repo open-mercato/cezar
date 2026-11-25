@@ -11,14 +11,24 @@ describe('installCrashLogging', () => {
   let uninstall: (() => void) | undefined;
   afterEach(() => uninstall?.());
 
-  it('logs an unhandled rejection with a timestamp and its stack', () => {
+  it('logs an unhandled rejection with a timestamp and its stack, and reports it', () => {
     const lines: string[] = [];
-    uninstall = installCrashLogging({ write: (line) => lines.push(line), now: () => new Date('2026-11-25T12:37:33.000Z') });
+    const reported: unknown[] = [];
+    uninstall = installCrashLogging({ write: (line) => lines.push(line), now: () => new Date('2026-11-25T12:37:33.000Z'), report: (reason) => reported.push(reason) });
     const error = new Error('boom');
     process.emit('unhandledRejection', error, Promise.resolve());
     expect(lines).toHaveLength(1);
     expect(lines[0]).toContain('2026-11-25T12:37:33.000Z unhandled promise rejection');
     expect(lines[0]).toContain(error.stack!);
+    // Handled here, it no longer reaches telemetry's uncaughtException reporter on its own.
+    expect(reported).toEqual([error]);
+  });
+
+  it('survives a reporter that throws', () => {
+    const lines: string[] = [];
+    uninstall = installCrashLogging({ write: (line) => lines.push(line), report: () => { throw new Error('offline'); } });
+    expect(() => process.emit('unhandledRejection', new Error('boom'), Promise.resolve())).not.toThrow();
+    expect(lines).toHaveLength(1);
   });
 
   it('removes both handlers on uninstall', () => {
@@ -49,6 +59,8 @@ describe('installCrashLogging', () => {
     const thrown = run(`setTimeout(() => { throw new Error('fatal'); }, 10); setTimeout(() => console.log('survived'), 200);`);
     expect(thrown.status).toBe(1);
     expect(thrown.stdout).not.toContain('survived');
-    expect(thrown.stderr).toMatch(/uncaught exception \(uncaughtException\) — the cockpit stops:\nError: fatal/);
+    expect(thrown.stderr).toMatch(/uncaught exception \(uncaughtException\) — the cockpit stops; the stack follows:\n/);
+    // Node prints the stack itself; the monitor only adds the timestamped header.
+    expect(thrown.stderr.match(/Error: fatal/g)).toHaveLength(1);
   });
 });

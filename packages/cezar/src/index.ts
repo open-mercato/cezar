@@ -51,7 +51,7 @@ import { initServeWorkspace, initWorkspace } from './workspace/boot.ts';
 import { loadWorkspaceConfig } from './workspace/config.ts';
 import { runProjectsCommand } from './workspace/projects-cli.ts';
 import { WorkspaceSemaphore } from './workspace/semaphore.ts';
-import { flushTelemetry, initTelemetry, installCrashReporter, registerDailyInventory, registerTelemetryContext, startDailyPing, track } from './telemetry.ts';
+import { flushTelemetry, initTelemetry, installCrashReporter, registerDailyInventory, reportError, registerTelemetryContext, startDailyPing, track } from './telemetry.ts';
 import { collectFeatureInventory } from './feature-telemetry.ts';
 import { runTaskCommand } from './dispatch/task-cli.ts';
 import { runAutomationCommand } from './automations/automation-cli.ts';
@@ -350,7 +350,7 @@ async function serveCommand(
   bindHost?: string,
 ): Promise<void> {
   // A failing request or task must not take the whole cockpit down, and must leave a trace.
-  installCrashLogging();
+  installCrashLogging({ report: (reason) => reportError(reason, { source: 'process', handler: 'unhandledRejection' }) });
   const runtimeId = newRuntimeId();
   let cockpitLease: CockpitLease | undefined;
   let runtimeReleased = false;
