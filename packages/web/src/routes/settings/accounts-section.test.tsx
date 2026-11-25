@@ -10,6 +10,8 @@ import type { AgentProfile, AgentProfilesResponse } from '@open-mercato/cezar-ap
 import { Toaster, onDangerToast, resetToasts } from '@/components/ui/toaster'
 import { AppRoutes } from '@/routes'
 import { ThemeProvider } from '@/components/theme-provider'
+import { AddAccountProvider } from '@/components/add-account/add-account-host'
+import { applyAgentLoginEvent } from '@/api/agent-login'
 
 /**
  * Global settings → Agent accounts (spec `.ai/specs/2026-07-29-agent-profiles.md`).
@@ -105,6 +107,19 @@ function serve(
       }
       if (url === '/api/v1/workspace/agent-profiles' && method === 'POST') {
         if (options.createStatus) return json({ error: options.createError }, options.createStatus)
+        if (body?.managed) {
+          const made = profile({
+            id: 'work',
+            label: String(body.label ?? 'work'),
+            configDir: '/home/u/.cezar/agent-homes/claude/work',
+            path: '/home/u/.cezar/agent-homes/claude/work',
+            provider: body.provider as AgentProfile['provider'],
+            managed: true,
+            pending: true,
+          })
+          state = { ...state, profiles: [...state.profiles, made] }
+          return json({ profile: made }, 201)
+        }
         const created = profile({
           id: 'added',
           label: String(body?.label ?? 'added'),
@@ -129,6 +144,12 @@ function serve(
       if (url.includes('/agent-profiles/') && url.includes('/status') && method === 'GET') {
         statusReads.push(url)
         return json({ status: options.status ?? { provider: 'claude', status: 'connected' } })
+      }
+      if (url === '/api/v1/providers/login' && method === 'POST') {
+        return json({ sessionId: 's1', provider: body?.provider, profileId: body?.profileId, method: 'browser', phase: 'starting' })
+      }
+      if (url === '/api/v1/providers/login/s1' && method === 'DELETE') {
+        return json({ sessionId: 's1', provider: 'claude', profileId: 'work', method: 'browser', phase: 'cancelled' })
       }
       if (url === '/api/v1/providers/connect' && options.connect) {
         return json(options.connect.body, options.connect.status)
@@ -172,12 +193,17 @@ function AgentParamProbe() {
   )
 }
 
+let lastClient: ReturnType<typeof createQueryClient> | undefined
+/** The client the last `renderAccounts` mounted, for pushing SSE frames into it. */
+const currentClient = () => lastClient!
+
 function renderAccounts(
   entry = '/settings/global/accounts',
   extra: ReactNode = null,
   localHandoff: boolean | null = true,
 ) {
   const client = createQueryClient()
+  lastClient = client
   client.setDefaultOptions({ queries: { ...client.getDefaultOptions().queries, retry: false } })
   if (localHandoff !== null) client.setQueryData(queryKeys.health, {
     bootProject: 'boot',
@@ -199,9 +225,11 @@ function renderAccounts(
     <QueryClientProvider client={client}>
       <ThemeProvider>
         <MemoryRouter initialEntries={[entry]}>
-          <AppRoutes />
-          {extra}
-          <Toaster />
+          <AddAccountProvider>
+            <AppRoutes />
+            {extra}
+            <Toaster />
+          </AddAccountProvider>
         </MemoryRouter>
       </ThemeProvider>
     </QueryClientProvider>,
@@ -1015,9 +1043,12 @@ describe('the agent accounts section', () => {
  * not exist yet — neither is reachable through a picker that only lists visible directories.
  */
 describe('the add-account dialog', () => {
+  // The folder field is the wizard's Advanced choice now (spec 2026-11-24-add-account-in-cockpit).
   const openDialog = async () => {
-    await waitFor(() => expect(document.querySelector('[data-action="accounts-add"]')).not.toBeNull())
+    await waitFor(() => expect(document.querySelector<HTMLButtonElement>('[data-action="accounts-add"]')?.disabled).toBe(false))
     fireEvent.click(document.querySelector('[data-action="accounts-add"]')!)
+    await waitFor(() => expect(document.querySelector('[data-action="add-account-advanced"]')).not.toBeNull())
+    fireEvent.click(document.querySelector('[data-action="add-account-advanced"]')!)
     await waitFor(() => expect(document.querySelector('[data-slot="add-account-dialog"]')).not.toBeNull())
   }
   const dirField = () => screen.getByLabelText<HTMLInputElement>('Config folder')
@@ -1128,5 +1159,87 @@ describe('the add-account dialog', () => {
         "that is already this agent's default folder",
       ),
     )
+  })
+})
+
+/** Add account from the cockpit (spec 2026-11-24-add-account-in-cockpit). */
+describe('the add-account wizard', () => {
+  const PROFILES = { editable: true, profileCapableProviders: ['claude', 'codex'], defaults: {}, selections: {}, profiles: DEFAULTS } as AgentProfilesResponse
+  const openWizard = async () => {
+    await waitFor(() => expect(document.querySelector<HTMLButtonElement>('[data-action="accounts-add"]')?.disabled).toBe(false))
+    fireEvent.click(document.querySelector('[data-action="accounts-add"]')!)
+    await waitFor(() => expect(document.querySelector('[data-slot="add-account-wizard"]')).not.toBeNull())
+  }
+
+  it('creates a managed account, shows the link to copy without opening a tab, then who signed in', async () => {
+    serve(PROFILES)
+    const opened = vi.fn()
+    vi.stubGlobal('open', opened)
+    renderAccounts()
+    await openWizard()
+    fireEvent.change(document.querySelector('[data-slot="add-account-name"]')!, { target: { value: 'Work' } })
+    fireEvent.click(document.querySelector('[data-action="add-account-continue"]')!)
+
+    await waitFor(() => expect(requests.find((r) => r.method === 'POST' && r.url === '/api/v1/workspace/agent-profiles')?.body)
+      .toEqual({ provider: 'claude', managed: true, label: 'Work' }))
+    await waitFor(() => expect(requests.find((r) => r.url === '/api/v1/providers/login')?.body).toEqual({ provider: 'claude', profileId: 'work' }))
+    act(() => applyAgentLoginEvent(currentClient(), { sessionId: 's1', provider: 'claude', profileId: 'work', method: 'browser', phase: 'waiting', url: 'https://claude.com/cai/oauth/authorize?x=1' }))
+    await waitFor(() => expect(screen.getByText('https://claude.com/cai/oauth/authorize?x=1')).toBeTruthy())
+    expect(screen.getByRole('button', { name: 'Copy link' })).toBeTruthy()
+    expect(opened).not.toHaveBeenCalled()
+
+    act(() => applyAgentLoginEvent(currentClient(), { sessionId: 's1', provider: 'claude', profileId: 'work', method: 'browser', phase: 'connected' }))
+    await waitFor(() => expect(document.querySelector('[data-slot="add-account-ready"]')).not.toBeNull())
+    await waitFor(() => expect(document.querySelector('[data-slot="add-account-identity"]')?.textContent).toContain('me@example.com'))
+  })
+
+  it('cancelling a sign-in asks first, then deletes the new account', async () => {
+    serve(PROFILES)
+    renderAccounts()
+    await openWizard()
+    fireEvent.click(document.querySelector('[data-action="add-account-continue"]')!)
+    await waitFor(() => expect(document.querySelector('[data-slot="add-account-signing"]')).not.toBeNull())
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+    await waitFor(() => expect(document.querySelector('[data-slot="add-account-cancel"]')).not.toBeNull())
+    expect(requests.some((r) => r.method === 'DELETE' && r.url.includes('/agent-profiles/'))).toBe(false)
+    fireEvent.click(document.querySelector('[data-action="add-account-discard"]')!)
+    await waitFor(() => expect(requests.some((r) => r.method === 'DELETE' && r.url === '/api/v1/workspace/agent-profiles/work')).toBe(true))
+    await waitFor(() => expect(document.querySelector('[data-slot="add-account-wizard"]')).toBeNull())
+  })
+
+  it('shows the server refusal in step 1', async () => {
+    serve(PROFILES, { createStatus: 409, createError: 'agent accounts are disabled in hosted mode' })
+    renderAccounts()
+    await openWizard()
+    fireEvent.click(document.querySelector('[data-action="add-account-continue"]')!)
+    await waitFor(() => expect(document.querySelector('[data-slot="add-account-error"]')?.textContent).toContain('disabled in hosted mode'))
+  })
+
+  it('on a phone: no folder paths, no Advanced, and only cezar-made accounts can be removed', async () => {
+    serve({
+      ...PROFILES,
+      hostPaths: false,
+      profiles: [
+        ...DEFAULTS.map((row) => ({ ...row, configDir: '', path: '' })),
+        profile({ id: 'own', configDir: '', path: '' }),
+        profile({ id: 'made', configDir: '', path: '', managed: true }),
+        profile({ id: 'half', configDir: '', path: '', managed: true, pending: true }),
+      ],
+    })
+    renderAccounts()
+    await waitFor(() => expect(document.querySelector('[data-account="made"]')).not.toBeNull())
+    expect(document.querySelector('[data-slot="account-path"]')).toBeNull()
+    expect(document.querySelector('[data-account="half"] [data-slot="account-pending"]')).not.toBeNull()
+    expect(document.querySelector('[data-account="half"] [data-action="account-finish-sign-in"]')).not.toBeNull()
+
+    fireEvent.click(document.querySelector('[data-account="own"] [data-action="account-details-toggle"]')!)
+    await waitFor(() => expect(document.querySelector('[data-account="own"] [data-slot="account-details"]')).not.toBeNull())
+    expect(document.querySelector('[data-account="own"] [data-action="account-remove"]')).toBeNull()
+    fireEvent.click(document.querySelector('[data-account="made"] [data-action="account-details-toggle"]')!)
+    await waitFor(() => expect(document.querySelector('[data-account="made"] [data-action="account-remove"]')).not.toBeNull())
+    expect(document.querySelector('[data-account="made"] [data-action="account-rename"]')).toBeNull()
+
+    await openWizard()
+    expect(document.querySelector('[data-action="add-account-advanced"]')).toBeNull()
   })
 })

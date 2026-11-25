@@ -74,9 +74,9 @@ export type MemoryRefusal = { error: string; status: 400 | 404 | 409 };
 export function setMemoryEntry(
   file: MemoryFile,
   key: string,
-  input: PutManagerMemoryInput,
+  input: Omit<PutManagerMemoryInput, 'source'>,
   at: string,
-  source: ManagerMemoryEntry['source'] = input.source ?? 'user',
+  source: ManagerMemoryEntry['source'],
 ): MemoryFile | MemoryRefusal {
   const entry: ManagerMemoryEntry = {
     key,

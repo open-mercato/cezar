@@ -41,16 +41,30 @@ function cross(parent, x, y) {
   }
 }
 
-function buildFace(avatar, size) {
+function halo(svg) {
+  node('circle', { class: 'halo', cx: 16, cy: 16, r: 15 }, svg)
+}
+
+/** The cockpit's portrait (`ManagerAvatar`). The state cues sit around and beside it: the ring,
+ *  the motion and a corner badge for an error, never a face drawn over the character. */
+function buildMascot(svg, mascot) {
+  const body = node('g', { class: 'body' }, svg)
+  node('image', { class: 'skin portrait', href: `mascots/${mascot}.webp`, x: 0, y: 0, width: 32, height: 32 }, body)
+  halo(svg)
+  const badge = node('g', { class: 'badge' }, svg)
+  node('circle', { cx: 26.5, cy: 26.5, r: 5.5 }, badge)
+  node('path', { d: 'M24.6 24.6l3.8 3.8m0 -3.8l-3.8 3.8' }, badge)
+}
+
+/** A legacy manager with no mascot keeps the persona the cockpit still draws for it. */
+function buildPersona(svg, avatar) {
   const parts = avatarParts(avatar)
   const id = `gloss-${(gloss += 1)}`
-  const svg = node('svg', { class: 'face', viewBox: '0 0 32 32', width: size, height: size, 'aria-hidden': 'true' })
-  svg.dataset.avatar = String(avatar)
   const defs = node('defs', {}, svg)
   const gradient = node('radialGradient', { id, cx: '0.35', cy: '0.2', r: '0.9' }, defs)
   node('stop', { offset: '0', 'stop-color': 'white', 'stop-opacity': '0.32' }, gradient)
   node('stop', { offset: '1', 'stop-color': 'white', 'stop-opacity': '0' }, gradient)
-  node('circle', { class: 'halo', cx: 16, cy: 16, r: 15 }, svg)
+  halo(svg)
   const body = node('g', { class: 'body' }, svg)
   const skin = node('g', { class: 'skin' }, body)
   node('path', { d: parts.shape, fill: parts.fill }, skin)
@@ -62,17 +76,34 @@ function buildFace(avatar, size) {
     node('path', { d: parts.companion, fill: `url(#${id})` }, skin)
     eyes(body, 21, 21, 0.75)
   }
+}
+
+/** `mascot` is one of `MASCOTS` in `notch_model.rs` or absent: the shell drops any other. */
+function faceKey(entry) {
+  return entry.mascot ? `mascot:${entry.mascot}` : `avatar:${entry.avatar}`
+}
+
+function buildFace(entry, size) {
+  const svg = node('svg', { class: 'face', viewBox: '0 0 32 32', width: size, height: size, 'aria-hidden': 'true' })
+  svg.dataset.key = faceKey(entry)
+  if (entry.mascot) {
+    svg.dataset.mascot = entry.mascot
+    buildMascot(svg, entry.mascot)
+  } else {
+    svg.dataset.avatar = String(entry.avatar)
+    buildPersona(svg, entry.avatar)
+  }
   return svg
 }
 
 /** Keeps a live svg when only its state changed: rebuilding restarts the animation. */
-function syncFace(slot, avatar, face, size) {
+function syncFace(slot, entry, size) {
   let svg = slot.firstElementChild
-  if (!svg || svg.dataset.avatar !== String(avatar) || Number(svg.getAttribute('width')) !== size) {
-    svg = buildFace(avatar, size)
+  if (!svg || svg.dataset.key !== faceKey(entry) || Number(svg.getAttribute('width')) !== size) {
+    svg = buildFace(entry, size)
     slot.replaceChildren(svg)
   }
-  svg.dataset.face = face
+  svg.dataset.face = entry.face
 }
 
 function setText(element, text) {
@@ -81,7 +112,7 @@ function setText(element, text) {
 
 function syncRow(row, entry) {
   row.dataset.face = entry.face
-  syncFace(row.querySelector('.row-face'), entry.avatar, entry.face, layout.expanded.face)
+  syncFace(row.querySelector('.row-face'), entry, layout.expanded.face)
   setText(row.querySelector('.row-name'), entry.name)
   setText(row.querySelector('.row-text'), entry.text)
   setText(row.querySelector('.row-tail'), entry.badge ?? WORDS[entry.face])
@@ -135,7 +166,7 @@ function syncMinis() {
       mini.dataset.id = entry.id
     }
     mini.title = entry.name
-    syncFace(mini, entry.avatar, entry.face, layout.pill2.mini)
+    syncFace(mini, entry, layout.pill2.mini)
     return mini
   })
   box.replaceChildren(...minis)
@@ -185,7 +216,7 @@ function draw() {
   const wasOut = island.dataset.state === 'tucked'
   syncRows()
   syncMinis()
-  syncFace($('primary-face'), model.primary.avatar, model.primary.face, Math.min(layout.pill1.face, housing.height - 8))
+  syncFace($('primary-face'), model.primary, Math.min(layout.pill1.face, housing.height - 8))
   setText($('primary-text'), model.primary.text)
   const count = model.active.length
   setText($('sheet-title'), housing.width > 0 ? `${count} active` : '')

@@ -21,6 +21,7 @@ import { RUNNERS } from '@/routes/new-task-form'
 /** The mockup's `.chip` — defined once in `components/chip.tsx` (spec 2026-09-14-automations-redesign
  *  § Primitives) and re-exported here for the composer's existing importers. */
 import { chipChevron as chevron, chipClass } from '@/components/chip'
+import { useAddAccount } from '@/components/add-account/add-account-host'
 import { cn } from '@/lib/utils'
 
 export { chevron, chipClass }
@@ -47,6 +48,7 @@ export function PickerPill({
   status,
   searchPlaceholder,
   className,
+  action,
 }: {
   slot: string
   ariaLabel: string
@@ -66,6 +68,8 @@ export function PickerPill({
   searchPlaceholder?: string
   /** Extra trigger classes — the composer joins two pills into one `agent · model` chip. */
   className?: string
+  /** One command below the options (the runner pill's "Add account…"). */
+  action?: { label: string; slot: string; onSelect: () => void } | undefined
 }) {
   const [open, setOpen] = useState(false)
   const [search, setSearch] = useState('')
@@ -216,6 +220,11 @@ export function PickerPill({
             {status}
           </DropdownMenuItem>
         ) : null}
+        {action ? (
+          <DropdownMenuItem data-action={action.slot} className="border-t border-border text-label" onSelect={action.onSelect}>
+            {action.label}
+          </DropdownMenuItem>
+        ) : null}
       </DropdownMenuContent>
     </DropdownMenu>
   )
@@ -286,6 +295,8 @@ export function RunnerPill({
   className?: string
 }) {
   const available = RUNNERS.filter((r) => runners.includes(r.id))
+  const addAccount = useAddAccount()
+  const addFor = addAccount?.capable.includes(value) ? value : available.find((runner) => addAccount?.capable.includes(runner.id))?.id
   const options = available.flatMap((runner) => {
     const logins = accounts.filter((entry) => entry.provider === runner.id)
     // One login is not a choice, so it does not become a row of its own — the agent is the row.
@@ -320,6 +331,12 @@ export function RunnerPill({
         onPick(runner as Runner, picked ?? null)
       }}
       options={options}
+      // A new login is selected here once it signs in (spec 2026-11-24-add-account-in-cockpit).
+      action={addAccount && addFor ? {
+        label: 'Add account…',
+        slot: 'runner-pill-add-account',
+        onSelect: () => addAccount.open({ provider: addFor, onAdded: (profile) => onPick(profile.provider as Runner, profile.id) }),
+      } : undefined}
     />
   )
 }

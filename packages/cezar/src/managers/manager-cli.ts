@@ -3,13 +3,16 @@
  * client over `/workspace/managers`, addressed like `cez task`: `CEZ_API_URL` plus `CEZ_MANAGER_ID`,
  * both set on every manager turn. The `cez-manager` shim on the turn's PATH lands here.
  */
-import { readFile } from 'node:fs/promises';
+import { readFile, realpath } from 'node:fs/promises';
+import { isAbsolute, join, relative, resolve } from 'node:path';
+import { cezarHomeDir } from '../paths.ts';
 import { parseArgs } from 'node:util';
 import type { ManagerCancelTaskResponse, ManagerCreateTaskResponse, ManagerFollowTaskResponse, ManagerForwarded, ManagerMemoryResponse, ManagerMessage, ManagerSnapshot, ManagerSnapshotProject, ManagerTaskMessageResponse } from '@open-mercato/cezar-contract';
 import { managerAccessOf, managerMemoryKeySchema, managerMemoryKindSchema, managerTaskEffortSchema, MANAGER_MEMORY_LIMITS, type Manager } from '@open-mercato/cezar-contract';
 import { runAutomationCommand } from '../automations/automation-cli.ts';
 import { missingCockpitMessage } from '../cockpit-address.ts';
 import { parseConnectorTool } from './connectors.ts';
+import { MANAGER_COMMANDS, MANAGER_JOB_SUBCOMMANDS, MANAGER_MEMORY_SUBCOMMANDS, MANAGER_TASK_SUBCOMMANDS } from './cli-vocabulary.ts';
 import { recentTasks } from './snapshot.ts';
 import { sameModel } from '../runs/reported-model.ts';
 
@@ -38,9 +41,12 @@ const USAGE = `cez manager — the tools of a cezar manager's agent (CEZ_MANAGER
   cez manager task create --project <id> [--title t] [--workflow w] [--runner r] [--account id] [--model m] [--effort e] [--dispatch] "<objective>"
   cez manager task say --project <id> <run> [--model m] [--effort e] "<text>"
                                                  --model/--effort only when it continues a finished task
+  cez manager task switch --project <id> <run> [--runner r] [--account id] [--model m] [--effort e]
+                                                 change the agent and keep the task's history and worktree
   cez manager task cancel --project <id> <run> [--reason "…"]
                                                  stops it and every task it dispatched; worktree and branch stay
-  cez manager task retry --project <id> <run>    a failed or cancelled task again, as a new task
+  cez manager task retry --project <id> <run> [--runner r] [--account id] [--model m] [--effort e]
+                                                 retry in place with agent flags, or start over without them
   cez manager task follow|unfollow [--project <id>] <run>
                                                  hear when a task you did not start settles or needs the user
       content flags for create and say:
@@ -76,10 +82,10 @@ function fail(message: string): never {
   throw new Error(message);
 }
 
-const COMMANDS = ['status', 'attention', 'tasks', 'prs', 'task', 'workflows', 'merge', 'automation', 'job', 'propose-action', 'rename', 'memory', 'history'] as const;
-const TASK_SUBCOMMANDS = ['create', 'say', 'cancel', 'retry', 'follow', 'unfollow'] as const;
-const JOB_SUBCOMMANDS = ['add', 'list', 'remove'] as const;
-const MEMORY_SUBCOMMANDS = ['list', 'set', 'remove'] as const;
+const COMMANDS = MANAGER_COMMANDS;
+const TASK_SUBCOMMANDS = MANAGER_TASK_SUBCOMMANDS;
+const JOB_SUBCOMMANDS = MANAGER_JOB_SUBCOMMANDS;
+const MEMORY_SUBCOMMANDS = MANAGER_MEMORY_SUBCOMMANDS;
 /** `history` prints at most this much: older chat is a lookup, not a reload. */
 const HISTORY_CHARS = 8_000;
 const HISTORY_MESSAGE_CHARS = 800;
@@ -103,12 +109,12 @@ Compact by default: finished tasks the user has not opened, and all but the 20 n
 
 /** `--help` per command; `task create` adds the project's workflow names when it can reach them. */
 const HELP: Record<string, string> = {
-  status: SNAPSHOT_HELP('status', 'What needs attention, every task and every pull request.'),
+  status: SNAPSHOT_HELP('status', 'What needs attention, every task and every pull request, and the agent accounts new tasks may use with their usage-limit state.'),
   attention: SNAPSHOT_HELP('attention', 'What needs attention: waiting, failed, finished and stalled tasks, PRs and automations.'),
   tasks: SNAPSHOT_HELP('tasks', "Every connected project's tasks, the user's own included, with their model, effort and PR."),
   prs: SNAPSHOT_HELP('prs', 'Open pull requests and their status.'),
   task: `cez manager task <run> [--project <id>]
-cez manager task create|say|cancel|retry|follow|unfollow …   (each takes --help)
+cez manager task create|say|switch|cancel|retry|follow|unfollow …   (each takes --help)
 
 One task as JSON: status, startedBy, runner, model, actualModel (what the agent reported running), effort, prNumber/prUrl, its last message and its children.
   --project <id>   the task's project; found from the snapshot when omitted`,
@@ -119,25 +125,38 @@ Starts a task.
   --title <t>        its title
   --workflow <w>     a workflow name (default quick-task); see cez manager workflows
   --runner <r>       the agent backend, e.g. claude or codex, from the manager's allowed task accounts
-  --account <id>     the agent account id (default selects the discovered account)
+  --account <id>     the agent account id from those accounts
+                     Omit both to use the manager's settings: its first allowed account with usage capacity,
+                     skipping any that is out of limits (cez manager status lists them). With none free the task
+                     queues until the first one resets. A usage limit hit mid-task moves it to another allowed
+                     account with capacity. The output names the chosen account and why; an explicit --account
+                     that is out of limits prints a warning naming an allowed one with capacity.
   --model <m>        a model id or alias the runner can use, e.g. opus; refused with the valid ones otherwise
   --effort <e>       ${EFFORTS.join(' | ')}; refused when the runner or model has no such level
-  --dispatch         start it as the root of a dispatch tree${CONTENT_HELP}`,
+  --dispatch         start it as the root of a dispatch tree, only for work worth splitting;
+                     ignored in a trunk-based project, whose tasks work in its checkout${CONTENT_HELP}`,
   'task say': `cez manager task say --project <id> <run> [flags] "<text>"
 
 Messages a running task, or continues a finished one with the text.
   --project <id>     the task's project
   --model <m>        continue on this model (a finished task only)
   --effort <e>       ${EFFORTS.join(' | ')} (a finished task only)${CONTENT_HELP}`,
+  'task switch': `cez manager task switch --project <id> <run> [--runner r] [--account id] [--model m] [--effort e]
+
+Choose at least one agent flag. Switches a queued task before it starts, interrupts a live agent turn,
+or continues a settled task with its conversation. Keeps the run id, worktree, branch, and history.
+The choice applies to unfinished agent steps that use the replaced runner.
+Only a task this manager started, unless the user allowed "Cancel or switch any task" in its settings.`,
   'task cancel': `cez manager task cancel --project <id> <run> [--reason "…"]
 
 Stops the task and every task it dispatched, and marks them cancelled. Their worktree and branch stay.
-Only a task this manager started, unless the user allowed "Cancel any task" in its settings.
+Only a task this manager started, unless the user allowed "Cancel or switch any task" in its settings.
   --project <id>     the task's project
   --reason "…"       why; kept on the task and shown in the cockpit`,
-  'task retry': `cez manager task retry --project <id> <run>
+  'task retry': `cez manager task retry --project <id> <run> [--runner r] [--account id] [--model m] [--effort e]
 
-Starts a failed or cancelled task again as a new task: the same objective, workflow, runner, model and effort.
+With any agent flag, retry a failed or cancelled task in place using the switch command's permissions.
+With no agent flags, start a new task with the same objective, workflow, runner, model and effort.
   --project <id>     the task's project`,
   'task follow': `cez manager task follow [--project <id>] <run>
 
@@ -334,13 +353,31 @@ interface ContentValues {
 }
 
 /** The typed words, then the file or stdin; and what the server should copy in on its own. */
-async function contentOf(words: string[], values: ContentValues, io: ManagerCliIo): Promise<{ text: string; fromMessage?: string; allowPlaceholder?: true }> {
+/**
+ * A manager turn's `--file` reads only the manager's own workdir (where `files/` lives) and its
+ * attachments: the vetted shell accepts any `cez-manager` call, so this is not a way past the
+ * turn's read roots (`--file ~/.ssh/id_rsa`). Without a manager id there is no turn to confine.
+ */
+export async function readManagerFile(path: string, env: ManagerCliEnv): Promise<string> {
+  const real = await realpath(resolve(path));
+  const id = env.CEZ_MANAGER_ID;
+  if (id) {
+    const base = join(cezarHomeDir(env), 'managers', id);
+    const roots = (await Promise.all(['workdir', 'attachments'].map((dir) => realpath(join(base, dir)).catch(() => undefined))))
+      .filter((root): root is string => root !== undefined);
+    const inside = (root: string) => { const rel = relative(root, real); return rel === '' || (!isAbsolute(rel) && rel !== '..' && !rel.startsWith(`..${'/'}`) && !rel.startsWith('..\\')); };
+    if (!roots.some(inside)) throw new Error('only files in the manager\'s workdir (files/) or its attachments can be read');
+  }
+  return readFile(real, 'utf8');
+}
+
+async function contentOf(words: string[], values: ContentValues, io: ManagerCliIo, env: ManagerCliEnv): Promise<{ text: string; fromMessage?: string; allowPlaceholder?: true }> {
   if (values['attach-last-user-message'] && values['from-message']) fail('use --attach-last-user-message or --from-message, not both');
   if (values.file !== undefined && values.stdin) fail('use --file or --stdin, not both');
   let extra = '';
   if (values.file !== undefined) {
     try {
-      extra = await (io.readFile ?? ((path: string) => readFile(path, 'utf8')))(values.file);
+      extra = await (io.readFile ?? ((path: string) => readManagerFile(path, env)))(values.file);
     } catch (error) {
       fail(`cannot read ${values.file}: ${error instanceof Error ? error.message : String(error)}`);
     }
@@ -480,10 +517,17 @@ export async function runManagerCommand(
                 (task.model || task.actualModel) && `${taskModelLabel(task.model, task.actualModel)}${task.effort ? `/${task.effort}` : ''}`,
                 task.prNumber !== undefined && `PR #${task.prNumber}`,
                 task.childCount > 0 && `${task.childCount} dispatched`,
+                task.agentSwitch,
               ].filter(Boolean).join(', ');
               lines.push(`${project.projectId}  ${task.runId}  ${task.status}  ${task.title}  (${facts})`);
             }
             if (hidden > 0) lines.push(`${project.projectId}: ${hidden} older finished task${hidden === 1 ? '' : 's'} not shown (--all lists them)`);
+          }
+        }
+        if (command === 'status' && data.accounts?.length) {
+          for (const account of data.accounts) {
+            const flags = `--runner ${account.runner}${account.agentProfile ? ` --account ${account.agentProfile}` : ' (automatic account)'}`;
+            lines.push(`account  ${flags}  ${account.label}  ${account.outOfLimitsUntil ? `out of usage limits until ${account.outOfLimitsUntil}` : 'has capacity'}`);
           }
         }
         if (command === 'status' || command === 'prs') {
@@ -505,7 +549,7 @@ export async function runManagerCommand(
             ...CONTENT_OPTIONS,
           }, true);
           const effort = effortOf(values.effort);
-          const { text: task, ...content } = await contentOf(positionals, values, io);
+          const { text: task, ...content } = await contentOf(positionals, values, io, env);
           if (!task && !content.fromMessage) fail('an objective is required: cez manager task create --project <id> "<objective>" (or --attach-last-user-message)');
           const project = await projectOf(values.project);
           const created = await call<ManagerCreateTaskResponse>('/tasks', {
@@ -525,13 +569,25 @@ export async function runManagerCommand(
           });
           io.log(`[[task:${created.projectId}/${created.runId}]]`);
           if (created.forwarded) io.log(forwardedLine(created.forwarded));
+          if (created.notice) io.log(created.notice);
+          if (created.agent) {
+            const { agent } = created;
+            io.log(`agent: --runner ${agent.runner}${agent.agentProfile ? ` --account ${agent.agentProfile}` : ' (automatic account)'} — ${agent.label}; ${agent.reason}`);
+            // A warning means another allowed account is free: only this explicit one is waiting.
+            if (agent.queuedUntil) {
+              io.log(created.warning
+                ? `queued: ${agent.label} is out of usage limits; the task starts when it resets at ${agent.queuedUntil}`
+                : `queued: no allowed account has capacity; the task starts when ${agent.label} resets at ${agent.queuedUntil}`);
+            }
+          }
+          if (created.warning) io.log(`warning: ${created.warning}`);
           return 0;
         }
         if (sub === 'say') {
           const { values, positionals } = parse('task say', taskArgs, { project: { type: 'string' }, model: { type: 'string' }, effort: { type: 'string' }, ...CONTENT_OPTIONS }, true);
           const effort = effortOf(values.effort);
           const [runId, ...words] = positionals;
-          const { text, ...content } = runId ? await contentOf(words, values, io) : { text: '' };
+          const { text, ...content } = runId ? await contentOf(words, values, io, env) : { text: '' };
           if (!runId || (!text && !content.fromMessage)) fail('usage: cez manager task say --project <id> <run> "<text>" (or --attach-last-user-message)');
           const project = await projectOf(values.project);
           const sent = await call<ManagerTaskMessageResponse>('/task-message', {
@@ -555,13 +611,22 @@ export async function runManagerCommand(
             : `${result.runId} is ${result.status}, so there was nothing to stop${children ? `; cancelled${children.slice(1)}` : ''}.`);
           return 0;
         }
-        if (sub === 'retry') {
-          const { values, positionals } = parse('task retry', taskArgs, { project: { type: 'string' } }, true);
+        if (sub === 'switch' || sub === 'retry') {
+          const { values, positionals } = parse(`task ${sub}`, taskArgs, {
+            project: { type: 'string' }, runner: { type: 'string' }, account: { type: 'string' }, model: { type: 'string' }, effort: { type: 'string' },
+          }, true);
           const [runId, ...extra] = positionals;
-          if (!runId || extra.length > 0) fail('usage: cez manager task retry --project <id> <run>');
+          if (!runId || extra.length > 0) fail(`usage: cez manager task ${sub} --project <id> <run> [--runner r] [--account id] [--model m] [--effort e]`);
+          const effort = effortOf(values.effort);
+          const { runner, account, model } = values;
+          if (sub === 'switch' && !(runner || account || model || effort)) fail('choose at least one of --runner, --account, --model or --effort');
+          if (env.CEZ_MANAGER_TURN === 'watch') fail('a watch check is read-only: ask the user instead');
           const projectId = await projectForRun(values.project, runId);
-          const created = await call<ManagerCreateTaskResponse>('/task-retry', { method: 'POST', body: { projectId, runId } });
+          const created = await call<ManagerCreateTaskResponse>(`/task-${sub}`, {
+            method: 'POST', body: { projectId, runId, runner, agentProfile: account, model, effort },
+          });
           io.log(`[[task:${created.projectId}/${created.runId}]]`);
+          if (created.notice) io.log(created.notice);
           return 0;
         }
         if (sub === 'follow' || sub === 'unfollow') {

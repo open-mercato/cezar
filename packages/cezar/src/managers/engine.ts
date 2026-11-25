@@ -32,13 +32,16 @@ import {
   type ManagerMessagesResponse,
   type ManagerProposeActionInput,
   type ManagerRetryTaskInput,
+  type ManagerSwitchTaskInput,
   type ManagerSnapshot,
   type ManagerSummary,
   type ManagerTaskDetail,
   type ManagerTaskAgent,
+  type ManagerAccountState,
   type ManagerTaskMessageInput,
   type ManagerTaskMessageResponse,
   type ManagerTurnKind,
+  type SwitchRunAgentResponse,
   type QuestionClosed,
   type QuestionStale,
   type UpdateManagerInput,
@@ -51,11 +54,13 @@ import {
 } from '@open-mercato/cezar-contract';
 import type { AttentionKind, AutomationDefinition, AutomationReportMode, ManagerBashDenial } from '@open-mercato/cezar-contract';
 import { DEFAULT_AGENT_ACCOUNT_ID } from '../workspace/agent-accounts.ts';
+import { taskAgentSelection } from '../runs/agent-selection.ts';
+import { loadConfig } from '../config.ts';
 import { agentModelsLocked } from '../core/agent-model-policy.ts';
-import { CodexToolPolicyError } from '../core/codex-tool-policy.ts';
 import { parseAskCloseMarkers, parseAskMarker, stripAskCloseMarkers, stripAskMarker, type AskCloseMarker } from '../core/ask.ts';
 import type { RunRecord } from '../runs/store.ts';
 import { isIdleParked } from '../runs/store.ts';
+import { chooseTaskAgent, type AccountOption, type TaskAgentChoice } from './task-agent-choice.ts';
 import { isRunnerId, type AgentEvent, type AgentRunner, type AgentRunSpec, type AgentSession, type ContentBlock, type RunnerId } from '../core/agent-runner.ts';
 import { supportsProfiles } from '../core/agent-profiles.ts';
 import { readOnlyEnv } from '../core/read-only-env.ts';
@@ -81,6 +86,9 @@ import {
   managerBashHookCommand,
   managerBashPatternIssue,
   managerBashSuggestion,
+  managerShellPlan,
+  MANAGER_SHELL_DESCRIPTION,
+  MANAGER_BASH_FILTERS,
 } from './bash-policy.ts';
 import { classifyManagerFailure, failureCause, managerFailureMessage, retryPlan, type ManagerFailureKind } from './failure.ts';
 import { placeholderIn, placeholderRefusal, withForwarded } from './forward.ts';
@@ -150,6 +158,9 @@ export interface ManagerEngineDeps {
   defaultRunner: () => Promise<RunnerId>;
   /** Why this account cannot be picked, as `POST /runs` would say it. */
   accountError: (runner: RunnerId, agentProfile: string) => Promise<string | null>;
+  /** An account's resolved id, label and usage-limit reset (epoch ms) from the workspace holds.
+   *  Absent: every account has capacity. */
+  accountLimit?: (runner: RunnerId, agentProfile: string | undefined, repoRoot?: string) => Promise<{ account: string; label: string; until?: number }>;
   /** The cockpit's own routes, in process: POST /runs, merge, enable have exactly one implementation. */
   request: LoopbackRequest;
   costVisible: () => boolean;
@@ -384,7 +395,9 @@ export function managerWriteRules(filesDir: string): string[] {
 export { MANAGER_BASH_ALLOWLIST } from './bash-policy.ts';
 
 /** Backends that keep the manager to `MANAGER_BASH_ALLOWLIST` (Pi drops `Bash` instead). */
-const ALLOWLIST_FENCED: ReadonlySet<RunnerId> = new Set(['claude', 'pi']);
+// Claude fences Bash with its hook, Codex through cezar's broker
+// running `managerShellPlan` in an isolated session (#2330).
+const ALLOWLIST_FENCED: ReadonlySet<RunnerId> = new Set<RunnerId>(['claude', 'pi']).add('codex');
 
 /** `attachmentInputSchema`'s per-file bound, and the task text bound of `POST /runs`. */
 const ATTACHMENT_BASE64_LIMIT = 7_000_000;
@@ -394,6 +407,13 @@ interface Forward {
   text: string;
   images: AttachmentInput[];
   forwarded: ManagerForwarded;
+}
+
+/** Where a user turn starts, shared by its retries (spec 2026-11-21 § 2.3). */
+interface TurnOrigin {
+  startedAt: number;
+  /** The session record before this turn, when it resumes one. */
+  prior?: NonNullable<ManagerState['sessions']['chat']>;
 }
 
 const SESSION_FIELD = { chat: 'sessionId', watch: 'watchSessionId', job: 'jobSessionId' } as const;
@@ -409,6 +429,20 @@ const MEMORY_DURING_WATCH = 'Memory cannot change while a background check runs 
 const WATCH_REFUSAL = 'A watch check is read-only: it may ask the user to act, it may not act. Say what you would do and let the user ask for it.';
 
 const shellQuote = (value: string): string => `'${value.replace(/'/g, `'\\''`)}'`;
+
+/**
+ * A Codex manager's Bash: the policy Claude's hook applies, run by cezar's broker. Unlike a Claude
+ * manager's `gh`, which stays inside the user's Claude Bash sandbox (only `cez-manager` is excluded),
+ * these commands run directly on the host with the engine's environment, so a sandbox network
+ * allowlist does not apply to them. They are still only the vetted read-only set.
+ */
+function codexManagerShell(bashAllow: readonly string[] | undefined, env: Record<string, string | undefined>): NonNullable<AgentRunSpec['brokeredShell']> {
+  return {
+    verify: (command) => managerShellPlan(command, bashAllow ?? []), env, describe: MANAGER_SHELL_DESCRIPTION,
+    // The cockpit is loopback and the filters read only their pipe; every `gh`, user patterns included, is network.
+    offlinePrograms: ['cez-manager', ...MANAGER_BASH_FILTERS],
+  };
+}
 
 /** `cez-manager` on the turn's PATH, so `bashAllowlist` can name one word. */
 export function ensureManagerShim(): string {
@@ -808,7 +842,9 @@ export class ManagerEngine {
   async snapshot(id: string): Promise<ManagerSnapshot | undefined> {
     const manager = this.deps.store.get(id);
     if (!manager) return undefined;
-    return buildSnapshot(await this.sources(manager), this.deps.github, this.now());
+    const sources = await this.sources(manager);
+    const snapshot = await buildSnapshot(sources, this.deps.github, this.now());
+    return { ...snapshot, accounts: await this.accountStates(manager, sources) };
   }
 
   private nextChange(id: string): number {
@@ -1993,10 +2029,11 @@ export class ManagerEngine {
     const final = event.state === 'done' || event.state === 'review' || event.state === 'needs-you' ? finalAssistantText(dataDir, run.id) : undefined;
     const clipped = final && final.length > TASK_REPORT_TEXT_LIMIT ? `${final.slice(0, TASK_REPORT_TEXT_LIMIT)}…` : final;
     const important = event.state === 'failed' || event.state === 'needs-you';
+    const switched = run.agentSwitch?.summary;
     this.postDirect(id, {
       messageId,
       turn: 'watch',
-      text: `${card}\n\n**${state}**${clipped ? `\n\n${clipped}` : ''}`,
+      text: `${card}\n\n**${state}**${switched ? `\n\n${switched}` : ''}${clipped ? `\n\n${clipped}` : ''}`,
       ...(important ? { headline: `${title}: ${TASK_STATE_LINE[event.state].toLowerCase()}${detail ? ` (${detail})` : ''}`.slice(0, HEADLINE_LIMIT) } : {}),
       fields: { taskReport: { projectId, runId: run.id, state: event.state, ...(root ? { rootRunId: root.id } : {}) } },
       attentionKeys: event.attentionKeys,
@@ -2083,7 +2120,7 @@ export class ManagerEngine {
     const { store } = this.deps;
     turn.sourceTasks = fresh.flatMap((item) => item.runId ? [{ projectId: item.projectId, runId: item.runId }] : []);
     const startedAt = this.now();
-    const result = await this.drive(id, manager, watchPrompt(snapshot, fresh, this.openCards(id), await this.taskQuestions(manager)), turn, () => undefined).catch(turnFailure);
+    const result = await this.drive(id, manager, watchPrompt(snapshot, fresh, this.openCards(id), await this.taskQuestions(manager), manager.instructions), turn, () => undefined).catch(turnFailure);
     this.reportTurn(manager, turn, startedAt, result);
     if (!store.get(id)) return;
     this.addCost(id, result.costUsd);
@@ -2210,8 +2247,6 @@ export class ManagerEngine {
   ): Promise<DriveResult> {
     const { store } = this.deps;
     const runner = await this.runnerOf(manager);
-    // Every manager turn requires a tool fence, including chats and unattended watches.
-    if (runner === 'codex') return { ...turnFailure(new CodexToolPolicyError('a manager needs its cez-manager shell fence, which Codex cannot enforce', 'Refusing this manager turn; no model turn was started. Pick Claude Code for this manager.')), runner };
     const sessionKey = `${runner}|${manager.agentProfile ?? ''}`;
     const state = store.state(id);
     const field = SESSION_FIELD[turn.kind];
@@ -2219,8 +2254,7 @@ export class ManagerEngine {
     const resumable = resumeId !== undefined;
     const sources = await this.sources(manager);
     const profile = supportsProfiles(runner) ? await resolveProfileEnvForRoot(undefined, runner, manager.agentProfile) : { env: {} };
-    // Codex is refused above; Claude is the one manager runner with plan limits today.
-    const planProvider = runner === 'claude' ? runner : undefined;
+    const planProvider = runner === 'claude' || runner === 'codex' ? runner : undefined;
     const planProfile = 'profile' in profile ? profile.profile : undefined;
     turn.planAccount = planProvider && planProfile
       ? await ledgerAccountRef(planProvider, planProfile).catch(() => undefined)
@@ -2301,7 +2335,11 @@ export class ManagerEngine {
       // Another backend refuses an explicit effort, so a manager moved off one drops it.
       ...(manager.effort && runnerSupportsReasoningEffort(runner) ? { reasoningEffort: manager.effort } : {}),
     };
-    const first = await this.session(id, base, sessionKey, runner, resumeId, turn, onProgress);
+    // Claude's Bash inherits the cockpit's env plus the turn's; the broker runs Codex's commands in the same.
+    if (runner === 'codex') base.brokeredShell = codexManagerShell(manager.bashAllow, { ...process.env, ...base.env });
+    // A retry is the same user turn: it counts once, measured from the session as it stood before.
+    const origin: TurnOrigin = { startedAt: this.now(), ...(resumeId && state.sessions[turn.kind] ? { prior: state.sessions[turn.kind]! } : {}) };
+    const first = await this.session(id, base, sessionKey, runner, resumeId, turn, onProgress, origin);
     // A turn that ran a command may have acted: running it twice could act twice.
     if (!first.error || turn.stopped || turn.timedOut || first.commands.length > 0) return { ...first, runner };
     const plan = retryPlan(classifyManagerFailure(failureCause(first.error, first.text)), resumable);
@@ -2309,10 +2347,10 @@ export class ManagerEngine {
     if (plan === 'again') {
       await new Promise((resolve) => setTimeout(resolve, this.deps.retryDelayMs ?? RETRY_BACKOFF_MS).unref?.());
       if (turn.stopped || !store.get(id)) return { ...first, runner };
-      const again = await this.session(id, base, sessionKey, runner, resumeId, turn, onProgress);
+      const again = await this.session(id, base, sessionKey, runner, resumeId, turn, onProgress, origin);
       return { ...again, costUsd: again.costUsd + first.costUsd, runner };
     }
-    const fresh = await this.session(id, { ...base, userPrompt: freshPrompt }, sessionKey, runner, undefined, turn, onProgress);
+    const fresh = await this.session(id, { ...base, userPrompt: freshPrompt }, sessionKey, runner, undefined, turn, onProgress, { startedAt: origin.startedAt });
     return { ...fresh, costUsd: fresh.costUsd + first.costUsd, runner };
   }
 
@@ -2324,6 +2362,7 @@ export class ManagerEngine {
     resumeId: string | undefined,
     turn: ActiveTurn,
     onProgress: (progress: Progress) => void,
+    origin: TurnOrigin = { startedAt: this.now() },
   ): Promise<DriveResult> {
     const { store } = this.deps;
     // Claude takes an id we mint; every other backend mints its own and reports it (`session`).
@@ -2338,8 +2377,8 @@ export class ManagerEngine {
     const bashCommands = new Map<string, string>();
     const text = () => [committed, draft].filter(Boolean).join('\n\n');
     const turnStats = new TurnStatsCollector();
-    const turnStartedAt = this.now();
-    const priorSession = resumeId ? store.state(id).sessions[turn.kind] : undefined;
+    const turnStartedAt = origin.startedAt;
+    const priorSession = origin.prior;
     // Read when the throttle flushes, not per token: re-joining a long reply per delta is quadratic.
     const snapshot: Progress = () => ({ text: text(), commands: [...commands] });
     const progress = () => onProgress(snapshot);
@@ -2431,6 +2470,7 @@ export class ManagerEngine {
     const stats = turnStats.stats({
       fresh: !resumeId,
       sessionTurn,
+      ...(sessionId ? { session: sessionId.slice(0, 8) } : {}),
       ...(priorSession ? { idleMs: turnStartedAt - msOf(priorSession.lastAt) } : {}),
     });
     // A watch that reported nothing new is "quiet": the hint weighs its cadence against that.
@@ -2587,7 +2627,7 @@ export class ManagerEngine {
     const manager = this.deps.store.get(id);
     if (!manager) return undefined;
     if (this.watching(id)) return { error: MEMORY_DURING_WATCH, status: 409 };
-    const next = setMemoryEntry(this.memoryFor(id, await this.claudeConfigDir(manager)), key, input, this.iso());
+    const next = setMemoryEntry(this.memoryFor(id, await this.claudeConfigDir(manager)), key, input, this.iso(), input.source);
     if ('error' in next) return next;
     writeMemory(this.deps.store.dir(id), next);
     return this.memoryResponse(next);
@@ -2773,6 +2813,15 @@ export class ManagerEngine {
     });
   }
 
+  /** Whether the project runs tasks in its checkout by default (spec 2026-10-20-trunk-based-projects).
+   *  An unreadable config answers no: the request then goes out as asked. */
+  private async inPlaceProject(prefix: string): Promise<boolean> {
+    const response = await this.forward(`${prefix}/config`).catch(() => undefined);
+    if (!response?.ok) return false;
+    const config = (await response.json().catch(() => ({}))) as { taskWorkspace?: unknown };
+    return config.taskWorkspace === 'in-place';
+  }
+
   private static async refusalOf(response: Response): Promise<ManagerRefusal> {
     const body = (await response.json().catch(() => ({}))) as { error?: unknown };
     const status = response.status;
@@ -2849,7 +2898,8 @@ export class ManagerEngine {
     return { text, ...(forward ? { forward } : {}) };
   }
 
-  async createTask(id: string, input: ManagerCreateTaskInput): Promise<ManagerCreateTaskResponse | ManagerRefusal> {
+  /** `retry`: the task being retried — its pair ranks first while still allowed, and its model and effort stay only on its runner. */
+  async createTask(id: string, input: ManagerCreateTaskInput, retry?: { runner?: string; agentProfile?: string; allowed: boolean }): Promise<ManagerCreateTaskResponse | ManagerRefusal> {
     const scope = await this.toolScope(id, input.projectId, true);
     if ('error' in scope) return scope;
     const readOnly = managerAccessOf(scope.manager, input.projectId) === 'read';
@@ -2861,24 +2911,91 @@ export class ManagerEngine {
     const composed = this.composed(id, input.task, input);
     if ('error' in composed) return composed;
     const { forward } = composed;
-    const agents = scope.manager.taskAgents;
+    const agents = scope.manager.taskAgents?.filter((agent): agent is ManagerTaskAgent & { runner: RunnerId } => isRunnerId(agent.runner));
     const preferred = await this.runnerOf(scope.manager);
     const candidates = agents?.filter((agent) => (!input.runner || agent.runner === input.runner)
       && (input.agentProfile === undefined || agent.agentProfile === input.agentProfile));
     if (candidates?.length === 0) {
       return { error: 'Choose an agent account from the manager’s selected accounts for new tasks', status: 403 };
     }
-    const selected = candidates?.find((agent) => agent.runner === preferred) ?? candidates?.[0];
-    const runner = selected?.runner ?? scope.manager.taskRunner ?? input.runner ?? preferred;
-    const agentProfile = selected ? selected.agentProfile : input.agentProfile;
+    const root = scope.source?.root;
+    const now = this.now();
+    let choice: TaskAgentChoice | undefined;
+    let fallbackOptions: AccountOption[] | undefined;
+    /** The runner picked when every listed account has capacity: --model/--effort are refused, not dropped, there. */
+    let firstRunner: string | undefined;
+    if (agents && candidates) {
+      // The manager's settings are the default: a retried task's own account, then its own runner, then list order.
+      const rank = (agent: ManagerTaskAgent) => (retry?.allowed && agent.runner === retry.runner && agent.agentProfile === retry.agentProfile ? 0 : agent.runner === preferred ? 1 : 2);
+      const ordered = [...candidates].sort((a, b) => rank(a) - rank(b));
+      const allowed = await Promise.all([...agents].sort((a, b) => rank(a) - rank(b)).map((agent) => this.accountOption(agent.runner, agent.agentProfile, root)));
+      const options = ordered.map((agent) => allowed.find((option) => option.runner === agent.runner && option.agentProfile === agent.agentProfile)!);
+      choice = chooseTaskAgent(options, {
+        explicitAccount: input.agentProfile !== undefined, fromSettings: true, allowed, now,
+        ...(input.runner && candidates.length < agents.length ? { narrowedBy: `--runner ${input.runner}` } : {}),
+      });
+      firstRunner = options[0]?.runner;
+      const picked = choice.chosen;
+      // An explicit --runner or --account keeps a usage-limit fallback on that runner.
+      const sameRunner = input.runner !== undefined || input.agentProfile !== undefined;
+      // The whole list, the task's own account included: admission skips whichever account just ran
+      // out, so a dispatched child on another listed account still falls back to this one.
+      fallbackOptions = allowed.filter((option, index) => (!sameRunner || option.runner === picked.runner)
+        && allowed.findIndex((other) => other.runner === option.runner && other.account === option.account) === index);
+    }
+    const runner = choice?.chosen.runner ?? scope.manager.taskRunner ?? input.runner ?? preferred;
+    const agentProfile = choice ? choice.chosen.agentProfile : input.agentProfile;
     if (!isRunnerId(runner)) return { error: `unknown runner: ${runner}`, status: 400 };
     const accountIssue = await this.accountIssue(runner, agentProfile);
     if (accountIssue) return accountIssue;
+    choice ??= chooseTaskAgent([await this.accountOption(runner, agentProfile, root)], { explicitAccount: agentProfile !== undefined, fromSettings: false, now });
+    // --model/--effort are checked on the runner the task really landed on. A runner the flags did not
+    // pin (a limit skip off the first listed runner, a retry on another runner) drops only what fails
+    // there; anywhere else a bad flag is refused with the valid choices, as before.
+    const unpinned = (firstRunner !== undefined && !input.runner && firstRunner !== runner)
+      || (retry?.runner !== undefined && retry.runner !== runner);
+    let carried = input;
     if (input.model || input.effort) {
       const issue = await this.modelIssue(runner, input.model, input.effort);
-      if (issue) return issue;
+      if (issue && !unpinned) return issue;
+      if (issue) {
+        // Dropped only when another allowed runner can use it: a flag the manager typed that no listed
+        // runner accepts (a typo) is refused with the valid choices, as when nothing moved. A retry's
+        // flags are the old run's, so they are only ever dropped.
+        const runners = retry ? [] as RunnerId[] : [...new Set((agents ?? []).map((agent) => agent.runner))].filter((other) => other !== runner);
+        const usable = async (check: (other: RunnerId) => Promise<ManagerRefusal | undefined>) => {
+          for (const other of runners) if (!(await check(other))) return true;
+          return false;
+        };
+        const refusedHere = (model?: string, effort?: string) => this.modelIssue(runner, model, effort);
+        // Refused as if nothing had moved: the valid choices of the first listed runner, not the landed one.
+        const asFirst = (firstRunner ?? runner) as RunnerId;
+        if (!retry && input.model && (await refusedHere(input.model)) && !(await usable((other) => this.modelIssue(other, input.model, undefined)))) {
+          return (await this.modelIssue(asFirst, input.model, undefined)) ?? issue;
+        }
+        if (!retry && input.effort && (await refusedHere(undefined, input.effort)) && !(await usable((other) => this.modelIssue(other, undefined, input.effort)))) {
+          return (await this.modelIssue(asFirst, undefined, input.effort)) ?? issue;
+        }
+        const model = input.model && !(await this.modelIssue(runner, input.model, undefined)) ? input.model : undefined;
+        const effort = input.effort && !(await this.modelIssue(runner, model, input.effort)) ? input.effort : undefined;
+        carried = { ...input, model, effort };
+        const dropped = [input.model && !model && `--model ${input.model}`, input.effort && !effort && `--effort ${input.effort}`].filter(Boolean).join(' and ');
+        choice = { ...choice, reason: `${choice.reason}; ${dropped} dropped: not valid on ${runner}` };
+      }
     }
+    // A fallback entry carries the requested model only where that runner accepts it.
+    const modelValidOn = new Map<string, boolean>();
+    const fallback: Array<{ provider: RunnerId; profileId: string; model?: string }> | undefined = fallbackOptions && [];
+    for (const option of fallbackOptions ?? []) {
+      if (input.model && !modelValidOn.has(option.runner)) modelValidOn.set(option.runner, !(await this.modelIssue(option.runner, input.model, undefined)));
+      fallback!.push({ provider: option.runner, profileId: option.account, ...(input.model && modelValidOn.get(option.runner) ? { model: input.model } : {}) });
+    }
+    const agentNote = `Agent chosen by manager ${scope.manager.name}: ${choice.chosen.runner} · ${choice.chosen.label} — ${choice.reason}`;
     const prefix = `/p/${encodeURIComponent(input.projectId)}`;
+    // A dispatch root always gets its own worktree, which overrides a trunk-based project's in-place
+    // workspace: no Commit to the base branch, no auto-land. The project's model wins over the flag.
+    const dispatchIgnored = input.dispatch === true && (await this.inPlaceProject(prefix));
+    const dispatch = input.dispatch === true && !dispatchIgnored;
     // Before the request: anything the run does after it starts is news to this manager.
     const followedAt = this.iso();
     const response = await this.forward(`${prefix}/runs`, {
@@ -2890,10 +3007,11 @@ export class ManagerEngine {
         ...(readOnly ? { readOnly: true, enforceReadOnly: true } : {}),
         runner,
         ...(agentProfile !== undefined ? { agentProfile } : {}),
-        ...(input.model ? { model: input.model } : {}),
-        ...(input.effort ? { reasoningEffort: input.effort } : {}),
-        ...(input.dispatch ? { dispatch: {} } : {}),
+        ...(carried.model ? { model: carried.model } : {}),
+        ...(carried.effort ? { reasoningEffort: carried.effort } : {}),
+        ...(dispatch ? { dispatch: {} } : {}),
         startedByManager: { id: scope.manager.id, name: scope.manager.name },
+        managerAgent: { note: agentNote.slice(0, 500), ...(fallback ? { fallback: fallback.slice(0, 10) } : {}) },
       },
     });
     if (!response.ok) return ManagerEngine.refusalOf(response);
@@ -2906,7 +3024,51 @@ export class ManagerEngine {
     this.rememberTaskSource(id, input.projectId, run.id);
     const named = `${input.title ?? ''}\n${input.task ?? ''}`;
     this.managerActed(id, { tasks: taskSources(named).map((task) => followKey(task.projectId, task.runId)), prs: prRefs(named) }, 'you started a task on it since');
-    return { projectId: input.projectId, runId: run.id, ...(forward ? { forwarded: forward.forwarded } : {}) };
+    return {
+      projectId: input.projectId,
+      runId: run.id,
+      ...(forward ? { forwarded: forward.forwarded } : {}),
+      ...(dispatchIgnored ? { notice: `dispatch ignored: ${input.projectId} runs tasks in place` } : {}),
+      agent: {
+        runner: choice.chosen.runner,
+        ...(choice.chosen.agentProfile !== undefined ? { agentProfile: choice.chosen.agentProfile } : {}),
+        account: choice.chosen.account,
+        label: choice.chosen.label,
+        reason: choice.reason,
+        ...(choice.queuedUntil !== undefined ? { queuedUntil: new Date(choice.queuedUntil).toISOString() } : {}),
+      },
+      ...(choice.warning ? { warning: choice.warning } : {}),
+    };
+  }
+
+  /** One account's usage-limit state, from the workspace holds; unknown = capacity. */
+  private async accountOption(runner: RunnerId, agentProfile: string | undefined, repoRoot?: string): Promise<AccountOption> {
+    const state = await this.deps.accountLimit?.(runner, agentProfile, repoRoot).catch(() => undefined);
+    return {
+      runner,
+      ...(agentProfile !== undefined ? { agentProfile } : {}),
+      account: state?.account ?? agentProfile ?? 'default',
+      label: state?.label ?? agentProfile ?? 'automatic account',
+      ...(state?.until !== undefined ? { until: state.until } : {}),
+    };
+  }
+
+  /** The accounts new tasks may use and their limit state, for `cez-manager status`. */
+  private async accountStates(manager: Manager, sources: ManagerProjectSource[]): Promise<ManagerAccountState[]> {
+    const root = sources.find((source) => source.available)?.root;
+    const agents = manager.taskAgents?.filter((agent): agent is ManagerTaskAgent & { runner: RunnerId } => isRunnerId(agent.runner))
+      ?? [{ runner: manager.taskRunner && isRunnerId(manager.taskRunner) ? manager.taskRunner : await this.runnerOf(manager) }];
+    const now = this.now();
+    return Promise.all(agents.map(async (agent) => {
+      const option = await this.accountOption(agent.runner, agent.agentProfile, root);
+      return {
+        runner: option.runner,
+        ...(option.agentProfile !== undefined ? { agentProfile: option.agentProfile } : {}),
+        account: option.account,
+        label: option.label,
+        ...(option.until !== undefined && option.until > now ? { outOfLimitsUntil: new Date(option.until).toISOString() } : {}),
+      };
+    }));
   }
 
   /** A live task takes the message; a finished one is continued with it. */
@@ -2977,7 +3139,7 @@ export class ManagerEngine {
     if (!run) return { error: 'task not found', status: 404 };
     if (run.startedByManager?.id !== manager.id && manager.cancelAnyTask !== true) {
       return {
-        error: `task ${input.runId} was not started by this manager, so it cannot cancel it. Ask the user to cancel it, or to allow "Cancel any task" in your settings`,
+        error: `task ${input.runId} was not started by this manager, so it cannot cancel it. Ask the user to cancel it, or to allow "Cancel or switch any task" in your settings`,
         status: 403,
       };
     }
@@ -2998,20 +3160,80 @@ export class ManagerEngine {
     };
   }
 
-  /** A failed or cancelled task started again as a new one: same objective, workflow, runner, model, effort. */
+  async switchTask(id: string, input: ManagerSwitchTaskInput): Promise<ManagerCreateTaskResponse | ManagerRefusal> {
+    const scope = await this.toolScope(id, input.projectId, true);
+    if ('error' in scope) return scope;
+    const run = findRun(scope.source?.runs() ?? [], input.runId);
+    if (!scope.source || !run) return { error: 'task not found', status: 404 };
+    return this.changeTaskAgent(scope.manager, scope.source.root, run, input);
+  }
+
+  private async changeTaskAgent(manager: Manager, repoRoot: string, run: RunRecord, input: ManagerSwitchTaskInput): Promise<ManagerCreateTaskResponse | ManagerRefusal> {
+    const { projectId } = input;
+    if (managerAccessOf(manager, projectId) === 'read') {
+      return { error: `${projectId} is read-only for this manager: it cannot switch task agents there`, status: 403 };
+    }
+    if (run.startedByManager?.id !== manager.id && manager.cancelAnyTask !== true) {
+      return { error: `task ${run.id} was not started by this manager. Ask the user to switch it, or to allow "Cancel or switch any task" in your settings`, status: 403 };
+    }
+    const current = taskAgentSelection(run, run.runner ?? (await loadConfig(repoRoot)).defaultRunner);
+    const runner = input.runner ?? current.runner;
+    if (!isRunnerId(runner)) return { error: `unknown runner: ${runner}`, status: 400 };
+    const currentAccount = runner === current.runner ? current.agentProfile : undefined;
+    const candidates = manager.taskAgents?.filter((agent) => agent.runner === runner);
+    // An account-less entry allows the project's resolved account, just as in fallback admission.
+    const automatic = candidates?.some((agent) => agent.agentProfile === undefined)
+      ? (await this.accountOption(runner, undefined, repoRoot)).account
+      : undefined;
+    const allowed = candidates?.map((agent) => agent.agentProfile ?? automatic ?? DEFAULT_AGENT_ACCOUNT_ID);
+    const preferredAccount = runner === current.runner ? currentAccount ?? automatic : undefined;
+    const agentProfile = input.agentProfile ?? (allowed
+      ? allowed.find((account) => account === preferredAccount) ?? allowed[0]
+      : currentAccount);
+    if ((allowed && (agentProfile === undefined || !allowed.includes(agentProfile)))
+      || (!allowed && manager.taskRunner && manager.taskRunner !== runner)) {
+      return { error: 'Choose an agent account from the manager’s selected accounts for new tasks', status: 403 };
+    }
+    const accountIssue = await this.accountIssue(runner, agentProfile);
+    if (accountIssue) return accountIssue;
+    // Send only explicit pins. The workflow resolves inherited pins independently for each step.
+    const { model, effort } = input;
+    const issue = model || effort ? await this.modelIssue(runner, model, effort) : undefined;
+    if (issue) return issue;
+    const response = await this.forward(`/p/${encodeURIComponent(projectId)}/runs/${encodeURIComponent(run.id)}/switch-agent`, {
+      method: 'POST',
+      body: {
+        runner, agentProfile, model,
+        reasoningEffort: effort,
+        changedBy: manager.name,
+      },
+    });
+    if (!response.ok) return ManagerEngine.refusalOf(response);
+    const { summary } = (await response.json()) as SwitchRunAgentResponse;
+    this.rememberTaskSource(manager.id, projectId, run.id);
+    this.managerActed(manager.id, { tasks: [followKey(projectId, run.id)] }, 'you switched that task’s agent since');
+    return { projectId, runId: run.id, notice: summary };
+  }
+
+  /** With agent flags, reopen the same failed task. A plain retry repeats the workflow from scratch. */
   async retryTask(id: string, input: ManagerRetryTaskInput): Promise<ManagerCreateTaskResponse | ManagerRefusal> {
     const scope = await this.toolScope(id, input.projectId, true);
     if ('error' in scope) return scope;
     const run = findRun(scope.source?.runs() ?? [], input.runId);
-    if (!run) return { error: 'task not found', status: 404 };
+    if (!scope.source || !run) return { error: 'task not found', status: 404 };
     if (run.status !== 'failed' && run.status !== 'cancelled') {
       return { error: `task ${input.runId} is ${run.status}: only a failed or cancelled task can be retried. Use \`task say\` to continue it`, status: 409 };
+    }
+    if (input.runner || input.agentProfile || input.model || input.effort) {
+      return this.changeTaskAgent(scope.manager, scope.source.root, run, input);
     }
     if (run.workflow === '(planned)') return { error: 'an inline plan cannot be retried: start a new task with its objective instead', status: 409 };
     const effort = run.reasoningEffort && (['low', 'medium', 'high', 'max'] as const).find((level) => level === run.reasoningEffort);
     const allowed = scope.manager.taskAgents
       ? scope.manager.taskAgents.some((agent) => agent.runner === run.runner && agent.agentProfile === run.agentProfile)
       : !scope.manager.taskRunner || scope.manager.taskRunner === run.runner;
+    // With an allowed-accounts list the retry takes the manager's default (limit-aware), its old account first.
+    const pinned = allowed && !scope.manager.taskAgents;
     const created = await this.createTask(id, {
       projectId: input.projectId,
       task: run.task,
@@ -3019,11 +3241,11 @@ export class ManagerEngine {
       allowPlaceholder: true,
       workflow: run.workflow,
       ...(run.titleOrigin === 'user' ? { title: run.title } : {}),
-      ...(allowed && run.runner ? { runner: run.runner } : {}),
-      ...(allowed && run.agentProfile ? { agentProfile: run.agentProfile } : {}),
+      ...(pinned && run.runner ? { runner: run.runner } : {}),
+      ...(pinned && run.agentProfile ? { agentProfile: run.agentProfile } : {}),
       ...(run.model ? { model: run.model } : {}),
       ...(effort ? { effort } : {}),
-    });
+    }, { runner: run.runner, agentProfile: run.agentProfile, allowed });
     if (!('error' in created)) this.managerActed(id, { tasks: [followKey(input.projectId, run.id)] }, 'you retried that task since');
     return created;
   }

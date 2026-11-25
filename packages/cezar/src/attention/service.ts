@@ -88,3 +88,18 @@ export function createAttentionService(deps: {
     },
   };
 }
+
+/**
+ * One `attention-change` per change (spec 2026-11-23-needs-you-triage): sent when the change happens,
+ * whether or not a phone listens. The recount a poke starts drives only the phone's push, gated on its
+ * revision; the cockpit never waits on it, since a read can fail and a change (a re-snooze that only
+ * moves `until`) can leave the revision alone.
+ */
+export function createAttentionAnnouncer(deps: { poke: () => void; announce: () => void }): { changed: () => void } {
+  return {
+    changed() {
+      deps.poke();
+      deps.announce();
+    },
+  };
+}

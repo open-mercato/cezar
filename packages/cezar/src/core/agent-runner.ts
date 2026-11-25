@@ -53,6 +53,20 @@ export function isRunnerId(value: string): value is RunnerId {
 /** Historical default: unrestricted shell access, not a capability boundary. */
 export const DEFAULT_ALLOWED_TOOLS = ['Read', 'Edit', 'Write', 'Grep', 'Glob', 'Bash'];
 
+/** A shell command a restricted Codex broker may run: one argv per pipe stage, plus a heredoc body. */
+export type BrokeredShellPlan = { ok: true; pipeline: string[][]; stdin?: string } | { ok: false; reason: string };
+
+export interface BrokeredShell {
+  verify(command: string): BrokeredShellPlan;
+  /** The environment approved commands run in; the broker adds nothing to it. */
+  env: Record<string, string | undefined>;
+  /** What the model is told the shell is for, appended to the tool description. */
+  describe: string;
+  /** Programs that reach nothing beyond the loopback cockpit. Under `CEZ_CODEX_NETWORK=0` a
+   *  pipeline runs only when every stage is one of these; absent, every command is refused then. */
+  offlinePrograms?: readonly string[];
+}
+
 export interface AgentRunSpec {
   /** Optional account usage metadata from ordinary activity. Bind to the resolved step account. */
   onUsageWindows?: (observation: UsageWindowsObservation) => void;
@@ -74,6 +88,10 @@ export interface AgentRunSpec {
   /** Claude only: a PreToolUse hook command that allows or denies each Bash call. `bashAllowlist`
    *  stays the floor when the hook gives no answer or cannot run. Other backends ignore it. */
   bashHookCommand?: string;
+  /** Codex only: the shell a restricted session's broker may run on the host — a manager's
+   *  `cez-manager` and read-only `gh` (the fence Claude enforces through `bashHookCommand`).
+   *  `verify` is the whole policy: it returns the argv pipeline to spawn, never a shell string. */
+  brokeredShell?: BrokeredShell;
   /** Claude only: skip every permission prompt (`--permission-mode bypassPermissions`), the
    *  project's opt-in `bypassPermissions`. `enforceReadOnly` wins. Other backends ignore it. */
   bypassPermissions?: boolean;
@@ -247,8 +265,12 @@ export interface AgentUsageWindow {
 export interface AgentUsageStatus {
   /** Tokens in the main agent's context after its latest message. */
   contextTokens?: number;
+  /** Of `contextTokens`, what that request wrote to the prompt cache (Claude only). */
+  cacheWriteTokens?: number;
   contextWindow?: number;
   limits?: AgentUsageWindow[];
+  /** A finished turn's own totals (Claude's result frame): what a manager turn's stats record. */
+  turnTokens?: { cacheReadTokens: number; cacheWriteTokens: number; outputTokens: number };
 }
 
 export interface AgentToolCallRecord {

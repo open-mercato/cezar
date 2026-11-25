@@ -148,7 +148,7 @@ function ReviewActions({ run, diffComments }: { run: ApiRun; diffComments?: Diff
   const draftPrBusy = draftPr.isPending || git.pending !== null
   const openDraftPr = () => (git.byAgent ? git.onAction('create-draft-pr') : draftPr.mutate())
 
-  const commentCount = diffComments?.comments.length ?? 0
+  const commentCount = diffComments?.all.length ?? 0
   const submitNotes = () => {
     const text = notes.trim()
     // Drafted line comments are feedback on their own.

@@ -304,6 +304,22 @@ describe('reduceThread — mixed v1+v2 files (the dedup rule)', () => {
     expect(turns.flatMap((turn) => turn.items)).toHaveLength(5)
   })
 
+  it('shows a refusal repeated by every step before any model turn once, run summary included (#2330)', () => {
+    const refusal = 'codex: tool-policy enforcement unavailable — the installed Codex protocol has not been verified. Refusing this restricted step; no model turn was started. Pick Claude Code or Pi for unsupported grants.'
+    const steps = ['correctness', 'security', 'tests', 'judge']
+    const { turns } = reduceThread([
+      line(1, 'lifecycle', { message: 'run started — workflow "review-pr" (runner: codex)' }),
+      ...steps.flatMap((stepId, n) => [
+        line(10 + n * 2, 'error', { message: refusal, stepId }),
+        line(11 + n * 2, 'step-end', { stepId, status: 'failed', error: refusal }),
+      ]),
+      line(30, 'lifecycle', { message: `run failed — step "judge" failed: ${refusal}` }),
+    ])
+    const items = turns.flatMap((turn) => turn.items)
+    expect(items.filter((item) => item.kind === 'note' && item.text.includes('tool-policy'))).toHaveLength(1)
+    expect(items).toHaveLength(2)
+  })
+
   it('keeps the newest session.started model for runs recorded before RunRecord.actualModel', () => {
     expect(reduceThread([line(1, 'session.started', { sessionId: 'a', backend: 'claude' })]).sessionModel).toBeUndefined()
     const { sessionModel } = reduceThread([

@@ -1824,11 +1824,11 @@ export async function cancelAutoResume(id: string): Promise<CancelAutoResumeResp
 }
 
 /** Sweep every finished (done/failed/cancelled) active run into the archive in one call —
- *  the Tasks header's "Archive finished" button. */
-export async function archiveFinished(): Promise<ArchiveFinishedResponse> {
+ *  the Tasks header's "Archive finished" button. `projectId` pins it from outside a scope (the bottom bar). */
+export async function archiveFinished(projectId: string = queryScope()): Promise<ArchiveFinishedResponse> {
   return unwrap(
     await cez.api.v1.p[':projectId'].runs['archive-finished'].$post({
-      param: { projectId: queryScope() },
+      param: { projectId },
     }),
     '/runs/archive-finished',
   )

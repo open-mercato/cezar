@@ -39,19 +39,50 @@ export interface ManagerTurnShape {
   tools: PlanUsageTurnStats['tools']
   /** Turns heavy enough that a task might have done them: many requests or much of its own work. */
   couldBeTasks: number
+  /** Summed over the turns that reported them (Claude); null when none did. */
+  tokens: TurnTokens | null
 }
 
-/** The prompt cache lasts an hour: a resume after that re-reads the whole history at the write price. */
+export interface TurnTokens { cacheRead: number; cacheWrite: number; output: number }
+
+/** A turn's own cache reads, writes and output, when its runner reported them. */
+export function turnTokens(turn: PlanUsageTurnStats): TurnTokens | null {
+  if (turn.cacheReadTokens === undefined && turn.cacheWriteTokens === undefined && turn.outputTokens === undefined) return null
+  return { cacheRead: turn.cacheReadTokens ?? 0, cacheWrite: turn.cacheWriteTokens ?? 0, output: turn.outputTokens ?? 0 }
+}
+
+/** 950 · 13k · 3.7M: token counts at a glance. */
+export function tokenCount(n: number): string {
+  // Round first, then pick the unit: 999,600 is 1.0M, never 1000k.
+  if (Math.round(n) < 1000) return String(Math.round(n))
+  const k = Math.round(n / 1000)
+  if (k < 1000) return `${k}k`
+  const tenths = Math.round(n / 100_000) / 10
+  return tenths < 10 ? `${tenths.toFixed(1)}M` : `${Math.round(n / 1_000_000)}M`
+}
+
+/** "3.7M cache read · 942k cache written · 3k output". */
+export const tokensLabel = (t: TurnTokens): string =>
+  `${tokenCount(t.cacheRead)} cache read · ${tokenCount(t.cacheWrite)} cache written · ${tokenCount(t.output)} output`
+
+/** The prompt cache lasts an hour: a turn recorded before `cold` existed is judged by its idle gap. */
 const CACHE_TTL_MS = 60 * 60_000
 
+/** Writes are left out on purpose: a manager writes files only to hand long text to a task, which
+ *  is routing, not work a task should have done. */
 export const couldBeTask = (turn: PlanUsageTurnStats): boolean => turn.requests >= 6 || turn.tools.own >= 4
+
+/** The history was re-cached: its first request wrote over half its context (spec § 2.3). */
+const isCold = (turn: PlanUsageTurnStats): boolean =>
+  turn.cold ?? (!turn.fresh && turn.idleMs !== undefined && turn.idleMs >= CACHE_TTL_MS)
 
 /** Why a turn cost what it did, most telling first; empty when nothing stands out. */
 export function turnReasons(turn: PlanUsageTurnStats): string[] {
   const reasons: string[] = []
-  if (!turn.fresh && turn.idleMs !== undefined && turn.idleMs >= CACHE_TTL_MS) reasons.push(`cache expired after ${Math.round(turn.idleMs / 3_600_000)} h idle`)
-  if (turn.contextPeak >= 100_000) reasons.push(`large context (${Math.round(turn.contextPeak / 1000)}k)`)
-  if (turn.requests >= 6) reasons.push(`${turn.requests} requests`)
+  // Bare labels: the figures are already on the detail line.
+  if (!turn.fresh && isCold(turn)) reasons.push(turn.idleMs !== undefined && turn.idleMs >= CACHE_TTL_MS ? `cold start after ${Math.round(turn.idleMs / 3_600_000)} h idle` : 'cold start')
+  if (turn.contextPeak >= 100_000) reasons.push('large context')
+  if (turn.requests >= 6) reasons.push('many requests')
   if (turn.toolResultChars >= 20_000) reasons.push('big tool output')
   if (turn.fresh) reasons.push('new session')
   return reasons
@@ -67,6 +98,11 @@ export function turnShape(messages: ReadonlyArray<{ turn?: PlanUsageTurnStats }>
     avgRequests: sum((t) => t.requests) / turns.length,
     tools: { route: sum((t) => t.tools.route), look: sum((t) => t.tools.look), own: sum((t) => t.tools.own), write: sum((t) => t.tools.write) },
     couldBeTasks: turns.filter(couldBeTask).length,
+    tokens: turns.reduce<TurnTokens | null>((acc, t) => {
+      const own = turnTokens(t)
+      if (!own) return acc
+      return acc ? { cacheRead: acc.cacheRead + own.cacheRead, cacheWrite: acc.cacheWrite + own.cacheWrite, output: acc.output + own.output } : own
+    }, null),
   }
 }
 
@@ -200,6 +236,90 @@ function currentWindow(windows: readonly PlanUsageWindow[] | undefined, key: str
   return windows?.find((w) => w.current && w.account.key === key && w.usedPercent !== null)
 }
 
+/** One reply's share of the 5-hour limit, for the line under it (restored 2026-11-22). */
+export interface ReplyUsage {
+  pp: number
+  /** Of `pp`, the part measured while no other cezar work ran. */
+  alonePp: number
+  /** `Claude · default · 5-hour limit 10:00–15:00`, one per window the reply's share came from. */
+  windows: string[]
+  /** What the reply's turn was made of, when the ledger recorded it. */
+  turn?: PlanUsageTurnStats
+}
+
+/** Per assistant message: its estimate in the 5-hour windows it ran in. Absent = no entry, never 0:
+ *  the ledger rounds a share to 0.01 pp, so a share of 0 is no measurable share and gets no line.
+ *  Keyed by the chat message id, which a turn keeps whatever session it ran in. */
+export function replyUsageById(entries: readonly PlanUsageConsumerWindow[] | undefined, managerId: string): ReadonlyMap<string, ReplyUsage> {
+  const id = managerConsumerId(managerId)
+  const found = new Map<string, { pp: number; alonePp: number; windows: Array<{ label: string; startsAt: string }>; turn?: PlanUsageTurnStats }>()
+  for (const e of entries ?? []) {
+    if (e.kind !== 'five-hour' || e.consumer.id !== id) continue
+    const window = { label: `${e.account.label} · 5-hour limit ${clockTime(e.startsAt)}–${clockTime(e.resetsAt)}`, startsAt: e.startsAt }
+    for (const m of e.consumer.messages ?? []) {
+      if (!(m.estimatePp > 0)) continue
+      const prior = found.get(m.messageId)
+      const turn = prior?.turn ?? m.turn
+      const windows = prior?.windows ?? []
+      found.set(m.messageId, {
+        pp: (prior?.pp ?? 0) + m.estimatePp,
+        alonePp: (prior?.alonePp ?? 0) + m.aloneInferredPp,
+        windows: windows.some((w) => w.label === window.label) ? windows : [...windows, window],
+        ...(turn ? { turn } : {}),
+      })
+    }
+  }
+  const out = new Map<string, ReplyUsage>()
+  for (const [messageId, reply] of found) {
+    // Oldest window first, whatever order the report lists them in.
+    const windows = [...reply.windows].sort((a, b) => Date.parse(a.startsAt) - Date.parse(b.startsAt)).map((w) => w.label)
+    out.set(messageId, { pp: reply.pp, alonePp: reply.alonePp, windows, ...(reply.turn ? { turn: reply.turn } : {}) })
+  }
+  return out
+}
+
+const sharedLabel = (usage: ReplyUsage): string =>
+  usage.alonePp >= usage.pp ? 'ran alone' : usage.alonePp > 0 ? 'partly shared with other work' : 'shared with other work'
+
+/** "Claude · default · 5-hour limit 10:00–15:00 · ran alone · 2 requests · 35k context". */
+export function replyUsageDetail(usage: ReplyUsage): string {
+  const t = usage.turn
+  return [usage.windows.join(' and '), sharedLabel(usage), ...(t ? [plural(t.requests, 'request', 'requests'), `${Math.round(t.contextPeak / 1000)}k context`] : [])].join(' · ')
+}
+
+/** The grey line under a reply; rendered only when the ledger has an entry for it. It opens the
+ *  breakdown as a popover, or a bottom sheet on a phone, so touch and keyboard reach it too. */
+export function ReplyUsageNote({ usage }: { usage: ReplyUsage }) {
+  const label = `This reply ${approxPp(usage.pp)} of 5h`
+  const rows: PlanUsageRow[] = [
+    { slot: 'manager-reply-usage-share', label: usage.windows.length > 1 ? `Share of 5-hour limits (${usage.windows.length} windows)` : 'Share of the 5-hour limit', value: approxPp(usage.pp) },
+    // Only a measurable part: "It shared with other work" already says when there is none.
+    ...(usage.alonePp > 0 ? [{ slot: 'manager-reply-usage-alone', label: 'While no other cezar work ran', value: approxPp(usage.alonePp), indent: true }] : []),
+    ...(usage.turn ? [
+      { slot: 'manager-reply-usage-requests', label: 'Model requests', value: String(usage.turn.requests) },
+      { slot: 'manager-reply-usage-context', label: 'Peak context', value: `${Math.round(usage.turn.contextPeak / 1000)}k tokens` },
+    ] : []),
+  ]
+  const trigger = (
+    <button
+      type="button"
+      data-slot="manager-reply-usage"
+      aria-label={`${label}: show what it cost`}
+      className="mt-1 block rounded-sm text-left text-xs text-muted-foreground tabular-nums underline-offset-2 outline-none hover:text-foreground hover:underline focus-visible:ring-[3px] focus-visible:ring-ring/50"
+    >
+      {label}
+    </button>
+  )
+  return (
+    <PlanUsageSurface slot="manager-reply-usage-details" trigger={trigger} tooltip={replyUsageDetail(usage)}>
+      <PlanUsageTitle>What this reply cost</PlanUsageTitle>
+      {usage.windows.map((window) => <p key={window} data-slot="plan-usage-window" className="text-meta text-muted-foreground">{window}</p>)}
+      <p className="text-meta text-muted-foreground">It {sharedLabel(usage)}.</p>
+      <PlanUsageRows rows={rows} />
+    </PlanUsageSurface>
+  )
+}
+
 export function useManagerPlanUsage(
   { managerId, provider, agentProfile }: { managerId: string; provider: PlanUsageProvider | null; agentProfile?: string | undefined },
   messages: readonly ManagerMessage[],
@@ -214,7 +334,8 @@ export function useManagerPlanUsage(
   // `now` ticks every 30 s; the day boundary only needs that resolution.
   const usage = useMemo(() => managerPlanUsage(entries, managerId, started, key, new Date(now)), [entries, managerId, started, key, now])
   const account: AccountNow = { key, fiveHour, week, level: limitLevel(fiveHour) }
-  return { enabled, usage, account }
+  const replies = useMemo(() => replyUsageById(entries, managerId), [entries, managerId])
+  return { enabled, usage, account, replies }
 }
 
 const LEVEL_TEXT: Record<LimitLevel, string> = { ok: '', warning: 'text-warning', critical: 'text-destructive' }
@@ -282,6 +403,7 @@ function usageRows(u: ManagerPlanUsage): PlanUsageRow[] {
 
 function TurnLabel({ t }: { t: ManagerTurnUsage }) {
   const reasons = t.turn ? turnReasons(t.turn) : []
+  const tokens = t.turn ? turnTokens(t.turn) : null
   return (
     <span className="block">
       <span className="block">{PART_LABEL[t.part]} · {clockTime(t.at)} · {t.alonePp >= t.pp ? 'ran alone' : t.alonePp > 0 ? 'partly shared' : 'shared'}</span>
@@ -289,6 +411,9 @@ function TurnLabel({ t }: { t: ManagerTurnUsage }) {
         <span data-slot="manager-usage-turn-detail" className="block text-meta text-muted-foreground">
           {plural(t.turn.requests, 'request', 'requests')} · {Math.round(t.turn.contextPeak / 1000)}k context{reasons.length > 0 ? ` · ${reasons.join(', ')}` : ''}
         </span>
+      ) : null}
+      {tokens ? (
+        <span data-slot="manager-usage-turn-tokens" className="block text-meta text-muted-foreground tabular-nums">{tokensLabel(tokens)}</span>
       ) : null}
     </span>
   )
@@ -305,6 +430,9 @@ function TurnShapeSection({ shape }: { shape: ManagerTurnShape }) {
       <p className="text-meta text-muted-foreground tabular-nums">
         Tool calls: {route} routing work to tasks, {look} looking up state, {own} its own work{write > 0 ? `, ${write} writing files` : ''}
       </p>
+      {shape.tokens ? (
+        <p data-slot="manager-usage-shape-tokens" className="text-meta text-muted-foreground tabular-nums">Tokens: {tokensLabel(shape.tokens)}</p>
+      ) : null}
       {shape.couldBeTasks > 0 ? (
         <p data-slot="manager-usage-could-be-task" className="text-meta text-muted-foreground">
           {plural(shape.couldBeTasks, 'turn', 'turns')} did enough work that a task could have done it.

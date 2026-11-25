@@ -1,5 +1,6 @@
 import type { PlanUsageTurnStats } from '@open-mercato/cezar-contract';
-import type { AgentEvent } from '../core/agent-runner.ts';
+import type { AgentEvent, AgentUsageStatus } from '../core/agent-runner.ts';
+import { isManagerCommand, MANAGER_ROUTES, MANAGER_SUBCOMMANDS } from './cli-vocabulary.ts';
 
 /**
  * What one manager turn is made of (spec 2026-11-21-manager-short-sessions-and-memory § 2.3): the
@@ -9,23 +10,34 @@ import type { AgentEvent } from '../core/agent-runner.ts';
 
 type ToolKind = keyof PlanUsageTurnStats['tools'];
 
-/** `cez-manager` subcommands that act; every other one only reads. */
-const ROUTE = new Set(['merge', 'propose-action', 'automation', 'rename']);
-const ROUTE_TASK = new Set(['create', 'say', 'follow', 'unfollow', 'cancel', 'retry']);
-const ROUTE_SUB = new Set(['add', 'remove', 'set', 'enable', 'disable', 'pause']);
+/**
+ * The command and subcommand of a `cez-manager` call: the first word the CLI knows as a command,
+ * then the first later word that command knows as a subcommand. Matching the CLI's own words, not a
+ * list of flags, keeps a flag's value from being read as the subcommand, unless the value is itself
+ * one of those words.
+ */
+function managerWords(command: string): { sub?: string; next?: string } | undefined {
+  const match = /(?:^|[\s;&|(])cez-manager(?:\s+([^;&|)\n]*))?/.exec(command);
+  if (!match) return undefined;
+  const tokens = (match[1] ?? '').trim().split(/\s+/);
+  const at = tokens.findIndex(isManagerCommand);
+  if (at < 0) return {};
+  const sub = tokens[at]!;
+  const known = MANAGER_SUBCOMMANDS[sub as keyof typeof MANAGER_SUBCOMMANDS] ?? [];
+  const next = tokens.slice(at + 1).find((token) => known.includes(token));
+  return { sub, ...(next ? { next } : {}) };
+}
 
 export function managerToolKind(tool: string, input: unknown): ToolKind {
   if (tool === 'Write' || tool === 'Edit' || tool === 'MultiEdit') return 'write';
   const command = tool === 'Bash' && typeof (input as { command?: unknown } | undefined)?.command === 'string'
     ? (input as { command: string }).command
     : '';
-  const match = /(?:^|[\s;&|(])cez-manager\s+([a-z-]+)(?:\s+([a-z-]+))?/.exec(command);
-  if (!match) return 'own';
-  const [, sub, next] = match;
-  if (ROUTE.has(sub!)) return 'route';
-  if (sub === 'task') return next && ROUTE_TASK.has(next) ? 'route' : 'look';
-  if (sub === 'job' || sub === 'memory') return next && ROUTE_SUB.has(next) ? 'route' : 'look';
-  return 'look';
+  const words = managerWords(command);
+  if (!words) return 'own';
+  const route = words.sub ? MANAGER_ROUTES[words.sub as keyof typeof MANAGER_ROUTES] : undefined;
+  if (route === true) return 'route';
+  return route && words.next && route.has(words.next) ? 'route' : 'look';
 }
 
 export class TurnStatsCollector {
@@ -34,14 +46,20 @@ export class TurnStatsCollector {
   private contextPeak = 0;
   private lastContext = 0;
   private toolResultChars = 0;
+  private cold: boolean | undefined;
+  private tokens: AgentUsageStatus['turnTokens'];
   private readonly tools: PlanUsageTurnStats['tools'] = { route: 0, look: 0, own: 0, write: 0 };
 
   event(event: AgentEvent): void {
+    if (event.type === 'usage-status' && event.status.turnTokens) this.tokens = event.status.turnTokens;
     if (event.type === 'usage-status' && event.status.contextTokens !== undefined) {
       // The runner sends a reading only when it changed: one per model request.
       const context = event.status.contextTokens;
       this.requests++;
-      if (this.requests === 1) this.contextFirst = context;
+      if (this.requests === 1) {
+        this.contextFirst = context;
+        if (event.status.cacheWriteTokens !== undefined && context > 0) this.cold = event.status.cacheWriteTokens > context / 2;
+      }
       this.contextPeak = Math.max(this.contextPeak, context);
       this.lastContext = context;
     } else if (event.type === 'tool-call') {
@@ -56,7 +74,7 @@ export class TurnStatsCollector {
     return this.lastContext;
   }
 
-  stats(session: { fresh: boolean; sessionTurn: number; idleMs?: number }): Omit<PlanUsageTurnStats, 'usd'> {
+  stats(session: { fresh: boolean; sessionTurn: number; idleMs?: number; session?: string }): Omit<PlanUsageTurnStats, 'usd'> {
     return {
       requests: this.requests,
       contextFirst: this.contextFirst,
@@ -66,6 +84,9 @@ export class TurnStatsCollector {
       fresh: session.fresh,
       sessionTurn: session.sessionTurn,
       ...(session.idleMs !== undefined ? { idleMs: Math.max(0, Math.round(session.idleMs)) } : {}),
+      ...(this.tokens ? { cacheReadTokens: this.tokens.cacheReadTokens, cacheWriteTokens: this.tokens.cacheWriteTokens, outputTokens: this.tokens.outputTokens } : {}),
+      ...(this.cold !== undefined ? { cold: this.cold } : {}),
+      ...(session.session ? { session: session.session } : {}),
     };
   }
 }

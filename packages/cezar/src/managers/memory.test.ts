@@ -12,7 +12,7 @@ describe('manager memory', () => {
   beforeEach(() => { dir = mkdtempSync(join(tmpdir(), 'cez-memory-')); });
   afterEach(() => rmSync(dir, { recursive: true, force: true }));
 
-  const set = (file: MemoryFile, key: string, text: string) => setMemoryEntry(file, key, { kind: 'feedback', text }, AT);
+  const set = (file: MemoryFile, key: string, text: string) => setMemoryEntry(file, key, { kind: 'feedback', text }, AT, 'user');
 
   it('replaces by key and keeps the order', () => {
     const one = set({ entries: [] }, 'a', 'Open full PRs') as MemoryFile;
