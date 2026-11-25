@@ -129,10 +129,10 @@ const TOOL_LIMITS_ENFORCED: Record<AgentBackend, boolean> = {
   gemini: false,
   kimi: false,
   omp: false,
-  antigravity: false,
+  antigravity: true,
 };
 
-const TOOL_LIMITS_ENFORCED_LABEL = 'Claude Code, Codex or Pi';
+const TOOL_LIMITS_ENFORCED_LABEL = 'Claude Code, Codex, Pi or Antigravity';
 
 /**
  * A read-only workflow's agent refuses a backend that would ignore its tool limits — the only

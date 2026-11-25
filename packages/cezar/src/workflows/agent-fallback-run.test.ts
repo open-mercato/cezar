@@ -916,7 +916,7 @@ describe('automatic agent fallback', () => {
       setManagerTaskAccountsLookup(() => ({
         agents: [
           { runner: 'claude', agentProfile: 'default', role: 'main' },
-          { runner: 'antigravity', agentProfile: 'default', role: 'main' },
+          { runner: 'opencode', agentProfile: 'default', role: 'main' },
         ],
       }));
       manager = new RunManager(store, repoRoot);
@@ -959,7 +959,7 @@ describe('automatic agent fallback', () => {
         managerAgent: {
           note: 'chosen',
           fallback: [
-            { provider: 'antigravity', profileId: 'default' },
+            { provider: 'opencode', profileId: 'default' },
             { provider: 'claude', profileId: 'second' },
           ],
         },
@@ -968,7 +968,7 @@ describe('automatic agent fallback', () => {
       const record = store.getRun(started.id);
       expect(record?.runner).toBe('claude');
       expect(record?.agentProfile).toBe('second');
-      expect(messages(started.id).some((m) => m.includes('fallback skipped antigravity') && m.includes('does not enforce'))).toBe(true);
+      expect(messages(started.id).some((m) => m.includes('fallback skipped opencode') && m.includes('does not enforce'))).toBe(true);
     }, 40_000);
 
     it('keeps reset-time auto-resume when only incompatible runners remain in a manager fallback list', async () => {
@@ -981,7 +981,7 @@ describe('automatic agent fallback', () => {
         startedByManager,
         managerAgent: {
           note: 'chosen',
-          fallback: [{ provider: 'antigravity', profileId: 'default' }],
+          fallback: [{ provider: 'opencode', profileId: 'default' }],
         },
       });
       await until(() => store.getRun(started.id)?.autoResumeAt !== undefined, 'reset-time auto-resume armed');

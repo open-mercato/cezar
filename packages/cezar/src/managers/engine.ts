@@ -3461,12 +3461,26 @@ export class ManagerEngine {
         choice = { ...choice, reason: `${choice.reason}; ${dropped} dropped: not valid on ${runner}` };
       }
     }
-    // A fallback entry carries the requested model only where that runner accepts it.
+    // Default models from Settings → Agents (when not locked) and per-row pins on `taskAgents`.
+    const modelsLocked = agentModelsLocked(root);
+    const projectConfig = !modelsLocked && root ? await loadConfig(root).catch(() => undefined) : undefined;
+    const defaultModelFor = (candidateRunner: RunnerId, candidateProfile?: string): string | undefined => {
+      if (modelsLocked) return undefined;
+      const row = agents?.find((agent) => agent.runner === candidateRunner && agent.agentProfile === candidateProfile);
+      if (row?.model) return row.model;
+      if (projectConfig?.defaultModelsAuto?.[candidateRunner]) return undefined;
+      return projectConfig?.defaultModels?.[candidateRunner];
+    };
+    const effectiveModel = carried.model ?? defaultModelFor(runner, agentProfile);
+    // A fallback entry carries the requested model only where that runner accepts it, else its row/settings default.
     const modelValidOn = new Map<string, boolean>();
     const fallback: Array<{ provider: RunnerId; profileId: string; model?: string }> | undefined = fallbackOptions && [];
     for (const option of fallbackOptions ?? []) {
       if (input.model && !modelValidOn.has(option.runner)) modelValidOn.set(option.runner, !(await this.modelIssue(option.runner, input.model, undefined)));
-      fallback!.push({ provider: option.runner, profileId: option.account, ...(input.model && modelValidOn.get(option.runner) ? { model: input.model } : {}) });
+      const entryModel = input.model
+        ? (modelValidOn.get(option.runner) ? input.model : undefined)
+        : defaultModelFor(option.runner, option.agentProfile);
+      fallback!.push({ provider: option.runner, profileId: option.account, ...(entryModel ? { model: entryModel } : {}) });
     }
     const agentNote = `Agent chosen by manager ${scope.manager.name}: ${choice.chosen.runner} · ${choice.chosen.label} — ${choice.reason}`;
     const prefix = `/p/${encodeURIComponent(input.projectId)}`;
@@ -3485,7 +3499,7 @@ export class ManagerEngine {
         ...(readOnly ? { readOnly: true, enforceReadOnly: true } : {}),
         runner,
         ...(agentProfile !== undefined ? { agentProfile } : {}),
-        ...(carried.model ? { model: carried.model } : {}),
+        ...(effectiveModel ? { model: effectiveModel } : {}),
         ...(carried.effort ? { reasoningEffort: carried.effort } : {}),
         ...(dispatch ? { dispatch: {} } : {}),
         startedByManager: { id: scope.manager.id, name: scope.manager.name },

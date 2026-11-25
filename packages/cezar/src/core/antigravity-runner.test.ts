@@ -5,6 +5,14 @@ import { join } from 'node:path';
 import type { AgentEvent } from './agent-runner.ts';
 import type { UiEvent } from './ui-events.ts';
 import { AntigravityRunner, antigravityUserFrame, buildAntigravityArgs } from './antigravity-runner.ts';
+import {
+  antigravitySettingsOverride,
+  createAntigravityToolGuard,
+  evaluateAntigravityToolCall,
+  needsAntigravityToolGuard,
+} from './antigravity-tool-guard.ts';
+import { existsSync, readFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
 import { createRunner } from './runner-factory.ts';
 import { buildChildEnv } from './agent-env.ts';
 import { parseAntigravityModelsOutput } from './antigravity-model-catalog.ts';
@@ -72,6 +80,57 @@ describe('Antigravity runner', () => {
 
   it.each([undefined, '', '   '])('omits an absent or blank model (%s)', (model) => {
     expect(buildAntigravityArgs({ cwd: tmpdir(), userPrompt: 'test', model })).not.toContain('--model');
+  });
+
+  it('attaches --settings and --add-dir when a step restricts tools or enforces read-only, and omits them otherwise', () => {
+    expect(needsAntigravityToolGuard({ allowedTools: ['Read', 'Edit', 'Write', 'Bash', 'Glob', 'Grep'] })).toBe(false);
+    expect(needsAntigravityToolGuard({ allowedTools: ['Read', 'Grep', 'Glob', 'Bash'], bashAllowlist: ['gh pr diff'] })).toBe(true);
+    expect(needsAntigravityToolGuard({ enforceReadOnly: true })).toBe(true);
+
+    const reviewSpec = { allowedTools: ['Read', 'Grep', 'Glob', 'Bash'], bashAllowlist: ['gh pr diff', 'git status'] };
+    const settings = JSON.parse(antigravitySettingsOverride(reviewSpec)!);
+    expect(settings).toEqual({ permissions: { deny: ['write_file(*)', 'mcp(*)'] } });
+
+    const roSettings = JSON.parse(antigravitySettingsOverride({ enforceReadOnly: true })!);
+    expect(roSettings).toEqual({ permissions: { deny: ['write_file(*)', 'command(*)', 'mcp(*)'] } });
+
+    const args = buildAntigravityArgs({ cwd: '/tmp', userPrompt: 'review' }, { settingsJson: '{"permissions":{"deny":["write_file(*)"]}}', hookDir: '/tmp/guard' });
+    expect(args).toContain('--settings');
+    expect(args).toContain('--add-dir');
+    expect(args.at(-1)).toBe('-p=');
+  });
+
+  it('evaluates PreToolUse decisions for read-only workflows and enforceReadOnly, and generates an executable hook', () => {
+    const policy = { allowedTools: ['Read', 'Grep', 'Glob', 'Bash'], bashAllowlist: ['gh pr diff', 'git status'] };
+    expect(evaluateAntigravityToolCall(policy, 'view_file', { AbsolutePath: '/repo/a.ts' })).toEqual({ decision: 'allow' });
+    expect(evaluateAntigravityToolCall(policy, 'write_file', { Path: '/repo/a.ts' }).decision).toBe('deny');
+    expect(evaluateAntigravityToolCall(policy, 'replace_file_content', {}).decision).toBe('deny');
+    expect(evaluateAntigravityToolCall(policy, 'call_mcp_tool', {}).decision).toBe('deny');
+    expect(evaluateAntigravityToolCall(policy, 'run_command', { CommandLine: 'gh pr diff 12' })).toEqual({ decision: 'allow' });
+    expect(evaluateAntigravityToolCall(policy, 'run_command', { CommandLine: 'git push origin main' }).decision).toBe('deny');
+    expect(evaluateAntigravityToolCall(policy, 'run_command', { CommandLine: 'git status && git push' }).decision).toBe('deny');
+    expect(evaluateAntigravityToolCall({ enforceReadOnly: true }, 'view_file', {})).toEqual({ decision: 'allow' });
+    expect(evaluateAntigravityToolCall({ enforceReadOnly: true }, 'run_command', { CommandLine: 'git status' }).decision).toBe('deny');
+
+    const guard = createAntigravityToolGuard(policy)!;
+    expect(guard.hookDir).toBeTruthy();
+    const hooksJson = JSON.parse(readFileSync(join(guard.hookDir!, '.agents', 'hooks.json'), 'utf8'));
+    expect(hooksJson['cezar-tool-guard'].PreToolUse[0].matcher).toBe('*');
+
+    const hookScript = join(guard.hookDir!, 'hook.mjs');
+    const allowedRun = spawnSync(process.execPath, [hookScript], {
+      input: JSON.stringify({ toolCall: { name: 'run_command', args: { CommandLine: 'gh pr diff 42' } } }),
+      encoding: 'utf8',
+    });
+    expect(JSON.parse(allowedRun.stdout)).toEqual({ decision: 'allow' });
+    const deniedRun = spawnSync(process.execPath, [hookScript], {
+      input: JSON.stringify({ toolCall: { name: 'run_command', args: { CommandLine: 'git push' } } }),
+      encoding: 'utf8',
+    });
+    expect(JSON.parse(deniedRun.stdout).decision).toBe('deny');
+
+    guard.cleanup();
+    expect(existsSync(guard.hookDir!)).toBe(false);
   });
 
   it('frames a stdin turn the way agy 1.4.0 reads it', () => {

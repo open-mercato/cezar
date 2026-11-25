@@ -114,7 +114,8 @@ import { homedir } from 'node:os';
 import { basename, dirname, join, posix, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Hono, type Context } from 'hono';
-import type { Next } from 'hono';
+import type { HonoBase } from 'hono/hono-base';
+import type { BlankEnv, MergeSchemaPath, Next, Schema } from 'hono/types';
 import { serve, type ServerType } from '@hono/node-server';
 import { bodyLimit } from 'hono/body-limit';
 import { HTTPException } from 'hono/http-exception';
@@ -1513,11 +1514,9 @@ async function probeWritableDir(dir: string, create: boolean): Promise<string | 
   }
 }
 
-// The return type is INFERRED on purpose: it is the chained app type built at the bottom of
-// this function, and `AppType` (src/server/app-type.ts) is `ReturnType<typeof createApp>`.
-// Annotating it `Hono` here would erase every route from the type and leave the typed client
-// with nothing to offer. See the `routed` assembly at the end of the function.
-export function createApp(deps: ServerDeps) {
+// Built separately from `createApp` so TypeScript serializes `v1` once instead of twice
+// (scoped + unscoped) when emitting declarations (`TS7056`), while `AppType` stays exact.
+export function createAppParts(deps: ServerDeps) {
   const { version, update, bindHost, bootProjectId } = deps;
   const runtimeId = deps.runtimeId ?? randomUUID();
   // Boot singletons keep DELIBERATELY distinct names (`boot*`): every
@@ -9536,7 +9535,8 @@ export function createApp(deps: ServerDeps) {
     // manager's included), so the notch and the heads show what Now shows.
     .get('/workspace/managers', async (c) => {
       const [managers, list] = await Promise.all([managerEngine.list(), attention.list().catch(() => undefined)]);
-      return c.json({ managers: list ? managers.map((manager) => ({ ...manager, needsYou: managerNeedsYou(list.items, manager.id) })) : managers });
+      const items: typeof managers = list ? managers.map((manager) => ({ ...manager, needsYou: managerNeedsYou(list.items, manager.id) })) : managers;
+      return c.json({ managers: items });
     })
     // Deactivate or reactivate every manager (spec 2026-11-19-manager-deactivate). Cockpit-only: `cez manager` never calls it.
     .post('/workspace/managers/activity', jsonZodValidator(managerActivityInputSchema), async (c) =>
@@ -9911,28 +9911,56 @@ export function createApp(deps: ServerDeps) {
   // mounts its `use('*')` scope resolver over the whole prefix, and Hono runs matched middleware
   // in registration order. `/health` in particular answers for the workspace, has no project to
   // resolve, and is the CORS-open discovery route — it must not sit behind the resolver.
-  const routed = app
+  return {
+    app,
+    v1,
+    workspaceV1,
+    finish(routed: { get: (path: string, handler: (c: Context) => Response | Promise<Response>) => unknown; request: (path: string, init?: RequestInit) => Response | Promise<Response>; fetch: (request: Request) => Response | Promise<Response> }) {
+      // ---- SPA catch-all -------------------------------------------------------
+      // Last, so every route above still wins. Any other GET gets the cockpit shell:
+      // react-router owns the route map, including the 404, so `/tasks/:id/changes`
+      // cold-loads and survives a refresh instead of 404ing. `/api/*` and the static
+      // files above resolve to `passthrough` and fall through to Hono's own 404 —
+      // an unknown API path must never answer with HTML.
+      // Without a web/dist build this serves the built-in build-hint page (dev-only
+      // state — the published tarball ships web/dist), never a 404.
+      routed.get('*', (c) => serveShell(c) ?? c.notFound());
+      managerLoopback.request = (path, init) => routed.request(path, init);
+      phonePairing.attach(
+        (request) => Promise.resolve(routed.fetch(request)),
+        () => workspaceEvents.emit('phone-pairing', { pairing: phonePairing.list().pairing } satisfies PhonePairingEvent),
+      );
+    },
+  };
+}
 
+type SchemaOf<T> = T extends HonoBase<any, infer S, any> ? S : never;
+type PrefixSchema<S, P extends string> = S extends Schema ? MergeSchemaPath<S, P> : never;
+type AppParts = ReturnType<typeof createAppParts>;
+type ProjectV1Schema = SchemaOf<AppParts['v1']>;
+type WorkspaceV1Schema = SchemaOf<AppParts['workspaceV1']>;
+
+/**
+ * The mounted HTTP app type: `v1` under both `/api/v1/p/:projectId` and `/api/v1`, plus
+ * single-mount `workspaceV1` under `/api/v1`. Named explicitly so `createApp`'s declaration
+ * references `ProjectV1Schema` once instead of serializing it twice.
+ */
+export type ServerApp = Hono<
+  BlankEnv,
+  | PrefixSchema<ProjectV1Schema, typeof V1_SCOPED_PREFIX>
+  | PrefixSchema<ProjectV1Schema, typeof V1_PREFIX>
+  | PrefixSchema<WorkspaceV1Schema, typeof V1_PREFIX>,
+  '/'
+>;
+
+export function createApp(deps: ServerDeps): ServerApp {
+  const { app, v1, workspaceV1, finish } = createAppParts(deps);
+  const routed = app
     .route(V1_SCOPED_PREFIX, v1)
     .route(V1_PREFIX, v1)
     .route(V1_PREFIX, workspaceV1);
-
-  // ---- SPA catch-all -------------------------------------------------------
-  // Last, so every route above still wins. Any other GET gets the cockpit shell:
-  // react-router owns the route map, including the 404, so `/tasks/:id/changes`
-  // cold-loads and survives a refresh instead of 404ing. `/api/*` and the static
-  // files above resolve to `passthrough` and fall through to Hono's own 404 —
-  // an unknown API path must never answer with HTML.
-  // Without a web/dist build this serves the built-in build-hint page (dev-only
-  // state — the published tarball ships web/dist), never a 404.
-  routed.get('*', (c) => serveShell(c) ?? c.notFound());
-  managerLoopback.request = (path, init) => routed.request(path, init);
-  phonePairing.attach(
-    (request) => Promise.resolve(routed.fetch(request)),
-    () => workspaceEvents.emit('phone-pairing', { pairing: phonePairing.list().pairing } satisfies PhonePairingEvent),
-  );
-
-  return routed;
+  finish(routed);
+  return routed as unknown as ServerApp;
 }
 
 /** The status route's body: the configured thresholds (the guard's own copy is from its last pass). */

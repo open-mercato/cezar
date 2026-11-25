@@ -119,26 +119,28 @@ describe('workflowCapabilities', () => {
 describe('readOnlyWorkflowRefusal', () => {
   it('refuses a read-only workflow on a backend that ignores tool limits', () => {
     expect(readOnlyWorkflowRefusal(REVIEW_PR, 'opencode')).toBeDefined();
-    expect(readOnlyWorkflowRefusal(REVIEW_PR, 'antigravity')).toContain('antigravity does not enforce');
-    expect(workflowSupportsBackend(REVIEW_PR, 'antigravity')).toBe(false);
+    expect(readOnlyWorkflowRefusal(REVIEW_PR, 'cursor')).toContain('cursor does not enforce');
+    expect(workflowSupportsBackend(REVIEW_PR, 'opencode')).toBe(false);
   });
 
   it('lets it run where the limits hold, and never touches a workflow that may publish', () => {
     expect(readOnlyWorkflowRefusal(REVIEW_PR, 'claude')).toBeUndefined();
     expect(readOnlyWorkflowRefusal(REVIEW_PR, 'codex')).toBeUndefined();
     expect(readOnlyWorkflowRefusal(REVIEW_PR, 'pi')).toBeUndefined();
+    expect(readOnlyWorkflowRefusal(REVIEW_PR, 'antigravity')).toBeUndefined();
     expect(workflowSupportsBackend(REVIEW_PR, 'claude')).toBe(true);
     expect(workflowSupportsBackend(REVIEW_PR, 'codex')).toBe(true);
     expect(workflowSupportsBackend(REVIEW_PR, 'pi')).toBe(true);
+    expect(workflowSupportsBackend(REVIEW_PR, 'antigravity')).toBe(true);
     expect(readOnlyWorkflowRefusal(QUICK_TASK_WORKFLOW, 'codex')).toBeUndefined();
-    expect(workflowSupportsBackend(QUICK_TASK_WORKFLOW, 'antigravity')).toBe(true);
+    expect(workflowSupportsBackend(QUICK_TASK_WORKFLOW, 'opencode')).toBe(true);
     expect(readOnlyWorkflowRefusal(undefined, 'codex')).toBeUndefined();
   });
 
   it('reports when no candidate runner supports a read-only workflow', () => {
-    expect(noCompatibleRunnerRefusal(REVIEW_PR, ['antigravity'])).toBe(readOnlyWorkflowRefusal(REVIEW_PR, 'antigravity'));
-    expect(noCompatibleRunnerRefusal(REVIEW_PR, ['antigravity', 'opencode'])).toContain('antigravity, opencode');
-    expect(noCompatibleRunnerRefusal(REVIEW_PR, ['antigravity', 'claude'])).toBeUndefined();
-    expect(noCompatibleRunnerRefusal(QUICK_TASK_WORKFLOW, ['antigravity', 'opencode'])).toBeUndefined();
+    expect(noCompatibleRunnerRefusal(REVIEW_PR, ['opencode'])).toBe(readOnlyWorkflowRefusal(REVIEW_PR, 'opencode'));
+    expect(noCompatibleRunnerRefusal(REVIEW_PR, ['opencode', 'cursor'])).toContain('opencode, cursor');
+    expect(noCompatibleRunnerRefusal(REVIEW_PR, ['opencode', 'antigravity'])).toBeUndefined();
+    expect(noCompatibleRunnerRefusal(QUICK_TASK_WORKFLOW, ['opencode', 'cursor'])).toBeUndefined();
   });
 });
