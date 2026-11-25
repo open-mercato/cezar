@@ -450,16 +450,25 @@ describe('/api/v1/providers/setup', () => {
 
     it('re-probes at the exit itself, before any request sees the session end', async () => {
       let refreshes = 0;
+      let probes = 0;
+      let version = '2.0.14 (Claude Code)';
       const routes = routesWith({
         currentStatus: async () => ({ providers: [{ provider: 'claude', status: 'connected' }] }),
         status: async () => { refreshes += 1; return { providers: [{ provider: 'claude', status: 'connected' }] }; },
-        checks: async () => [{ name: 'claude', available: true, version: '2.0.14 (Claude Code)' }],
+        checks: async () => { probes += 1; return [{ name: 'claude', available: true, version }]; },
       });
+      const read = async () => ((await (await routes.request('/providers/setup')).json()) as { agents: Array<{ provider: string; version: string | null }> })
+        .agents.find((agent) => agent.provider === 'claude')?.version;
+      expect(await read()).toBe('2.0.14');
       await start(routes, { provider: 'claude', action: 'update' });
       const before = refreshes;
+      version = '2.1.3 (Claude Code)';
       ptys[0]!.finish(0);
       // No request in between: only the exit listener can have started this probe.
       expect(refreshes).toBe(before + 1);
+      // The exit also dropped the cached versions: the next listing probes again and sees the update.
+      expect(await read()).toBe('2.1.3');
+      expect(probes).toBe(2);
     });
 
     it('sends a phone no host paths: program names only, and no sign-in line', async () => {

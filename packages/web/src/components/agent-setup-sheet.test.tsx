@@ -1,10 +1,12 @@
 import { QueryClientProvider } from '@tanstack/react-query'
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import * as React from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import type { AgentSetupEntry, AgentSetupProvider } from '@open-mercato/cezar-api-client'
 
 import { createQueryClient } from '@/api/query-client'
+import type { QueryClient } from '@tanstack/react-query'
 import { useAgentSetup } from '@/api/queries'
 import { AgentSetupFlow } from '@/components/agent-setup-sheet'
 import { toast } from '@/components/ui/toaster'
@@ -39,6 +41,10 @@ let onStatusRefresh: (() => void | Promise<void>) | null = null
 /** How long a start takes to answer: long enough, and the sheet re-renders while it is in flight. */
 let postDelayMs = 0
 let cancelled: string[] = []
+/** When true, DELETE /providers/setup/sessions/:id answers 500 and the session keeps running. */
+let cancelFails = false
+/** When true, `GET /api/v1/providers/status?refresh=1` answers 500. */
+let refreshFails = false
 
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } })
 
@@ -64,6 +70,7 @@ beforeEach(() => {
     const method = init?.method ?? 'GET'
     if (url.pathname === '/api/v1/providers/status') {
       if (url.searchParams.get('refresh') === '1' && onStatusRefresh) await onStatusRefresh()
+      if (url.searchParams.get('refresh') === '1' && refreshFails) return json({ error: 'down' }, 500)
       return json({ providers: Object.entries(statuses).map(([provider, status]) => ({ provider, status, enabled: true })) })
     }
     if (url.pathname === '/api/v1/providers/setup') return json({ available: refusedWith === null, reason: refusedWith, interactive, session, agents })
@@ -82,6 +89,9 @@ beforeEach(() => {
     const cancelMatch = /^\/api\/v1\/providers\/setup\/sessions\/([^/]+)$/.exec(url.pathname)
     if (cancelMatch && method === 'DELETE') {
       cancelled.push(cancelMatch[1]!)
+      if (cancelFails) return json({ error: 'boom' }, 500)
+      // The server ends the terminal: the listing reports its exit from now on.
+      if (session && session.id === cancelMatch[1]) session = { ...session, exitCode: 130 }
       return json({ ok: true })
     }
     if (url.pathname === '/api/v1/health') return json({ repoRoot: '/work', bootProject: 'boot', capabilities: {} })
@@ -89,7 +99,10 @@ beforeEach(() => {
   })
 })
 
-afterEach(() => {
+afterEach(async () => {
+  // Unmount first and let the deferred close-cancel run, while fetch is still the stub.
+  cleanup()
+  await new Promise((resolve) => setTimeout(resolve, 20))
   agents = []
   interactive = true
   refusedWith = null
@@ -100,17 +113,25 @@ afterEach(() => {
   onStatusRefresh = null
   postDelayMs = 0
   cancelled = []
-  cleanup()
+  cancelFails = false
+  refreshFails = false
   fetchMock.mockReset()
   vi.unstubAllGlobals()
 })
 
-const renderFlow = (provider: AgentSetupProvider, action: 'install' | 'update' | 'sign-in') =>
-  render(
-    <QueryClientProvider client={createQueryClient()}>
+const renderFlow = (
+  provider: AgentSetupProvider,
+  action: 'install' | 'update' | 'sign-in',
+  options: { strict?: boolean; client?: QueryClient } = {},
+) => {
+  const tree = (
+    <QueryClientProvider client={options.client ?? createQueryClient()}>
       <AgentSetupFlow provider={provider} action={action} onClose={() => {}} />
-    </QueryClientProvider>,
+    </QueryClientProvider>
   )
+  return render(options.strict ? <React.StrictMode>{tree}</React.StrictMode> : tree)
+}
+const pause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
 
 const phase = () => document.querySelector('[data-slot="agent-setup-flow"]')?.getAttribute('data-phase')
 const WAIT = { timeout: 5_000 }
@@ -409,6 +430,10 @@ describe('AgentSetupFlow: terminal sign-in and lost sessions (#2474 re-review)',
     statuses = { antigravity: 'connected' }
     await waitFor(() => expect(phase()).toBe('done'), WAIT)
     await waitFor(() => expect(cancelled).toEqual(['s1']))
+    // Closing afterwards does not send a second DELETE for the login it already ended.
+    cleanup()
+    await pause(20)
+    expect(cancelled).toEqual(['s1'])
   })
 
   it('offers Cancel while a sign-in terminal is open, and does not rejoin what it cancelled', async () => {
@@ -461,8 +486,6 @@ describe('AgentSetupFlow: terminal sign-in and lost sessions (#2474 re-review)',
     renderFlow('codex', 'install')
     fireEvent.click(await screen.findByRole('button', { name: 'Install' }))
     await waitFor(() => expect(phase()).toBe('running'))
-    // Seen by a listing first, then gone (a restart, a sleep past the server's retention).
-    await new Promise((resolve) => setTimeout(resolve, 1_200))
     statuses = { codex: 'disconnected' }
     session = null
     await waitFor(() => expect(phase()).toBe('sign-in'), WAIT)
@@ -474,10 +497,146 @@ describe('AgentSetupFlow: terminal sign-in and lost sessions (#2474 re-review)',
     renderFlow('claude', 'update')
     fireEvent.click(await screen.findByRole('button', { name: 'Update' }))
     await waitFor(() => expect(phase()).toBe('running'))
-    await new Promise((resolve) => setTimeout(resolve, 1_200))
     session = null
     await waitFor(() => expect(phase()).toBe('failed'), WAIT)
     expect(screen.getByRole('alert').textContent).toContain('The terminal closed before cezar saw it finish.')
+  })
+
+  it('reports an update as done when its session vanished and the version really changed', async () => {
+    statuses = { claude: 'connected' }
+    agents = [entry('claude', { installed: true, version: '2.0.14', method: 'native', update: { command: "'claude' update", runnable: true, sudo: false } })]
+    renderFlow('claude', 'update')
+    fireEvent.click(await screen.findByRole('button', { name: 'Update' }))
+    await waitFor(() => expect(phase()).toBe('running'))
+    // The server re-probed at the exit: the listing that drops the session already has the new version.
+    agents = [entry('claude', { installed: true, version: '2.1.3', method: 'native', update: { command: "'claude' update", runnable: true, sudo: false } })]
+    session = null
+    await waitFor(() => expect(phase()).toBe('done'), WAIT)
+    expect(screen.getByText('Claude Code is updated. It reports 2.1.3 now.')).toBeTruthy()
+  })
+
+  it('settles when the listing shows another session instead of the one it tracks', async () => {
+    statuses = { codex: 'not-installed' }
+    agents = [entry('codex', { install: { command: 'npm install -g @openai/codex', runnable: true, sudo: false } })]
+    renderFlow('codex', 'install')
+    fireEvent.click(await screen.findByRole('button', { name: 'Install' }))
+    await waitFor(() => expect(phase()).toBe('running'))
+    statuses = { codex: 'disconnected' }
+    // Another tab started one after a restart: s1 is gone, but the listing is not empty.
+    session = live({ id: 'other-tab', provider: 'claude', action: 'install' })
+    await waitFor(() => expect(phase()).toBe('sign-in'), WAIT)
+  })
+
+  it('never cancels a sign-in it rejoined from another tab when it closes (StrictMode)', async () => {
+    statuses = { antigravity: 'disconnected' }
+    agents = [entry('antigravity', { installed: true, loginCommand: "'agy'" })]
+    session = live({ provider: 'antigravity', action: 'login' })
+    const view = renderFlow('antigravity', 'sign-in', { strict: true })
+    await waitFor(() => expect(screen.getByTestId('terminal').getAttribute('data-session')).toBe('live-1'))
+    await pause(20)
+    expect(cancelled).toEqual([])
+    view.unmount()
+    await pause(20)
+    expect(cancelled).toEqual([])
+  })
+
+  it('under StrictMode, cancels the sign-in it started exactly once when it closes', async () => {
+    statuses = { antigravity: 'disconnected' }
+    agents = [entry('antigravity', { installed: true, loginCommand: "'agy'" })]
+    const view = renderFlow('antigravity', 'sign-in', { strict: true })
+    fireEvent.click(await screen.findByRole('button', { name: 'Open terminal here' }))
+    await screen.findByTestId('terminal')
+    view.unmount()
+    await waitFor(() => expect(cancelled).toEqual(['s1']))
+  })
+
+  it('a sheet reopened right after closing does not rejoin the sign-in the close cancelled', async () => {
+    statuses = { antigravity: 'disconnected' }
+    agents = [entry('antigravity', { installed: true, loginCommand: "'agy'" })]
+    const client = createQueryClient()
+    // The page behind the sheet keeps reading the listing, so its cache outlives the sheet.
+    function Page({ sheet }: { sheet: boolean }) {
+      useAgentSetup()
+      return sheet ? <AgentSetupFlow provider="antigravity" action="sign-in" onClose={() => {}} /> : null
+    }
+    const view = render(<QueryClientProvider client={client}><Page sheet /></QueryClientProvider>)
+    fireEvent.click(await screen.findByRole('button', { name: 'Open terminal here' }))
+    await screen.findByTestId('terminal')
+    view.rerender(<QueryClientProvider client={client}><Page sheet={false} /></QueryClientProvider>)
+    await waitFor(() => expect(cancelled).toEqual(['s1']))
+    view.rerender(<QueryClientProvider client={client}><Page sheet /></QueryClientProvider>)
+    await pause(300)
+    expect(screen.queryByTestId('terminal')).toBeNull()
+    expect(screen.queryByRole('alert')).toBeNull()
+    expect(screen.getByRole('button', { name: 'Open terminal here' })).toBeTruthy()
+  })
+
+  it('keeps the sign-in terminal and its Cancel when the cancel fails', async () => {
+    cancelFails = true
+    statuses = { antigravity: 'disconnected' }
+    agents = [entry('antigravity', { installed: true, loginCommand: "'agy'" })]
+    renderFlow('antigravity', 'sign-in')
+    fireEvent.click(await screen.findByRole('button', { name: 'Open terminal here' }))
+    await screen.findByTestId('terminal')
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+    expect((await screen.findByRole('alert')).textContent).toContain('could not stop the sign-in terminal')
+    expect(screen.getByTestId('terminal')).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Cancel' })).toBeTruthy()
+  })
+
+  it.each([
+    { sheet: 'install' as const, running: 'login', rejoins: true },
+    { sheet: 'install' as const, running: 'update', rejoins: false },
+    { sheet: 'sign-in' as const, running: 'install', rejoins: false },
+    { sheet: 'sign-in' as const, running: 'update', rejoins: false },
+  ])('a $sheet sheet $running session: rejoins=$rejoins', async ({ sheet, running, rejoins }) => {
+    statuses = { antigravity: sheet === 'install' ? 'not-installed' : 'disconnected' }
+    agents = [entry('antigravity', { installed: sheet !== 'install', loginCommand: "'agy'", install: { command: 'curl -fsSL https://x | bash', runnable: true, sudo: false } })]
+    session = live({ provider: 'antigravity', action: running })
+    renderFlow('antigravity', sheet)
+    if (rejoins) {
+      await waitFor(() => expect(screen.getByTestId('terminal').getAttribute('data-session')).toBe('live-1'))
+    } else {
+      await waitFor(() => expect(phase()).toBeTruthy())
+      await pause(50)
+      expect(screen.queryByTestId('terminal')).toBeNull()
+    }
+    expect(posted).toEqual([])
+  })
+
+  it('offers the terminal again when a sign-in session vanishes', async () => {
+    statuses = { antigravity: 'disconnected' }
+    agents = [entry('antigravity', { installed: true, loginCommand: "'agy'" })]
+    renderFlow('antigravity', 'sign-in')
+    fireEvent.click(await screen.findByRole('button', { name: 'Open terminal here' }))
+    await screen.findByTestId('terminal')
+    session = null
+    expect((await screen.findByRole('alert', {}, WAIT)).textContent).toContain('The terminal closed before cezar saw it finish. Open it again')
+    expect(screen.getByRole('button', { name: 'Open terminal here' })).toBeTruthy()
+    expect(screen.queryByTestId('terminal')).toBeNull()
+  })
+
+  it('fails an install that vanished while the agent is still not installed', async () => {
+    statuses = { codex: 'not-installed' }
+    agents = [entry('codex', { install: { command: 'npm install -g @openai/codex', runnable: true, sudo: false } })]
+    renderFlow('codex', 'install')
+    fireEvent.click(await screen.findByRole('button', { name: 'Install' }))
+    await waitFor(() => expect(phase()).toBe('running'))
+    session = null
+    await waitFor(() => expect(phase()).toBe('failed'), WAIT)
+    expect(screen.getByRole('alert').textContent).toContain('Codex is not installed. Try again.')
+  })
+
+  it('fails with a retry when the status cannot be read after an install vanished', async () => {
+    statuses = { codex: 'not-installed' }
+    agents = [entry('codex', { install: { command: 'npm install -g @openai/codex', runnable: true, sudo: false } })]
+    renderFlow('codex', 'install')
+    fireEvent.click(await screen.findByRole('button', { name: 'Install' }))
+    await waitFor(() => expect(phase()).toBe('running'))
+    refreshFails = true
+    session = null
+    await waitFor(() => expect(phase()).toBe('failed'), WAIT)
+    expect(screen.getByRole('alert').textContent).toContain('cezar could not check the agent. Try again.')
   })
 })
 

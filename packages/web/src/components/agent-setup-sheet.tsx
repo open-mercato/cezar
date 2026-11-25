@@ -2,7 +2,7 @@ import { useQueryClient } from '@tanstack/react-query'
 import { CheckIcon, ExternalLinkIcon } from 'lucide-react'
 import * as React from 'react'
 
-import type { AgentSetupEntry, AgentSetupProvider, AgentSetupSession } from '@open-mercato/cezar-api-client'
+import type { AgentSetupEntry, AgentSetupProvider, AgentSetupSession, AgentSetupState } from '@open-mercato/cezar-api-client'
 
 import { cancelAgentSetup } from '@/api/client'
 import { useAgentSetup, useCancelAgentSetup, useInvalidateHealth, useProviderStatus, useRefreshProviderStatus, useStartAgentSetup, workspaceQueryKeys } from '@/api/queries'
@@ -109,6 +109,19 @@ export function AgentSetupFlow({ provider, action, onClose }: { provider: AgentS
   const refreshMutate = refresh.mutate
   const refreshAsync = refresh.mutateAsync
 
+  // The version an update starts from, kept from before it ran: the listing after its end already
+  // holds the new one, because the server re-probes at the exit (#2474 re-review).
+  const versionNow = React.useRef(entry?.version ?? null)
+  versionNow.current = entry?.version ?? null
+  const versionBefore = React.useRef<string | null>(null)
+  // Logins this sheet started; only those are cancelled when it closes, never another tab's.
+  const owned = React.useRef(new Set<string>())
+  const track = React.useCallback((next: AgentSetupSession) => {
+    if (next.action === 'update') versionBefore.current = versionNow.current
+    setShown(next)
+    setPhase(next.action === 'login' ? 'sign-in' : 'running')
+  }, [])
+
   // A session for this agent already running (a reload, another tab) is rejoined, not restarted.
   const idle = phase === 'confirm' || (phase === 'sign-in' && shown === null)
   // A login cancelled here still reads as running until the next listing: never rejoin it.
@@ -117,47 +130,76 @@ export function AgentSetupFlow({ provider, action, onClose }: { provider: AgentS
     if (!session || session.provider !== provider || session.exitCode !== null || !idle) return
     if (session.id === dropped.current) return
     if (!REJOINS[action].includes(session.action)) return
-    setShown(session)
-    setPhase(session.action === 'login' ? 'sign-in' : 'running')
-  }, [action, idle, provider, session])
-  // Seen on the server, then gone while still running here (a sleep past the server's retention,
-  // a restart, a cancel elsewhere): settle against the status instead of spinning forever.
-  const seen = React.useRef<string | null>(null)
-  if (session && shown && session.id === shown.id) seen.current = session.id
-  const [vanished, setVanished] = React.useState<AgentSetupSession | null>(null)
-  React.useEffect(() => {
-    if (session && shown && session.id === shown.id) setShown(session)
-    else if (!session && shown && shown.exitCode === null && seen.current === shown.id) {
-      setShown(null)
-      setVanished(shown)
-    }
-  }, [session, shown])
+    track(session)
+  }, [action, idle, provider, session, track])
 
-  // A login terminal nobody watches holds the one setup slot: cancel it when the sheet closes or
-  // the sign-in lands. Decided a tick later so StrictMode's remount does not kill a rejoined login.
+  // The session tracked here gone from the listing (a restart, a sleep past the server's retention,
+  // a cancel elsewhere), whatever else it lists now: confirmed with a fresh read, since a read that
+  // began before the start can still land, then settled against the status instead of spinning.
+  const refetchSetup = setup.refetch
+  const shownNow = React.useRef(shown)
+  shownNow.current = shown
+  const checking = React.useRef<string | null>(null)
+  const [vanished, setVanished] = React.useState<AgentSetupSession | null>(null)
+  const watching = phase === 'running' || phase === 'sign-in'
+  React.useEffect(() => {
+    if (!shown || !setup.data) return
+    if (session?.id === shown.id) {
+      if (session !== shown) setShown(session)
+      return
+    }
+    if (shown.exitCode !== null || !watching || checking.current === shown.id) return
+    const lost = shown
+    checking.current = lost.id
+    void refetchSetup().then((next) => {
+      checking.current = null
+      if (shownNow.current?.id !== lost.id) return
+      const fresh = next.data?.session
+      if (fresh?.id === lost.id) return setShown(fresh)
+      setShown(null)
+      setVanished(lost)
+    })
+  }, [refetchSetup, session, setup.data, shown, watching])
+
+  // A cancelled session leaves the cached listing at once: a sheet reopened before the next read
+  // must not rejoin it.
+  const forget = React.useCallback((id: string) => {
+    queryClient.setQueryData<AgentSetupState>(workspaceQueryKeys.agentSetup, (state) =>
+      state?.available && state.session?.id === id ? { ...state, session: null } : state)
+    void queryClient.invalidateQueries({ queryKey: workspaceQueryKeys.agentSetup })
+  }, [queryClient])
+
+  // A login terminal nobody watches holds the one setup slot: cancel the one this sheet started
+  // when it closes or the sign-in lands. Only a started one, so StrictMode's mount-time remount
+  // has nothing to cancel and a rejoined login from another tab survives.
   const cancel = useCancelAgentSetup()
   const liveLogin = shown?.action === 'login' && shown.exitCode === null ? shown.id : null
-  const liveLoginNow = React.useRef(liveLogin)
-  liveLoginNow.current = liveLogin
-  const mounted = React.useRef(false)
-  React.useEffect(() => {
-    mounted.current = true
-    return () => {
-      mounted.current = false
-      const login = liveLoginNow.current
-      window.setTimeout(() => {
-        if (!mounted.current && login) void cancelAgentSetup(login).catch(() => {})
-      }, 0)
-    }
-  }, [])
+  const ownedLogin = liveLogin && owned.current.has(liveLogin) ? liveLogin : null
+  const ownedLoginNow = React.useRef(ownedLogin)
+  ownedLoginNow.current = ownedLogin
+  React.useEffect(() => () => {
+    const login = ownedLoginNow.current
+    if (login) void cancelAgentSetup(login).then(() => forget(login), () => {})
+  }, [forget])
   const cancelMutate = cancel.mutate
   React.useEffect(() => {
-    if (phase === 'done' && liveLogin) cancelMutate(liveLogin)
-  }, [cancelMutate, liveLogin, phase])
+    if (phase !== 'done' || !ownedLogin) return
+    cancelMutate(ownedLogin, { onSuccess: () => { forget(ownedLogin); setShown(null) } })
+  }, [cancelMutate, forget, ownedLogin, phase])
+  // Cancel is the user's own click, so it stops a rejoined login too. A failed cancel keeps the
+  // terminal and its Cancel: the server still holds the slot.
   const cancelLogin = () => {
-    if (liveLogin) cancelMutate(liveLogin)
-    dropped.current = liveLogin
-    setShown(null)
+    if (!liveLogin) return setShown(null)
+    const id = liveLogin
+    setFailure(null)
+    cancelMutate(id, {
+      onSuccess: () => {
+        dropped.current = id
+        forget(id)
+        setShown((current) => (current?.id === id ? null : current))
+      },
+      onError: () => setFailure('cezar could not stop the sign-in terminal. Try again.'),
+    })
   }
 
   // `mutate` is stable; the mutation object is not, and depending on it re-fired the wait below.
@@ -169,8 +211,8 @@ export function AgentSetupFlow({ provider, action, onClose }: { provider: AgentS
         { provider, action: kind, ...(force ? { force } : {}) },
         {
           onSuccess: (next) => {
-            setShown(next)
-            setPhase(kind === 'login' ? 'sign-in' : 'running')
+            if (next.action === 'login') owned.current.add(next.id)
+            track(next)
           },
           onError: (error: Error) => {
             setFailure(error.message)
@@ -179,11 +221,10 @@ export function AgentSetupFlow({ provider, action, onClose }: { provider: AgentS
         },
       )
     },
-    [provider, startMutate],
+    [provider, startMutate, track],
   )
 
   // "Update when they finish": ask until no task runs on this agent, then start it exactly once.
-  const refetchSetup = setup.refetch
   const waitFired = React.useRef(false)
   React.useEffect(() => {
     if (phase !== 'waiting') {
@@ -249,7 +290,7 @@ export function AgentSetupFlow({ provider, action, onClose }: { provider: AgentS
     }
     invalidateHealth()
     if (vanished.action === 'update') {
-      const before = entry?.version ?? null
+      const before = versionBefore.current
       void refetchSetup().then((next) => {
         const now = next.data?.agents.find((agent) => agent.provider === provider)?.version ?? null
         if (now && now !== before) {
@@ -275,7 +316,7 @@ export function AgentSetupFlow({ provider, action, onClose }: { provider: AgentS
         setPhase('failed')
       },
     )
-  }, [entry?.version, invalidateHealth, label, provider, queryClient, refetchSetup, refreshAsync, vanished])
+  }, [invalidateHealth, label, provider, queryClient, refetchSetup, refreshAsync, vanished])
 
   // A login terminal that ended without signing in offers the terminal again, not a dead log.
   const loginEnded = React.useRef<string | null>(null)
@@ -508,6 +549,7 @@ function SignIn({
     return (
       <div className="flex flex-col gap-2">
         <SetupTerminal key={session.id} session={session} running={session.exitCode === null} installing={false} />
+        {failure ? <p role="alert" className="text-ui text-danger">{failure}</p> : null}
         {session.exitCode === null ? (
           <div className="flex justify-end">
             <Button size="sm" variant="outline" className="font-normal" onClick={onCancel}>Cancel</Button>
