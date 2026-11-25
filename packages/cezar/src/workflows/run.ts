@@ -4745,6 +4745,38 @@ export class RunManager {
     return true;
   }
 
+<<<<<<< HEAD
+=======
+  private cancelPendingHandoff(runId: string): void {
+    this.pendingContinuations.delete(runId);
+    const run = this.store.getRun(runId);
+    const handoff = run?.agentSwitch;
+    if (!run || !handoff?.continuationStepId) return;
+    const step = run.steps.find((candidate) => candidate.id === handoff.continuationStepId);
+    if (step?.status !== 'pending') return;
+    this.store.updateStep(runId, step.id, { status: 'cancelled', finishedAt: new Date().toISOString() });
+    this.store.updateRun(runId, { agentSwitch: { ...handoff, continuationStepId: undefined, continuationInput: undefined } });
+  }
+
+  private armCancellationGrace(runId: string, state: ActiveRun): void {
+    if (state.cancellationTimer) clearTimeout(state.cancellationTimer);
+    state.cancellationTimer = setTimeout(() => {
+      if (this.active.get(runId) !== state || !state.cancelled) return;
+      const session = state.session;
+      if (!session) return;
+      session.hardStop?.();
+      const reapSettled = () => {
+        if (this.active.get(runId) === state && state.cancelled) this.dropActive(runId, state);
+      };
+      void session.result.then(reapSettled, reapSettled);
+      // A confirmed process exit also frees the slot: a descendant holding stdout open can keep
+      // `result` pending forever, and Continue then refuses the run as still active (#1929).
+      void session.processExited?.then(reapSettled, reapSettled);
+    }, CANCEL_GRACE_MS);
+    state.cancellationTimer.unref?.();
+  }
+
+>>>>>>> 0ece4cf (fix(runs): release a cancelled run once its backend process has exited (carry of #1961) (#2471))
   /** Process-local proof, not merely a deadline left in the run record. */
   hasScheduledAutoResume(runId: string): boolean {
     return this.autoResumeTimers.has(runId);
