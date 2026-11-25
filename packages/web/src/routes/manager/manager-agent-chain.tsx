@@ -1,5 +1,5 @@
 import { ArrowLeftRightIcon, BotIcon, ChevronLeftIcon, CircleAlertIcon, CircleCheckIcon, GripVerticalIcon, InfoIcon, PlusIcon } from 'lucide-react'
-import { useState, type DragEvent } from 'react'
+import { useEffect, useRef, useState, type DragEvent, type FocusEvent, type PointerEvent } from 'react'
 
 import { useAgentProfiles, useHealth, useProviderStatus, useRunnerModels } from '@/api/queries'
 import { useUpdateManager } from '@/api/managers'
@@ -97,6 +97,78 @@ function RowSummary({ row, fallbackRunner }: { row: Row; fallbackRunner: string 
         {model}{runner === 'claude' && row.effort ? ` · ${effortLabel(row.effort)}` : ''}
       </span>
     </>
+  )
+}
+
+function NoConnectorsInfo() {
+  const [open, setOpen] = useState(false)
+  const triggerRef = useRef<HTMLButtonElement | null>(null)
+  const contentRef = useRef<HTMLDivElement | null>(null)
+  const closeTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
+  const pointerDown = useRef(false)
+
+  const clearTimer = () => clearTimeout(closeTimer.current)
+  const scheduleClose = () => {
+    clearTimer()
+    closeTimer.current = setTimeout(() => setOpen(false), 100)
+  }
+  useEffect(() => () => clearTimeout(closeTimer.current), [])
+
+  const holdsFocus = (node: EventTarget | null) =>
+    node instanceof Node && (contentRef.current?.contains(node) || triggerRef.current?.contains(node))
+
+  return (
+    <Popover open={open} onOpenChange={(next) => { clearTimer(); setOpen(next) }}>
+      <PopoverTrigger asChild>
+        <button
+          ref={triggerRef}
+          type="button"
+          data-slot="manager-chain-no-connectors"
+          aria-label="No connectors on this agent"
+          onPointerDown={() => {
+            pointerDown.current = true
+            setTimeout(() => { pointerDown.current = false }, 0)
+          }}
+          onPointerEnter={(event: PointerEvent) => {
+            if (event.pointerType === 'touch') return
+            clearTimer()
+            setOpen(true)
+          }}
+          onPointerLeave={(event: PointerEvent) => {
+            if (event.pointerType !== 'touch') scheduleClose()
+          }}
+          onFocus={() => {
+            if (pointerDown.current) return
+            clearTimer()
+            setOpen(true)
+          }}
+          onBlur={(event: FocusEvent) => {
+            if (!holdsFocus(event.relatedTarget)) {
+              clearTimer()
+              setOpen(false)
+            }
+          }}
+          className="inline-flex size-6 shrink-0 items-center justify-center rounded-full text-muted-foreground outline-none hover:bg-muted hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50 pointer-coarse:size-9"
+        >
+          <InfoIcon aria-hidden="true" className="size-3.5" />
+        </button>
+      </PopoverTrigger>
+      <PopoverContent
+        ref={contentRef}
+        align="end"
+        side="top"
+        data-slot="manager-chain-no-connectors-popover"
+        className="w-64 max-w-[calc(100vw-2rem)] p-3 text-xs text-popover-foreground"
+        onOpenAutoFocus={(event) => event.preventDefault()}
+        onCloseAutoFocus={(event) => event.preventDefault()}
+        onPointerEnter={clearTimer}
+        onPointerLeave={(event: PointerEvent) => {
+          if (event.pointerType !== 'touch') scheduleClose()
+        }}
+      >
+        Connectors are Claude-only. While this agent answers, the Manager works without them.
+      </PopoverContent>
+    </Popover>
   )
 }
 
@@ -218,15 +290,13 @@ export function AgentChainSection({ manager, onPatch, initialEditing }: { manage
     save([...rows, fresh])
     setEditing(rows.length)
   }
-  const statusOf = (slot: number, row: Row) => {
-    const runner = row.runner ?? fallbackRunner
+  const statusOf = (slot: number) => {
     if (rows.length > 1 && slot === active) return <StatusPill tone="ok">answering</StatusPill>
     if (slot === 0 && manager.activeAgent) {
       return manager.activeAgent.reason === 'auth'
         ? <StatusPill tone="bad">sign in</StatusPill>
         : <StatusPill tone="warn">{manager.activeAgent.primaryBackAt ? `out until ${clock(manager.activeAgent.primaryBackAt)}` : 'unavailable'}</StatusPill>
     }
-    if (runner !== 'claude' && grants) return <StatusPill tone="warn">no connectors</StatusPill>
     return null
   }
   const editor = (slot: number) => (
@@ -262,35 +332,44 @@ export function AgentChainSection({ manager, onPatch, initialEditing }: { manage
         {rows.length > 1 ? <p className="mt-1 text-xs text-muted-foreground">The first agent that can reply does. The ones below take over when it’s out of limits or can’t sign in.</p> : null}
       </div>
       <ol className="space-y-1.5">
-        {rows.map((row, slot) => (
-          <li
-            key={`${slot}-${keyOf(row)}`}
-            className="space-y-1.5"
-            onDragOver={(event: DragEvent) => { if (dragging !== null) event.preventDefault() }}
-            onDrop={() => { if (dragging !== null) move(dragging, slot); setDragging(null) }}
-          >
-            <button
-              type="button"
-              data-slot="manager-chain-row"
-              data-slot-index={slot}
-              aria-expanded={editing === slot}
-              draggable={!phone && rows.length > 1 && canReorder}
-              onDragStart={() => setDragging(slot)}
-              onDragEnd={() => setDragging(null)}
-              onClick={() => setEditing(editing === slot ? null : slot)}
-              className={cn(
-                'flex min-h-11 w-full items-center gap-2 rounded-lg border border-border bg-background px-2 text-sm outline-none hover:bg-muted focus-visible:ring-[3px] focus-visible:ring-ring/50',
-                editing === slot && 'border-primary ring-1 ring-primary',
-              )}
+        {rows.map((row, slot) => {
+          const status = statusOf(slot)
+          const showNoConnectors = !status && (row.runner ?? fallbackRunner) !== 'claude' && grants
+          return (
+            <li
+              key={`${slot}-${keyOf(row)}`}
+              className="space-y-1.5"
+              onDragOver={(event: DragEvent) => { if (dragging !== null) event.preventDefault() }}
+              onDrop={() => { if (dragging !== null) move(dragging, slot); setDragging(null) }}
             >
-              {rows.length > 1 && !phone ? <GripVerticalIcon aria-hidden="true" className="size-3.5 shrink-0 cursor-grab text-muted-foreground" /> : null}
-              <span className={cn('flex size-5 shrink-0 items-center justify-center rounded-md text-xs', slot === 0 ? 'bg-primary/20 text-primary' : 'bg-muted text-muted-foreground')}>{slot + 1}</span>
-              <RowSummary row={row} fallbackRunner={fallbackRunner} />
-              {statusOf(slot, row)}
-            </button>
-            {!phone && editing === slot ? editor(slot) : null}
-          </li>
-        ))}
+              <div
+                draggable={!phone && rows.length > 1 && canReorder}
+                onDragStart={() => setDragging(slot)}
+                onDragEnd={() => setDragging(null)}
+                className={cn(
+                  'flex min-h-11 w-full items-center gap-1 rounded-lg border border-border bg-background px-2 text-sm hover:bg-muted has-[[data-slot="manager-chain-row"]:focus-visible]:ring-[3px] has-[[data-slot="manager-chain-row"]:focus-visible]:ring-ring/50',
+                  editing === slot && 'border-primary ring-1 ring-primary',
+                )}
+              >
+                <button
+                  type="button"
+                  data-slot="manager-chain-row"
+                  data-slot-index={slot}
+                  aria-expanded={editing === slot}
+                  onClick={() => setEditing(editing === slot ? null : slot)}
+                  className="flex min-h-11 min-w-0 flex-1 items-center gap-2 outline-none"
+                >
+                  {rows.length > 1 && !phone ? <GripVerticalIcon aria-hidden="true" className="size-3.5 shrink-0 cursor-grab text-muted-foreground" /> : null}
+                  <span className={cn('flex size-5 shrink-0 items-center justify-center rounded-md text-xs', slot === 0 ? 'bg-primary/20 text-primary' : 'bg-muted text-muted-foreground')}>{slot + 1}</span>
+                  <RowSummary row={row} fallbackRunner={fallbackRunner} />
+                  {status}
+                </button>
+                {showNoConnectors ? <NoConnectorsInfo /> : null}
+              </div>
+              {!phone && editing === slot ? editor(slot) : null}
+            </li>
+          )
+        })}
       </ol>
       {rows.length <= MANAGER_BACKUPS_MAX ? (
         <button type="button" data-action="manager-chain-add" disabled={!providerStatus.data} className="flex min-h-8 items-center gap-1.5 text-sm text-primary pointer-coarse:min-h-11 disabled:opacity-50" onClick={add}>

@@ -1918,6 +1918,44 @@ describe('/manager/:id', () => {
       fireEvent.click(within(popover).getByRole('button', { name: 'Switch back now' }))
       await waitFor(() => expect(patches()).toContainEqual({ switchToPrimary: true }))
     })
+
+    it('replaces the non-Claude "no connectors" pill with a muted info icon whose popover opens on hover, focus, and tap', async () => {
+      seedChat({
+        runner: 'claude',
+        backups: [{ runner: 'codex' }],
+        connectors: { github: { level: 'read' } },
+      })
+      renderAt('/manager/global')
+      fireEvent.click(await screen.findByRole('button', { name: 'Manager settings' }))
+      fireEvent.click(within(await waitFor(() => document.querySelector<HTMLElement>('[data-slot="manager-settings-menu"]')!)).getByRole('button', { name: 'Manager agent…' }))
+      const dialog = await screen.findByRole('dialog', { name: 'Manager agent' })
+
+      expect(dialog.textContent).not.toContain('no connectors')
+      const items = dialog.querySelectorAll<HTMLElement>('[data-slot="manager-chain"] ol > li')
+      expect(items).toHaveLength(2)
+      expect(items[0]!.querySelector('[data-slot="manager-chain-no-connectors"]')).toBeNull()
+
+      const info = within(items[1]!).getByRole('button', { name: 'No connectors on this agent' })
+      expect(info.className).toContain('text-muted-foreground')
+
+      // Tap / click opens the popover without expanding the row editor.
+      fireEvent.click(info)
+      const popover = await waitFor(() => document.querySelector<HTMLElement>('[data-slot="manager-chain-no-connectors-popover"]')!)
+      expect(popover.textContent).toContain('Connectors are Claude-only. While this agent answers, the Manager works without them.')
+      expect(dialog.querySelector('[data-slot="manager-chain-editor"]')).toBeNull()
+      fireEvent.click(info)
+      await waitFor(() => expect(document.querySelector('[data-slot="manager-chain-no-connectors-popover"]')).toBeNull())
+
+      // Keyboard focus opens the popover and blur closes it.
+      fireEvent.focus(info)
+      await waitFor(() => expect(document.querySelector('[data-slot="manager-chain-no-connectors-popover"]')).not.toBeNull())
+      fireEvent.blur(info)
+      await waitFor(() => expect(document.querySelector('[data-slot="manager-chain-no-connectors-popover"]')).toBeNull())
+
+      // Pointer hover opens the popover.
+      fireEvent.pointerEnter(info, { pointerType: 'mouse' })
+      await waitFor(() => expect(document.querySelector('[data-slot="manager-chain-no-connectors-popover"]')).not.toBeNull())
+    })
   })
 })
 
