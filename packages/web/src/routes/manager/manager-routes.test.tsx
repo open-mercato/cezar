@@ -1831,14 +1831,18 @@ describe('/manager/:id', () => {
     it('a backup answering shows a quiet (i) whose popover explains it and switches back', async () => {
       seedChat({
         backups: [{ runner: 'codex' }],
-        activeAgent: { agent: ref(1, 'codex', 'Work'), reason: 'usage-limit', since: '2026-11-25T16:12:00.000Z', primaryBackAt: '2026-11-25T18:40:00.000Z', primary: ref(0, 'claude', 'Automations') },
+        runner: 'claude',
+        agentProfile: 'automations',
+        activeAgent: { agent: ref(1, 'codex', 'Work'), reason: 'usage-limit', since: '2026-11-25T16:12:00.000Z', primaryBackAt: '2026-11-25T18:40:00.000Z' },
       })
       server.messages = [
         { id: 'n1', seq: 1, at: '2026-11-25T16:12:00.000Z', kind: 'notice', text: 'switched', agentSwitch: { from: ref(0, 'claude', 'Automations'), to: ref(1, 'codex', 'Work'), reason: 'usage-limit', until: '2026-11-25T18:40:00.000Z' } },
         assistantMessage(2, { text: 'From the backup', agent: ref(1, 'codex', 'Work') }),
         assistantMessage(3, { text: 'From #1', agent: ref(0, 'claude', 'Automations') }),
       ]
-      renderAt('/manager/global')
+      renderAt('/manager/global', (client) => {
+        client.setQueryData(workspaceQueryKeys.agentProfiles, { profiles: [{ provider: 'claude', id: 'automations', label: 'Automations' }] })
+      })
       const info = await screen.findByRole('button', { name: 'Answering with backup #2' })
       await screen.findByText('From the backup')
       expect(document.querySelectorAll('[data-slot="manager-reply-agent"]')).toHaveLength(1)

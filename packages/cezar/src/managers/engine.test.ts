@@ -4904,7 +4904,7 @@ describe('ManagerEngine', () => {
       const notice = notices(id).find((message) => message.agentSwitch)!;
       expect(notice.seq).toBeLessThan(replies[0]!.seq);
       const summary = await engine.summary(id);
-      expect(summary?.activeAgent).toMatchObject({ agent: { slot: 1 }, reason: 'usage-limit', primaryBackAt: resetAt, primary: { slot: 0, runner: 'claude' } });
+      expect(summary?.activeAgent).toMatchObject({ agent: { slot: 1 }, reason: 'usage-limit', primaryBackAt: resetAt });
       expect(engine.accountHolds().deadlines.get('claude:default')).toBe(Date.parse(resetAt));
     });
 

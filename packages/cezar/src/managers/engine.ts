@@ -51,7 +51,6 @@ import {
   type ManagerMemoryResponse,
   type PutManagerMemoryInput,
   MANAGER_MEMORY_LIMITS,
-  managerAgentSwitchReasonSchema,
   supersededAskIds,
   questionCardPartlyReasked,
   questionCardSharedHeaders,
@@ -2923,13 +2922,11 @@ export class ManagerEngine {
     if (!row) return undefined;
     const [info, primary] = await Promise.all([this.rowInfo(row), this.rowInfo(rows[0]!)]);
     const hold = this.rowHold(manager.id, primary, this.now());
-    const reason = managerAgentSwitchReasonSchema.safeParse(active.reason);
     return {
       agent: info.ref,
-      reason: reason.success ? reason.data : 'held',
+      reason: active.reason,
       since: active.since,
       ...(hold ? { primaryBackAt: hold.until } : {}),
-      primary: primary.ref,
     };
   }
 

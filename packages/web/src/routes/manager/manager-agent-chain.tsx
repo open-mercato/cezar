@@ -332,9 +332,14 @@ const REASON: Record<string, string> = {
 /** The quiet (i) by the Manager's name while a backup answers; the details live in its popover. */
 export function ActiveAgentInfo({ manager, onOpenSettings }: { manager: ManagerSummary; onOpenSettings: () => void }) {
   const update = useUpdateManager(manager.id)
+  const runner = useManagerRunner(manager.runner)
+  const profiles = useAgentProfiles().data
   const active = manager.activeAgent
   if (!active) return null
-  const primary = `#1 ${active.primary.runner} · ${active.primary.label ?? active.primary.profileId}`
+  // #1 is the manager's own agent and account.
+  const account = manager.agentProfile ?? profiles?.defaults?.[runner] ?? DEFAULT_AGENT_ACCOUNT_ID
+  const label = profiles?.profiles.find((entry) => entry.provider === runner && entry.id === account)?.label ?? (account === DEFAULT_AGENT_ACCOUNT_ID ? 'Default' : account)
+  const primary = `#1 ${runner} · ${label}`
   return (
     <Popover>
       <PopoverTrigger asChild>

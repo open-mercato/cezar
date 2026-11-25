@@ -310,12 +310,12 @@ export const managerSummarySchema = managerSchema.extend({
   /** A backup is answering instead of #1. Absent = #1 (or no backups). */
   activeAgent: z.object({
     agent: managerAgentRefSchema,
-    reason: managerAgentSwitchReasonSchema,
+    /** A `managerAgentSwitchReasonSchema` value. A plain string here: the summary rides every manager
+     *  route, and the API type sits at the compiler's serialization limit. #1 is the manager's own fields. */
+    reason: z.string(),
     since: z.string(),
     /** When #1 is expected to answer again: its usage-limit reset, or the next retry. */
     primaryBackAt: z.string().optional(),
-    /** #1 as it is configured now, for the popover. */
-    primary: managerAgentRefSchema,
   }).optional(),
 });
 export type ManagerSummary = z.infer<typeof managerSummarySchema>;
