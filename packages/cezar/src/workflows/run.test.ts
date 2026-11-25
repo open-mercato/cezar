@@ -18,7 +18,7 @@ import { parseAskMarker } from '../core/ask.ts';
 import type { UiEvent } from '../core/ui-events.ts';
 import { ClaudeCliRunner } from '../core/claude-cli-runner.ts';
 import { createWorktree, removeWorktree } from '../git-worktree.ts';
-import { agentTmpDir } from '../runs/agent-tmpdir.ts';
+import { agentTmpRoots } from '../runs/agent-tmpdir.ts';
 import { RunStore, type RunRecord, type StepState } from '../runs/store.ts';
 import { WorkspaceSemaphore } from '../workspace/semaphore.ts';
 import { parseTaskMarkers } from '../runs/task-markers.ts';
@@ -3916,10 +3916,11 @@ describe('registry /skill expansion survives a continuation (#811)', () => {
     // #999 moved agent scratch out of the checkout, so occupying `.ai/cezar/tmp`
     // no longer breaks anything. Break the preflight where it now lives: the
     // run's hashed project namespace, held by a FILE so mkdir cannot pass it.
-    const scratch = agentTmpDir(join(repoRoot, '.ai/cezar'), id);
-    mkdirSync(dirname(dirname(scratch)), { recursive: true });
-    rmSync(dirname(scratch), { recursive: true, force: true });
-    writeFileSync(dirname(scratch), 'not a directory', 'utf8');
+    for (const ns of agentTmpRoots(join(repoRoot, '.ai/cezar'))) {
+      mkdirSync(dirname(ns), { recursive: true });
+      rmSync(ns, { recursive: true, force: true });
+      writeFileSync(ns, 'not a directory', 'utf8');
+    }
     expect(manager.continueRun(id, { runner: 'codex' })).toEqual({ ok: true });
     await waitFor(() => store.getRun(id)?.status === 'failed');
     const failed = store.getRun(id)?.steps.find((s) => s.id === 'continue-1');

@@ -4,7 +4,7 @@ import { dirname, join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { RunStore } from '../runs/store.ts';
-import { AgentTempDirError, agentTmpDir } from '../runs/agent-tmpdir.ts';
+import { AgentTempDirError, agentTmpDir, agentTmpRoots } from '../runs/agent-tmpdir.ts';
 import { registerProject } from '../workspace/projects.ts';
 import { RunManager, agentDirectories } from './run.ts';
 
@@ -99,8 +99,10 @@ describe('RunManager — task-scoped agent TMPDIR (#785)', () => {
   // whose every shell command will come back empty.
   it('fails before spawning when the temp directory cannot be had', async () => {
     const run = newRun();
-    mkdirSync(dirname(dirname(agentTmpDir(dataDir, run.id))), { recursive: true });
-    writeFileSync(dirname(agentTmpDir(dataDir, run.id)), 'not a directory', 'utf8');
+    for (const ns of agentTmpRoots(dataDir)) {
+      mkdirSync(dirname(ns), { recursive: true });
+      writeFileSync(ns, 'not a directory', 'utf8');
+    }
     await expect(seam().agentEnvForStep(run.id, 'claude')).rejects.toBeInstanceOf(AgentTempDirError);
   });
 
@@ -118,8 +120,10 @@ describe('RunManager — task-scoped agent TMPDIR (#785)', () => {
 
   it('the error names the path and the way out, so the thread footer is actionable', async () => {
     const run = newRun();
-    mkdirSync(dirname(dirname(agentTmpDir(dataDir, run.id))), { recursive: true });
-    writeFileSync(dirname(agentTmpDir(dataDir, run.id)), 'not a directory', 'utf8');
+    for (const ns of agentTmpRoots(dataDir)) {
+      mkdirSync(dirname(ns), { recursive: true });
+      writeFileSync(ns, 'not a directory', 'utf8');
+    }
     await expect(seam().agentEnvForStep(run.id, 'claude')).rejects.toThrow(
       /agent temp directory is not writable: .* — free disk space, or set CEZ_AGENT_TMPDIR=0/,
     );

@@ -19,12 +19,22 @@ import {
   agentTmpDir,
   agentTmpDirEnabled,
   agentTmpEnv,
+  agentTmpRoots,
   removeAgentTmpDir,
+  SOCKET_HEADROOM,
   securePrivateDir,
   sweepAgentTmpDirs,
 } from './agent-tmpdir.ts';
 import { execFile } from 'node:child_process';
 import { createServer } from 'node:net';
+
+/** Occupy every candidate root's project namespace with a file, so no root can mint a directory. */
+function blockEveryRoot(dataDir: string): void {
+  for (const ns of agentTmpRoots(dataDir)) {
+    mkdirSync(dirname(ns), { recursive: true });
+    writeFileSync(ns, 'not a directory', 'utf8');
+  }
+}
 
 function gitInsideWorktree(path: string): Promise<string> {
   return new Promise((resolve) => {
@@ -60,7 +70,7 @@ describe('agentTmpEnv — per-run temp directory (#785)', () => {
   });
 
   it('honors an explicit CEZ_HOME and keeps it outside the checkout', () => {
-    const home = mkdtempSync(join(realpathSync(tmpdir()), 'cez-agent-home-'));
+    const home = mkdtempSync(join(realpathSync(tmpdir()), 'ch-'));
     const env = { CEZ_HOME: home };
     try {
       expect(agentTmpEnv(dataDir, 'explicit-home', env).TMPDIR)
@@ -112,8 +122,7 @@ describe('agentTmpEnv — per-run temp directory (#785)', () => {
   it('fails with a named, actionable error when the directory cannot be created', () => {
     // The hashed project namespace occupied by a FILE — mkdir cannot make the
     // run's directory. Deterministic and portable, unlike simulating a quota.
-    mkdirSync(dirname(dirname(agentTmpDir(dataDir, 'run-c'))), { recursive: true });
-    writeFileSync(dirname(agentTmpDir(dataDir, 'run-c')), 'not a directory', 'utf8');
+    blockEveryRoot(dataDir);
     let thrown: unknown;
     try {
       agentTmpEnv(dataDir, 'run-c', {});
@@ -122,7 +131,7 @@ describe('agentTmpEnv — per-run temp directory (#785)', () => {
     }
     expect(thrown).toBeInstanceOf(AgentTempDirError);
     expect((thrown as Error).message).toContain('agent temp directory is not writable');
-    expect((thrown as Error).message).toContain(agentTmpDir(dataDir, 'run-c'));
+    expect((thrown as Error).message).toContain('/run-c');
     // The remedy names the opt-out, so the message alone is enough to act on.
     expect((thrown as Error).message).toContain('CEZ_AGENT_TMPDIR=0');
   });
@@ -133,13 +142,15 @@ describe('agentTmpEnv — per-run temp directory (#785)', () => {
   it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)(
     'fails when the directory exists but rejects writes',
     () => {
-      const dir = agentTmpDir(dataDir, 'run-d');
-      mkdirSync(dir, { recursive: true });
-      chmodSync(dir, 0o500);
+      const dirs = agentTmpRoots(dataDir).map((ns) => join(ns, 'run-d'));
+      for (const dir of dirs) {
+        mkdirSync(dir, { recursive: true, mode: 0o700 });
+        chmodSync(dir, 0o500);
+      }
       try {
         expect(() => agentTmpEnv(dataDir, 'run-d', {})).toThrow(AgentTempDirError);
       } finally {
-        chmodSync(dir, 0o700);
+        for (const dir of dirs) chmodSync(dir, 0o700);
       }
     },
   );
@@ -382,6 +393,46 @@ describe('agent scratch leaves room for a Unix socket (#1936)', () => {
       });
     } finally {
       await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+
+  // The Claude Code Linux sandbox bridges its proxy through `$TMPDIR/claude-http-<16 hex>.sock`
+  // (35 bytes with the slash) and loses its shell when that does not bind.
+  it('leaves room for the longest known socket names under a typical home', () => {
+    const limit = process.platform === 'linux' ? 107 : 103;
+    const dir = mint(runId, { CEZ_HOME: join(homeRoot, '.cezar') });
+    for (const name of [`/claude-http-${'f'.repeat(16)}.sock`, `/tsx-4294967295/${'9'.repeat(10)}.pipe`]) {
+      expect(Buffer.byteLength(dir + name)).toBeLessThanOrEqual(limit);
+    }
+    expect(SOCKET_HEADROOM).toBeGreaterThanOrEqual(36);
+  });
+
+  it.skipIf(process.platform === 'win32')('binds a claude-sandbox-shaped socket under a long home', async () => {
+    const dir = mint(runId, { CEZ_HOME: longHome });
+    const server = createServer();
+    try {
+      await new Promise<void>((resolve, reject) => {
+        server.once('error', reject);
+        server.listen(join(dir, `claude-http-${'a'.repeat(16)}.sock`), resolve);
+      });
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+
+  // The preferred short root is a shared path; one we cannot use must not fail the run.
+  it.skipIf(process.platform === 'win32')('quietly falls to the next root when the short root is unusable', () => {
+    const dir = mint(runId, { CEZ_HOME: longHome });
+    const first = dir.split('/').slice(0, -2).join('/');
+    rmSync(first, { recursive: true, force: true });
+    writeFileSync(first, 'x');
+    try {
+      const alt = agentTmpEnv(dataDir, runId, { CEZ_HOME: longHome }).TMPDIR as string;
+      minted.push(alt);
+      expect(alt).not.toBe(dir);
+      expect(existsSync(alt)).toBe(true);
+    } finally {
+      rmSync(first, { force: true });
     }
   });
 

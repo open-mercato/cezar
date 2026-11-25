@@ -119,9 +119,10 @@ function socketPathMax(): number {
   return process.platform === 'linux' ? 107 : 103;
 }
 
-/** Room a tool needs below `TMPDIR` for its socket — tsx's `/tsx-<uid>/<pid>.pipe`
- *  is 28 bytes at its longest (#1936). */
-const SOCKET_HEADROOM = 32;
+/** Room a tool needs below `TMPDIR` for its socket (#1936): tsx's `/tsx-<uid>/<pid>.pipe`
+ *  is 28 bytes at its longest, the Claude Code Linux sandbox's `/claude-http-<16 hex>.sock`
+ *  is 35. 40 covers both with a margin. */
+export const SOCKET_HEADROOM = 40;
 
 /** The per-run leaf: a uuid's first 16 characters (its id8 plus ~52 random bits) keep
  *  concurrent runs apart while sparing 20 bytes of socket budget (#1936). */
@@ -144,12 +145,18 @@ function agentTmpBases(dataDir: string, env: NodeJS.ProcessEnv): string[] {
 /** Prefer CEZ_HOME outside the checkout, then the first root whose run directories
  *  leave a tool room to bind a socket; the shortest when none does. */
 function agentTmpBase(dataDir: string, env: NodeJS.ProcessEnv): string {
+  return orderedBases(dataDir, env)[0] as string;
+}
+
+/** Candidates in the order to try them: bases with socket headroom first (preference
+ *  order), then the rest, shortest first. */
+function orderedBases(dataDir: string, env: NodeJS.ProcessEnv): string[] {
   const bases = agentTmpBases(dataDir, env);
   const fits = (base: string): boolean =>
     Buffer.byteLength(join(base, projectTmpNamespace(dataDir), 'x'.repeat(16))) + SOCKET_HEADROOM
       <= socketPathMax();
-  return bases.find(fits)
-    ?? bases.reduce((a, b) => (Buffer.byteLength(b) < Buffer.byteLength(a) ? b : a));
+  const rest = bases.filter((b) => !fits(b)).sort((a, b) => Buffer.byteLength(a) - Buffer.byteLength(b));
+  return [...bases.filter(fits), ...rest];
 }
 
 /**
@@ -191,7 +198,7 @@ export function agentTmpDir(dataDir: string, runId: string, env: NodeJS.ProcessE
 
 /** Every root a per-run directory may hang off — the only scratch trees this module
  *  removes. All candidates, so scratch minted under another root is still reaped. */
-function agentTmpRoots(dataDir: string, env: NodeJS.ProcessEnv = process.env): string[] {
+export function agentTmpRoots(dataDir: string, env: NodeJS.ProcessEnv = process.env): string[] {
   return agentTmpBases(dataDir, effectiveEnv(env)).map((base) => join(base, projectTmpNamespace(dataDir)));
 }
 
@@ -281,17 +288,28 @@ export function agentTmpEnv(
   env: NodeJS.ProcessEnv = process.env,
 ): Record<string, string> {
   if (!agentTmpDirEnabled(env)) return {};
-  const base = agentTmpBase(dataDir, effectiveEnv(env));
-  const dir = agentTmpDir(dataDir, runId, env);
-  // Only a shared temp root needs vetting; `~/.cezar` is already the user's own.
-  if (base === platformFallbackBase() || base === shortPosixBase()) securePrivateDir(base);
-  try {
-    mkdirSync(dir, { recursive: true, mode: PRIVATE_DIR_MODE });
-  } catch (err) {
-    throw new AgentTempDirError(dir, err);
+  const bases = orderedBases(dataDir, effectiveEnv(env));
+  const shared = (b: string): boolean => b === platformFallbackBase() || b === shortPosixBase();
+  let firstError: unknown;
+  for (const base of bases) {
+    const dir = join(base, projectTmpNamespace(dataDir), runLeaf(runId));
+    try {
+      // Only a shared temp root needs vetting; `~/.cezar` is already the user's own.
+      if (shared(base)) securePrivateDir(base);
+      try {
+        mkdirSync(dir, { recursive: true, mode: PRIVATE_DIR_MODE });
+      } catch (err) {
+        throw new AgentTempDirError(dir, err);
+      }
+      probeWritable(dir);
+      return { TMPDIR: dir, TEMP: dir, TMP: dir };
+    } catch (err) {
+      firstError ??= err;
+      // A broken home root stays loud (#785); an unusable shared root quietly yields to the next.
+      if (!shared(base)) throw err;
+    }
   }
-  probeWritable(dir);
-  return { TMPDIR: dir, TEMP: dir, TMP: dir };
+  throw firstError;
 }
 
 /**
