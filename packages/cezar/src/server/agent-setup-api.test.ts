@@ -448,23 +448,18 @@ describe('/api/v1/providers/setup', () => {
       expect(await output.json()).toMatchObject({ data: 'added 1 package' });
     });
 
-    it('clears the versions at the exit itself, even when no listing sees the session end', async () => {
-      let probes = 0;
-      let version = '2.0.14 (Claude Code)';
+    it('re-probes at the exit itself, before any request sees the session end', async () => {
+      let refreshes = 0;
       const routes = routesWith({
-        status: async () => ({ providers: [{ provider: 'claude', status: 'connected' }, { provider: 'codex', status: 'not-installed' }] }),
-        checks: async () => { probes += 1; return [{ name: 'claude', available: true, version }]; },
+        currentStatus: async () => ({ providers: [{ provider: 'claude', status: 'connected' }] }),
+        status: async () => { refreshes += 1; return { providers: [{ provider: 'claude', status: 'connected' }] }; },
+        checks: async () => [{ name: 'claude', available: true, version: '2.0.14 (Claude Code)' }],
       });
-      const read = async () => ((await (await routes.request('/providers/setup')).json()) as { agents: Array<{ provider: string; version: string | null }> })
-        .agents.find((agent) => agent.provider === 'claude')?.version;
-      expect(await read()).toBe('2.0.14');
       await start(routes, { provider: 'claude', action: 'update' });
-      version = '2.1.3 (Claude Code)';
+      const before = refreshes;
       ptys[0]!.finish(0);
-      // Another session starts before any listing: the update's end is never seen by a GET.
-      expect((await start(routes, { provider: 'codex', action: 'install' })).status).toBe(201);
-      expect(await read()).toBe('2.1.3');
-      expect(probes).toBe(2);
+      // No request in between: only the exit listener can have started this probe.
+      expect(refreshes).toBe(before + 1);
     });
 
     it('sends a phone no host paths: program names only, and no sign-in line', async () => {
@@ -546,9 +541,11 @@ describe('/api/v1/providers/setup', () => {
           cached = { providers: [{ provider: 'codex' as const, status: 'disconnected' as const }] };
           return cached;
         },
-        checks: async () => (installedOnDisk ? [{ name: 'codex', available: true, version: '0.170.0' }] : []),
+        // No probe says it is there: `installed` must come from the awaited status alone.
+        checks: async () => [],
         locate: (executable) => ({ executable, path: '/usr/local/lib/node_modules/@openai/codex/bin/codex.js', method: 'npm' }),
         latest: new LatestVersions({
+          env: {},
           fetch: async () => ({ ok: true, json: async () => ({ version: '0.180.0' }) }),
         }),
       });
@@ -557,7 +554,10 @@ describe('/api/v1/providers/setup', () => {
       ptys[0]!.finish(0);
 
       // A listing arriving while the refresh is still in flight awaits it rather than reading stale cache.
-      const pendingListing = routes.request('/providers/setup', { headers: { 'x-cezar-latest': '1' } });
+      let settled = false;
+      const pendingListing = Promise.resolve(routes.request('/providers/setup', { headers: { 'x-cezar-latest': '1' } })).finally(() => { settled = true; });
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(settled).toBe(false);
       resolveRefresh();
       const body = await (await pendingListing).json() as {
         agents: Array<{ provider: string; installed: boolean; method: string | null; update: { command: string | null; runnable: boolean } | null; latestVersion: string | null }>;

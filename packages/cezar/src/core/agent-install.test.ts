@@ -101,6 +101,22 @@ describe('planUpdate', () => {
     expect(planUpdate('claude', at(null), mac)).toMatchObject({ command: "'claude' update", runnable: true });
   });
 
+  it("keeps `$'` in a path literal instead of reading it as a replacement pattern", () => {
+    const executable = "/tmp/$'a';id;#/claude";
+    const plan = planUpdate('claude', { executable, path: executable, method: 'native' }, mac);
+    expect(plan?.command).toBe(`'/tmp/$'\\''a'\\'';id;#/claude' update`);
+  });
+
+  it('only shows an update whose path the shell cannot carry intact', () => {
+    const win: InstallEnv = { platform: 'win32', npm: true, npmGlobalWritable: true, curl: true, sudo: false, brew: false };
+    const quoted = 'C:\\Users\\a"b\\.local\\bin\\claude.exe';
+    expect(planUpdate('claude', { executable: quoted, path: quoted, method: 'native' }, win)).toMatchObject({ runnable: false });
+    const newline = '/home/a\nb/.local/bin/claude';
+    expect(planUpdate('claude', { executable: newline, path: newline, method: 'native' }, mac)).toMatchObject({ runnable: false });
+    const plain = 'C:\\Users\\ab\\.local\\bin\\claude.exe';
+    expect(planUpdate('claude', { executable: plain, path: plain, method: 'native' }, win)).toMatchObject({ runnable: true });
+  });
+
   it('shows a brew upgrade to copy when brew is no longer here', () => {
     expect(planUpdate('claude', at('brew'), { ...mac, brew: false })).toMatchObject({ command: 'brew upgrade claude-code', runnable: false });
     expect(planUpdate('claude', at('native'), { ...mac, brew: false, curl: false })).toMatchObject({ runnable: true });

@@ -3,7 +3,7 @@ import { delimiter, dirname, isAbsolute, join } from 'node:path';
 
 import { compareVersions, parseVersion } from '../self-update/semver.ts';
 import type { RunnerId } from './agent-runner.ts';
-import { quoteExecutable } from './shell-env.ts';
+import { isShellEmbeddable, quoteExecutable } from './shell-env.ts';
 
 /**
  * How each agent CLI is installed and updated: the ONE table every install surface reads (the
@@ -284,7 +284,10 @@ export function planUpdate(provider: RunnerId, installed: InstalledCli, env: Ins
     return formula ? { command: `brew upgrade ${formula}`, runnable: false, method: 'brew', sudo: false } : null;
   }
   const trust = own ? method!.update!.trust : recipe.selfUpdate!.trust;
-  const command = template.replaceAll('{bin}', quoteExecutable(installed.executable, env.platform));
+  // A path the shell would read differently is not run; a replacer keeps `$'` in it literal.
+  const embeds = !template.includes('{bin}') || isShellEmbeddable(installed.executable, env.platform);
+  const command = template.replaceAll('{bin}', () => quoteExecutable(installed.executable, env.platform));
+  if (!embeds) return { command, runnable: false, method: method?.id ?? installed.method, sudo: false };
   if (own && method!.id === 'npm' && !env.npmGlobalWritable && env.platform !== 'win32') {
     // No npm here, no sudo, or a vendor that warns against it: the line is only to copy.
     if (recipe.noSudoNpm || !env.sudo || !env.npm) return { command, runnable: false, method: 'npm', sudo: false };

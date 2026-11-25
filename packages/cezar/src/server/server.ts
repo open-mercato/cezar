@@ -2707,7 +2707,8 @@ export function createApp(deps: ServerDeps) {
         }
         let opened = false;
         try {
-          opened = await openTerminal(bootRoot, command);
+          // Home, not the repo: a project's `.npmrc` must not redirect a global (or sudo) npm install.
+          opened = await openTerminal(homedir(), command);
         } catch {
           // Best-effort, as for Connect: the command is the fallback.
         }

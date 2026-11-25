@@ -1,5 +1,5 @@
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
@@ -798,7 +798,7 @@ describe('workspace provider API', () => {
 
       expect(response.status).toBe(200);
       expect(await response.json()).toEqual({ opened: true, command: "'opencode' upgrade" });
-      expect(openTerminal).toHaveBeenCalledWith(root, "'opencode' upgrade");
+      expect(openTerminal).toHaveBeenCalledWith(homedir(), "'opencode' upgrade");
     });
 
     it('answers 409 without a command for a CLI that cannot update itself', async () => {
@@ -834,7 +834,7 @@ describe('workspace provider API', () => {
 
       expect(response.status).toBe(200);
       expect(await response.json()).toEqual({ opened: true, command: 'brew upgrade --cask codex' });
-      expect(openTerminal).toHaveBeenCalledWith(root, 'brew upgrade --cask codex');
+      expect(openTerminal).toHaveBeenCalledWith(homedir(), 'brew upgrade --cask codex');
     });
 
     it('shows a Linuxbrew formula Codex its upgrade to copy, never the macOS-only cask', async () => {
@@ -860,7 +860,7 @@ describe('workspace provider API', () => {
 
       expect(response.status).toBe(200);
       expect(await response.json()).toEqual({ opened: true, command });
-      expect(openTerminal).toHaveBeenCalledWith(root, command);
+      expect(openTerminal).toHaveBeenCalledWith(homedir(), command);
     });
 
     it('never runs sudo npm for Claude Code, even when npm needs root', async () => {

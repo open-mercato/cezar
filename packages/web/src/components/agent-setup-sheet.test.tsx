@@ -38,6 +38,7 @@ let startError: string | null = null
 let onStatusRefresh: (() => void | Promise<void>) | null = null
 /** How long a start takes to answer: long enough, and the sheet re-renders while it is in flight. */
 let postDelayMs = 0
+let cancelled: string[] = []
 
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } })
 
@@ -78,6 +79,11 @@ beforeEach(() => {
       }
       return json(session, 201)
     }
+    const cancelMatch = /^\/api\/v1\/providers\/setup\/sessions\/([^/]+)$/.exec(url.pathname)
+    if (cancelMatch && method === 'DELETE') {
+      cancelled.push(cancelMatch[1]!)
+      return json({ ok: true })
+    }
     if (url.pathname === '/api/v1/health') return json({ repoRoot: '/work', bootProject: 'boot', capabilities: {} })
     return json({ error: 'not stubbed' }, 404)
   })
@@ -93,6 +99,7 @@ afterEach(() => {
   startError = null
   onStatusRefresh = null
   postDelayMs = 0
+  cancelled = []
   cleanup()
   fetchMock.mockReset()
   vi.unstubAllGlobals()
@@ -374,6 +381,103 @@ describe('AgentSetupFlow: review follow-ups (#2474)', () => {
     } finally {
       vi.useRealTimers()
     }
+  })
+})
+
+const live = (over: Record<string, unknown>) => ({
+  id: 'live-1', runId: 'agent-setup', cwd: '/home/me', shell: '/bin/sh', cols: 80, rows: 24, startedAt: 'now', exitCode: null,
+  label: 'x', busy: false, topic: 't', command: 'run', ...over,
+})
+
+describe('AgentSetupFlow: terminal sign-in and lost sessions (#2474 re-review)', () => {
+  it('cancels a terminal sign-in when the sheet closes, so it does not hold the setup slot', async () => {
+    statuses = { antigravity: 'disconnected' }
+    agents = [entry('antigravity', { installed: true, loginCommand: "'agy'" })]
+    const view = renderFlow('antigravity', 'sign-in')
+    fireEvent.click(await screen.findByRole('button', { name: 'Open terminal here' }))
+    await screen.findByTestId('terminal')
+    view.unmount()
+    await waitFor(() => expect(cancelled).toEqual(['s1']))
+  })
+
+  it('cancels the sign-in terminal once the sign-in lands', async () => {
+    statuses = { antigravity: 'disconnected' }
+    agents = [entry('antigravity', { installed: true, loginCommand: "'agy'" })]
+    renderFlow('antigravity', 'sign-in')
+    fireEvent.click(await screen.findByRole('button', { name: 'Open terminal here' }))
+    await screen.findByTestId('terminal')
+    statuses = { antigravity: 'connected' }
+    await waitFor(() => expect(phase()).toBe('done'), WAIT)
+    await waitFor(() => expect(cancelled).toEqual(['s1']))
+  })
+
+  it('offers Cancel while a sign-in terminal is open, and does not rejoin what it cancelled', async () => {
+    statuses = { antigravity: 'disconnected' }
+    agents = [entry('antigravity', { installed: true, loginCommand: "'agy'" })]
+    renderFlow('antigravity', 'sign-in')
+    fireEvent.click(await screen.findByRole('button', { name: 'Open terminal here' }))
+    await screen.findByTestId('terminal')
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+    await waitFor(() => expect(cancelled).toEqual(['s1']))
+    expect(await screen.findByRole('button', { name: 'Open terminal here' })).toBeTruthy()
+    expect(screen.queryByTestId('terminal')).toBeNull()
+  })
+
+  it('opened as a sign-in, rejoins a sign-in terminal already running', async () => {
+    statuses = { antigravity: 'disconnected' }
+    agents = [entry('antigravity', { installed: true, loginCommand: "'agy'" })]
+    session = live({ provider: 'antigravity', action: 'login' })
+    renderFlow('antigravity', 'sign-in')
+    await waitFor(() => expect(screen.getByTestId('terminal').getAttribute('data-session')).toBe('live-1'))
+    expect(posted).toEqual([])
+  })
+
+  it('offers the terminal again when the sign-in terminal ends before signing in', async () => {
+    statuses = { antigravity: 'disconnected' }
+    agents = [entry('antigravity', { installed: true, loginCommand: "'agy'" })]
+    renderFlow('antigravity', 'sign-in')
+    fireEvent.click(await screen.findByRole('button', { name: 'Open terminal here' }))
+    await screen.findByTestId('terminal')
+    session = { ...session, exitCode: 1 }
+    expect((await screen.findByRole('alert', {}, WAIT)).textContent).toContain('The sign-in terminal closed before Antigravity signed in.')
+    expect(screen.getByRole('button', { name: 'Open terminal here' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Check again' })).toBeTruthy()
+  })
+
+  it('an update sheet never rejoins a sign-in, so it cannot report an update that never ran', async () => {
+    statuses = { claude: 'disconnected' }
+    agents = [entry('claude', { installed: true, version: '2.0.14', method: 'native', update: { command: "'claude' update", runnable: true, sudo: false } })]
+    session = live({ provider: 'claude', action: 'login' })
+    renderFlow('claude', 'update')
+    expect(await screen.findByRole('button', { name: 'Update' })).toBeTruthy()
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    expect(phase()).toBe('confirm')
+    expect(screen.queryByTestId('terminal')).toBeNull()
+  })
+
+  it('settles an install whose session vanished from the server against the status', async () => {
+    statuses = { codex: 'not-installed' }
+    agents = [entry('codex', { install: { command: 'npm install -g @openai/codex', runnable: true, sudo: false } })]
+    renderFlow('codex', 'install')
+    fireEvent.click(await screen.findByRole('button', { name: 'Install' }))
+    await waitFor(() => expect(phase()).toBe('running'))
+    // Seen by a listing first, then gone (a restart, a sleep past the server's retention).
+    await new Promise((resolve) => setTimeout(resolve, 1_200))
+    statuses = { codex: 'disconnected' }
+    session = null
+    await waitFor(() => expect(phase()).toBe('sign-in'), WAIT)
+  })
+
+  it('settles an update whose session vanished from the server against the version', async () => {
+    statuses = { claude: 'connected' }
+    agents = [entry('claude', { installed: true, version: '2.0.14', method: 'native', update: { command: "'claude' update", runnable: true, sudo: false } })]
+    renderFlow('claude', 'update')
+    fireEvent.click(await screen.findByRole('button', { name: 'Update' }))
+    await waitFor(() => expect(phase()).toBe('running'))
+    await new Promise((resolve) => setTimeout(resolve, 1_200))
+    session = null
+    await waitFor(() => expect(phase()).toBe('failed'), WAIT)
+    expect(screen.getByRole('alert').textContent).toContain('The terminal closed before cezar saw it finish.')
   })
 })
 

@@ -4,7 +4,8 @@ import * as React from 'react'
 
 import type { AgentSetupEntry, AgentSetupProvider, AgentSetupSession } from '@open-mercato/cezar-api-client'
 
-import { useAgentSetup, useInvalidateHealth, useProviderStatus, useRefreshProviderStatus, useStartAgentSetup, workspaceQueryKeys } from '@/api/queries'
+import { cancelAgentSetup } from '@/api/client'
+import { useAgentSetup, useCancelAgentSetup, useInvalidateHealth, useProviderStatus, useRefreshProviderStatus, useStartAgentSetup, workspaceQueryKeys } from '@/api/queries'
 import { SetupTerminal } from '@/components/agent-setup'
 import { ReconnectCard } from '@/components/reconnect/reconnect-card'
 import { TERMINAL_ONLY } from '@/components/reconnect/copy'
@@ -28,6 +29,13 @@ import { PROVIDER_LABELS } from '@/lib/provider-auth-alert'
 export type AgentSetupSheetAction = 'install' | 'update' | 'sign-in'
 
 type Phase = 'confirm' | 'waiting' | 'running' | 'sign-in' | 'done' | 'failed'
+
+// Which running session a sheet may rejoin: a login never answers an update sheet (#2474 review).
+const REJOINS: Record<AgentSetupSheetAction, readonly AgentSetupSession['action'][]> = {
+  install: ['install', 'login'],
+  update: ['update'],
+  'sign-in': ['login'],
+}
 
 const SIGN_IN_POLL_MS = 3_000
 const WAIT_POLL_MS = 5_000
@@ -102,15 +110,55 @@ export function AgentSetupFlow({ provider, action, onClose }: { provider: AgentS
   const refreshAsync = refresh.mutateAsync
 
   // A session for this agent already running (a reload, another tab) is rejoined, not restarted.
+  const idle = phase === 'confirm' || (phase === 'sign-in' && shown === null)
+  // A login cancelled here still reads as running until the next listing: never rejoin it.
+  const dropped = React.useRef<string | null>(null)
   React.useEffect(() => {
-    if (session && session.provider === provider && session.exitCode === null && phase === 'confirm') {
-      setShown(session)
-      setPhase(session.action === 'login' ? 'sign-in' : 'running')
-    }
-  }, [phase, provider, session])
+    if (!session || session.provider !== provider || session.exitCode !== null || !idle) return
+    if (session.id === dropped.current) return
+    if (!REJOINS[action].includes(session.action)) return
+    setShown(session)
+    setPhase(session.action === 'login' ? 'sign-in' : 'running')
+  }, [action, idle, provider, session])
+  // Seen on the server, then gone while still running here (a sleep past the server's retention,
+  // a restart, a cancel elsewhere): settle against the status instead of spinning forever.
+  const seen = React.useRef<string | null>(null)
+  if (session && shown && session.id === shown.id) seen.current = session.id
+  const [vanished, setVanished] = React.useState<AgentSetupSession | null>(null)
   React.useEffect(() => {
     if (session && shown && session.id === shown.id) setShown(session)
+    else if (!session && shown && shown.exitCode === null && seen.current === shown.id) {
+      setShown(null)
+      setVanished(shown)
+    }
   }, [session, shown])
+
+  // A login terminal nobody watches holds the one setup slot: cancel it when the sheet closes or
+  // the sign-in lands. Decided a tick later so StrictMode's remount does not kill a rejoined login.
+  const cancel = useCancelAgentSetup()
+  const liveLogin = shown?.action === 'login' && shown.exitCode === null ? shown.id : null
+  const liveLoginNow = React.useRef(liveLogin)
+  liveLoginNow.current = liveLogin
+  const mounted = React.useRef(false)
+  React.useEffect(() => {
+    mounted.current = true
+    return () => {
+      mounted.current = false
+      const login = liveLoginNow.current
+      window.setTimeout(() => {
+        if (!mounted.current && login) void cancelAgentSetup(login).catch(() => {})
+      }, 0)
+    }
+  }, [])
+  const cancelMutate = cancel.mutate
+  React.useEffect(() => {
+    if (phase === 'done' && liveLogin) cancelMutate(liveLogin)
+  }, [cancelMutate, liveLogin, phase])
+  const cancelLogin = () => {
+    if (liveLogin) cancelMutate(liveLogin)
+    dropped.current = liveLogin
+    setShown(null)
+  }
 
   // `mutate` is stable; the mutation object is not, and depending on it re-fired the wait below.
   const startMutate = start.mutate
@@ -191,6 +239,61 @@ export function AgentSetupFlow({ provider, action, onClose }: { provider: AgentS
     )
   }, [invalidateHealth, label, provider, queryClient, refetchSetup, refreshAsync, shown])
 
+  React.useEffect(() => {
+    if (!vanished) return
+    setVanished(null)
+    const closed = 'The terminal closed before cezar saw it finish.'
+    if (vanished.action === 'login') {
+      setFailure(`${closed} Open it again, or check again if you signed in.`)
+      return
+    }
+    invalidateHealth()
+    if (vanished.action === 'update') {
+      const before = entry?.version ?? null
+      void refetchSetup().then((next) => {
+        const now = next.data?.agents.find((agent) => agent.provider === provider)?.version ?? null
+        if (now && now !== before) {
+          setUpdatedTo(now)
+          return setPhase('done')
+        }
+        setFailure(`${closed} ${label} still reports ${now ?? 'no version'}. Try again.`)
+        setPhase('failed')
+      })
+      return
+    }
+    void refreshAsync().then(
+      (next) => {
+        void queryClient.invalidateQueries({ queryKey: workspaceQueryKeys.agentSetup })
+        const now = next.providers.find((candidate) => candidate.provider === provider)
+        if (now?.status === 'connected') return setPhase('done')
+        if (now && now.status !== 'not-installed') return setPhase('sign-in')
+        setFailure(`${closed} ${label} is not installed. Try again.`)
+        setPhase('failed')
+      },
+      () => {
+        setFailure('cezar could not check the agent. Try again.')
+        setPhase('failed')
+      },
+    )
+  }, [entry?.version, invalidateHealth, label, provider, queryClient, refetchSetup, refreshAsync, vanished])
+
+  // A login terminal that ended without signing in offers the terminal again, not a dead log.
+  const loginEnded = React.useRef<string | null>(null)
+  React.useEffect(() => {
+    if (!shown || shown.action !== 'login' || shown.exitCode === null || loginEnded.current === shown.id) return
+    loginEnded.current = shown.id
+    const id = shown.id
+    void refreshAsync().then(
+      (next) => {
+        const now = next.providers.find((candidate) => candidate.provider === provider)
+        if (now?.status === 'connected') return
+        setShown((current) => (current?.id === id ? null : current))
+        setFailure(`The sign-in terminal closed before ${label} signed in. Open it again, or check again.`)
+      },
+      () => {},
+    )
+  }, [label, provider, refreshAsync, shown])
+
   // Nothing tells the page a sign-in landed: ask until it does.
   React.useEffect(() => {
     if (phase !== 'sign-in') return
@@ -231,7 +334,7 @@ export function AgentSetupFlow({ provider, action, onClose }: { provider: AgentS
         </div>
       ) : null}
       {phase === 'sign-in' ? (
-        <SignIn provider={provider} entry={entry} interactive={interactive && available} session={shown?.action === 'login' ? shown : null} failure={failure} busy={start.isPending} onTerminal={() => run('login')} onCheck={() => refreshMutate()} />
+        <SignIn provider={provider} entry={entry} interactive={interactive && available} session={shown?.action === 'login' ? shown : null} failure={failure} busy={start.isPending} onTerminal={() => run('login')} onCheck={() => refreshMutate()} onCancel={cancelLogin} />
       ) : null}
       {phase === 'failed' ? (
         <div className="flex flex-wrap items-center justify-between gap-3">
@@ -388,6 +491,7 @@ function SignIn({
   busy,
   onTerminal,
   onCheck,
+  onCancel,
 }: {
   provider: AgentSetupProvider
   entry: AgentSetupEntry
@@ -397,9 +501,21 @@ function SignIn({
   busy: boolean
   onTerminal: () => void
   onCheck: () => void
+  onCancel: () => void
 }) {
   if (!TERMINAL_ONLY.has(provider)) return <ReconnectCard provider={provider} profileId="default" place="attention" inSheet compact={!interactive} />
-  if (session) return <SetupTerminal key={session.id} session={session} running={session.exitCode === null} installing={false} />
+  if (session) {
+    return (
+      <div className="flex flex-col gap-2">
+        <SetupTerminal key={session.id} session={session} running={session.exitCode === null} installing={false} />
+        {session.exitCode === null ? (
+          <div className="flex justify-end">
+            <Button size="sm" variant="outline" className="font-normal" onClick={onCancel}>Cancel</Button>
+          </div>
+        ) : null}
+      </div>
+    )
+  }
   // No headless sign-in (spec 2026-11-18): a terminal here, or the computer.
   return (
     <div data-slot="agent-setup-terminal-sign-in" className="flex flex-col gap-2">
