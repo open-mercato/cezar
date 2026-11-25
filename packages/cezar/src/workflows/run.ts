@@ -260,6 +260,7 @@ const IDLE_CLOSED_LIFECYCLE = 'run closed after inactivity — nobody replied; C
 /** Tail of an agent node's last turn kept as `{{nodes.<id>.summary}}`. */
 const NODE_SUMMARY_CAP = 4_000;
 import { freshContinuationContext } from './continuation-context.ts';
+import { laterInstructions, resumeWithContext } from './resume-prompt.ts';
 
 const CHECK_OUTPUT_CAP = 20_000;
 
@@ -1408,6 +1409,20 @@ export const VARIANT_HINTS: Record<string, string | undefined> = {
 
 const RESTART_CONTINUATION_PROMPT =
   'The cezar process restarted while you were working on this task. Read the handoff file (CEZ_HANDOFF_FILE) to recover context, then continue the task from where you left off.';
+<<<<<<< HEAD
+=======
+const SWITCH_AGENT_PROMPT =
+  'Continue this task on the newly selected agent. Use the handoff, conversation and existing worktree to pick up the work. If a user decision was pending, wait for their answer.';
+/** Openings cezar sends on its own; recorded like the user's messages, but not instructions. */
+const CEZAR_OPENINGS = [
+  RESTART_CONTINUATION_PROMPT,
+  SWITCH_AGENT_PROMPT,
+  AUTO_RESUME_PROMPT,
+  TRANSIENT_RETRY_PROMPT,
+  AUTH_RECONNECTED_PROMPT,
+  'Sent automatically by cezar',
+];
+>>>>>>> 4ce90da (fix(self-update): restart when idle waits for tasks, managers and setup terminals (#2478))
 
 interface PendingContinuation {
   stepId: string;
@@ -1647,7 +1662,12 @@ export class RunManager {
       newestPromotionAt: () => this.newestPromotionAt(),
       accountHolds: () => this.accountHolds(),
       refreshQueueReasons: () => this.refreshQueueReasons(),
+<<<<<<< HEAD
       activeRuns: () => this.store.listRuns().filter((r) => RESTART_SENSITIVE.has(r.status)).length,
+=======
+      activeRuns: () => this.store.listRuns().filter((r) => RESTART_SENSITIVE.has(r.status) && !isIdleParked(r)).length,
+      restartBlockers: () => this.restartBlockers(),
+>>>>>>> 4ce90da (fix(self-update): restart when idle waits for tasks, managers and setup terminals (#2478))
     });
     this.lifecycle = new WorktreeLifecycleCoordinator(repoRoot, store, {
       semaphore: this.semaphore,
@@ -2203,6 +2223,34 @@ export class RunManager {
   }
 
   /**
+   * Runs a restart would cut off mid-work, by title. Unlike `busySlots`, a run monitoring its CI
+   * or its children counts — it is still working — and so does every queued run the pending
+   * restart does not hold. A run waiting on the user does not: boot resumes it as it was.
+   */
+  private restartBlockers(): string[] {
+    const names: string[] = [];
+    for (const run of this.store.listRuns()) {
+      const working = run.status === 'running' || this.starting.has(run.id)
+        || (run.status === 'queued' && !this.heldForRestart(run));
+      if (working) names.push(run.title || run.task.slice(0, 60));
+    }
+    return names;
+  }
+
+  /**
+   * A pending "restart when idle" holds new tasks in the queue, so the wait can end. Not held:
+   * continuations (a resume of work already under way — restart recovery, a usage-limit resume, the
+   * user's own Continue), a dispatched child (its parent is waiting on it, and the parent blocks the
+   * restart until it reports), and a run the user told to Start now.
+   */
+  private heldForRestart(run: RunRecord): boolean {
+    return this.semaphore.restartGate.holding
+      && !this.pendingContinuations.has(run.id)
+      && !run.dispatch?.parentRunId
+      && !this.startNowRequested.has(run.id);
+  }
+
+  /**
    * Park a run in the monitoring set — the ONE entry, so `unitParents ⊆ monitoring` cannot be
    * half-applied across the two near-identical turn-end handlers (AGENTS.md § "Find every
    * construction site of a shared in-memory object").
@@ -2386,6 +2434,12 @@ export class RunManager {
         const defaultRunner = anyHold ? (await loadConfig(this.repoRoot)).defaultRunner : undefined;
         const startable = (id: string): boolean => {
           const queued = this.store.getRun(id);
+<<<<<<< HEAD
+=======
+          if (queued && this.heldForRestart(queued)) return false;
+          // Busy is a soft limit: "Start now" overrides it as it overrides `maxParallel`.
+          if (routedBusy.has(id) && !this.startNowRequested.has(id)) return false;
+>>>>>>> 4ce90da (fix(self-update): restart when idle waits for tasks, managers and setup terminals (#2478))
           if (queued && anyHold && accountHeldFor(queued, holds, defaultRunner ?? 'claude', this.askingAccounts(), this.pendingJobs.get(id)?.workflow)) return false;
           // "Start now" goes over `maxParallel` on purpose, but a non-git root still runs one at a time.
           if (this.startNowRequested.has(id)) return repo !== null || this.busySlots() < 1;
@@ -4280,6 +4334,8 @@ export class RunManager {
       await this.reviveQueuedRun(run, 'queue watchdog');
     }
     if (this.queue.length === 0) return;
+    // A pending restart holds the queue on purpose; cancelling it pumps every manager.
+    if (this.semaphore.restartGate.holding) return;
     if (this.busySlots() > 0 || this.starting.size > 0) return;
     if (this.semaphore.busy() > 0) return;
     // A future deadline is a real reason to sit still: that timer will fire and pump.
@@ -4855,13 +4911,9 @@ export class RunManager {
       return { ...continuation, persistedImages: [], persistedAttachments: [] };
     }
     const stack = run.queuedMessages ?? [];
-    const amendedTask = [run.task, ...stack.map((message) => message.text)]
-      .map((part) => part.trim())
-      .filter((part) => part.length > 0)
-      .join('\n\n');
-    const prompt = amendedTask
-      ? `${continuation.prompt}\n\nCurrent task and queued updates:\n\n${amendedTask}`
-      : continuation.prompt;
+    // The newest instructions win, labelled by age — not the first objective as "current".
+    const later = laterInstructions(this.store.readEvents(runId), run.task, CEZAR_OPENINGS);
+    const prompt = resumeWithContext(continuation.prompt, run.task, later, stack.map((message) => message.text));
     const persisted = this.readPersistedAttachments(
       runId,
       stack.flatMap((message) => message.images ?? []),

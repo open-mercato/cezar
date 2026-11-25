@@ -3089,6 +3089,31 @@ describe('RunManager queued-stack mutators (#472)', () => {
     expect(internals.workflowInput(r).reasoningEffort).toBe('high');
   });
 
+  it('a restart continuation puts the latest instructions ahead of the original objective', async () => {
+    const r = store.createRun({ title: 'changed course', workflow: 'quick-task', task: 'Research only. Do not change product code, push, or open a PR.', steps: [] });
+    store.updateRun(r.id, { status: 'queued' });
+    // What the session saw: the user's later messages, and an earlier restart's own opening.
+    store.appendEvent(r.id, { type: 'user-message', text: 'Good findings. Now implement the fix.' });
+    store.appendEvent(r.id, { type: 'user-message', text: 'The cezar process restarted while you were working on this task. Read the handoff file (CEZ_HANDOFF_FILE) to recover context, then continue the task from where you left off.\n\nThe task:\n\nResearch only.' });
+    store.appendEvent(r.id, { type: 'user-message', text: 'Then open a ready-for-review PR.' });
+    const internals = manager as unknown as {
+      hydrateQueuedContinuation(runId: string, continuation: { stepId: string; sessionId: string | undefined; backend: 'claude'; prompt: string; images: ContentBlock[] }): { prompt: string };
+    };
+    const { prompt } = internals.hydrateQueuedContinuation(r.id, { stepId: 'continue-1', sessionId: 's', backend: 'claude', prompt: 'restart recovery', images: [] });
+
+    expect(prompt).not.toContain('Current task');
+    const original = prompt.indexOf('Research only.');
+    const implement = prompt.indexOf('Good findings. Now implement the fix.');
+    const pr = prompt.indexOf('Then open a ready-for-review PR.');
+    expect(original).toBeGreaterThan(-1);
+    expect(implement).toBeGreaterThan(original);
+    expect(pr).toBeGreaterThan(implement);
+    expect(prompt).toContain('the later instructions below replace it wherever they differ');
+    expect(prompt).toContain('the last one is the latest you were following');
+    // cezar's own restart opening is not an instruction.
+    expect(prompt.match(/cezar process restarted/g)).toBeNull();
+  });
+
   it('hydrates edits and stacked messages into a queued restart continuation', async () => {
     const r = store.createRun({
       title: 'interrupted task',
@@ -3157,8 +3182,9 @@ describe('RunManager queued-stack mutators (#472)', () => {
     await internals.pump();
 
     expect(delivered?.prompt).toBe(
-      'restart recovery\n\nCurrent task and queued updates:\n\n' +
-        'amended recovery goal\n\nalso verify the queue',
+      'restart recovery\n\n' +
+        'The task as first given — the later instructions below replace it wherever they differ:\n\namended recovery goal\n\n' +
+        'Sent while the task was stopped, oldest first — these are the newest instructions and win over everything above:\n\nalso verify the queue',
     );
     expect(delivered?.images).toEqual([]);
     expect(delivered?.persistedImages).toEqual([image()]);
