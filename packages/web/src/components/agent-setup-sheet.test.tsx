@@ -8,7 +8,7 @@ import type { AgentSetupEntry, AgentSetupProvider } from '@open-mercato/cezar-ap
 import { createQueryClient } from '@/api/query-client'
 import type { QueryClient } from '@tanstack/react-query'
 import { useAgentSetup } from '@/api/queries'
-import { AgentSetupFlow } from '@/components/agent-setup-sheet'
+import { AgentSetupFlow, agentSetupCancelsForTests } from '@/components/agent-setup-sheet'
 import { toast } from '@/components/ui/toaster'
 import { DefaultAgentPicker, agentPickerRows } from '@/components/default-agent-picker'
 
@@ -47,6 +47,8 @@ let cancelFails = false
 let cancelGate: Promise<void> | null = null
 /** When true, GET /providers/setup answers 500. */
 let listFails = false
+/** When set, GET /providers/setup waits for it before answering. */
+let listGate: Promise<void> | null = null
 /** When true, a POST answers as the server's join of the running session, with its header. */
 let joinNext = false
 /** When true, `GET /api/v1/providers/status?refresh=1` answers 500. */
@@ -79,6 +81,7 @@ beforeEach(() => {
       if (url.searchParams.get('refresh') === '1' && refreshFails) return json({ error: 'down' }, 500)
       return json({ providers: Object.entries(statuses).map(([provider, status]) => ({ provider, status, enabled: true })) })
     }
+    if (url.pathname === '/api/v1/providers/setup' && listGate) await listGate
     if (url.pathname === '/api/v1/providers/setup' && listFails) return json({ error: 'down' }, 500)
     if (url.pathname === '/api/v1/providers/setup') return json({ available: refusedWith === null, reason: refusedWith, interactive, session, agents })
     if (url.pathname === '/api/v1/providers/setup/sessions' && method === 'POST') {
@@ -127,7 +130,11 @@ afterEach(async () => {
   cancelFails = false
   cancelGate = null
   listFails = false
+  listGate = null
   joinNext = false
+  // Module-level in the sheet, and the tests reuse ids (s1, s2): never carried into the next case.
+  agentSetupCancelsForTests().clear()
+  vi.restoreAllMocks()
   refreshFails = false
   fetchMock.mockReset()
   vi.unstubAllGlobals()
@@ -942,5 +949,95 @@ describe('DefaultAgentPicker with the setup catalog', () => {
     )
     expect(screen.getAllByRole('radio').length).toBeGreaterThan(1)
     expect(document.querySelector('[data-slot="agents-setup-groups"]')).toBeNull()
+  })
+})
+
+describe('AgentSetupFlow: a cancel that settles after the sheet closed (#2474 final review)', () => {
+  const openLogin = async () => {
+    statuses = { antigravity: 'disconnected' }
+    agents = [entry('antigravity', { installed: true, loginCommand: "'agy'" })]
+    const view = renderFlow('antigravity', 'sign-in')
+    fireEvent.click(await screen.findByRole('button', { name: 'Open terminal here' }))
+    await screen.findByTestId('terminal')
+    return view
+  }
+
+  it.each([
+    { how: 'Cancel', fails: true },
+    { how: 'Cancel', fails: false },
+    { how: 'a landed sign-in', fails: true },
+    { how: 'a landed sign-in', fails: false },
+  ])('after $how, a DELETE that settles (fails=$fails) once the sheet is gone still clears the list', async ({ how, fails }) => {
+    const view = await openLogin()
+    let release!: () => void
+    cancelGate = new Promise<void>((resolve) => { release = resolve })
+    cancelFails = fails
+    if (how === 'Cancel') {
+      fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+    } else {
+      statuses = { antigravity: 'connected' }
+      await waitFor(() => expect(phase()).toBe('done'), WAIT)
+    }
+    await waitFor(() => expect(cancelled).toEqual(['s1']))
+    // Done / closed while the DELETE is still out.
+    view.unmount()
+    release()
+    await pause(100)
+    expect(cancelled).toEqual(['s1'])
+    if (fails) {
+      // The server still holds the login: a reopened sheet shows it again, with its Cancel.
+      expect(agentSetupCancelsForTests().has('s1')).toBe(false)
+      statuses = { antigravity: 'disconnected' }
+      renderFlow('antigravity', 'sign-in')
+      await waitFor(() => expect(screen.getByTestId('terminal').getAttribute('data-session')).toBe('s1'))
+    } else {
+      expect(agentSetupCancelsForTests().size).toBe(0)
+    }
+  })
+})
+
+describe('AgentSetupFlow: the re-check timer and unmount (#2474 final review)', () => {
+  const startInstall = async () => {
+    statuses = { codex: 'not-installed' }
+    agents = [entry('codex', { install: { command: 'npm install -g @openai/codex', runnable: true, sudo: false } })]
+    const client = createQueryClient()
+    const view = renderFlow('codex', 'install', { client })
+    fireEvent.click(await screen.findByRole('button', { name: 'Install' }))
+    await waitFor(() => expect(phase()).toBe('running'))
+    return { view, client }
+  }
+  const RECHECK_MS = 2_000
+
+  it('clears a pending re-check when the sheet closes', async () => {
+    const { view, client } = await startInstall()
+    const setTimer = vi.spyOn(window, 'setTimeout')
+    const clearTimer = vi.spyOn(window, 'clearTimeout')
+    listFails = true
+    act(() => { client.setQueryData(['workspace', 'providers', 'setup'], (state: Record<string, unknown>) => ({ ...state, session: null })) })
+    await waitFor(() => expect(setTimer.mock.calls.some(([, ms]) => ms === RECHECK_MS)).toBe(true))
+    const index = setTimer.mock.calls.findIndex(([, ms]) => ms === RECHECK_MS)
+    const timer = setTimer.mock.results[index]!.value as number
+    view.unmount()
+    expect(clearTimer).toHaveBeenCalledWith(timer)
+  })
+
+  it('arms no re-check when a failed read answers after the sheet closed', async () => {
+    const { view, client } = await startInstall()
+    // Something else still reads the listing, so the late read is not dropped with the sheet.
+    function Listing() {
+      useAgentSetup()
+      return null
+    }
+    render(<QueryClientProvider client={client}><Listing /></QueryClientProvider>)
+    let release!: () => void
+    listGate = new Promise<void>((resolve) => { release = resolve })
+    listFails = true
+    act(() => { client.setQueryData(['workspace', 'providers', 'setup'], (state: Record<string, unknown>) => ({ ...state, session: null })) })
+    await pause(50)
+    view.unmount()
+    const setTimer = vi.spyOn(window, 'setTimeout')
+    release()
+    await pause(100)
+    expect(setTimer.mock.calls.some(([, ms]) => ms === RECHECK_MS)).toBe(false)
   })
 })

@@ -44,6 +44,10 @@ const RECHECK_MS = 2_000
 // openers only watch the `latest` listing, the main one is dropped on close (gcTime 0), and a
 // sheet reopened while the DELETE is in flight reads the login as still running.
 const cancelling = new Set<string>()
+/** Tests only: the list itself, so a test can read it and clear it between cases. */
+export function agentSetupCancelsForTests(): Set<string> {
+  return cancelling
+}
 const WAIT_POLL_MS = 5_000
 
 export function AgentSetupSheet({
@@ -148,8 +152,14 @@ export function AgentSetupFlow({ provider, action, onClose }: { provider: AgentS
   const [vanished, setVanished] = React.useState<AgentSetupSession | null>(null)
   const [recheck, setRecheck] = React.useState(0)
   const recheckTimer = React.useRef<number | null>(null)
-  React.useEffect(() => () => {
-    if (recheckTimer.current !== null) window.clearTimeout(recheckTimer.current)
+  // A failed read that answers after the sheet closed must not arm a timer the cleanup missed.
+  const alive = React.useRef(true)
+  React.useEffect(() => {
+    alive.current = true
+    return () => {
+      alive.current = false
+      if (recheckTimer.current !== null) window.clearTimeout(recheckTimer.current)
+    }
   }, [])
   const watching = phase === 'running' || phase === 'sign-in'
   React.useEffect(() => {
@@ -166,6 +176,7 @@ export function AgentSetupFlow({ provider, action, onClose }: { provider: AgentS
       if (shownNow.current?.id !== lost.id) return
       // A failed read keeps the old listing: it says nothing about the session, so ask again later.
       if (next.isError) {
+        if (!alive.current) return
         recheckTimer.current = window.setTimeout(() => setRecheck((count) => count + 1), RECHECK_MS)
         return
       }
@@ -208,20 +219,26 @@ export function AgentSetupFlow({ provider, action, onClose }: { provider: AgentS
     forget(login)
     void cancelAgentSetup(login).then(() => stopped(login), () => keep(login))
   }, [forget, keep, stopped])
-  const cancelMutate = cancel.mutate
+  // The list is cleaned up from the request's own promise: a mutate call's callbacks are skipped
+  // once the sheet is gone (TanStack v5), and the cleanup must still run then. UI updates only
+  // ever happen while it is mounted.
+  const cancelAsync = cancel.mutateAsync
+  const stop = React.useCallback((id: string, onFail: () => void) => {
+    forget(id)
+    cancelAsync(id).then(
+      () => stopped(id),
+      () => {
+        keep(id)
+        if (alive.current) onFail()
+      },
+    )
+  }, [cancelAsync, forget, keep, stopped])
   // A landed sign-in whose terminal could not be stopped: it still holds the setup slot, so say so.
   const [stranded, setStranded] = React.useState<string | null>(null)
   const closeLanded = React.useCallback((id: string) => {
     setStranded(null)
-    forget(id)
-    cancelMutate(id, {
-      onSuccess: () => stopped(id),
-      onError: () => {
-        keep(id)
-        setStranded(id)
-      },
-    })
-  }, [cancelMutate, forget, keep, stopped])
+    stop(id, () => setStranded(id))
+  }, [stop])
   React.useEffect(() => {
     if (phase !== 'done' || !liveLogin) return
     setShown(null)
@@ -234,15 +251,10 @@ export function AgentSetupFlow({ provider, action, onClose }: { provider: AgentS
     const id = liveLogin
     const was = shown
     setFailure(null)
-    forget(id)
     setShown(null)
-    cancelMutate(id, {
-      onSuccess: () => stopped(id),
-      onError: () => {
-        keep(id)
-        setShown((current) => current ?? was)
-        setFailure('cezar could not stop the sign-in terminal. Try again.')
-      },
+    stop(id, () => {
+      setShown((current) => current ?? was)
+      setFailure('cezar could not stop the sign-in terminal. Try again.')
     })
   }
 
