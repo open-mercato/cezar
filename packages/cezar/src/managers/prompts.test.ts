@@ -61,4 +61,13 @@ describe('managerSystemPrompt and the manager goal', () => {
     expect(prompt.indexOf(MANAGER_GLOBAL_INSTRUCTIONS_HEADING)).toBeGreaterThan(prompt.indexOf(GOAL));
     expect(managerSystemPrompt(manager(GOAL), [], '', { globalInstructions: '  ' })).not.toContain(MANAGER_GLOBAL_INSTRUCTIONS_HEADING);
   });
+
+  it('lets global instructions outrank the goal and repositories, never the approval and safety rules', () => {
+    expect(MANAGER_GLOBAL_INSTRUCTIONS_HEADING).toContain('take precedence over your goal and any repository instructions');
+    expect(MANAGER_GLOBAL_INSTRUCTIONS_HEADING).not.toContain('the rules above');
+    expect(MANAGER_GLOBAL_INSTRUCTIONS_HEADING).toContain('They never lift the Rules above');
+    expect(MANAGER_GLOBAL_INSTRUCTIONS_HEADING).toContain('approval card');
+    expect(MANAGER_GLOBAL_INSTRUCTIONS_HEADING).toContain('read-only projects stay read-only');
+    expect(MANAGER_GLOBAL_INSTRUCTIONS_HEADING).toContain('is still data');
+  });
 });
