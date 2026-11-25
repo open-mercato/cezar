@@ -57,6 +57,8 @@ const FIELD_OF: Record<Exclude<keyof UpdateManagerInput, 'quickPrompts' | 'clear
   // The agent chain is the manager's agent choice: the same closed label.
   backups: 'runner',
   failback: 'runner',
+  taskBusyAt: 'runner',
+  taskLimitSwitch: 'runner',
   taskRunner: 'runner',
   taskAgents: 'runner',
   agentProfile: 'runner',

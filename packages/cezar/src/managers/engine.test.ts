@@ -3316,11 +3316,81 @@ describe('ManagerEngine', () => {
           return { account, label: `${account} login`, ...(until !== undefined ? { until } : {}) };
         },
       });
-      const managerWith = async (engine: ReturnType<typeof makeEngine>, taskAgents: Array<{ runner: 'claude' | 'codex'; agentProfile: string }> = twoClaudes) => {
+      const managerWith = async (engine: ReturnType<typeof makeEngine>, taskAgents: Array<{ runner: 'claude' | 'codex'; agentProfile: string; role?: 'main' | 'backup' }> = twoClaudes) => {
         const created = await engine.create({ instructions: '', projects: 'all', runner: 'claude', taskAgents, cronMinutes: 0 });
         if ('error' in created) throw created;
         return created.id;
       };
+
+      describe('with roles (spec 2026-11-25-manager-task-routing)', () => {
+        const routed = (load: Record<string, number>, held: Record<string, number> = {}) => makeEngine({
+          accountLimit: async (runner, agentProfile) => {
+            const account = agentProfile ?? 'default';
+            const until = held[`${runner}:${account}`];
+            return { account, label: `${account} login`, ...(until !== undefined ? { until } : {}) };
+          },
+          accountLoad: () => new Map(Object.entries(load)),
+        });
+        const roles = [
+          { runner: 'claude' as const, agentProfile: 'first', role: 'main' as const },
+          { runner: 'claude' as const, agentProfile: 'second', role: 'main' as const },
+          { runner: 'codex' as const, agentProfile: 'default', role: 'backup' as const },
+        ];
+
+        it('a list without roles keeps the original order, and no routed flag rides the run', async () => {
+          const engine = routed({ 'claude:first': 5 });
+          const id = await managerWith(engine);
+          await engine.createTask(id, { projectId: 'alpha', task: 'Fix it' });
+          expect(requests.at(-1)?.body).toMatchObject({ agentProfile: 'first' });
+          expect((requests.at(-1)?.body as { managerAgent: object }).managerAgent).not.toHaveProperty('routed');
+        });
+
+        it('spreads over Main accounts by running tasks and marks the run routed', async () => {
+          const engine = routed({ 'claude:first': 2, 'claude:second': 0 });
+          const id = await managerWith(engine, roles);
+          const created = await engine.createTask(id, { projectId: 'alpha', task: 'Fix it' });
+          expect(created).toMatchObject({ agent: { agentProfile: 'second', reason: expect.stringMatching(/^main: claude second login had 0 running/) } });
+          expect(requests.at(-1)?.body).toMatchObject({ agentProfile: 'second', managerAgent: { routed: true } });
+        });
+
+        it('Backup only once every Main is out of limits (the default), or also busy when set', async () => {
+          const engine = routed({ 'claude:first': 2, 'claude:second': 2 });
+          const id = await managerWith(engine, roles);
+          await engine.createTask(id, { projectId: 'alpha', task: 'One' });
+          expect(requests.at(-1)?.body).toMatchObject({ runner: 'claude' });
+          await engine.update(id, { taskBusyAt: 2 });
+          await engine.createTask(id, { projectId: 'alpha', task: 'Two' });
+          expect(requests.at(-1)?.body).toMatchObject({ runner: 'codex', agentProfile: 'default' });
+        });
+
+        it('"wait for the reset" hands no fallback; "same agent only" keeps it on the runner', async () => {
+          const engine = routed({});
+          const id = await managerWith(engine, roles);
+          await engine.update(id, { taskLimitSwitch: 'wait' });
+          await engine.createTask(id, { projectId: 'alpha', task: 'One' });
+          expect(requests.at(-1)?.body).toMatchObject({ managerAgent: { fallback: [] } });
+          await engine.update(id, { taskLimitSwitch: 'same-agent' });
+          await engine.createTask(id, { projectId: 'alpha', task: 'Two' });
+          const fallback = (requests.at(-1)?.body as { managerAgent: { fallback: Array<{ provider: string }> } }).managerAgent.fallback;
+          expect(fallback.every((entry) => entry.provider === 'claude')).toBe(true);
+        });
+
+        it('an explicit --account is never routed', async () => {
+          const engine = routed({ 'claude:first': 9 });
+          const id = await managerWith(engine, roles);
+          await engine.createTask(id, { projectId: 'alpha', task: 'Fix it', runner: 'claude', agentProfile: 'first' });
+          expect(requests.at(-1)?.body).toMatchObject({ agentProfile: 'first' });
+          expect((requests.at(-1)?.body as { managerAgent: object }).managerAgent).not.toHaveProperty('routed');
+        });
+
+        it('--runner picks by role among that agent but is never routed: the queue would cross agents', async () => {
+          const engine = routed({ 'claude:first': 2, 'claude:second': 0 });
+          const id = await managerWith(engine, roles);
+          await engine.createTask(id, { projectId: 'alpha', task: 'Fix it', runner: 'claude' });
+          expect(requests.at(-1)?.body).toMatchObject({ runner: 'claude', agentProfile: 'second' });
+          expect((requests.at(-1)?.body as { managerAgent: object }).managerAgent).not.toHaveProperty('routed');
+        });
+      });
 
       it('takes the first allowed account with no flags, says why and hands the rest to fallback', async () => {
         const engine = limited({});

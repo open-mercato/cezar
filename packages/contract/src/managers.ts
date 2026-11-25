@@ -28,12 +28,23 @@ export const managerTaskAgentSchema = z.object({
   runner: runnerSchema,
   /** Absent follows the task's account default; an id pins that exact account. */
   agentProfile: z.string().min(1).max(64).optional(),
+  /** Main accounts share new tasks; Backup ones are used in order (spec 2026-11-25-manager-task-routing).
+   *  Absent on every entry = the original order: the manager's own runner, then list order. */
+  role: z.enum(['main', 'backup']).optional(),
 });
 export type ManagerTaskAgent = z.infer<typeof managerTaskAgentSchema>;
 export const managerTaskAgentsSchema = z.array(managerTaskAgentSchema).min(1).max(64).refine(
   (agents) => new Set(agents.map((agent) => JSON.stringify([agent.runner, agent.agentProfile]))).size === agents.length,
   'choose each agent account only once',
 );
+
+/** Backup accounts take new tasks once every Main is out of limits, or also, when set, while every
+ *  Main already runs this many tasks ("Out of limits or busy"). Absent = out of limits only. */
+export const managerTaskBusyAtSchema = z.number().int().min(1).max(64);
+
+/** A task that runs out of limits mid-way: another listed account, the same agent only, or wait. Absent = `any`. */
+export const managerTaskLimitSwitchSchema = z.enum(['any', 'same-agent', 'wait']);
+export type ManagerTaskLimitSwitch = z.infer<typeof managerTaskLimitSwitchSchema>;
 
 /** `all` follows the registry: a project added later is connected without touching the manager. */
 export const managerProjectsSchema = z.union([z.literal('all'), z.array(z.string().min(1).max(200)).min(1).max(200)]);
@@ -241,6 +252,8 @@ export const managerSchema = z.object({
   runner: z.string().optional(),
   taskRunner: runnerSchema.optional(),
   taskAgents: managerTaskAgentsSchema.optional(),
+  taskBusyAt: managerTaskBusyAtSchema.optional(),
+  taskLimitSwitch: managerTaskLimitSwitchSchema.optional(),
   model: z.string().optional(),
   effort: managerEffortSchema.optional(),
   /** Agent account id ("Account" in the design); absent = the runner's default. */
@@ -329,6 +342,8 @@ export const createManagerInputSchema = z.object({
   runner: runnerInput.optional(),
   taskRunner: runnerSchema.optional(),
   taskAgents: managerTaskAgentsSchema.optional(),
+  taskBusyAt: managerTaskBusyAtSchema.optional(),
+  taskLimitSwitch: managerTaskLimitSwitchSchema.optional(),
   model: modelInput.optional(),
   effort: managerEffortSchema.optional(),
   agentProfile: z.string().max(64).optional(),
@@ -352,6 +367,9 @@ export const updateManagerInputSchema = z.object({
   runner: runnerInput.nullable().optional(),
   taskRunner: runnerSchema.nullable().optional(),
   taskAgents: managerTaskAgentsSchema.nullable().optional(),
+  taskBusyAt: managerTaskBusyAtSchema.nullable().optional(),
+  /** `any` is the default; there is no `null` for it. */
+  taskLimitSwitch: managerTaskLimitSwitchSchema.optional(),
   model: modelInput.nullable().optional(),
   effort: managerEffortSchema.nullable().optional(),
   agentProfile: z.string().max(64).nullable().optional(),

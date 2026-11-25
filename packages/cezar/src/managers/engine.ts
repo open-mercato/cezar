@@ -63,7 +63,8 @@ import { agentModelsLocked } from '../core/agent-model-policy.ts';
 import { parseAskCloseMarkers, parseAskMarker, stripAskCloseMarkers, stripAskMarker, type AskCloseMarker } from '../core/ask.ts';
 import type { RunRecord } from '../runs/store.ts';
 import { isIdleParked } from '../runs/store.ts';
-import { chooseTaskAgent, type AccountOption, type TaskAgentChoice } from './task-agent-choice.ts';
+import { chooseTaskAgent, type AccountOption, type RoleRouting, type TaskAgentChoice } from './task-agent-choice.ts';
+import { fiveHourUsedPercent } from '../workspace/usage-windows.ts';
 import {
   chainChanged,
   chainOf,
@@ -181,6 +182,8 @@ export interface ManagerEngineDeps {
   /** An account's resolved id, label and usage-limit reset (epoch ms) from the workspace holds.
    *  Absent: every account has capacity. */
   accountLimit?: (runner: RunnerId, agentProfile: string | undefined, repoRoot?: string) => Promise<{ account: string; label: string; until?: number }>;
+  /** Running tasks per `runner:account` across the workspace (spec 2026-11-25-manager-task-routing). Absent: none. */
+  accountLoad?: () => ReadonlyMap<string, number>;
   /** The cockpit's own routes, in process: POST /runs, merge, enable have exactly one implementation. */
   request: LoopbackRequest;
   costVisible: () => boolean;
@@ -324,6 +327,12 @@ function followedTasks(state: ManagerState): string[] {
   for (const [key, follow] of Object.entries(state.follows)) if (!at.has(key)) at.set(key, follow.at);
   return [...at].sort(([, a], [, b]) => msOf(b) - msOf(a)).map(([key]) => key);
 }
+
+/** Any role on the list turns routing on; a list without roles keeps the original order. */
+export const routedByRoles = (manager: Pick<Manager, 'taskAgents'>): boolean => manager.taskAgents?.some((agent) => agent.role !== undefined) === true;
+
+export const roleRouting = (manager: Pick<Manager, 'taskBusyAt'>): RoleRouting =>
+  manager.taskBusyAt !== undefined ? { maxRunning: manager.taskBusyAt } : {};
 
 const connectedTo = (manager: Manager, projectId: string): boolean =>
   manager.projects === 'all' || manager.projects.includes(projectId);
@@ -990,6 +999,8 @@ export class ManagerEngine {
       ...(input.agentProfile !== undefined ? { agentProfile: input.agentProfile } : {}),
       ...(input.backups?.length ? { backups: input.backups } : {}),
       ...(input.failback !== undefined ? { failback: input.failback } : {}),
+      ...(input.taskBusyAt !== undefined ? { taskBusyAt: input.taskBusyAt } : {}),
+      ...(input.taskLimitSwitch !== undefined ? { taskLimitSwitch: input.taskLimitSwitch } : {}),
       ...(input.connectors !== undefined ? { connectors: input.connectors } : {}),
       cronMinutes: input.cronMinutes ?? MANAGER_DEFAULT_CRON_MINUTES,
       jobs: [],
@@ -1029,13 +1040,13 @@ export class ManagerEngine {
     if (issue) return issue;
     const badPattern = input.bashAllow?.map(managerBashPatternIssue).find(Boolean);
     if (badPattern) return { error: badPattern, status: 400 };
-    const optional = <K extends 'runner' | 'taskRunner' | 'taskAgents' | 'model' | 'effort' | 'agentProfile' | 'failback'>(key: K): Partial<Pick<Manager, K>> => {
+    const optional = <K extends 'runner' | 'taskRunner' | 'taskAgents' | 'model' | 'effort' | 'agentProfile' | 'failback' | 'taskBusyAt' | 'taskLimitSwitch'>(key: K): Partial<Pick<Manager, K>> => {
       const value = input[key];
       if (value === null) return {};
       const kept = value ?? current[key];
       return kept === undefined ? {} : ({ [key]: kept } as Partial<Pick<Manager, K>>);
     };
-    const { runner: _runner, taskRunner: _taskRunner, taskAgents: _taskAgents, model: _model, effort: _effort, agentProfile: _agentProfile, quickPrompts: _quickPrompts, bashAllow: _bashAllow, backups: _backups, failback: _failback, ...base } = current;
+    const { runner: _runner, taskRunner: _taskRunner, taskAgents: _taskAgents, model: _model, effort: _effort, agentProfile: _agentProfile, quickPrompts: _quickPrompts, bashAllow: _bashAllow, backups: _backups, failback: _failback, taskBusyAt: _taskBusyAt, taskLimitSwitch: _taskLimitSwitch, ...base } = current;
     // An emptied chain is stored as no chain: that manager is today's manager again.
     const backups = input.backups === undefined ? current.backups : input.backups ?? undefined;
     const bashAllow = input.bashAllow ? [...new Set(input.bashAllow)] : current.bashAllow;
@@ -1076,6 +1087,8 @@ export class ManagerEngine {
       ...optional('agentProfile'),
       ...(backups?.length ? { backups } : {}),
       ...optional('failback'),
+      ...optional('taskBusyAt'),
+      ...optional('taskLimitSwitch'),
       updatedAt: this.iso(),
     };
     let updated = this.deps.store.update(id, () => next);
@@ -3324,23 +3337,39 @@ export class ManagerEngine {
     let fallbackOptions: AccountOption[] | undefined;
     /** The runner picked when every listed account has capacity: --model/--effort are refused, not dropped, there. */
     let firstRunner: string | undefined;
+    // Roles on the list switch on routing (spec 2026-11-25-manager-task-routing); none keeps the original order.
+    const roles = agents && routedByRoles(scope.manager) ? roleRouting(scope.manager) : undefined;
     if (agents && candidates) {
       // The manager's settings are the default: a retried task's own account, then its own runner, then list order.
-      const rank = (agent: ManagerTaskAgent) => (retry?.allowed && agent.runner === retry.runner && agent.agentProfile === retry.agentProfile ? 0 : agent.runner === preferred ? 1 : 2);
+      // With roles, list order is the order (Backup rows are used top to bottom).
+      const rank = (agent: ManagerTaskAgent) => (roles ? 0 : retry?.allowed && agent.runner === retry.runner && agent.agentProfile === retry.agentProfile ? 0 : agent.runner === preferred ? 1 : 2);
       const ordered = [...candidates].sort((a, b) => rank(a) - rank(b));
-      const allowed = await Promise.all([...agents].sort((a, b) => rank(a) - rank(b)).map((agent) => this.accountOption(agent.runner, agent.agentProfile, root)));
+      const load = roles ? this.deps.accountLoad?.() : undefined;
+      const allowed = await Promise.all([...agents].sort((a, b) => rank(a) - rank(b)).map(async (agent) => {
+        const option = await this.accountOption(agent.runner, agent.agentProfile, root);
+        if (!roles) return option;
+        const usage = fiveHourUsedPercent(option.runner, option.account, now);
+        return { ...option, role: agent.role ?? 'main', load: load?.get(`${option.runner}:${option.account}`) ?? 0, ...(usage !== undefined ? { usage } : {}) };
+      }));
       const options = ordered.map((agent) => allowed.find((option) => option.runner === agent.runner && option.agentProfile === agent.agentProfile)!);
-      choice = chooseTaskAgent(options, {
+      const own = roles && retry?.allowed && input.agentProfile === undefined
+        ? options.find((option) => option.runner === retry.runner && option.agentProfile === retry.agentProfile && option.role === 'main')
+        : undefined;
+      // A retry keeps its own Main account while it is open: its cache is warm.
+      const ownOpen = own && (own.until === undefined || own.until <= now) && (roles?.maxRunning === undefined || (own.load ?? 0) < roles.maxRunning);
+      choice = ownOpen ? { chosen: own, reason: `retry: its own account ${own.runner} · ${own.label}` } : chooseTaskAgent(options, {
         explicitAccount: input.agentProfile !== undefined, fromSettings: true, allowed, now,
+        ...(roles ? { roles } : {}),
         ...(input.runner && candidates.length < agents.length ? { narrowedBy: `--runner ${input.runner}` } : {}),
       });
       firstRunner = options[0]?.runner;
       const picked = choice.chosen;
-      // An explicit --runner or --account keeps a usage-limit fallback on that runner.
-      const sameRunner = input.runner !== undefined || input.agentProfile !== undefined;
+      // An explicit --runner or --account keeps a usage-limit fallback on that runner, as does "same agent only".
+      const sameRunner = input.runner !== undefined || input.agentProfile !== undefined || scope.manager.taskLimitSwitch === 'same-agent';
       // The whole list, the task's own account included: admission skips whichever account just ran
       // out, so a dispatched child on another listed account still falls back to this one.
-      fallbackOptions = allowed.filter((option, index) => (!sameRunner || option.runner === picked.runner)
+      // "Wait for the reset" records an empty list: the task keeps the reset-time auto-resume.
+      fallbackOptions = scope.manager.taskLimitSwitch === 'wait' ? [] : allowed.filter((option, index) => (!sameRunner || option.runner === picked.runner)
         && allowed.findIndex((other) => other.runner === option.runner && other.account === option.account) === index);
     }
     const runner = choice?.chosen.runner ?? scope.manager.taskRunner ?? input.runner ?? preferred;
@@ -3411,7 +3440,13 @@ export class ManagerEngine {
         ...(carried.effort ? { reasoningEffort: carried.effort } : {}),
         ...(dispatch ? { dispatch: {} } : {}),
         startedByManager: { id: scope.manager.id, name: scope.manager.name },
-        managerAgent: { note: agentNote.slice(0, 500), ...(fallback ? { fallback: fallback.slice(0, 10) } : {}) },
+        managerAgent: {
+          note: agentNote.slice(0, 500),
+          ...(fallback ? { fallback: fallback.slice(0, 10) } : {}),
+          // The queue may move a routed task to an account that frees up; an explicit --account or
+          // --runner stays, since the queue's targets span every agent on the list.
+          ...(roles && input.agentProfile === undefined && input.runner === undefined ? { routed: true } : {}),
+        },
       },
     });
     if (!response.ok) return ManagerEngine.refusalOf(response);

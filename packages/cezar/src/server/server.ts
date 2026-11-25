@@ -1764,7 +1764,15 @@ export function createApp(deps: ServerDeps) {
   // Workspace-level, shared by the managers family and the automation report link.
   const managerStore = new ManagerStore();
   // A manager task's fallback follows the manager's list as it is now (deleted or Automatic = withdrawn).
-  setManagerTaskAccountsLookup((managerId) => managerStore.get(managerId)?.taskAgents ?? null);
+  setManagerTaskAccountsLookup((managerId) => {
+    const manager = managerStore.get(managerId);
+    if (!manager?.taskAgents) return null;
+    return {
+      agents: manager.taskAgents,
+      ...(manager.taskLimitSwitch ? { limitSwitch: manager.taskLimitSwitch } : {}),
+      ...(manager.taskBusyAt !== undefined ? { maxRunning: manager.taskBusyAt } : {}),
+    };
+  });
   const contextProjects = async () => {
     const selector = capabilities().singleProject
       ? { projectId: await resolveBootProject() }
@@ -9235,6 +9243,7 @@ export function createApp(deps: ServerDeps) {
     },
     // The same holds the queue enforces (spec 2026-08-03-auto-resume-after-usage-limit).
     accountLimit: (runner, agentProfile, repoRoot) => managerAccountLimit(() => deps.semaphore?.accountHolds(), runner, agentProfile, repoRoot),
+    accountLoad: () => deps.semaphore?.accountLoad() ?? new Map(),
     request: (path, init) => {
       if (!managerLoopback.request) throw new Error('the cockpit is not ready');
       const headers = new Headers(init?.headers);
