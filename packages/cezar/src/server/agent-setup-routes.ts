@@ -13,6 +13,7 @@ import {
   type AgentSetupAction,
   type AgentSetupEntry,
   type AgentSetupProvider,
+  type AgentSetupSession,
   type ProviderStatusResponse,
 } from '@open-mercato/cezar-contract';
 import { Hono } from 'hono';
@@ -215,13 +216,10 @@ export function agentSetupRoutes(deps: AgentSetupDeps) {
         }));
         return c.json(agentSetupStateSchema.parse({ available: false, reason, agents: safe }));
       }
-      const session = info && phoneMayRead(info.id) ? describe(info) : null;
-      return c.json(agentSetupStateSchema.parse({
-        available: true,
-        agents: phone() ? agents.map(forPhone) : agents,
-        interactive: !phone(),
-        session: session && phone() ? { ...session, command: withoutHostPaths(session.command) } : session,
-      }));
+      const described = info && phoneMayRead(info.id) ? describe(info) : null;
+      const session: AgentSetupSession | null = described && phone() ? { ...described, command: withoutHostPaths(described.command) } : described;
+      const listed: AgentSetupEntry[] = phone() ? agents.map(forPhone) : agents;
+      return c.json(agentSetupStateSchema.parse({ available: true, agents: listed, interactive: !phone(), session }));
     })
     .post('/providers/setup/sessions', jsonZodValidator(agentSetupStartSchema), async (c) => {
       const reason = await refusal();
@@ -290,7 +288,8 @@ export function agentSetupRoutes(deps: AgentSetupDeps) {
           deps.onLoginOpened(provider, row.status === 'unknown' ? 'unknown' : 'disconnected', deps.deviceSid(c.req.header('x-cezar-sid')));
         }
         const started = agentSetupSessionSchema.parse(describe(created.session));
-        return c.json(phone() ? { ...started, command: withoutHostPaths(started.command) } : started, 201);
+        const body: AgentSetupSession = phone() ? { ...started, command: withoutHostPaths(started.command) } : started;
+        return c.json(body, 201);
       } finally {
         starting = false;
       }
