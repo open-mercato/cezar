@@ -139,6 +139,8 @@ describe('every mutating route carries a typed body into AppType', () => {
     Assert<HasTypedInput<'/api/v1/github/prs/:number/merge-state', '$get', 'query'>>,
     Assert<HasTypedInput<'/api/v1/github/prs/:number/changes', '$get', 'query'>>,
     Assert<HasTypedInput<'/api/v1/github/prs/:number/changes', '$get', 'param'>>,
+    Assert<HasTypedInput<'/api/v1/github/prs/:number/review-comments', '$get', 'query'>>,
+    Assert<HasTypedInput<'/api/v1/github/prs/:number/review-comments', '$get', 'param'>>,
     Assert<HasTypedInput<'/api/v1/repo/commit/:sha', '$get', 'query'>>,
     Assert<HasTypedInput<'/api/v1/automation-log', '$get', 'query'>>,
     // The draft surface reaches the filesystem as a path segment, so its validation must be

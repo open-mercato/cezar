@@ -435,7 +435,7 @@ import { parseRemote, resolveForge, type ForgeAvailability } from './forge/index
 import { isGithubHost } from '../github-hosts.ts';
 import { createGithubDriver } from './forge/github.ts';
 import { onPrClosed, reportPrClosed } from './forge/pr-closed.ts';
-import { fetchGithub, fetchGithubChecks, fetchGithubComments, fetchGithubPrDiff, fetchGithubRefStatus, forgetRefStatus, readCachedPrEnds, readCachedRefStatuses, refNumberFromUrl, searchGithubItems, GithubPrNotFoundError, GH_CHECKS_MAX, GH_SEARCH_MAX, GH_REF_STATUS_MAX, forgetGithubListCache } from './github.ts';
+import { fetchGithub, fetchGithubChecks, fetchGithubComments, fetchGithubPrDiff, fetchGithubReviewComments, fetchGithubRefStatus, forgetRefStatus, readCachedPrEnds, readCachedRefStatuses, refNumberFromUrl, searchGithubItems, GithubPrNotFoundError, GH_CHECKS_MAX, GH_SEARCH_MAX, GH_REF_STATUS_MAX, forgetGithubListCache } from './github.ts';
 import { ensureLaunchKey } from './launch-key.ts';
 import { openInTerminal } from './open-in-terminal.ts';
 import { agentSetupRoutes } from './agent-setup-routes.ts';
@@ -7993,6 +7993,20 @@ export function createApp(deps: ServerDeps) {
           if (err instanceof GithubPrNotFoundError) return c.json({ error: err.message }, 404);
           throw err;
         }
+      },
+    )
+
+    // A PR's inline review comments for the task Changes tab (spec 2026-07-18-github-comment-threads,
+    // follow-up). Lazy, cached 60 s, and degrades in the payload like /github/comments.
+    .get(
+      '/github/prs/:number/review-comments',
+      paramZodValidator(prChangesParams, { message: 'invalid pull request number' }),
+      queryZodValidator(refreshQuery),
+      async (c) => {
+        const { root: repoRoot } = c.get('project');
+        return c.json(
+          await fetchGithubReviewComments(repoRoot, c.req.valid('param').number, c.req.valid('query').refresh === '1'),
+        );
       },
     );
 
