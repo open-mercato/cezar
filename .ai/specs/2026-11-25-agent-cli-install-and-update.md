@@ -27,7 +27,7 @@ run failed with "X or newer is required". The install commands lived in three pl
   | OpenCode | `npm i -g opencode-ai@1`, `opencode upgrade` (shipped) | brew |
   | Cursor | install script, `agent update` (shipped) | — |
   | Copilot | npm install and `@latest` upgrade (shipped) | — |
-  | Antigravity | `agy update` (shipped) | install: docs link only |
+  | Antigravity | macOS: `curl -fsSL https://antigravity.google/cli/install.sh \| bash` (docs: Google's download page, 2026-11-25); `agy update` (shipped) | Linux, Windows install: docs link only |
   | Gemini, pi, Junie | — | npm install and upgrade |
   | Kimi | — | docs link only |
   | OMP | — | `brew install can1357/tap/omp` (always) |

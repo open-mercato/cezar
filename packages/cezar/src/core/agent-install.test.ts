@@ -31,8 +31,17 @@ describe('planInstall', () => {
   });
 
   it('has only the docs link for an agent whose installer is unknown', () => {
-    expect(planInstall('antigravity', mac)).toEqual({ command: null, runnable: false, method: null, sudo: false });
-    expect(installHintCommand('antigravity')).toBe('https://antigravity.google/docs/cli');
+    expect(planInstall('kimi', mac)).toEqual({ command: null, runnable: false, method: null, sudo: false });
+    expect(installHintCommand('kimi', 'linux')).toBe('https://moonshotai.github.io/kimi-code/');
+  });
+
+  it("runs Antigravity's macOS installer from Google's download page, and only on macOS", () => {
+    expect(planInstall('antigravity', mac)).toEqual({ command: 'curl -fsSL https://antigravity.google/cli/install.sh | bash', runnable: true, method: 'script', sudo: false });
+    expect(planInstall('antigravity', { ...mac, curl: false })).toMatchObject({ runnable: false });
+    expect(planInstall('antigravity', { ...mac, platform: 'linux' })).toEqual({ command: null, runnable: false, method: null, sudo: false });
+    expect(planInstall('antigravity', { ...mac, platform: 'win32' })).toEqual({ command: null, runnable: false, method: null, sudo: false });
+    expect(installHintCommand('antigravity', 'linux')).toBe('https://antigravity.google/docs/cli');
+    expect(installHintCommand('antigravity', 'darwin')).toBe('curl -fsSL https://antigravity.google/cli/install.sh | bash');
   });
 
   it('never offers sudo npm for Claude Code', () => {
