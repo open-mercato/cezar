@@ -1,5 +1,3 @@
-import type { RestartBlocker } from '@open-mercato/cezar-contract';
-
 /**
  * What "restart when idle" waits for, and the hold that keeps new work from starting meanwhile.
  *
@@ -8,7 +6,28 @@ import type { RestartBlocker } from '@open-mercato/cezar-contract';
  * and neither does a setup terminal — so a restart "when idle" cut all three off. Each kind of
  * work registers a source here instead, and the restart fires only when every source is empty.
  */
-export type RestartBlockerKind = RestartBlocker['kind'];
+export type RestartBlockerKind = 'task' | 'manager' | 'setup';
+
+/** One kind of busy work, merged across sources: `names` are the first few of `count`. */
+export interface RestartBlocker {
+  kind: RestartBlockerKind;
+  count: number;
+  names: string[];
+}
+
+const KIND_NOUN: Record<RestartBlockerKind, [string, string]> = {
+  task: ['task', 'tasks'],
+  manager: ['manager', 'managers'],
+  setup: ['agent setup', 'agent setups'],
+};
+
+/** How the cockpit reads one blocker: `2 tasks (Fix login, Docs)`, `5 tasks (A, B, C and 2 more)`. */
+export function describeRestartBlocker({ kind, count, names }: RestartBlocker): string {
+  const [one, many] = KIND_NOUN[kind];
+  const more = count - names.length;
+  const listed = names.length > 0 ? ` (${names.join(', ')}${more > 0 ? ` and ${more} more` : ''})` : '';
+  return `${count} ${count === 1 ? one : many}${listed}`;
+}
 
 /** One source's work: a kind and the names of what is busy (one entry per item). */
 export interface RestartBlockerItems {

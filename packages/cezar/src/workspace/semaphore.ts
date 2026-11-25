@@ -119,6 +119,9 @@ export interface SemaphoreParticipant {
    * and any caller that predates the hold — keeps working; absent simply holds nothing.
    */
   accountHolds?(): AccountHolds;
+  /** Running tasks per agent account (`runAccountKey`), for a manager's busy rule (spec
+   *  2026-11-25-manager-task-routing). Optional: absent counts none. */
+  accountLoad?(): ReadonlyMap<string, number>;
   /** Runs a restart would interrupt (queued, waiting or running) — the self-update dialog's
    *  warning. Optional for stubs; absent counts none. */
   activeRuns?(): number;
@@ -209,6 +212,15 @@ export class WorkspaceSemaphore {
     this.notifyingHolds = true;
     try { for (const participant of this.participants) participant.refreshQueueReasons?.(); }
     finally { this.notifyingHolds = false; }
+  }
+
+  /** Running tasks per account across the whole workspace; asked live, like `accountHolds`. */
+  accountLoad(): Map<string, number> {
+    const load = new Map<string, number>();
+    for (const participant of this.participants) {
+      for (const [key, count] of participant.accountLoad?.() ?? []) load.set(key, (load.get(key) ?? 0) + count);
+    }
+    return load;
   }
 
   /** Slots held across EVERY registered manager (waiting runs excluded by

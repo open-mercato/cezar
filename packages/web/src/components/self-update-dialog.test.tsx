@@ -20,7 +20,7 @@ vi.mock('@/api/client', async (original) => ({
 }))
 
 /** `n` tasks a restart would interrupt. */
-const working = (n: number) => [{ kind: 'task' as const, count: n, names: [] }]
+const working = (n: number) => [`${n} task${n === 1 ? '' : 's'}`]
 
 const status: SelfUpdateStatus = {
   version: '0.12.0',
@@ -184,7 +184,7 @@ describe('SelfUpdateDialog', () => {
       applySelfUpdate.mockClear()
       renderDialog({ activeRuns: 2, restartBlockers: working(2) }, { autoApply: '0.12.1' })
       const dialog = await screen.findByRole('dialog')
-      expect(dialog.textContent).toContain('2 tasks are working')
+      expect(dialog.textContent).toContain('Still working: 2 tasks.')
       await new Promise((resolve) => setTimeout(resolve, 20))
       expect(applySelfUpdate).not.toHaveBeenCalled()
     })

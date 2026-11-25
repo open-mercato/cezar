@@ -21,7 +21,7 @@ vi.mock('@/api/client', async (original) => ({
 }))
 
 /** `n` tasks a restart would interrupt. */
-const working = (n: number) => [{ kind: 'task' as const, count: n, names: [] }]
+const working = (n: number) => [`${n} task${n === 1 ? '' : 's'}`]
 
 const status: SelfUpdateStatus = {
   version: '0.21.0',
@@ -88,10 +88,7 @@ describe('BuildSkewBanner', () => {
 
   it('names what a pending restart waits for, and offers Restart now and Cancel', async () => {
     const scheduled = { target: '0.21.0+local', requestedAt: 'now' }
-    const blockers = [
-      { kind: 'task' as const, count: 1, names: ['CI watcher'] },
-      { kind: 'manager' as const, count: 1, names: ['Ops'] },
-    ]
+    const blockers = ['1 task (CI watcher)', '1 manager (Ops)']
     applySelfUpdate.mockResolvedValue({ ...status, scheduled, job: { status: 'restarting', target: scheduled.target, startedAt: 'now', finishedAt: 'now', log: [] } })
     cancelScheduledSelfUpdate.mockResolvedValue({ ...status, restartBlockers: blockers })
     renderBanner({ ...status, activeRuns: 1, restartBlockers: blockers, scheduled })

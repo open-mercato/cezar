@@ -397,7 +397,7 @@ describe('update when idle', () => {
       await settle();
       const pending = await gated.status();
       expect(pending.scheduled?.target).toBe('0.12.1');
-      expect(pending.restartBlockers).toEqual([{ kind, count: 1, names: ['busy one'] }]);
+      expect(pending.restartBlockers).toEqual([`1 ${{ task: 'task', manager: 'manager', setup: 'agent setup' }[kind]} (busy one)`]);
       expect(pending.job).toBeNull();
       expect(gate.holding).toBe(true);
       expect(restart).not.toHaveBeenCalled();

@@ -1,4 +1,4 @@
-import type { RestartBlocker, SelfUpdateStatus } from '@open-mercato/cezar-api-client'
+import type { SelfUpdateStatus } from '@open-mercato/cezar-api-client'
 import { Button } from '@/components/ui/button'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 
@@ -14,21 +14,10 @@ export function offerWhenIdle(data: SelfUpdateStatus, target: string | null): ta
   return !!target && data.restartBlockers.length > 0 && data.scheduled?.target !== target
 }
 
-const KIND_NOUN: Record<RestartBlocker['kind'], [string, string]> = {
-  task: ['task', 'tasks'],
-  manager: ['manager', 'managers'],
-  setup: ['agent setup', 'agent setups'],
-}
-
-/** What a restart is waiting for, in one phrase: `2 tasks (Fix login, Docs) and 1 manager (Ops)`. */
-export function describeRestartBlockers(blockers: readonly RestartBlocker[]): string {
-  const parts = blockers.map(({ kind, count, names }) => {
-    const [one, many] = KIND_NOUN[kind]
-    const more = count - names.length
-    const listed = names.length > 0 ? ` (${names.join(', ')}${more > 0 ? ` and ${more} more` : ''})` : ''
-    return `${count} ${count === 1 ? one : many}${listed}`
-  })
-  return parts.length <= 1 ? (parts[0] ?? '') : `${parts.slice(0, -1).join(', ')} and ${parts.at(-1)}`
+/** What a restart is waiting for, in one phrase: `2 tasks (Fix login, Docs) and 1 manager (Ops)`.
+ *  The server phrases each kind (`restartBlockers`); this only joins them. */
+export function describeRestartBlockers(blockers: readonly string[]): string {
+  return blockers.length <= 1 ? (blockers[0] ?? '') : `${blockers.slice(0, -1).join(', ')} and ${blockers.at(-1)}`
 }
 
 /** The "…when idle" twin of every restart button in the self-update dialog. `doing` finishes the

@@ -8,7 +8,7 @@
 import type { SelfUpdateDevelopment, SelfUpdateJob, SelfUpdateScheduled, SelfUpdateStatus, UpdateChannel } from '@open-mercato/cezar-contract';
 
 import { loadWorkspaceConfig, mergeWriteWorkspaceConfig } from '../workspace/config.ts';
-import type { RestartGate } from '../workspace/restart-gate.ts';
+import { describeRestartBlocker, type RestartGate } from '../workspace/restart-gate.ts';
 import type { WorkspaceSemaphore } from '../workspace/semaphore.ts';
 import { installFromLocal, installFromRegistry } from './installer.ts';
 import { buildCheckout, discoverCheckouts } from './checkouts.ts';
@@ -167,7 +167,7 @@ export class SelfUpdateService {
       job: this.job,
       scheduled: this.scheduled,
       activeRuns: this.deps.runs?.activeRuns() ?? 0,
-      restartBlockers: this.deps.gate?.blockers() ?? [],
+      restartBlockers: (this.deps.gate?.blockers() ?? []).map(describeRestartBlocker),
     };
   }
 

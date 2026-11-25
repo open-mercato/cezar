@@ -347,6 +347,8 @@ export function useCheckNow(managerId: string): () => void {
 export interface ManagerSettingsHandle {
   openAccount: () => void
   openJobs: () => void
+  /** The (i) popover's "Agent settings": the Manager agent dialog. */
+  openAgent: () => void
   /** A sidebar row's Settings…: the gear menu itself. */
   openMenu: () => void
 }
@@ -367,6 +369,7 @@ export function ManagerSettings({ manager, onPatch, ref }: { manager: ManagerSum
       setDialog('agent')
     },
     openJobs: () => { setMenuOpen(false); setDialog('jobs') },
+    openAgent: () => { setFocusAccount(false); setMenuOpen(false); setDialog('agent') },
     openMenu: () => setMenuOpen(true),
   }), [])
   const openDialog = (next: 'agent' | 'rename' | 'jobs' | 'connectors' | 'memory' | 'shell' | 'prompts' | 'delete') => {

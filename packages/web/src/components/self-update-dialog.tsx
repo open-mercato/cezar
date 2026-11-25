@@ -180,7 +180,7 @@ export function SelfUpdateDialog({
               </div>
             ) : data.restartBlockers.length > 0 && data.canSelfUpdate ? (
               <p className="rounded-md border border-pending/50 bg-pending/10 px-3 py-2 text-label text-foreground">
-                {describeRestartBlockers(data.restartBlockers)} {data.restartBlockers.length === 1 && data.restartBlockers[0]!.count === 1 ? 'is' : 'are'} working.
+                Still working: {describeRestartBlockers(data.restartBlockers)}.
                 A restart interrupts them; {brandName} re-queues or resumes tasks on the way back up.
                 {' '}The &ldquo;when idle&rdquo; buttons wait for them to finish instead.
               </p>
