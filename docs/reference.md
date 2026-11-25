@@ -521,10 +521,15 @@ whose counter never resets within a run, so every run is finite.
   `paths-changed` (`glob`: `*` within a folder, `**` across), `output` (`ref:
   <node>.<field>`, `op`, `value` — numeric when both sides are numbers) and `branch`
   (`equals` / `matches` on the base branch).
-- **`github.pr-checkout`** fetches `pull/<n>/head` for the PR URL in the task, moves the
-  task branch to it (never the repository's own working tree, never uncommitted work), and
-  saves `pr-<n>.json` and `pr-<n>.diff` in the run's artifacts. It posts nothing; it leaves
-  by `failed` when the head is not checked out, still saving what it could.
+- **`github.pr-checkout`** fetches `pull/<n>/head` for the PR URL in the task — from the remote
+  that is the PR's repository, else from the repository's URL — and moves the task branch to it.
+  It refuses, leaving the tree as it was, when the task runs in the repository's own working
+  tree, has uncommitted changes, has commits of its own past the base branch, or has untracked
+  or ignored files at a path the PR tracks. It saves `pr-<n>.json` and `pr-<n>.diff` in the
+  run's artifacts either way, posts nothing, and leaves by `failed` when the head is not checked
+  out. Under `CEZ_DRY_RUN=1` it fetches and checks out nothing. Claude steps of a workflow with
+  this node ignore the checked-out tree's project/local settings, hooks, `CLAUDE.md` and MCP
+  config (`--setting-sources user`, `--strict-mcp-config`).
 - **`git.sync-base`** merges the freshest base into the task branch. On a conflict it
   leaves the merge in progress and leaves by `conflict` — wire that to an agent to
   resolve it (`{{nodes.<id>.conflicts}}` lists the files).

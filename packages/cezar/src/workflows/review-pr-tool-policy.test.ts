@@ -3,6 +3,8 @@ import type { AgentRunSpec } from '../core/agent-runner.ts';
 import { buildClaudeArgs, claudeArtifactsWriteRule } from '../core/claude-cli-runner.ts';
 import { codexBashArgv, compileCodexRestrictedPolicy } from '../core/codex-restricted-policy.ts';
 import { isReadOnlyWorkflow } from './capabilities.ts';
+import { readOnlyWorkflowSpec } from './run.ts';
+import { QUICK_TASK_WORKFLOW } from './types.ts';
 import { REVIEW_PR } from './templates.ts';
 
 const ARTIFACTS = '/tmp/cez-artifacts/run-1';
@@ -38,8 +40,8 @@ function claudeRules(s: AgentRunSpec): string[] {
   return i < 0 ? [] : args[i + 1]!.split(',');
 }
 
-/** Claude's prefix semantics: `Bash(p:*)` admits any command that starts with `p`. */
-function claudeAdmits(rules: string[], command: string): boolean {
+/** Whether Claude's `--allowedTools` rule list admits `command` (`Bash(p:*)` admits any command starting with `p`). */
+function ruleListAdmits(rules: string[], command: string): boolean {
   return rules.some((rule) => {
     if (rule === 'Bash') return true;
     const m = /^Bash\((.*):\*\)$/.exec(rule);
@@ -67,12 +69,12 @@ describe('review-pr tool policy', () => {
     });
 
     it.each(PUBLISHING)('refuses %s', (command) => {
-      expect(claudeAdmits(rules, command)).toBe(false);
+      expect(ruleListAdmits(rules, command)).toBe(false);
     });
 
     it('admits the read-only fallback', () => {
-      expect(claudeAdmits(rules, 'gh pr view 5700 --json title,files')).toBe(true);
-      expect(claudeAdmits(rules, 'gh pr diff 5700')).toBe(true);
+      expect(ruleListAdmits(rules, 'gh pr view 5700 --json title,files')).toBe(true);
+      expect(ruleListAdmits(rules, 'gh pr diff 5700')).toBe(true);
     });
   });
 
@@ -116,5 +118,27 @@ describe('claudeArtifactsWriteRule', () => {
   it('makes the artifacts directory reachable', () => {
     const args = buildClaudeArgs({ systemPrompt: '', userPrompt: '', cwd: '/repo', ...base } as AgentRunSpec, {});
     expect(args[args.indexOf('--add-dir') + 1]).toBe(ARTIFACTS);
+  });
+  it('does not add the artifacts directory twice when it is already an additional directory', () => {
+    const args = buildClaudeArgs({ systemPrompt: '', userPrompt: '', cwd: '/repo', ...base, additionalDirectories: ['/runs', ARTIFACTS] } as AgentRunSpec, {});
+    expect(args.filter((a, i) => args[i - 1] === '--add-dir')).toEqual(['/runs', ARTIFACTS]);
+  });
+});
+
+describe('readOnlyWorkflowSpec', () => {
+  it('gives review-pr steps their artifacts and an untrusted-tree launch', () => {
+    expect(readOnlyWorkflowSpec(REVIEW_PR, {}, ARTIFACTS)).toEqual({ artifactsWriteDir: ARTIFACTS, untrustedWorktree: true, noMcpServers: true });
+  });
+  it('leaves Ask tasks and writable workflows exactly as before', () => {
+    expect(readOnlyWorkflowSpec(REVIEW_PR, { readOnly: true }, ARTIFACTS)).toEqual({});
+    expect(readOnlyWorkflowSpec(QUICK_TASK_WORKFLOW, {}, ARTIFACTS)).toEqual({});
+    expect(readOnlyWorkflowSpec(undefined, {}, ARTIFACTS)).toEqual({});
+  });
+  it("makes Claude ignore the checked-out tree's settings, hooks, CLAUDE.md and MCP config", () => {
+    const node = agents[0]!;
+    const args = buildClaudeArgs(spec(node, readOnlyWorkflowSpec(REVIEW_PR, {}, ARTIFACTS)), {});
+    expect(args[args.indexOf('--setting-sources') + 1]).toBe('user');
+    expect(args).toContain('--strict-mcp-config');
+    expect(buildClaudeArgs(spec(node), {})).not.toContain('--setting-sources');
   });
 });

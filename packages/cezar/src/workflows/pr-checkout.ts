@@ -1,8 +1,8 @@
 import { execFile } from 'node:child_process';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { lstatSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { ghEnv } from '../core/gh-env.ts';
-import { parseRemote, resolveTaskRemotes } from '../git-remotes.ts';
+import { parseRemote } from '../git-remotes.ts';
 import { isSafeGitRef } from '../git-refs.ts';
 import { isGithubHost } from '../github-hosts.ts';
 
@@ -10,6 +10,7 @@ import { isGithubHost } from '../github-hosts.ts';
  * The `github.pr-checkout` node: put the PR's head into the task worktree and its metadata and
  * diff into the run's artifacts BEFORE any agent runs, so a read-only reviewer only reads files
  * (the 5700 review: every reviewer's `git fetch` and `gh pr diff > file` was refused).
+ * The checked-out tree is untrusted: Claude steps that read it ignore its settings (`run.ts`).
  */
 
 export interface PrRef {
@@ -30,11 +31,14 @@ export function parsePrUrl(text: string): PrRef | undefined {
   return undefined;
 }
 
-type Exec = (file: string, args: string[], opts: { cwd: string; timeoutMs: number; env?: NodeJS.ProcessEnv }) => Promise<{ ok: boolean; stdout: string; stderr: string }>;
+export type Exec = (file: string, args: string[], opts: { cwd: string; timeoutMs: number; env?: NodeJS.ProcessEnv }) => Promise<{ ok: boolean; stdout: string; stderr: string }>;
 
 const exec: Exec = (file, args, { cwd, timeoutMs, env }) => new Promise((done) => {
-  execFile(file, args, { cwd, timeout: timeoutMs, maxBuffer: 64 * 1024 * 1024, encoding: 'utf8', env: { ...(env ?? process.env), GIT_TERMINAL_PROMPT: '0', GH_PROMPT_DISABLED: '1' } },
-    (err, stdout, stderr) => done({ ok: !err, stdout: String(stdout ?? ''), stderr: String(stderr ?? err?.message ?? '') }));
+  execFile(file, args, {
+    cwd, timeout: timeoutMs, maxBuffer: 64 * 1024 * 1024, encoding: 'utf8',
+    // Unattended: an HTTPS or SSH credential prompt fails instead of hanging.
+    env: { ...(env ?? process.env), GIT_TERMINAL_PROMPT: '0', GIT_SSH_COMMAND: 'ssh -o BatchMode=yes', GH_PROMPT_DISABLED: '1' },
+  }, (err, stdout, stderr) => done({ ok: !err, stdout: String(stdout ?? ''), stderr: String(stderr || err?.message || '') }));
 });
 
 export interface PrCheckoutInput {
@@ -43,9 +47,9 @@ export interface PrCheckoutInput {
   pr: PrRef;
   /** False for a task running in the repository's own working tree: that tree is the user's, never reset. */
   ownWorktree: boolean;
-  /** The task's base branch, for a local diff when `gh` cannot give one. */
+  /** The task's base branch: the task branch must have no commits of its own past it. */
   baseBranch?: string;
-  /** No `gh` call (CEZ_DRY_RUN=1): metadata and diff come from git alone. */
+  /** CEZ_DRY_RUN=1: no network and no reset — nothing is fetched or checked out. */
   offline?: boolean;
   exec?: Exec;
 }
@@ -60,17 +64,43 @@ export interface PrCheckoutResult {
   problems: string[];
 }
 
-/** The remote that IS the PR's repository, else the task's PR-target remote. */
-async function prRemote(cwd: string, pr: PrRef, run: Exec): Promise<string | null> {
-  const git = async (args: string[]) => run('git', args, { cwd, timeoutMs: 10_000 });
-  const res = await git(['config', '--get-regexp', '^remote\\..*\\.url$']);
+/** The remote whose URL IS the PR's repository; undefined when none is (then the URL is fetched). */
+export async function prRemote(cwd: string, pr: PrRef, run: Exec = exec): Promise<string | undefined> {
+  const res = await run('git', ['config', '--get-regexp', '^remote\\..*\\.url$'], { cwd, timeoutMs: 10_000 });
   for (const line of res.ok ? res.stdout.split('\n') : []) {
     const m = /^remote\.(.+)\.url (.*)$/.exec(line.trim());
     const parsed = m ? parseRemote(m[2] ?? '') : null;
-    if (m && parsed && isSafeGitRef(m[1]!) && parsed.host === pr.host
+    if (m && parsed && isSafeGitRef(m[1]!) && parsed.host.toLowerCase() === pr.host
       && parsed.owner.toLowerCase() === pr.owner.toLowerCase() && parsed.repo.toLowerCase() === pr.repo.toLowerCase()) return m[1]!;
   }
-  return (await resolveTaskRemotes(git)).base;
+  return undefined;
+}
+
+const exists = (path: string): boolean => { try { lstatSync(path); return true; } catch { return false; } };
+const lastLine = (s: string) => s.trim().split('\n').pop()?.slice(0, 300) ?? '';
+
+/** Why resetting the task branch to `head` would lose something, or undefined when it is safe. */
+async function resetRefusal(git: (args: string[], timeoutMs?: number) => ReturnType<Exec>, cwd: string, head: string, baseBranch: string | undefined, remote: string | undefined): Promise<string | undefined> {
+  const dirty = await git(['status', '--porcelain', '--untracked-files=no']);
+  if (!dirty.ok || dirty.stdout.trim()) return 'the worktree has uncommitted changes';
+  // Commits of its own (an autosave, an earlier turn) would be dropped by the reset.
+  // The fewest against either base: the branch forked from one of them, and the other may be stale.
+  let ahead: number | undefined;
+  for (const base of baseBranch ? [baseBranch, `${remote ?? 'origin'}/${baseBranch}`] : []) {
+    const count = await git(['rev-list', '--count', `${base}..HEAD`]);
+    if (count.ok) ahead = Math.min(ahead ?? Infinity, Number(count.stdout.trim()));
+  }
+  if (ahead === undefined) return 'cannot tell whether the task branch has commits of its own (no base branch)';
+  if (ahead > 0) return `the task branch has ${ahead} commit(s) of its own`;
+  // Untracked or ignored files (seeded config, build output) at a path the PR tracks would be overwritten.
+  const others = await git(['ls-files', '-z', '--others', '--directory']);
+  const tracked = await git(['ls-tree', '-r', '-z', '--name-only', head], 60_000);
+  if (!others.ok || !tracked.ok) return 'could not list the files the checkout would overwrite';
+  const local = others.stdout.split('\0').filter(Boolean);
+  // `--directory` collapses an untracked folder (node_modules, a seeded .claude/): only a file that exists there clashes.
+  const clash = tracked.stdout.split('\0').filter((path) => local.some((o) => (o.endsWith('/') ? path.startsWith(o) && exists(join(cwd, path)) : path === o)));
+  if (clash.length) return `untracked or ignored files would be overwritten (${clash.slice(0, 3).join(', ')}${clash.length > 3 ? ', …' : ''})`;
+  return undefined;
 }
 
 export async function checkoutPr(input: PrCheckoutInput): Promise<PrCheckoutResult> {
@@ -78,7 +108,6 @@ export async function checkoutPr(input: PrCheckoutInput): Promise<PrCheckoutResu
   const { cwd, pr } = input;
   const git = (args: string[], timeoutMs = 30_000) => run('git', args, { cwd, timeoutMs });
   const problems: string[] = [];
-  const lastLine = (s: string) => s.trim().split('\n').pop()?.slice(0, 300) ?? '';
   let head = '';
   let checkedOut = false;
 
@@ -99,23 +128,28 @@ export async function checkoutPr(input: PrCheckoutInput): Promise<PrCheckoutResu
   const ghHead = typeof meta.headRefOid === 'string' ? meta.headRefOid : '';
 
   const remote = await prRemote(cwd, pr, run);
-  if (!remote) problems.push('this repository has no git remote to fetch the PR from');
+  if (input.offline) problems.push('CEZ_DRY_RUN=1: the PR was not fetched or checked out');
   else {
-    const fetched = await git(['fetch', '--no-tags', '--quiet', remote, `+refs/pull/${pr.number}/head`], 120_000);
-    if (!fetched.ok) problems.push(`git fetch ${remote} pull/${pr.number}/head failed — ${lastLine(fetched.stderr)}`);
+    // No remote of this repository is the PR's (a fork's PR, a clone of something else): fetch its URL.
+    const source = remote ?? `https://${pr.host}/${pr.owner}/${pr.repo}.git`;
+    const fetched = await git(['fetch', '--no-tags', '--quiet', source, `+refs/pull/${pr.number}/head`], 120_000);
+    if (!fetched.ok) problems.push(`git fetch ${source} pull/${pr.number}/head failed — ${lastLine(fetched.stderr)}`);
     else head = (await git(['rev-parse', '--verify', 'FETCH_HEAD^{commit}'])).stdout.trim();
-  }
-  // The fallback remote may hold a different repository's PR with the same number.
-  if (head && ghHead && head !== ghHead) {
-    problems.push(`${remote} pull/${pr.number}/head is ${head.slice(0, 12)}, not the PR's head ${ghHead.slice(0, 12)}; nothing was checked out`);
-    head = '';
+    // Belt and braces: what was fetched must be the head GitHub reports for this PR.
+    if (head && ghHead && head !== ghHead) {
+      problems.push(`${source} pull/${pr.number}/head is ${head.slice(0, 12)}, not the PR's head ${ghHead.slice(0, 12)}; nothing was checked out`);
+      head = '';
+    }
   }
   if (head) meta.headRefOid = head;
 
   if (head && !input.ownWorktree) problems.push('the task runs in the repository working tree, which is never reset; the PR head was fetched but not checked out');
   else if (head) {
-    const dirty = await git(['status', '--porcelain', '--untracked-files=no']);
-    if (!dirty.ok || dirty.stdout.trim()) problems.push('the worktree has uncommitted changes; the PR head was not checked out');
+    const current = (await git(['rev-parse', 'HEAD'])).stdout.trim();
+    // A resumed walk finds its own earlier checkout.
+    const refusal = current === head ? undefined : await resetRefusal(git, cwd, head, input.baseBranch, remote);
+    if (refusal) problems.push(`${refusal}; the PR head was not checked out`);
+    else if (current === head) checkedOut = true;
     else {
       // The task branch moves to the PR head, so the Changes tab and the reviewers see the PR itself.
       const reset = await git(['reset', '--hard', '--quiet', head]);

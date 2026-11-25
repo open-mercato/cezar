@@ -103,6 +103,9 @@ export interface AgentRunSpec {
   /** Claude only: the run's own artifacts directory, writable even when `allowedTools` grants no
    *  Write — a read-only reviewer still saves its findings there. `enforceReadOnly` wins. */
   artifactsWriteDir?: string;
+  /** Claude only: `cwd` holds untrusted content (a checked-out PR). Its project and local
+   *  settings, hooks and CLAUDE.md are not loaded (`--setting-sources user`). */
+  untrustedWorktree?: boolean;
   /** Must not change the repository or publish anything, enforced by each backend's own control
    *  (AGENT_PROTOCOL.md); a runner that cannot has to fail the run. Set only for a manager's
    *  read-only work: an Ask task's read-only tools are not this (spec 2026-10-31-managers). */

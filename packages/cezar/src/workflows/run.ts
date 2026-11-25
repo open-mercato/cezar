@@ -73,7 +73,7 @@ import {
   sanitizeAttachmentName,
   storedAttachmentExtension,
 } from '@open-mercato/cezar-contract';
-import type { AgentEvent, AgentRunResult, ContentBlock } from '../core/agent-runner.ts';
+import type { AgentEvent, AgentRunResult, AgentRunSpec, ContentBlock } from '../core/agent-runner.ts';
 import { discoverSkills, parseFrontmatter, type Skill } from '../skills.ts';
 import { automationsReachable } from '../automations/builtin-skill.ts';
 import { AUTOMATIONS_PROMPT } from '../automations/prompts.ts';
@@ -792,6 +792,17 @@ interface ActiveRun {
     startedTurns: Set<string>;
     recordedTurns: Set<string>;
   };
+}
+
+/**
+ * Launch fields for a step of a read-only workflow (review-pr): its own artifacts directory is
+ * writable on Claude, and a workflow that checks a PR out reads an untrusted tree, so Claude
+ * ignores that tree's settings, hooks, CLAUDE.md and MCP config. An Ask task gets neither.
+ */
+export function readOnlyWorkflowSpec(def: WorkflowDef | undefined, state: Pick<ActiveRun, 'readOnly'>, artifacts: string): Pick<AgentRunSpec, 'artifactsWriteDir' | 'untrustedWorktree' | 'noMcpServers'> {
+  if (!def || state.readOnly || !isReadOnlyWorkflow(def)) return {};
+  const untrusted = !!def.graph?.nodes.some((n) => n.type === 'github.pr-checkout');
+  return { artifactsWriteDir: artifacts, ...(untrusted ? { untrustedWorktree: true, noMcpServers: true } : {}) };
 }
 
 function savedContinuationTools(run: RunRecord | undefined, owner?: StepState): StepToolPolicy | undefined {
@@ -6931,7 +6942,7 @@ export class RunManager {
           cwd: state.cwd,
           ...continuationTools,
           ...(state.bypassPermissions && !continuationTools.enforceReadOnly ? { bypassPermissions: true } : {}),
-          artifactsWriteDir: artifactsDir(this.dataDir, runId),
+          ...readOnlyWorkflowSpec(record?.workflowDef, state, artifactsDir(this.dataDir, runId)),
           additionalDirectories: agentDirectories(
             join(this.dataDir, 'runs'),
             state.grantedAttachmentLibrary,
@@ -9538,7 +9549,7 @@ export class RunManager {
           ...stepTools,
           ...(state.bypassPermissions && !stepTools.enforceReadOnly ? { bypassPermissions: true } : {}),
           // The handoff file lives outside the worktree — grant access.
-          artifactsWriteDir: artifactsDir(this.dataDir, runId),
+          ...readOnlyWorkflowSpec(stepDef, state, artifactsDir(this.dataDir, runId)),
           additionalDirectories: agentDirectories(
             join(this.dataDir, 'runs'),
             state.grantedAttachmentLibrary,
