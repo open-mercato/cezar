@@ -29,6 +29,8 @@ keeps two settled-run pools (regular, automation), each sized from Settings.
 
 ## Progress
 
+PR: #2479
+
 > Convention: `- [ ]` pending, `- [x]` done. Append ` — <commit sha>` when a step lands. Do not rename step titles.
 
 ### Phase 1: Server
