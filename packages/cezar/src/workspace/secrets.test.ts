@@ -78,7 +78,7 @@ describe('SecretStore (spec 2026-10-10-project-secrets-vault-options)', () => {
     expect(await again.keyBackend()).toBe('keychain');
 
     // An established keychain becoming unavailable must not replace its data key.
-    await expect(store.set(workspace, 'OTHER', 'other-value')).rejects.toThrow('existing data key');
+    await expect(store.set(workspace, 'OTHER', 'other-value')).rejects.toThrow('Nothing was changed');
     await expect(stat(join(home, 'secrets', '.key'))).rejects.toMatchObject({ code: 'ENOENT' });
     expect((await again.read(workspace)).values.LLM_KEY?.value).toBe('sk-workspace-key-0123456789');
   });
@@ -334,4 +334,41 @@ it.each(['malformed', 'unsafe-mode'])('degrades %s keychain markers on reads but
     await writeFile(marker, identity); await chmod(marker, 0o600);
     expect((await new SecretStore({ CEZ_HOME: home }, { keychain }).read(scope)).values.KEY?.value).toBe('synthetic-secret');
   } finally { await rm(home, { recursive: true, force: true }); }
+});
+
+describe('a keychain that cannot be reached is not a lost key', () => {
+  async function sealedUnderKeychain() {
+    const home = await mkdtemp(join(tmpdir(), 'unreachable-keychain-'));
+    const ring = fakeKeychain();
+    await new SecretStore({ CEZ_HOME: home }, { keychain: async () => ring }).set({ kind: 'workspace' }, 'KEEP', 'synthetic-kept-value');
+    const before = await readFile(join(home, 'secrets', 'workspace.json'), 'utf8');
+    return { home, before };
+  }
+
+  it('names the missing native module on save and read, and overwrites nothing', async () => {
+    const { home, before } = await sealedUnderKeychain();
+    try {
+      const reason = 'the native keychain module @napi-rs/keyring failed to load';
+      const store = new SecretStore({ CEZ_HOME: home }, { keychain: async () => null, keychainReason: async () => reason });
+      const saved = store.set({ kind: 'workspace' }, 'NEW', 'synthetic-new-value');
+      await expect(saved).rejects.toThrow(reason);
+      await expect(saved).rejects.not.toThrow(/restore|remove what/);
+      expect((await store.read({ kind: 'workspace' })).skipped).toContain(reason);
+      expect(await store.keyBackend()).toBe('keychain');
+      expect(await readFile(join(home, 'secrets', 'workspace.json'), 'utf8')).toBe(before);
+      await expect(stat(join(home, 'secrets', '.key'))).rejects.toMatchObject({ code: 'ENOENT' });
+    } finally { await rm(home, { recursive: true, force: true }); }
+  });
+
+  it('says locked or refused when the keychain get throws, and overwrites nothing', async () => {
+    const { home, before } = await sealedUnderKeychain();
+    try {
+      let writes = 0;
+      const locked: DataKeyring = { get: async () => { throw new Error('locked'); }, set: async () => { writes++; } };
+      const store = new SecretStore({ CEZ_HOME: home }, { keychain: async () => locked });
+      await expect(store.set({ kind: 'workspace' }, 'NEW', 'synthetic-new-value')).rejects.toThrow(/locked or refused access/);
+      expect(writes).toBe(0);
+      expect(await readFile(join(home, 'secrets', 'workspace.json'), 'utf8')).toBe(before);
+    } finally { await rm(home, { recursive: true, force: true }); }
+  });
 });

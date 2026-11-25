@@ -17,7 +17,7 @@ import {
 } from '@open-mercato/cezar-contract';
 import { assertCezarHomeWriteIsSandboxed, cezarHomeDir } from '../paths.ts';
 import { PROJECT_ID_RE } from './config.ts';
-import { osKeychain, KEYCHAIN_ACCOUNT, type DataKeyring } from './secret-keyring.ts';
+import { keychainStatus, KEYCHAIN_ACCOUNT, type DataKeyring } from './secret-keyring.ts';
 
 /**
  * Project and workspace secrets (spec `2026-10-10-project-secrets-vault-options`).
@@ -109,15 +109,22 @@ export interface ResolvedSecrets {
 export interface SecretStoreOptions {
   /** The OS keychain to keep the data key in. Default: `osKeychain()`; tests inject a fake. */
   keychain?: (account: string) => Promise<DataKeyring | null>;
+  /** Why the keychain is absent when `keychain` returns `null`. Default: `keychainStatus()`'s reason. */
+  keychainReason?: () => Promise<string>;
 }
 
 export class SecretStore {
   private readonly directory: string;
   private readonly keychainFactory: (account: string) => Promise<DataKeyring | null>;
+  private readonly keychainReason: () => Promise<string>;
 
   constructor(env: NodeJS.ProcessEnv = process.env, options: SecretStoreOptions = {}) {
     this.directory = join(cezarHomeDir(env), 'secrets');
-    this.keychainFactory = options.keychain ?? (account => osKeychain(env, account));
+    this.keychainFactory = options.keychain ?? (async account => (await keychainStatus(env, account)).keyring);
+    this.keychainReason = options.keychainReason ?? (async () => {
+      const status = await keychainStatus(env);
+      return 'reason' in status ? status.reason : 'no OS keychain service is available';
+    });
   }
 
   /** Absent marker means the legacy shared item, which is read-only from now on.
@@ -144,15 +151,19 @@ export class SecretStore {
       const found = await this.loadDataKey();
       if (found) return found.backend;
       const keychain = await this.keychain();
-      if (!keychain) return 'file';
+      if (!keychain) return await this.markedBackend() === 'keychain' ? 'keychain' : 'file';
       await keychain.get();
       return 'keychain';
     } catch {
       // Reporting the configured backend must not prevent opening Settings when
       // key metadata is unreadable. This is not a decryption/availability claim.
-      const backend = await this.readFile(join(this.directory, '.backend')).catch(() => '');
-      return backend.trim() === 'keychain' ? 'keychain' : 'file';
+      return this.markedBackend();
     }
+  }
+
+  private async markedBackend(): Promise<SecretKeyBackend> {
+    const backend = await this.readFile(join(this.directory, '.backend')).catch(() => '');
+    return backend.trim() === 'keychain' ? 'keychain' : 'file';
   }
 
   /** Internal encryption for managed records. Never exposed by the generic secret editor. */
@@ -409,7 +420,7 @@ export class SecretStore {
       return 'the OS keychain holding the data key is locked or unreachable — unlock it and retry';
     }
     if (!keychain && backend === 'keychain') {
-      return 'the data key is kept in the OS keychain, which is unavailable here (CEZ_SECRETS_KEYCHAIN=0 or no keychain service) — run where the keychain is available';
+      return `the data key is kept in the OS keychain, which is unavailable here: ${await this.keychainReason()} — run where the keychain is available`;
     }
     return 'the data key is gone — the OS keychain item or ~/.cezar/secrets/.key was removed; restore it, or unset these secrets and store them again';
   }
@@ -438,6 +449,14 @@ export class SecretStore {
       });
       blockers.push(...managed.filter(name => name.endsWith('.vault')).map(name => `tracker-connections/${name}`));
       if (blockers.length) {
+        const marked = entries.includes('.backend') && await this.markedBackend() === 'keychain';
+        const keychain = marked ? await this.keychain() : null;
+        if (marked && !keychain) {
+          throw new SecretsError(`The data key is kept in the OS keychain, which is unavailable here: ${await this.keychainReason()}. Nothing was changed; the key is not lost.`);
+        }
+        if (keychain && await keychain.get().then(() => false, () => true)) {
+          throw new SecretsError('The OS keychain holding the data key is locked or refused access. Nothing was changed; unlock it or allow access, then retry.');
+        }
         throw new SecretsError(`The existing data key is unavailable; unlock or restore it, or remove what is still encrypted under it (${blockers.join(', ')}: cezar secrets list/unset, cez tracker-connections list/remove; a secrets file of a project no longer registered can be deleted) before saving.`);
       }
       const keychain = await this.keychain();
@@ -447,7 +466,7 @@ export class SecretStore {
         && !(keychain && await keychain.get().then(() => true, () => false))) {
         throw new SecretsError(keychain
           ? 'The keychain-held data key is unreachable; unlock the OS keychain, then retry.'
-          : 'The data key is kept in the OS keychain, which is unavailable here (CEZ_SECRETS_KEYCHAIN=0 or no keychain service). Run where the keychain is available; if that key is lost, delete ~/.cezar/secrets/.backend, then save again.');
+          : `The data key is kept in the OS keychain, which is unavailable here: ${await this.keychainReason()}. Run where the keychain is available; if that key is lost, delete ~/.cezar/secrets/.backend, then save again.`);
       }
       const key = randomBytes(32);
       let initialized: { key: Buffer; backend: SecretKeyBackend } | undefined;

@@ -25,18 +25,32 @@ export interface DataKeyring {
 export const KEYCHAIN_SERVICE = 'cezar';
 export const KEYCHAIN_ACCOUNT = 'secrets-data-key';
 
+export type KeychainStatus = { keyring: DataKeyring } | { keyring: null; reason: string };
+
+/** The platform package `@napi-rs/keyring` needs on this machine, for the "missing package" message. */
+export function keyringPlatformPackage(platform = process.platform, arch = process.arch): string {
+  if (platform === 'darwin') return `@napi-rs/keyring-darwin-${arch}`;
+  if (platform === 'win32') return `@napi-rs/keyring-win32-${arch}-msvc`;
+  const report = process.report?.getReport() as { header?: { glibcVersionRuntime?: string } } | undefined;
+  return `@napi-rs/keyring-${platform}-${arch}-${report?.header?.glibcVersionRuntime ? 'gnu' : 'musl'}`;
+}
+
 /**
- * The OS keychain, or `null` when it is not to be used here: `CEZ_SECRETS_KEYCHAIN=0`, a test
- * run (a vitest worker must never write a developer's real keychain — tests inject a fake), a
- * missing native package, or no usable store on this machine.
+ * The OS keychain with the reason it is absent: disabled by `CEZ_SECRETS_KEYCHAIN=0` or a test
+ * run, the native module failing to load (a node_modules installed on another OS), or no usable
+ * store on this machine. A locked or refused store is not decided here: it throws from `get`.
  */
-export async function osKeychain(env: NodeJS.ProcessEnv = process.env, account = KEYCHAIN_ACCOUNT): Promise<DataKeyring | null> {
-  if (env.CEZ_SECRETS_KEYCHAIN === '0' || env.VITEST || process.env.VITEST) return null;
+export async function keychainStatus(env: NodeJS.ProcessEnv = process.env, account = KEYCHAIN_ACCOUNT): Promise<KeychainStatus> {
+  if (env.CEZ_SECRETS_KEYCHAIN === '0') return { keyring: null, reason: 'the keychain is disabled by CEZ_SECRETS_KEYCHAIN=0' };
+  if (env.VITEST || process.env.VITEST) return { keyring: null, reason: 'the keychain is not used in a test run' };
   let keyring: typeof import('@napi-rs/keyring');
   try {
     keyring = await import('@napi-rs/keyring');
   } catch {
-    return null;
+    return {
+      keyring: null,
+      reason: `the native keychain module @napi-rs/keyring failed to load, most likely because ${keyringPlatformPackage()} is not installed for ${process.platform}-${process.arch} (node_modules installed on another OS?) — run npm install on this machine`,
+    };
   }
   let entry: InstanceType<typeof keyring.AsyncEntry>;
   try {
@@ -44,18 +58,25 @@ export async function osKeychain(env: NodeJS.ProcessEnv = process.env, account =
     // instead of silently picking the non-persistent kernel keyring.
     entry = new keyring.AsyncEntry(KEYCHAIN_SERVICE, account, { linux: { store: 'secret-service' } });
   } catch {
-    return null;
+    return { keyring: null, reason: 'this machine has no usable OS keychain service' };
   }
   return {
-    async get() {
-      const stored = await entry.getPassword();
-      if (stored === null) return null;
-      const key = Buffer.from(stored, 'base64');
-      // Anything but a 32-byte key is not ours: treat it as absent rather than decrypt with it.
-      return key.length === 32 ? key : null;
-    },
-    async set(key) {
-      await entry.setPassword(key.toString('base64'));
+    keyring: {
+      async get() {
+        const stored = await entry.getPassword();
+        if (stored === null) return null;
+        const key = Buffer.from(stored, 'base64');
+        // Anything but a 32-byte key is not ours: treat it as absent rather than decrypt with it.
+        return key.length === 32 ? key : null;
+      },
+      async set(key) {
+        await entry.setPassword(key.toString('base64'));
+      },
     },
   };
+}
+
+/** The OS keychain, or `null` when it is not to be used here; `keychainStatus` says why. */
+export async function osKeychain(env: NodeJS.ProcessEnv = process.env, account = KEYCHAIN_ACCOUNT): Promise<DataKeyring | null> {
+  return (await keychainStatus(env, account)).keyring;
 }

@@ -399,6 +399,13 @@ optional packages, or `CEZ_SECRETS_KEYCHAIN=0` — the data key is a `0600` file
 beside the secrets, which makes the store exactly as strong as a private
 plaintext file; Settings and `cezar secrets list` say which one is in use. A
 secret is written for one machine: a reset keychain or a deleted key file
+When the key is in the keychain but the server cannot reach it, Settings and the
+save error name the reason instead of advising a restore: `@napi-rs/keyring`
+failed to load (the platform package, such as `@napi-rs/keyring-darwin-arm64`, is
+missing because `node_modules` was installed on another OS — run `npm install` on
+the machine that runs the server), no keychain service, or a locked or refused
+store (on macOS, unlock the login keychain and choose Always Allow for `node`
+when it asks). Nothing is overwritten in any of these cases.
 leaves the store unreadable (reported on the run as a note) until the secrets
 are stored again.
 
