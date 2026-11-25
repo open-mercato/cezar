@@ -3,8 +3,10 @@ import { resolve } from 'node:path';
 import { SECRET_AUDIENCES, SECRET_BINDING_SCHEMES, secretBindingSchema, secretNameIssue, type SecretAudience, type SecretBinding } from '@open-mercato/cezar-contract';
 import { SecretStore, SecretsError, type SecretScopeRef } from './secrets.ts';
 import { loadWorkspaceConfig } from './config.ts';
+import { runImportSandcastle } from './secrets-import.ts';
 
-const USAGE = 'Usage: cezar secrets list | set <NAME> [--audience checks,cezar] | unset <NAME> | resolve <NAME>...   [--workspace] [--repo <dir>]\n' +
+const USAGE = 'Usage: cezar secrets list | set <NAME> [--audience checks,cezar] | unset <NAME> | resolve <NAME>... | import-sandcastle   [--workspace] [--repo <dir>]\n' +
+  '  import-sandcastle copies run-pi-in-colima\'s ~/.sandcastle-secrets into proxy secrets (dry run unless --apply); run it with a bad flag for its usage.\n' +
   '  set --audience proxy --host a.example,b.example --header Authorization --scheme bearer|basic|raw [--sentinel ENV_NAME]\n' +
   '  resolve prints `NAME value` for named proxy secrets to a pipe, only with an OS-keychain key (or --allow-file-key).\n' +
   '  set reads the value from stdin (pipe it in, or type it at the hidden prompt) — never from argv.\n' +
@@ -34,6 +36,13 @@ export async function runSecretsCommand(
   env: NodeJS.ProcessEnv = process.env,
   store: SecretStore = new SecretStore(env),
 ): Promise<number> {
+  if (args[0] === 'import-sandcastle') {
+    return runImportSandcastle(args.slice(1), io, env, store, async (workspace, repo) => {
+      if (workspace) return { kind: 'workspace' };
+      const project = await registeredProject(repo ?? process.cwd());
+      return project ? { kind: 'project', projectId: project.id, root: project.root } : undefined;
+    });
+  }
   const parsed = parseArgs(args);
   if (!parsed) {
     io.error(USAGE);
