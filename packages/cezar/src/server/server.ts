@@ -439,7 +439,7 @@ import { onPrClosed, reportPrClosed } from './forge/pr-closed.ts';
 import { fetchGithub, fetchGithubChecks, fetchGithubComments, fetchGithubPrDiff, fetchGithubRefStatus, forgetRefStatus, readCachedPrEnds, readCachedRefStatuses, refNumberFromUrl, searchGithubItems, GithubPrNotFoundError, GH_CHECKS_MAX, GH_SEARCH_MAX, GH_REF_STATUS_MAX, forgetGithubListCache } from './github.ts';
 import { ensureLaunchKey } from './launch-key.ts';
 import { openInTerminal } from './open-in-terminal.ts';
-import { agentSetupRoutes } from './agent-setup-routes.ts';
+import { AGENT_SETUP_OWNER, agentSetupRoutes } from './agent-setup-routes.ts';
 import { countActiveRuns } from './agent-active-runs.ts';
 import { probeInstallEnv, type InstallEnv } from './agent-setup.ts';
 import {
@@ -1719,6 +1719,12 @@ export function createApp(deps: ServerDeps) {
   const detectedUrls = new DetectedUrls();
   const terminalSessions = deps.terminalSessions ?? new TerminalSessions(undefined, detectedUrls);
   deps.onDispose?.(() => terminalSessions.closeAll());
+  // An agent install or sign-in still running is work a restart would cut off.
+  const offSetupGate = deps.semaphore?.restartGate.addSource(() => [{
+    kind: 'setup',
+    names: terminalSessions.listFor(AGENT_SETUP_OWNER).filter((session) => session.exitCode === null).map((session) => session.label),
+  }]);
+  if (offSetupGate) deps.onDispose?.(offSetupGate);
   /** Stop a task's shells, their process trees and the addresses they printed (archive + delete). */
   const stopTaskProcesses = (runId: string) => {
     for (const session of terminalSessions.listFor(runId)) terminalSessions.kill(session.id);
@@ -1768,7 +1774,15 @@ export function createApp(deps: ServerDeps) {
   // Workspace-level, shared by the managers family and the automation report link.
   const managerStore = new ManagerStore();
   // A manager task's fallback follows the manager's list as it is now (deleted or Automatic = withdrawn).
-  setManagerTaskAccountsLookup((managerId) => managerStore.get(managerId)?.taskAgents ?? null);
+  setManagerTaskAccountsLookup((managerId) => {
+    const manager = managerStore.get(managerId);
+    if (!manager?.taskAgents) return null;
+    return {
+      agents: manager.taskAgents,
+      ...(manager.taskLimitSwitch ? { limitSwitch: manager.taskLimitSwitch } : {}),
+      ...(manager.taskBusyAt !== undefined ? { maxRunning: manager.taskBusyAt } : {}),
+    };
+  });
   const contextProjects = async () => {
     const selector = capabilities().singleProject
       ? { projectId: await resolveBootProject() }
@@ -9280,6 +9294,7 @@ export function createApp(deps: ServerDeps) {
     },
     // The same holds the queue enforces (spec 2026-08-03-auto-resume-after-usage-limit).
     accountLimit: (runner, agentProfile, repoRoot) => managerAccountLimit(() => deps.semaphore?.accountHolds(), runner, agentProfile, repoRoot),
+    accountLoad: () => deps.semaphore?.accountLoad() ?? new Map(),
     request: (path, init) => {
       if (!managerLoopback.request) throw new Error('the cockpit is not ready');
       const headers = new Headers(init?.headers);
@@ -9301,8 +9316,21 @@ export function createApp(deps: ServerDeps) {
     // An inactive manager's cards leave the Questions count (spec 2026-11-19-manager-deactivate).
     onActivityChange: () => refreshQuestions(),
     ...(deps.managerRunnerFor ? { runnerFor: deps.managerRunnerFor } : {}),
+    ...(deps.semaphore ? { restartGate: deps.semaphore.restartGate } : {}),
+    onAccountHoldsChanged: () => {
+      deps.semaphore?.notifyAccountHoldsChanged();
+      void deps.semaphore?.release();
+    },
   });
   deps.onManagerEngine?.(managerEngine);
+  // A manager's agent chain shares the usage limits it hits with the task queues (spec 2026-11-25-manager-agent-chain).
+  const unregisterManagerHolds = deps.semaphore?.register({
+    busySlots: () => 0,
+    pump: () => undefined,
+    oldestQueuedAt: () => null,
+    accountHolds: () => managerEngine.accountHolds(),
+  });
+  if (unregisterManagerHolds) deps.onDispose?.(unregisterManagerHolds);
   // A signed-in-again account resumes what was blocked on it (spec 2026-11-18-inline-account-reconnect).
   deps.onDispose?.(registerAuthResume({
     contexts,

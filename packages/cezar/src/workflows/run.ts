@@ -43,7 +43,7 @@ import { diskFullAgentErrorText } from '../disk-space.ts';
 import { accountStateHint, classifyAgentFailure, isOauthRefreshRace, transientRetryCap, transientRetryDelayMs } from '../core/agent-failure-class.ts';
 import { reportAgentError } from '../runs/agent-error-telemetry.ts';
 import { createRunner } from '../core/runner-factory.ts';
-import { REASONING_EFFORT_UNSUPPORTED_ERROR, runnerSupportsReasoningEffort, type RunnerId } from '../core/agent-runner.ts';
+import { isRunnerId, REASONING_EFFORT_UNSUPPORTED_ERROR, runnerSupportsReasoningEffort, type RunnerId } from '../core/agent-runner.ts';
 import { modelConflictsWithRunner, pinSurvivesRunnerSwitch } from '../core/model-presets.ts';
 import { AGENT_MODELS_LOCKED_ERROR, agentModelsLocked } from '../core/agent-model-policy.ts';
 import {
@@ -166,6 +166,7 @@ import { DEFAULT_AGENT_ACCOUNT_ID, defaultAgentAccountStore, loadAgentAccounts, 
 import {
   candidateKey,
   eligibleFallbackCandidates,
+  currentManagerRouting,
   fallbackConsentCurrent,
   managerFallbackPolicy,
   getAgentFallbackPolicySync,
@@ -274,6 +275,7 @@ const IDLE_CLOSED_LIFECYCLE = 'run closed after inactivity — nobody replied; C
 /** Tail of an agent node's last turn kept as `{{nodes.<id>.summary}}`. */
 const NODE_SUMMARY_CAP = 4_000;
 import { freshContinuationContext } from './continuation-context.ts';
+import { laterInstructions, resumeWithContext } from './resume-prompt.ts';
 
 const CHECK_OUTPUT_CAP = 20_000;
 
@@ -1144,7 +1146,7 @@ export interface StartRunInput {
   inheritedFallbackPolicy?: RunRecord['fallbackPolicy'];
   /** The manager's agent choice: a timeline note, and its other allowed accounts for a usage limit
    *  (absent: the project's own fallback policy). */
-  managerAgent?: { note: string; fallback?: Array<{ provider: RunnerId; profileId: string; model?: string }> };
+  managerAgent?: { note: string; routed?: true; fallback?: Array<{ provider: RunnerId; profileId: string; model?: string }> };
   /** Composer opt-out (#worktree-toggle): `false` runs the task in the repo
    *  working tree instead of an isolated worktree. Undefined/`true` keeps the
    *  default per-task worktree. Ignored for variants (they always isolate). */
@@ -1497,6 +1499,15 @@ const RESTART_CONTINUATION_PROMPT =
   'The cezar process restarted while you were working on this task. Read the handoff file (CEZ_HANDOFF_FILE) to recover context, then continue the task from where you left off.';
 const SWITCH_AGENT_PROMPT =
   'Continue this task on the newly selected agent. Use the handoff, conversation and existing worktree to pick up the work. If a user decision was pending, wait for their answer.';
+/** Openings cezar sends on its own; recorded like the user's messages, but not instructions. */
+const CEZAR_OPENINGS = [
+  RESTART_CONTINUATION_PROMPT,
+  SWITCH_AGENT_PROMPT,
+  AUTO_RESUME_PROMPT,
+  TRANSIENT_RETRY_PROMPT,
+  AUTH_RECONNECTED_PROMPT,
+  'Sent automatically by cezar',
+];
 
 interface PendingContinuation {
   stepId: string;
@@ -1765,8 +1776,10 @@ export class RunManager {
       oldestQueuedAt: () => this.oldestQueuedAt(),
       newestPromotionAt: () => this.newestPromotionAt(),
       accountHolds: () => this.accountHolds(),
+      accountLoad: () => this.accountLoad(),
       refreshQueueReasons: () => this.refreshQueueReasons(),
       activeRuns: () => this.store.listRuns().filter((r) => RESTART_SENSITIVE.has(r.status) && !isIdleParked(r)).length,
+      restartBlockers: () => this.restartBlockers(),
     });
     this.lifecycle = new WorktreeLifecycleCoordinator(repoRoot, store, {
       semaphore: this.semaphore,
@@ -2193,7 +2206,7 @@ export class RunManager {
       // An allowed-accounts list never falls back outside itself, so `[]` means no fallback at all.
       fallbackPolicy: input.startedByManager && input.inheritedFallbackPolicy?.source === 'manager' ? input.inheritedFallbackPolicy
         : input.startedByManager && input.managerAgent?.fallback
-        ? managerFallbackPolicy(input.managerAgent.fallback, input.startedByManager.id)
+        ? managerFallbackPolicy(input.managerAgent.fallback, input.startedByManager.id, input.managerAgent.routed === true)
         : ((policy) => (policy.enabled ? policy : undefined))(getAgentFallbackPolicySync(this.repoRoot)),
       // The global inbox is the ceiling on the per-run flag (#471). Enforced here rather than
       // at the HTTP route because `cezar run`, the inbox's own "▶ Run" and variants all reach
@@ -2352,6 +2365,34 @@ export class RunManager {
     const watchers = this.monitoring.size - spawnParked;
     const exemptMonitoring = Math.min(watchers, this.semaphore.maxMonitoringSessions());
     return this.active.size + this.starting.size - ordinaryWaiting - exemptMonitoring - spawnParked;
+  }
+
+  /**
+   * Runs a restart would cut off mid-work, by title. Unlike `busySlots`, a run monitoring its CI
+   * or its children counts — it is still working — and so does every queued run the pending
+   * restart does not hold. A run waiting on the user does not: boot resumes it as it was.
+   */
+  private restartBlockers(): string[] {
+    const names: string[] = [];
+    for (const run of this.store.listRuns()) {
+      const working = run.status === 'running' || this.starting.has(run.id)
+        || (run.status === 'queued' && !this.heldForRestart(run));
+      if (working) names.push(run.title || run.task.slice(0, 60));
+    }
+    return names;
+  }
+
+  /**
+   * A pending "restart when idle" holds new tasks in the queue, so the wait can end. Not held:
+   * continuations (a resume of work already under way — restart recovery, a usage-limit resume, the
+   * user's own Continue), a dispatched child (its parent is waiting on it, and the parent blocks the
+   * restart until it reports), and a run the user told to Start now.
+   */
+  private heldForRestart(run: RunRecord): boolean {
+    return this.semaphore.restartGate.holding
+      && !this.pendingContinuations.has(run.id)
+      && !run.dispatch?.parentRunId
+      && !this.startNowRequested.has(run.id);
   }
 
   /**
@@ -2532,12 +2573,18 @@ export class RunManager {
         this.forceNextPump = false;
         if (this.queue.length > 0 && !forced) await this.refreshAccounts();
         const holds = this.queue.length > 0 && !forced ? this.semaphore.accountHolds() : NO_HOLDS;
+        // A manager's routed task moves to an account that opened up, or waits while all are busy
+        // (spec 2026-11-25-manager-task-routing). Before `anyHold`: a move can lift its hold.
+        const routedBusy = forced ? new Set<string>() : this.routeQueuedManagerTasks(holds);
         const anyHold = holds.deadline.size > 0 || holds.inFlight.size > 0;
         // Only pay for the config read when something is actually held: a queued record may name
         // no runner, and then the account it would use is the configured default.
         const defaultRunner = anyHold ? (await loadConfig(this.repoRoot)).defaultRunner : undefined;
         const startable = (id: string): boolean => {
           const queued = this.store.getRun(id);
+          if (queued && this.heldForRestart(queued)) return false;
+          // Busy is a soft limit: "Start now" overrides it as it overrides `maxParallel`.
+          if (routedBusy.has(id) && !this.startNowRequested.has(id)) return false;
           if (queued && anyHold && accountHeldFor(queued, holds, defaultRunner ?? 'claude', this.askingAccounts(), this.pendingJobs.get(id)?.workflow)) return false;
           // "Start now" goes over `maxParallel` on purpose, but a non-git root still runs one at a time.
           if (this.startNowRequested.has(id)) return repo !== null || this.busySlots() < 1;
@@ -4165,7 +4212,7 @@ export class RunManager {
       ...defaultAgentAccountStore(),
       accounts: policy.candidates.map((c) => ({ id: c.profileId, provider: c.provider, configDir: '', label: '', addedAt: '' })),
     } as AgentAccountStore;
-    return eligibleFallbackCandidates(policy, attempted, held, accounts, this.repoRoot).eligible.length > 0;
+    return eligibleFallbackCandidates(policy, attempted, held, accounts, this.repoRoot, failed.backend ?? run.runner ?? 'claude').eligible.length > 0;
   }
 
   private finishFallbackAdmission(runId: string, message: string): void {
@@ -4221,7 +4268,7 @@ export class RunManager {
     if (startFailure === undefined && snapshot.source !== 'manager' && snapshot.candidates.some((candidate) => candidateKey(candidate) === fromKey)) {
       this.store.appendEvent(runId, { type: 'note', message: `fallback skipped ${label(fromKey)} — it is the agent that just reached its limit` });
     }
-    const { eligible, skipped } = eligibleFallbackCandidates(snapshot, attempted, this.semaphore.accountHolds().deadline, accounts, this.repoRoot);
+    const { eligible, skipped } = eligibleFallbackCandidates(snapshot, attempted, this.semaphore.accountHolds().deadline, accounts, this.repoRoot, fromKey.split(':')[0], this.semaphore.accountLoad());
     for (const skip of skipped) {
       attempted.add(candidateKey(skip.candidate));
       this.store.appendEvent(runId, { type: 'note', message: `fallback skipped ${label(candidateKey(skip.candidate))} — ${skip.reason}` });
@@ -4604,6 +4651,8 @@ export class RunManager {
       await this.reviveQueuedRun(run, 'queue watchdog');
     }
     if (this.queue.length === 0) return;
+    // A pending restart holds the queue on purpose; cancelling it pumps every manager.
+    if (this.semaphore.restartGate.holding) return;
     if (this.busySlots() > 0 || this.starting.size > 0) return;
     if (this.semaphore.busy() > 0) return;
     // A future deadline is a real reason to sit still: that timer will fire and pump.
@@ -4686,9 +4735,93 @@ export class RunManager {
       const until = holds.deadlines?.get(key);
       const reason: RunRecord['queueWaitReason'] = run.status !== 'queued' ? undefined
         : until !== undefined ? { kind: 'usage-reset', until: new Date(until).toISOString(), timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone }
-        : holds.inFlight.has(key) && !resumeInFlight(run) ? { kind: 'account-resume' } : undefined;
+        : holds.inFlight.has(key) && !resumeInFlight(run) ? { kind: 'account-resume' }
+        // The pump owns this one: it alone knows the task waits for a free account.
+        : run.queueWaitReason?.kind === 'account-busy' ? run.queueWaitReason : undefined;
       if (JSON.stringify(reason) !== JSON.stringify(run.queueWaitReason)) this.store.updateRun(run.id, { queueWaitReason: reason });
     }
+  }
+
+  /**
+   * Where a manager-routed queued task should start now (spec 2026-11-25-manager-task-routing):
+   * its own account while that is open; else the open Main with the fewest running, else the first
+   * open Backup; with none open, `busy` (wait) unless it is out of limits (the hold already waits).
+   * Only tasks the manager's roles placed: an explicit `--account` never moves.
+   */
+  private managerRoute(run: RunRecord, holds: AccountHolds, load: Map<string, number>):
+    { kind: 'stay'; key?: string } | { kind: 'busy' } | { kind: 'move'; runner: RunnerId; agentProfile: string; key: string } {
+    const policy = run.fallbackPolicy as AgentFallbackPolicy | undefined;
+    if (run.status !== 'queued' || policy?.source !== 'manager' || !policy.routed) return { kind: 'stay' };
+    const routing = currentManagerRouting(policy);
+    if (!routing || !routing.agents.some((agent) => agent.role !== undefined)) return { kind: 'stay' };
+    const accounts = this.askingAccounts();
+    const keyOf = (runner: RunnerId, agentProfile: string | undefined) => runAccountKey({ runner, agentProfile }, runner, accounts);
+    const busy = (key: string) => routing.maxRunning !== undefined && (load.get(key) ?? 0) >= routing.maxRunning;
+    const open = (key: string) => !holds.deadline.has(key) && !busy(key);
+    const ownRunner = run.runner ?? 'claude';
+    const own = keyOf(ownRunner, run.agentProfile);
+    if (open(own)) return { kind: 'stay', key: own };
+    // A pinned model or effort belongs to its runner: such a task moves only between its accounts.
+    const pinned = run.model !== undefined || run.reasoningEffort !== undefined;
+    const entries = routing.agents
+      .filter((agent): agent is typeof agent & { runner: RunnerId } => isRunnerId(agent.runner) && (!pinned || agent.runner === ownRunner))
+      .map((agent, index) => ({ ...agent, index, key: keyOf(agent.runner, agent.agentProfile) }));
+    const main = entries.filter((entry) => entry.role !== 'backup' && open(entry.key))
+      .sort((a, b) => (load.get(a.key) ?? 0) - (load.get(b.key) ?? 0) || a.index - b.index)[0];
+    const target = main ?? entries.find((entry) => entry.role === 'backup' && open(entry.key));
+    if (target && target.key !== own) return { kind: 'move', runner: target.runner, agentProfile: target.key.slice(target.runner.length + 1), key: target.key };
+    return holds.deadline.has(own) ? { kind: 'stay' } : { kind: 'busy' };
+  }
+
+  /** Moves routed queued tasks that can start elsewhere; answers the ones that must wait for a free account. */
+  private routeQueuedManagerTasks(holds: AccountHolds): Set<string> {
+    const waiting = new Set<string>();
+    if (!this.queue.some((id) => (this.store.getRun(id)?.fallbackPolicy as AgentFallbackPolicy | undefined)?.routed)) return waiting;
+    const load = this.semaphore.accountLoad();
+    for (const id of [...this.queue]) {
+      const run = this.store.getRun(id);
+      if (!run) continue;
+      // Only before it ever starts: a Continue, auto-resume or requeue resumes where it ran, under
+      // the manager's mid-task setting instead.
+      const fresh = this.pendingJobs.has(id) && !this.pendingContinuations.has(id) && !run.steps.some((step) => step.startedAt);
+      const route = fresh ? this.managerRoute(run, holds, load) : { kind: 'stay' as const };
+      if (route.kind === 'busy') {
+        waiting.add(id);
+        if (run.queueWaitReason?.kind !== 'account-busy') this.store.updateRun(id, { queueWaitReason: { kind: 'account-busy' } });
+        continue;
+      }
+      if (route.kind !== 'move') {
+        // Counted as starting there, so a burst in one sweep does not pile onto one account.
+        if (route.key) load.set(route.key, (load.get(route.key) ?? 0) + 1);
+        if (run.queueWaitReason?.kind === 'account-busy') this.store.updateRun(id, { queueWaitReason: undefined });
+        continue;
+      }
+      const from = runAccountKey(run, run.runner ?? 'claude', this.askingAccounts());
+      const moved = this.switchAgent(id, { runner: route.runner, agentProfile: route.agentProfile, changedBy: 'manager routing' });
+      if ('error' in moved) {
+        // Its own account is busy and the move was refused: wait rather than start there anyway.
+        waiting.add(id);
+        if (run.queueWaitReason?.kind !== 'account-busy') this.store.updateRun(id, { queueWaitReason: { kind: 'account-busy' } });
+        continue;
+      }
+      // Counted as started there, so the next queued task spreads to another account.
+      load.set(route.key, (load.get(route.key) ?? 0) + 1);
+      this.store.updateRun(id, { queueWaitReason: undefined });
+      this.store.appendEvent(id, { type: 'note', message: `Routed to ${route.key.replace(':', ' · ')}: ${from.replace(':', ' · ')} ${holds.deadline.has(from) ? 'is out of usage limits' : 'is busy'}` });
+    }
+    return waiting;
+  }
+
+  /** Tasks running or starting per account: queued, waiting and parked ones use nothing. A
+   *  dequeued run is `starting` until `execute` writes `running`, and a burst must see it. */
+  accountLoad(): Map<string, number> {
+    const load = new Map<string, number>();
+    for (const run of this.store.listRuns()) {
+      if (!this.starting.has(run.id) && (run.status !== 'running' || isIdleParked(run))) continue;
+      const key = runAccountKey(run, run.runner ?? 'claude', this.accountStore && { store: this.accountStore, repoRoot: this.repoRoot, holding: true });
+      load.set(key, (load.get(key) ?? 0) + 1);
+    }
+    return load;
   }
 
   accountHolds(now = Date.now()): AccountHolds {
@@ -5285,13 +5418,9 @@ export class RunManager {
       return { ...continuation, persistedImages: [], persistedAttachments: [] };
     }
     const stack = run.queuedMessages ?? [];
-    const amendedTask = [run.task, ...stack.map((message) => message.text)]
-      .map((part) => part.trim())
-      .filter((part) => part.length > 0)
-      .join('\n\n');
-    const prompt = amendedTask
-      ? `${continuation.prompt}\n\nCurrent task and queued updates:\n\n${amendedTask}`
-      : continuation.prompt;
+    // The newest instructions win, labelled by age — not the first objective as "current".
+    const later = laterInstructions(this.store.readEvents(runId), run.task, CEZAR_OPENINGS);
+    const prompt = resumeWithContext(continuation.prompt, run.task, later, stack.map((message) => message.text));
     const persisted = this.readPersistedAttachments(
       runId,
       stack.flatMap((message) => message.images ?? []),

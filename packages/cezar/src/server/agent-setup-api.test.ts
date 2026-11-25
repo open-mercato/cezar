@@ -12,6 +12,7 @@ import { apiRequest } from './loopback-request.testkit.ts';
 import { createApp, type ServerDeps } from './server.ts';
 import type { PtyBinding, PtyProcess, PtySpawnOptions } from './terminal/pty-module.ts';
 import { TerminalSessions } from './terminal/sessions.ts';
+import { WorkspaceSemaphore } from '../workspace/semaphore.ts';
 
 /** `/api/v1/providers/setup` (spec 2026-10-26-first-run-onboarding, "Set up an agent here"), over
  *  a fake PTY and a fake status: what is pinned is which command runs, where, and who may ask. */
@@ -148,6 +149,16 @@ describe('/api/v1/providers/setup', () => {
     ptys[0]!.finish(0);
     expect((await post(app, { provider: 'copilot', action: 'install' })).status).toBe(201);
     expect(spawns).toHaveLength(2);
+  });
+
+  it('a running install blocks "restart when idle" until it exits', async () => {
+    const semaphore = new WorkspaceSemaphore();
+    const app = build({ semaphore });
+    expect(semaphore.restartGate.idle()).toBe(true);
+    await post(app, { provider: 'codex', action: 'install' });
+    expect(semaphore.restartGate.blockers()).toEqual([{ kind: 'setup', count: 1, names: ['codex install'] }]);
+    ptys[0]!.finish(0);
+    expect(semaphore.restartGate.idle()).toBe(true);
   });
 
   it('reattaches after a reload: the state names the session and its exit code', async () => {
