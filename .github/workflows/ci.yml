@@ -171,9 +171,9 @@ jobs:
 
       # A cold Windows PowerShell probe is intentionally fail-closed and expensive. Serial files
       # avoid a worker-start stampede while the first successful probe populates its process cache.
-      - name: Run the webhook suite on Windows
+      - name: Run webhook and worktree safety tests on Windows
         if: runner.os == 'Windows'
-        run: npm test -- packages/cezar/src/webhooks --no-file-parallelism --testTimeout=180000 --hookTimeout=30000
+        run: npm test -- packages/cezar/src/webhooks packages/cezar/src/git-worktree-remove.test.ts --no-file-parallelism --testTimeout=180000 --hookTimeout=30000
 
       - name: Verify test home isolation
         run: npm test -- packages/cezar/src/workspace/home-safety --no-file-parallelism
