@@ -4,6 +4,7 @@ import { open, realpath } from 'node:fs/promises';
 import { isAbsolute, posix, relative, resolve, sep, win32 } from 'node:path';
 import { z } from 'zod';
 import type { AgentRunSpec } from './agent-runner.ts';
+import { hasSignallablePid } from './child-kill-guard.ts';
 import { codexBashArgv, codexGithubOperands, type CodexRestrictedPolicy } from './codex-restricted-policy.ts';
 
 const path = z.string().min(1).max(4_096);
@@ -61,7 +62,8 @@ const killGroup = (group: number): void => { try { process.kill(group, 'SIGKILL'
 const TASKKILL_TIMEOUT_MS = 5_000;
 // Deduplicate async taskkill calls to narrow the pid reuse window.
 const pendingKills = new WeakSet<ChildProcess>();
-const hardKill = (child: ChildProcess): void => { try { child.kill('SIGKILL'); } catch { /* already gone */ } };
+// A stage that never started has no pid; its kill() would signal our own group (child-kill-guard.ts).
+const hardKill = (child: ChildProcess): void => { if (!hasSignallablePid(child)) return; try { child.kill('SIGKILL'); } catch { /* already gone */ } };
 
 /**
  * Kills a stage and what it forked. Never throws: it runs from timers, listeners and `finish()`.

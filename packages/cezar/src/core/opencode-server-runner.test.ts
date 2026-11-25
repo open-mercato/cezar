@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { PassThrough } from 'node:stream';
 import { fileURLToPath } from 'node:url';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AgentEvent } from './agent-runner.ts';
 import type { UiEvent } from './ui-events.ts';
 import { parseUsageLimit } from './usage-limit.ts';
@@ -39,6 +39,19 @@ vi.mock('node:child_process', async (importOriginal) => {
       spawnHook.override ? spawnHook.override(...args) : actual.spawn(...args),
   };
 });
+
+// The fake children below carry made-up pids, and the runner signals a server's process GROUP for
+// real (`process.kill(-pid)`): any unrelated group with that id on the machine was SIGKILLed.
+const FAKE_PIDS = new Set([5150, 5151]);
+const realKill = process.kill.bind(process);
+let killGuard: { mockRestore(): void } | undefined;
+beforeEach(() => {
+  killGuard = vi.spyOn(process, 'kill').mockImplementation(((pid: number, signal?: string | number) => {
+    if (FAKE_PIDS.has(Math.abs(pid))) throw Object.assign(new Error('kill ESRCH'), { code: 'ESRCH' });
+    return realKill(pid, signal);
+  }) as typeof process.kill);
+});
+afterEach(() => killGuard?.mockRestore());
 
 const httpHook = vi.hoisted(() => ({ override: null as null | (() => Promise<never>) }));
 
