@@ -811,6 +811,7 @@ export function workflowLaunchSpec(
   return {
     readOnlyWorkflow,
     ...(readOnlyWorkflow && !state.readOnly ? { artifactsWriteDir: dirs.artifacts } : {}),
+    // The folder itself, never its `tree/`: Claude reads `.claude/skills` from an added folder's root.
     prDirs: checksOutPr ? [dirs.prCheckout] : [],
   };
 }
@@ -6954,6 +6955,7 @@ export class RunManager {
           ...continuationTools,
           ...(state.bypassPermissions && !continuationTools.enforceReadOnly && !continueLaunch.readOnlyWorkflow ? { bypassPermissions: true } : {}),
           ...(continueLaunch.artifactsWriteDir ? { artifactsWriteDir: continueLaunch.artifactsWriteDir } : {}),
+          ...(continueLaunch.readOnlyWorkflow ? { strictPermissions: true } : {}),
           additionalDirectories: [
             ...agentDirectories(
               join(this.dataDir, 'runs'),
@@ -8445,7 +8447,10 @@ export class RunManager {
       case 'github.pr-checkout': {
         const run = record();
         const pr = parsePrUrl(task);
+        // Rendered into prompts: a placeholder reads better than an empty path.
+        const NONE = '(none)';
         if (!run || !pr) {
+          outputs.set(node.id, { number: NONE, head: NONE, tree: NONE, diff: NONE, meta: NONE, checkedOut: 'no — the task names no GitHub pull request URL' });
           note('no GitHub pull request URL in the task to check out', 'danger');
           return 'failed';
         }
@@ -8457,8 +8462,16 @@ export class RunManager {
           pr,
           ...(run.baseBranch ? { baseBranch: run.baseBranch } : {}),
           offline: process.env.CEZ_DRY_RUN === '1',
+          refPrefix: `refs/cezar/pr-checkouts/${runId}`,
         });
-        outputs.set(node.id, { number: pr.number, head: res.head, tree: res.tree, diff: res.diffPath, meta: res.metaPath, checkedOut: res.checkedOut ? 'yes' : 'no' });
+        outputs.set(node.id, {
+          number: pr.number,
+          head: res.head || NONE,
+          tree: res.tree || NONE,
+          diff: res.diffPath || NONE,
+          meta: res.metaPath,
+          checkedOut: res.checkedOut ? 'yes' : 'no',
+        });
         for (const problem of res.problems) note(problem, 'danger');
         if (res.checkedOut) note(`checked out PR #${pr.number} at ${res.head.slice(0, 12)} into ${res.tree}`);
         return res.checkedOut ? 'done' : 'failed';
@@ -9565,6 +9578,7 @@ export class RunManager {
           ...stepTools,
           ...(state.bypassPermissions && !stepTools.enforceReadOnly && !stepLaunch.readOnlyWorkflow ? { bypassPermissions: true } : {}),
           ...(stepLaunch.artifactsWriteDir ? { artifactsWriteDir: stepLaunch.artifactsWriteDir } : {}),
+          ...(stepLaunch.readOnlyWorkflow ? { strictPermissions: true } : {}),
           // The handoff file lives outside the worktree — grant access.
           additionalDirectories: [
             ...agentDirectories(

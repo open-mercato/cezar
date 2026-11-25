@@ -1,9 +1,9 @@
-import { existsSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import type { RunRecord, RunStatus } from './store.ts';
-import { isReclaimable, selectReclaimableWorktrees, reclaimWorktrees } from './retention.ts';
+import { isReclaimable, selectReclaimableWorktrees, reclaimIdlePrCheckouts, reclaimWorktrees } from './retention.ts';
 
 /**
  * The pure retention selector (#483). It only reads a handful of fields, so the
@@ -134,6 +134,41 @@ describe('reclamation lifecycle gate', () => {
       expect(existsSync(join(root, 'newest'))).toBe(true);
       expect(update).toHaveBeenCalledTimes(1);
       expect(records.find(record => record.id === 'gated')?.worktreeReclaimedAt).toBeUndefined();
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+});
+
+describe('reclaimIdlePrCheckouts', () => {
+  it('reclaims tree/ for idle runs older than days (in-place included) while keeping diff/meta and protecting active or recent runs', () => {
+    const root = mkdtempSync(join(tmpdir(), 'cez-pr-retention-'));
+    try {
+      const nowMs = Date.parse('2026-07-15T00:00:00Z');
+      const old = '2026-07-01T00:00:00Z';
+      const fresh = '2026-07-12T00:00:00Z';
+      const records: RunRecord[] = [
+        run({ id: 'idle-done', status: 'done', finishedAt: old }),
+        run({ id: 'idle-inplace', status: 'review', worktreePath: null, finishedAt: old }),
+        run({ id: 'recent', status: 'done', finishedAt: fresh }),
+        run({ id: 'pinned', status: 'done', finishedAt: old, pinned: true }),
+        run({ id: 'live', status: 'waiting', finishedAt: old }),
+        run({ id: 'running', status: 'running', createdAt: old }),
+        Object.assign(run({ id: 'waking', status: 'waiting', finishedAt: old }), { monitoringWakeAt: '2026-07-15T01:00:00Z' }),
+      ];
+      for (const r of records) {
+        mkdirSync(join(root, r.id, 'tree'), { recursive: true });
+        writeFileSync(join(root, r.id, 'tree', 'a.txt'), 'pr\n');
+        writeFileSync(join(root, r.id, 'pr-7.diff'), 'diff\n');
+      }
+      const store = { listRuns: () => records, updateRun: vi.fn(), prCheckoutDir: (id: string) => join(root, id) };
+      expect(reclaimIdlePrCheckouts(store, 0, { isLive: (id) => id === 'live', nowMs: () => nowMs })).toEqual([]);
+      expect(reclaimIdlePrCheckouts(store, 7, { isLive: (id) => id === 'live', nowMs: () => nowMs })).toEqual(['idle-done', 'idle-inplace']);
+      for (const id of ['idle-done', 'idle-inplace']) {
+        expect(existsSync(join(root, id, 'tree'))).toBe(false);
+        expect(existsSync(join(root, id, 'pr-7.diff'))).toBe(true);
+      }
+      for (const id of ['recent', 'pinned', 'live', 'running', 'waking']) {
+        expect(existsSync(join(root, id, 'tree'))).toBe(true);
+      }
     } finally { rmSync(root, { recursive: true, force: true }); }
   });
 });

@@ -28,7 +28,6 @@ export const DATA_GITIGNORE_ENTRIES = [
   'attachments/',
   'worktrees/',
   'artifacts/', // agent-published pages per run (spec 2026-10-22-html-artifacts-and-impact)
-  'pr-checkouts/', // a review's exported PR head, diff and metadata (workflows/pr-checkout.ts)
   'lifecycle/', // independent durable worktree preparation/cleanup history
   'config.lifecycle.lock/',
   'config.json.*.tmp',

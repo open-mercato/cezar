@@ -7,6 +7,8 @@ import { checkoutPr, parsePrUrl, prRemote, type Exec } from './pr-checkout.ts';
 
 const GIT_ID = ['-c', 'user.name=test', '-c', 'user.email=test@local'];
 const PR = { host: 'github.com', owner: 'o', repo: 'r', number: 7, url: 'https://github.com/o/r/pull/7' };
+const REF_PREFIX = 'refs/cezar/pr-checkouts/test-run';
+const NO_SLEEP = async () => {};
 
 describe('parsePrUrl', () => {
   it('reads the first GitHub PR URL in the task text', () => {
@@ -50,25 +52,78 @@ describe('checkoutPr, scripted', () => {
 
   it('under CEZ_DRY_RUN runs no gh and no git fetch, and exports nothing', async () => {
     const { exec, calls } = scripted([['git config', { ok: true, stdout: '' }]]);
-    const res = await checkoutPr({ cwd: '/w', dir: join(dir, 'pr'), pr: PR, offline: true, exec });
-    expect(calls.filter((c) => c.startsWith('gh ') || c.startsWith('git fetch') || c.includes('checkout-index'))).toEqual([]);
+    const res = await checkoutPr({ cwd: '/w', dir: join(dir, 'pr'), pr: PR, refPrefix: REF_PREFIX, offline: true, exec });
+    expect(calls.filter((c) => c.startsWith('gh ') || c.startsWith('git fetch') || c.includes('checkout-index') || c.includes('update-ref'))).toEqual([]);
     expect(res.checkedOut).toBe(false);
     expect(res.problems).toContain('CEZ_DRY_RUN=1: the PR was not fetched or checked out');
     expect(JSON.parse(readFileSync(res.metaPath, 'utf8'))).toMatchObject({ number: 7, checkedOut: false, headVerified: false });
   });
 
-  it('records an unreadable FETCH_HEAD and stops', async () => {
+  it('records an unreadable fetched ref, cleans it up, and stops', async () => {
     const { exec, calls } = scripted([
       ['git config', { ok: true, stdout: '' }],
       ['gh pr view', { ok: true, stdout: '{}' }],
       ['gh pr diff', { ok: true, stdout: 'D' }],
       ['git fetch', { ok: true }],
-      ['git rev-parse --verify FETCH_HEAD', { ok: false, stderr: 'fatal: bad object' }],
+      [`git rev-parse --verify ${REF_PREFIX}/head^{commit}`, { ok: false, stderr: 'fatal: bad object' }],
+      [`git update-ref -d ${REF_PREFIX}/head`, { ok: true }],
     ]);
-    const res = await checkoutPr({ cwd: '/w', dir: join(dir, 'pr'), pr: PR, exec });
+    const res = await checkoutPr({ cwd: '/w', dir: join(dir, 'pr'), pr: PR, refPrefix: REF_PREFIX, exec });
     expect(res.problems).toContain('fetched pull/7/head but could not read it — fatal: bad object');
     expect(res.checkedOut).toBe(false);
     expect(calls.some((c) => c.includes('read-tree'))).toBe(false);
+    expect(calls).toContain(`git update-ref -d ${REF_PREFIX}/head`);
+  });
+
+  it('re-fetches once after a short wait when refs/pull/N/head lags headRefOid', async () => {
+    const waits: number[] = [];
+    let headReads = 0;
+    const exec: Exec = async (file, args) => {
+      const line = [file, ...args].join(' ');
+      if (line.startsWith('git config')) return { ok: true, stdout: '', stderr: '' };
+      if (line.startsWith('gh pr view')) return { ok: true, stdout: JSON.stringify({ number: 7, headRefOid: 'newsha' }), stderr: '' };
+      if (line.startsWith('gh pr diff')) return { ok: true, stdout: 'DIFF', stderr: '' };
+      if (line.startsWith('git fetch')) return { ok: true, stdout: '', stderr: '' };
+      if (line === `git rev-parse --verify ${REF_PREFIX}/head^{commit}`) {
+        headReads += 1;
+        return { ok: true, stdout: headReads === 1 ? 'oldsha\n' : 'newsha\n', stderr: '' };
+      }
+      if (line.startsWith('git -c core.symlinks=false read-tree newsha')) return { ok: true, stdout: '', stderr: '' };
+      if (line.startsWith('git -c core.symlinks=false checkout-index')) return { ok: true, stdout: '', stderr: '' };
+      if (line.startsWith('git update-ref -d')) return { ok: true, stdout: '', stderr: '' };
+      return { ok: false, stdout: '', stderr: `unscripted: ${line}` };
+    };
+    const res = await checkoutPr({
+      cwd: '/w', dir: join(dir, 'pr'), pr: PR, refPrefix: REF_PREFIX, exec,
+      sleep: async (ms) => { waits.push(ms); },
+    });
+    expect(waits).toEqual([3_000]);
+    expect(headReads).toBe(2);
+    expect(res.checkedOut).toBe(true);
+    expect(res.head).toBe('newsha');
+    expect(res.problems).toEqual([]);
+    expect(JSON.parse(readFileSync(res.metaPath, 'utf8'))).toMatchObject({ headRefOid: 'newsha', headVerified: true, checkedOut: true });
+  });
+
+  it('gives up after one re-fetch when refs/pull/N/head still disagrees with headRefOid', async () => {
+    const waits: number[] = [];
+    const { exec, calls } = scripted([
+      ['git config', { ok: true, stdout: '' }],
+      ['gh pr view', { ok: true, stdout: JSON.stringify({ number: 7, headRefOid: 'newsha' }) }],
+      ['gh pr diff', { ok: true, stdout: 'DIFF' }],
+      ['git fetch', { ok: true }],
+      [`git rev-parse --verify ${REF_PREFIX}/head^{commit}`, { ok: true, stdout: 'oldsha\n' }],
+      ['git update-ref -d', { ok: true }],
+    ]);
+    const res = await checkoutPr({
+      cwd: '/w', dir: join(dir, 'pr'), pr: PR, refPrefix: REF_PREFIX, exec,
+      sleep: async (ms) => { waits.push(ms); },
+    });
+    expect(waits).toEqual([3_000]);
+    expect(calls.filter((c) => c.startsWith('git fetch'))).toHaveLength(2);
+    expect(res.checkedOut).toBe(false);
+    expect(res.head).toBe('');
+    expect(res.problems.join('\n')).toContain("not the PR's head");
   });
 
   it('names an Enterprise repo with its host, merges metadata, and falls back to the local baseRefName', async () => {
@@ -76,17 +131,20 @@ describe('checkoutPr, scripted', () => {
       ['git config', { ok: true, stdout: '' }],
       ['gh pr view', { ok: true, stdout: JSON.stringify({ title: 'Fix it', baseRefName: 'develop', number: 3 }) }],
       ['gh pr diff', { ok: false, stderr: 'warning\nHTTP 502: bad gateway' }],
-      ['git fetch --no-tags --quiet https://ghe.example.com/o/r.git +refs/heads/develop', { ok: false, stderr: 'fatal: offline' }],
+      [`git fetch --no-tags --quiet --no-write-fetch-head https://ghe.example.com/o/r.git +refs/heads/develop:${REF_PREFIX}/base`, { ok: false, stderr: 'fatal: offline' }],
       ['git fetch', { ok: true }],
-      ['git rev-parse --verify FETCH_HEAD', { ok: true, stdout: 'abc123\n' }],
+      [`git rev-parse --verify ${REF_PREFIX}/head^{commit}`, { ok: true, stdout: 'abc123\n' }],
       ['git -c core.symlinks=false read-tree abc123', { ok: true }],
       ['git -c core.symlinks=false checkout-index', { ok: true }],
       ['git rev-parse --verify develop^{commit}', { ok: true, stdout: 'd1\n' }],
       ['git merge-base develop abc123', { ok: true, stdout: 'base1\n' }],
       ['git diff --no-color --no-ext-diff base1 abc123', { ok: true, stdout: 'DIFF' }],
+      ['git update-ref -d', { ok: true }],
     ]);
-    const res = await checkoutPr({ cwd: '/w', dir: join(dir, 'pr'), pr: GHE, baseBranch: 'main', exec });
-    expect(calls).toContain('git fetch --no-tags --quiet https://ghe.example.com/o/r.git +refs/pull/3/head');
+    const res = await checkoutPr({ cwd: '/w', dir: join(dir, 'pr'), pr: GHE, baseBranch: 'main', refPrefix: REF_PREFIX, exec });
+    expect(calls).toContain(`git fetch --no-tags --quiet --no-write-fetch-head https://ghe.example.com/o/r.git +refs/pull/3/head:${REF_PREFIX}/head`);
+    expect(calls).toContain(`git update-ref -d ${REF_PREFIX}/head`);
+    expect(calls).toContain(`git update-ref -d ${REF_PREFIX}/base`);
     expect(calls.find((c) => c.startsWith('gh pr view'))).toContain('--repo ghe.example.com/o/r');
     expect(calls.find((c) => c.startsWith('gh pr diff'))).toContain('--repo ghe.example.com/o/r');
     expect(res.problems).toEqual([
@@ -106,8 +164,9 @@ describe('checkoutPr, scripted', () => {
       ['gh pr view', { ok: false, stderr: 'GraphQL: Could not resolve to a PullRequest' }],
       ['gh pr diff', { ok: true, stdout: 'GH DIFF' }],
       ['git fetch', { ok: false, stderr: 'fatal: could not read from remote' }],
+      ['git update-ref -d', { ok: true }],
     ]);
-    const res = await checkoutPr({ cwd: '/w', dir: join(dir, 'pr'), pr: { ...PR, number: 9 }, exec });
+    const res = await checkoutPr({ cwd: '/w', dir: join(dir, 'pr'), pr: { ...PR, number: 9 }, refPrefix: REF_PREFIX, exec });
     expect(res.problems).toEqual([
       'gh pr view failed — GraphQL: Could not resolve to a PullRequest',
       'git fetch https://github.com/o/r.git pull/9/head failed — fatal: could not read from remote',
@@ -177,19 +236,24 @@ describe('checkoutPr', { timeout: 30_000 }, () => {
     const prHead = git(work, 'ls-remote', origin, 'refs/pull/7/head').split('\t')[0]!;
     writeFileSync(join(work, '.git', 'info', 'exclude'), 'seeded.env\n');
     writeFileSync(join(work, 'seeded.env'), 'SECRET=local\n');
+    // User's own FETCH_HEAD must never be overwritten.
+    const fetchHeadPath = join(work, '.git', 'FETCH_HEAD');
+    writeFileSync(fetchHeadPath, `${baseSha}\t\tbranch 'main' of origin\n`);
 
-    const res = await checkoutPr({ cwd: work, dir, copyTo: artifacts, pr: PR, baseBranch: 'main', exec: withGh(prHead) });
+    const res = await checkoutPr({ cwd: work, dir, copyTo: artifacts, pr: PR, baseBranch: 'main', refPrefix: REF_PREFIX, exec: withGh(prHead), sleep: NO_SLEEP });
     expect(res.problems).toEqual([]);
     expect(res.checkedOut).toBe(true);
     expect(res.tree).toBe(join(dir, 'tree'));
     expect(readFileSync(join(res.tree, 'a.txt'), 'utf8')).toBe('one\ntwo from the PR\n');
     expect(readFileSync(join(res.tree, 'seeded.env'), 'utf8')).toBe('from the PR\n');
-    // The task: same branch, same commit, same files, index untouched.
+    // The task: same branch, same commit, same files, index, FETCH_HEAD and refs untouched.
     expect(git(work, 'rev-parse', '--abbrev-ref', 'HEAD')).toBe('cez/task');
     expect(git(work, 'rev-parse', 'HEAD')).toBe(own);
     expect(readFileSync(join(work, 'a.txt'), 'utf8')).toBe('one\n');
     expect(readFileSync(join(work, 'b.txt'), 'utf8')).toBe('uncommitted\n');
     expect(readFileSync(join(work, 'seeded.env'), 'utf8')).toBe('SECRET=local\n');
+    expect(readFileSync(fetchHeadPath, 'utf8')).toBe(`${baseSha}\t\tbranch 'main' of origin\n`);
+    expect(git(work, 'for-each-ref', 'refs/cezar/pr-checkouts/')).toBe('');
     expect(git(work, 'status', '--porcelain', '--untracked-files=no')).toBe('M b.txt');
     expect(JSON.parse(readFileSync(res.metaPath, 'utf8'))).toMatchObject({ headRefOid: prHead, headVerified: true, diffBase: 'github', checkedOut: true });
     // The user's copies sit in the artifacts; the agents read the ones beside the tree.
@@ -198,10 +262,10 @@ describe('checkoutPr', { timeout: 30_000 }, () => {
   });
 
   it('re-exports a newer head after a push to the PR, leaving nothing of the old one', async () => {
-    await checkoutPr({ cwd: work, dir, pr: PR, baseBranch: 'main', exec: withGh(prSha) });
+    await checkoutPr({ cwd: work, dir, pr: PR, baseBranch: 'main', refPrefix: REF_PREFIX, exec: withGh(prSha), sleep: NO_SLEEP });
     writeFileSync(join(dir, 'tree', 'stale.txt'), 'left over\n');
     const newer = pushPr({ 'a.txt': 'one\nthree, after review\n' });
-    const res = await checkoutPr({ cwd: work, dir, pr: PR, baseBranch: 'main', exec: withGh(newer) });
+    const res = await checkoutPr({ cwd: work, dir, pr: PR, baseBranch: 'main', refPrefix: REF_PREFIX, exec: withGh(newer), sleep: NO_SLEEP });
     expect(res.checkedOut).toBe(true);
     expect(res.head).toBe(newer);
     expect(readFileSync(join(res.tree, 'a.txt'), 'utf8')).toBe('one\nthree, after review\n');
@@ -214,21 +278,22 @@ describe('checkoutPr', { timeout: 30_000 }, () => {
     git(root, 'init', '-q', '--bare', '-b', 'main', other);
     git(work, 'push', '-q', other, `${baseSha}:refs/pull/7/head`);
     git(work, 'remote', 'set-url', 'origin', other);
-    const res = await checkoutPr({ cwd: work, dir, pr: PR, baseBranch: 'main', exec: withGh(prSha) });
+    const res = await checkoutPr({ cwd: work, dir, pr: PR, baseBranch: 'main', refPrefix: REF_PREFIX, exec: withGh(prSha), sleep: NO_SLEEP });
     expect(res.head).toBe(prSha);
     expect(res.checkedOut).toBe(true);
   });
 
   it("refuses a fetched head that is not the PR's head", async () => {
-    const res = await checkoutPr({ cwd: work, dir, pr: PR, baseBranch: 'main', exec: withGh(baseSha) });
+    const res = await checkoutPr({ cwd: work, dir, pr: PR, baseBranch: 'main', refPrefix: REF_PREFIX, exec: withGh(baseSha), sleep: NO_SLEEP });
     expect(res.checkedOut).toBe(false);
     expect(res.head).toBe('');
     expect(res.problems.join('\n')).toContain("not the PR's head");
     expect(existsSync(join(dir, 'tree'))).toBe(false);
+    expect(git(work, 'for-each-ref', 'refs/cezar/pr-checkouts/')).toBe('');
   });
 
   it('exports nothing when the PR ref cannot be fetched', async () => {
-    const res = await checkoutPr({ cwd: work, dir, pr: { ...PR, number: 8 }, baseBranch: 'main', exec: withGh() });
+    const res = await checkoutPr({ cwd: work, dir, pr: { ...PR, number: 8 }, baseBranch: 'main', refPrefix: REF_PREFIX, exec: withGh(), sleep: NO_SLEEP });
     expect(res.checkedOut).toBe(false);
     expect(res.problems.join('\n')).toContain('git fetch https://github.com/o/r.git pull/8/head failed');
     expect(JSON.parse(readFileSync(res.metaPath, 'utf8'))).toMatchObject({ number: 8, checkedOut: false });
@@ -242,12 +307,12 @@ describe('checkoutPr', { timeout: 30_000 }, () => {
     const head = git(work, 'rev-parse', 'HEAD');
     git(work, 'push', '-q', '-f', 'origin', 'HEAD:refs/pull/7/head');
     git(work, 'checkout', '-q', 'cez/task');
-    const res = await checkoutPr({ cwd: work, dir, pr: PR, baseBranch: 'main', exec: withGh(head) });
+    const res = await checkoutPr({ cwd: work, dir, pr: PR, baseBranch: 'main', refPrefix: REF_PREFIX, exec: withGh(head), sleep: NO_SLEEP });
     expect(lstatSync(join(res.tree, 'link')).isSymbolicLink()).toBe(false);
     expect(readFileSync(join(res.tree, 'link'), 'utf8')).toBe('/etc/passwd');
   });
 
-  it("without gh diffs against the PR's base fetched fresh, not a stale local one", async () => {
+  it("without gh diffs against the PR's base fetched fresh, not a stale local one, without touching FETCH_HEAD", async () => {
     // origin/main moved on and the PR forked from there; the local main is still behind.
     git(work, 'checkout', '-q', '--detach', baseSha);
     writeFileSync(join(work, 'upstream.txt'), 'landed upstream\n');
@@ -255,18 +320,22 @@ describe('checkoutPr', { timeout: 30_000 }, () => {
     git(work, 'push', '-q', 'origin', 'HEAD:main');
     const head = pushPr({ 'a.txt': 'one\nthe PR on a fresh base\n' }, git(work, 'rev-parse', 'HEAD'));
     expect(git(work, 'rev-parse', 'main')).toBe(baseSha);
-    const res = await checkoutPr({ cwd: work, dir, pr: PR, baseBranch: 'main', exec: withGh() });
+    const fetchHeadPath = join(work, '.git', 'FETCH_HEAD');
+    writeFileSync(fetchHeadPath, `${baseSha}\t\tbranch 'main' of origin\n`);
+    const res = await checkoutPr({ cwd: work, dir, pr: PR, baseBranch: 'main', refPrefix: REF_PREFIX, exec: withGh(), sleep: NO_SLEEP });
     expect(res.head).toBe(head);
     const diff = readFileSync(res.diffPath, 'utf8');
     expect(diff).toContain('+the PR on a fresh base');
     expect(diff).not.toContain('upstream.txt');
+    expect(readFileSync(fetchHeadPath, 'utf8')).toBe(`${baseSha}\t\tbranch 'main' of origin\n`);
+    expect(git(work, 'for-each-ref', 'refs/cezar/pr-checkouts/')).toBe('');
     expect(JSON.parse(readFileSync(res.metaPath, 'utf8'))).toMatchObject({ headVerified: false, diffBase: 'main fetched from https://github.com/o/r.git' });
     expect(res.problems).toEqual(['gh pr view failed — gh: offline', 'gh pr diff failed — gh: offline']);
   });
 
   it('says so when it can only diff against a local base', async () => {
     git(work, 'branch', '-q', 'trunk', baseSha);
-    const res = await checkoutPr({ cwd: work, dir, pr: PR, baseBranch: 'trunk', exec: withGh() });
+    const res = await checkoutPr({ cwd: work, dir, pr: PR, baseBranch: 'trunk', refPrefix: REF_PREFIX, exec: withGh(), sleep: NO_SLEEP });
     expect(readFileSync(res.diffPath, 'utf8')).toContain('+two from the PR');
     expect(res.problems).toContain('the diff is against the local trunk, which may be behind the PR\'s base');
     expect(JSON.parse(readFileSync(res.metaPath, 'utf8'))).toMatchObject({ diffBase: 'local trunk (may be stale)' });

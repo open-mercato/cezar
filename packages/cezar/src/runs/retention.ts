@@ -4,7 +4,8 @@
 // to reclaim (directory only — the `cez/<id8>` branch is kept, so the work stays
 // recoverable) and the thin I/O enforcer that performs the reclaim. The selector
 // is pure and unit-testable; the enforcer never throws (helper discipline).
-import { existsSync } from 'node:fs';
+import { existsSync, rmSync } from 'node:fs';
+import { join } from 'node:path';
 import { branchFor, createWorktree, localBranchExists, removeWorktree, worktreeHasUnpreservedWork } from '../git-worktree.ts';
 import { prunePrHeadRefs } from '../automations/pr-head.ts';
 import { holderOf, worktreeHolders, type WorktreeHolder } from '../worktree-in-use.ts';
@@ -54,6 +55,8 @@ export interface RetentionStore {
   updateRun(id: string, patch: { worktreeReclaimedAt?: string }): unknown;
   /** The run's event-log mtime (ms) — its truest "last activity". Optional for test fakes. */
   eventsMtimeMs?(id: string): number | undefined;
+  /** Where a run's PR review export lives (`prCheckoutDir`). Optional for test fakes. */
+  prCheckoutDir?(id: string): string;
 }
 
 /** The slice of the store the re-materializer needs. */
@@ -338,6 +341,34 @@ async function sweepPrHeadRefs(repoRoot: string, store: RetentionStore): Promise
   await prunePrHeadRefs(repoRoot, needed).catch(() => undefined);
 }
 
+/**
+ * A PR review's exported tree (`github.pr-checkout`, a full copy of the repository) on the idle
+ * worktree schedule: removed once its run has been idle `days` (0 = off). In-place runs too, which
+ * have no worktree. Its diff and metadata stay; a re-run exports the tree again. Never throws;
+ * returns the run ids whose tree was removed.
+ */
+export function reclaimIdlePrCheckouts(
+  store: RetentionStore,
+  days: number,
+  opts: { isLive: (runId: string) => boolean; activity?: (run: RunRecord) => string; nowMs?: () => number },
+): string[] {
+  if (!store.prCheckoutDir || !Number.isFinite(days) || days <= 0) return [];
+  const cutoff = (opts.nowMs ?? Date.now)() - days * 86_400_000;
+  const activity = opts.activity ?? ((run: RunRecord) => lastActivityAt(run));
+  const removed: string[] = [];
+  for (const run of store.listRuns()) {
+    if (!IDLE_STATUSES.has(run.status) || run.pinned || run.autoResumeAt || run.monitoringWakeAt || opts.isLive(run.id) || claimedForResume(run.id)) continue;
+    if (!(Date.parse(activity(run)) < cutoff)) continue;
+    const tree = join(store.prCheckoutDir(run.id), 'tree');
+    try {
+      if (!existsSync(tree)) continue;
+      rmSync(tree, { recursive: true, force: true });
+      removed.push(run.id);
+    } catch { /* retried on the next pass */ }
+  }
+  return removed;
+}
+
 /** A store's last-activity function: record stamps plus the event-log mtime when it has one. */
 export function storeActivity(store: RetentionStore): (run: RunRecord) => string {
   return (run) => lastActivityAt(run, store.eventsMtimeMs?.(run.id));
@@ -357,6 +388,7 @@ export async function enforceWorktreeRetention(
   const byCount = await reclaimWorktrees(repoRoot, store, keep, opts).catch(() => [] as string[]);
   const days = await resolveWorktreeIdleDays(repoRoot).catch(() => 0);
   const byAge = await reclaimIdleWorktrees(repoRoot, store, days, { activity: storeActivity(store), ...opts });
+  reclaimIdlePrCheckouts(store, days, { activity: storeActivity(store), isLive: opts.isLive });
   // An archived task's tree goes whatever its age (archive frees disk); this retries one that was
   // still in use when it was archived.
   const archived = store.listRuns().filter((run) => run.archived && isIdleReclaimable(run) && !opts.isLive(run.id));

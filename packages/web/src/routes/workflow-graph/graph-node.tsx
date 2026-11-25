@@ -194,7 +194,7 @@ export function nodeDetail(node: WorkflowGraphNode, loopCount?: number): string 
     case 'git.sync-base':
       return 'merge latest base'
     case 'github.pr-checkout':
-      return 'PR head → worktree'
+      return 'PR head → read-only folder'
     case 'github.pr-update':
       return [node.ready ? 'ready' : '', node.addLabels?.length ? `+${node.addLabels.join(', ')}` : '', node.reviewers?.length ? `@${node.reviewers.join(', @')}` : '']
         .filter(Boolean)

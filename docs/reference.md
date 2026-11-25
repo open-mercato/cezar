@@ -522,15 +522,19 @@ whose counter never resets within a run, so every run is finite.
   <node>.<field>`, `op`, `value` — numeric when both sides are numbers) and `branch`
   (`equals` / `matches` on the base branch).
 - **`github.pr-checkout`** fetches `pull/<n>/head` for the PR URL in the task — from the remote
-  that is the PR's repository, else from that repository's URL — and, when GitHub reports the PR's
-  head, only if the two agree. It exports that head into `.ai/cezar/pr-checkouts/<run>/tree`
-  (symlinks as plain files), never into the task's own tree: the task's branch, files, Changes
-  and merge/push/PR actions stay the base's, so it works in place too. Beside the tree it saves
-  `pr-<n>.json` and `pr-<n>.diff` (`gh pr diff`, else a diff against the PR's base fetched fresh;
-  `headVerified` and `diffBase` say how much GitHub confirmed); the run's artifacts get copies.
-  Every step of the workflow can read that folder; none runs in it, so the PR's own
-  `.claude`/`.pi` settings, hooks, `CLAUDE.md` and `.mcp.json` never load. It posts nothing,
-  leaves by `failed` when nothing was exported, and under `CEZ_DRY_RUN=1` fetches nothing.
+  that is the PR's repository, else from that repository's URL, into a private ref deleted
+  afterwards (never `FETCH_HEAD`) — and, when GitHub reports the PR's head, only if the two agree
+  (re-fetching once after a short wait if `refs/pull/<n>/head` lags a push). It exports that head
+  under `~/.cezar/pr-checkouts/<repo>/<run>/tree` (symlinks as plain files), outside every working
+  directory — in-place runs included — so the task's branch, files, Changes and merge/push/PR
+  actions stay the base's. Beside the tree it saves `pr-<n>.json` and `pr-<n>.diff` (`gh pr diff`,
+  else a diff against the PR's base fetched fresh; `headVerified` and `diffBase` say how much
+  GitHub confirmed); the run's artifacts get copies. Every step of the workflow can read that
+  folder (added at the folder root, never `tree/`), and none runs in it, so the PR's own
+  `.claude`/`.pi` settings, hooks, skills, `CLAUDE.md` and `.mcp.json` never load. The exported
+  `tree/` is reclaimed on the idle-worktree schedule (default 7 days; re-exported on re-run), and
+  the whole folder is deleted with the task. It posts nothing, leaves by `failed` when nothing was
+  exported, and under `CEZ_DRY_RUN=1` fetches nothing.
 - **`git.sync-base`** merges the freshest base into the task branch. On a conflict it
   leaves the merge in progress and leaves by `conflict` — wire that to an agent to
   resolve it (`{{nodes.<id>.conflicts}}` lists the files).

@@ -42,7 +42,7 @@ const exec: Exec = (file, args, { cwd, timeoutMs, env }) => new Promise((done) =
 });
 
 export interface PrCheckoutInput {
-  /** A checkout of the repository, for git: only objects and FETCH_HEAD change; its files never do. */
+  /** A checkout of the repository, for git: only objects and temporary private refs change; its files and FETCH_HEAD never do. */
   cwd: string;
   /** This run's PR folder (`prCheckoutDir`): emptied, then filled with `tree/`, the diff and metadata. */
   dir: string;
@@ -53,7 +53,12 @@ export interface PrCheckoutInput {
   baseBranch?: string;
   /** CEZ_DRY_RUN=1: no network — nothing is fetched or exported. */
   offline?: boolean;
+  /** Private refs the fetches land in (`refs/cezar/pr-checkouts/<run>`), deleted afterwards —
+   *  never FETCH_HEAD, which on an in-place run is the user's and another fetch may replace. */
+  refPrefix: string;
   exec?: Exec;
+  /** Waits before the one re-fetch of a head GitHub has not published yet; tests pass a no-op. */
+  sleep?: (ms: number) => Promise<void>;
 }
 
 export interface PrCheckoutResult {
@@ -113,56 +118,74 @@ export async function checkoutPr(input: PrCheckoutInput): Promise<PrCheckoutResu
   const remote = await prRemote(cwd, pr, run);
   // No remote of this repository is the PR's (a fork's PR, a clone of something else): fetch its URL.
   const source = remote ?? `https://${pr.host}/${pr.owner}/${pr.repo}.git`;
-  if (input.offline) problems.push('CEZ_DRY_RUN=1: the PR was not fetched or checked out');
-  else {
-    const fetched = await git(['fetch', '--no-tags', '--quiet', source, `+refs/pull/${pr.number}/head`], 120_000);
-    if (!fetched.ok) problems.push(`git fetch ${source} pull/${pr.number}/head failed — ${lastLine(fetched.stderr)}`);
+  const headRef = `${input.refPrefix}/head`;
+  const baseRef = `${input.refPrefix}/base`;
+  const touchedRefs = new Set<string>();
+  /** Fetch one ref into a private ref and resolve it there. */
+  const fetchInto = async (from: string, into: string): Promise<{ sha?: string; error?: string }> => {
+    touchedRefs.add(into);
+    const f = await git(['fetch', '--no-tags', '--quiet', '--no-write-fetch-head', source, `+${from}:${into}`], 120_000);
+    if (!f.ok) return { error: lastLine(f.stderr) };
+    const r = await git(['rev-parse', '--verify', `${into}^{commit}`]);
+    return r.ok && r.stdout.trim() ? { sha: r.stdout.trim() } : { error: `could not read it — ${lastLine(r.stderr)}` };
+  };
+  const pullRef = `refs/pull/${pr.number}/head`;
+  try {
+    if (input.offline) problems.push('CEZ_DRY_RUN=1: the PR was not fetched or checked out');
     else {
-      const resolved = await git(['rev-parse', '--verify', 'FETCH_HEAD^{commit}']);
-      if (resolved.ok && resolved.stdout.trim()) head = resolved.stdout.trim();
-      else problems.push(`fetched pull/${pr.number}/head but could not read it — ${lastLine(resolved.stderr)}`);
-    }
-    // What was fetched must be the head GitHub reports for this PR.
-    if (head && ghHead && head !== ghHead) {
-      problems.push(`${source} pull/${pr.number}/head is ${head.slice(0, 12)}, not the PR's head ${ghHead.slice(0, 12)}; nothing was checked out`);
-      head = '';
-    }
-  }
-
-  if (head) {
-    // A throwaway index, so neither the task's index nor its files are touched. Symlinks become
-    // plain files (a PR's link cannot point a reader elsewhere), and no LFS download runs.
-    const index = join(dir, 'index.tmp');
-    const env = { ...process.env, GIT_INDEX_FILE: index, GIT_LFS_SKIP_SMUDGE: '1' };
-    const read = await git(['-c', 'core.symlinks=false', 'read-tree', head], 60_000, env);
-    const out = read.ok ? await git(['-c', 'core.symlinks=false', 'checkout-index', '-a', '-f', `--prefix=${tree}/`], 300_000, env) : read;
-    rmSync(index, { force: true });
-    if (out.ok) checkedOut = true;
-    else problems.push(`could not export ${head.slice(0, 12)} — ${lastLine(out.stderr)}`);
-  }
-
-  if (diff === undefined && head) {
-    // No gh: the PR's commits against its base, fetched fresh; a local base may be stale.
-    const named = typeof meta.baseRefName === 'string' ? meta.baseRefName : input.baseBranch;
-    const baseName = named && isSafeGitRef(named) ? named : undefined;
-    let base: string | undefined;
-    if (baseName) {
-      const f = await git(['fetch', '--no-tags', '--quiet', source, `+refs/heads/${baseName}`], 120_000);
-      const sha = f.ok ? await git(['rev-parse', '--verify', 'FETCH_HEAD^{commit}']) : undefined;
-      if (sha?.ok) { base = sha.stdout.trim(); diffBase = `${baseName} fetched from ${source}`; }
-      else {
-        for (const local of [...(remote ? [`${remote}/${baseName}`] : []), baseName]) {
-          if ((await git(['rev-parse', '--verify', `${local}^{commit}`])).ok) { base = local; break; }
-        }
-        if (base) {
-          diffBase = `local ${base} (may be stale)`;
-          problems.push(`the diff is against the local ${base}, which may be behind the PR's base`);
-        }
+      let got = await fetchInto(pullRef, headRef);
+      // GitHub moves refs/pull/N/head a moment after a push: one more look before calling it a mismatch.
+      if (got.sha && ghHead && got.sha !== ghHead) {
+        await (input.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms))))(3_000);
+        got = await fetchInto(pullRef, headRef);
+      }
+      if (got.error) problems.push(got.error.startsWith('could not read')
+        ? `fetched pull/${pr.number}/head but ${got.error}`
+        : `git fetch ${source} pull/${pr.number}/head failed — ${got.error}`);
+      else head = got.sha!;
+      // What was fetched must be the head GitHub reports for this PR.
+      if (head && ghHead && head !== ghHead) {
+        problems.push(`${source} pull/${pr.number}/head is ${head.slice(0, 12)}, not the PR's head ${ghHead.slice(0, 12)}; nothing was checked out`);
+        head = '';
       }
     }
-    const mb = base ? await git(['merge-base', base, head]) : undefined;
-    const local = mb?.ok ? await git(['diff', '--no-color', '--no-ext-diff', mb.stdout.trim(), head], 60_000) : undefined;
-    if (local?.ok) diff = local.stdout;
+
+    if (head) {
+      // A throwaway index, so neither the task's index nor its files are touched. Symlinks become
+      // plain files (a PR's link cannot point a reader elsewhere), and no LFS download runs.
+      const index = join(dir, 'index.tmp');
+      const env = { ...process.env, GIT_INDEX_FILE: index, GIT_LFS_SKIP_SMUDGE: '1' };
+      const read = await git(['-c', 'core.symlinks=false', 'read-tree', head], 60_000, env);
+      const out = read.ok ? await git(['-c', 'core.symlinks=false', 'checkout-index', '-a', '-f', `--prefix=${tree}/`], 300_000, env) : read;
+      rmSync(index, { force: true });
+      if (out.ok) checkedOut = true;
+      else problems.push(`could not export ${head.slice(0, 12)} — ${lastLine(out.stderr)}`);
+    }
+
+    if (diff === undefined && head) {
+      // No gh: the PR's commits against its base, fetched fresh; a local base may be stale.
+      const named = typeof meta.baseRefName === 'string' ? meta.baseRefName : input.baseBranch;
+      const baseName = named && isSafeGitRef(named) ? named : undefined;
+      let base: string | undefined;
+      if (baseName) {
+        const fetched = await fetchInto(`refs/heads/${baseName}`, baseRef);
+        if (fetched.sha) { base = fetched.sha; diffBase = `${baseName} fetched from ${source}`; }
+        else {
+          for (const local of [...(remote ? [`${remote}/${baseName}`] : []), baseName]) {
+            if ((await git(['rev-parse', '--verify', `${local}^{commit}`])).ok) { base = local; break; }
+          }
+          if (base) {
+            diffBase = `local ${base} (may be stale)`;
+            problems.push(`the diff is against the local ${base}, which may be behind the PR's base`);
+          }
+        }
+      }
+      const mb = base ? await git(['merge-base', base, head]) : undefined;
+      const local = mb?.ok ? await git(['diff', '--no-color', '--no-ext-diff', mb.stdout.trim(), head], 60_000) : undefined;
+      if (local?.ok) diff = local.stdout;
+    }
+  } finally {
+    for (const ref of touchedRefs) await git(['update-ref', '-d', ref]);
   }
 
   meta = {

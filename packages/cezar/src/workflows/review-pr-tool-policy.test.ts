@@ -123,6 +123,13 @@ describe('claudeArtifactsWriteRule', () => {
     const args = buildClaudeArgs({ systemPrompt: '', userPrompt: '', cwd: '/repo', ...base, additionalDirectories: ['/runs', ARTIFACTS] } as AgentRunSpec, {});
     expect(args.filter((a, i) => args[i - 1] === '--add-dir')).toEqual(['/runs', ARTIFACTS]);
   });
+  it('forces dontAsk when strictPermissions is set, even under CEZ_APPROVAL_GATE=1 or bypassPermissions', () => {
+    const mode = (args: string[]) => args[args.indexOf('--permission-mode') + 1];
+    const s = { systemPrompt: '', userPrompt: '', cwd: '/repo', ...base } as AgentRunSpec;
+    expect(mode(buildClaudeArgs(s, { CEZ_APPROVAL_GATE: '1' }))).toBe('acceptEdits');
+    expect(mode(buildClaudeArgs({ ...s, strictPermissions: true }, { CEZ_APPROVAL_GATE: '1' }))).toBe('dontAsk');
+    expect(mode(buildClaudeArgs({ ...s, strictPermissions: true, bypassPermissions: true }, { CEZ_APPROVAL_GATE: '1' }))).toBe('dontAsk');
+  });
 });
 
 describe('workflowLaunchSpec', () => {

@@ -471,9 +471,10 @@ export function buildClaudeArgs(
     '--verbose',
     '--include-partial-messages',
     '--permission-mode',
-    spec.bypassPermissions && !spec.enforceReadOnly
-      ? 'bypassPermissions'
-      : env.CEZ_APPROVAL_GATE === '1' ? 'acceptEdits' : 'dontAsk',
+    spec.strictPermissions || spec.enforceReadOnly ? 'dontAsk'
+      : spec.bypassPermissions
+        ? 'bypassPermissions'
+        : env.CEZ_APPROVAL_GATE === '1' ? 'acceptEdits' : 'dontAsk',
   ];
   if (systemPromptFilePath) args.push('--append-system-prompt-file', systemPromptFilePath);
   else args.push('--append-system-prompt', appendClaudeSystemPrompt(spec.systemPrompt));
