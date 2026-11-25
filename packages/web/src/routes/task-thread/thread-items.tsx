@@ -16,6 +16,7 @@ import {
   SquarePenIcon,
   SquareTerminalIcon,
   Trash2Icon,
+  TriangleAlertIcon,
   WrenchIcon,
 } from 'lucide-react'
 import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'react'
@@ -35,6 +36,7 @@ import { isImageAttachmentName, type FileDiff, type ToolKind, type UiToolItem } 
 import { cn } from '@/lib/utils'
 
 import { parseReviewMessage } from './diff-comments'
+import { describeFallback, runnerDisplayName, type FallbackNote } from './fallback-note'
 import { Markdown } from './markdown'
 import { ReviewCommentsBlock } from './review-comments-block'
 import { useDraft } from './thread-draft'
@@ -417,6 +419,7 @@ export function CopyMessageButton({ text }: { text: string }) {
 
 /** A dim (lifecycle/note) or danger (error) transcript line. */
 export function NoteLine({ note }: { note: ThreadNote }) {
+  if (note.fallback) return <FallbackNoteRow fallback={note.fallback} />
   return (
     <div
       data-slot="note-line"
@@ -429,6 +432,71 @@ export function NoteLine({ note }: { note: ThreadNote }) {
       {note.tone === 'danger' ? '✗ ' : note.tone === 'info' ? '⇄ ' : '· '}
       {note.text}
       {note.action === 'install-skills' ? <InstallSkillsAction skillNames={note.skillNames} /> : null}
+    </div>
+  )
+}
+
+/**
+ * cezar's own naming or commit-message call fell back: a compact, readable warning row with
+ * a plain headline, the agent it tried and a hint; the raw reason stays behind "Details".
+ */
+export function FallbackNoteRow({ fallback }: { fallback: FallbackNote }) {
+  const copy = describeFallback(fallback)
+  const agent = runnerDisplayName(fallback.runner)
+  const [copied, setCopied] = useState(false)
+  const linkClass = 'font-medium text-foreground underline underline-offset-4'
+  return (
+    <div
+      role="note"
+      data-slot="fallback-note"
+      data-kind={fallback.kind}
+      className="flex gap-2 rounded-md border border-warning/30 bg-warning/5 px-3 py-2 text-ui text-foreground"
+    >
+      <TriangleAlertIcon aria-hidden className="mt-0.5 size-4 shrink-0 text-warning" />
+      <div className="min-w-0 flex-1">
+        <p className="font-medium">{copy.headline}</p>
+        <p className="mt-0.5 text-label text-muted-foreground">
+          Tried {agent ? <span className="font-medium text-foreground">{agent}</span> : 'the project’s default agent'}.{' '}
+          {copy.explanation ? <>{copy.explanation} </> : null}
+          {copy.hint ? <>{copy.hint}{copy.link ? ' ' : ''}</> : null}
+          {copy.link ? (
+            copy.link.scope === 'global'
+              ? <GlobalLink to={copy.link.to} className={linkClass}>{copy.link.label}</GlobalLink>
+              : <Link to={copy.link.to} className={linkClass}>{copy.link.label}</Link>
+          ) : null}
+          {copy.link ? '.' : ''}
+          {copy.hint || copy.link ? ' ' : ''}
+          <span className="text-soft-foreground">The task itself is unaffected.</span>
+        </p>
+        <Collapsible className="group/fallback mt-1">
+          <CollapsibleTrigger className="inline-flex items-center gap-1 rounded-sm text-label text-muted-foreground hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none">
+            <ChevronRightIcon aria-hidden className="size-3.5 transition-transform group-data-[state=open]/fallback:rotate-90" />
+            Details
+          </CollapsibleTrigger>
+          <CollapsibleContent>
+            <div className="mt-1 flex items-start gap-1 rounded-sm bg-muted/60 px-2 py-1.5">
+              <pre data-slot="fallback-reason" className="min-w-0 flex-1 font-mono text-meta break-words whitespace-pre-wrap text-muted-foreground">{fallback.reason}</pre>
+              <IconTooltip label={copied ? 'Copied' : 'Copy error'}>
+                <button
+                  type="button"
+                  aria-label={copied ? 'Copied' : 'Copy error'}
+                  onClick={() => {
+                    void writeClipboard(fallback.reason)
+                      .then(() => {
+                        setCopied(true)
+                        setTimeout(() => setCopied(false), 1500)
+                      })
+                      .catch(() => toast('Copy failed — the browser blocked clipboard access.', { tone: 'danger' }))
+                  }}
+                  className="shrink-0 rounded p-1 text-soft-foreground hover:bg-muted hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none"
+                >
+                  {copied ? <CheckIcon aria-hidden className="size-3.5" /> : <CopyIcon aria-hidden className="size-3.5" />}
+                </button>
+              </IconTooltip>
+            </div>
+          </CollapsibleContent>
+        </Collapsible>
+      </div>
     </div>
   )
 }

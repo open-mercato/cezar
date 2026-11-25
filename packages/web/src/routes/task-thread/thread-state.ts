@@ -1,6 +1,7 @@
 import type { RunEvent, RunStatus, Runner } from '@open-mercato/cezar-api-client'
 import { runItemKey } from '@/api/run-events'
 import { isOutdatedBackendError } from '@/lib/agent-errors'
+import { parseFallbackNote, type FallbackNote } from './fallback-note'
 import {
   runnerSchema,
   toolDisplay,
@@ -47,6 +48,8 @@ export interface ThreadNote {
   tone: 'dim' | 'danger' | 'info'
   action?: 'install-skills'
   skillNames?: string[]
+  /** cezar's own model call (title, commit message) fell back — rendered as a warning row. */
+  fallback?: FallbackNote
 }
 
 /** An image the run persisted (v1 `image` line: served from `/api/runs/:id/images/…`). */
@@ -689,6 +692,7 @@ export function reduceThread(events: RunEvent[], options: ThreadReduceOptions = 
         const installSkills = event.type === 'note' && event.action === 'install-skills'
         const names = installSkills && Array.isArray(event.skillNames)
           ? event.skillNames.filter((name): name is string => typeof name === 'string') : undefined
+        const fallback = event.type === 'note' ? parseFallbackNote(event.fallback, text) : undefined
         currentTurn().entries.push({
           origin: 'meta',
           ...(event.type === 'lifecycle' && FAILURE_PREFIX.test(text)
@@ -696,6 +700,7 @@ export function reduceThread(events: RunEvent[], options: ThreadReduceOptions = 
           entry: {
             kind: 'note', id: `v1:${event.seq}`, text, tone,
             ...(installSkills ? { action: 'install-skills', ...(names?.length ? { skillNames: names } : {}) } : {}),
+            ...(fallback ? { fallback } : {}),
           },
         })
         break

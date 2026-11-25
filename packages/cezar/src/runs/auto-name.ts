@@ -205,13 +205,14 @@ export function postValidateTitle(title: string, refNumber?: number): string {
  * without one is never called (#2012) — its default model is the premium one —
  * except to name a branch under explicit `branchNaming`, which the user opted into.
  */
-export async function generateRunName(repoRoot: string, ctx: NamerContext, execution?: { runner: RunnerId; env: Record<string, string>; onUsageWindows?: AgentRunSpec['onUsageWindows']; planUsageAccount?: LedgerAccountRef }, onUnavailable?: (reason: string) => void): Promise<NameResult | null> {
+export async function generateRunName(repoRoot: string, ctx: NamerContext, execution?: { runner: RunnerId; env: Record<string, string>; onUsageWindows?: AgentRunSpec['onUsageWindows']; planUsageAccount?: LedgerAccountRef }, onUnavailable?: (reason: string, runner: RunnerId) => void): Promise<NameResult | null> {
+  let runnerId: RunnerId | undefined;
   try {
     const config = await loadConfig(repoRoot);
     if (ctx.nameBranch && ctx.branchNaming === undefined && config.branchNaming) {
       ctx = { ...ctx, branchNaming: config.branchNaming };
     }
-    const runnerId = execution?.runner ?? config.defaultRunner;
+    runnerId = execution?.runner ?? config.defaultRunner;
     const choice = await resolveNamerModel(runnerId, config);
     // One creation call on the default model keeps configured branch naming working (#2045 review).
     if (!choice && !(ctx.nameBranch && ctx.branchNaming)) return null;
@@ -249,7 +250,7 @@ export async function generateRunName(repoRoot: string, ctx: NamerContext, execu
     }
   } catch (err) {
     if (err instanceof CodexToolPolicyError) {
-      try { onUnavailable?.(err.message); } catch { /* Diagnostics must not block a task. */ }
+      try { if (runnerId) onUnavailable?.(err.message, runnerId); } catch { /* Diagnostics must not block a task. */ }
     }
     // runner unavailable / crashed — the heuristic title stays
   }

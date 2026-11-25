@@ -2,6 +2,7 @@ import { execFile } from 'node:child_process';
 import { z } from 'zod';
 import { loadConfig } from '../config.ts';
 import { createRunner } from '../core/runner-factory.ts';
+import type { RunnerId } from '../core/agent-runner.ts';
 import { parseStructured } from '../planner.ts';
 import { autoNamingActive, NAMER_TIMEOUT_MS } from '../runs/auto-name.ts';
 import { resolveNamerModel } from '../runs/namer-model.ts';
@@ -63,7 +64,7 @@ async function recentSubjects(repoRoot: string): Promise<string[]> {
 }
 
 /** Why the last attempt produced no subject — recorded on the run so a fallback is explainable. */
-export type CommitMessageResult = { subject: string } | { subject?: undefined; reason: string };
+export type CommitMessageResult = { subject: string } | { subject?: undefined; reason: string; runner?: RunnerId };
 
 export async function generateCommitMessage(
   repoRoot: string,
@@ -73,10 +74,12 @@ export async function generateCommitMessage(
   if (!autoNamingActive()) return { reason: 'model naming is off' };
   if (staged.files.length === 0) return { reason: 'nothing staged' };
   let reason = 'no answer';
+  let runnerId: RunnerId | undefined;
   try {
     const config = await loadConfig(repoRoot);
+    runnerId = config.defaultRunner;
     const choice = await resolveNamerModel(config.defaultRunner, config);
-    if (!choice) return { reason: `no cheap model known for ${config.defaultRunner}` };
+    if (!choice) return { reason: `no cheap model known for ${config.defaultRunner}`, runner: runnerId };
     const runner = createRunner(config.defaultRunner);
     const { env, profile } = await resolveProfileEnvForRoot(repoRoot, config.defaultRunner);
     const planAccount = await oneShotAccountRef(config.defaultRunner, profile);
@@ -109,5 +112,5 @@ export async function generateCommitMessage(
   } catch (err) {
     reason = err instanceof Error ? err.message : String(err);
   }
-  return { reason };
+  return { reason, ...(runnerId ? { runner: runnerId } : {}) };
 }

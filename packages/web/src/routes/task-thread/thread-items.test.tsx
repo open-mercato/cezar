@@ -98,6 +98,54 @@ describe('NoteLine skill recovery', () => {
   })
 })
 
+describe('NoteLine fallback row', () => {
+  const REASON = 'codex: tool-policy enforcement unavailable — isolated startup verification timed out; check the selected account and model provider. Refusing this restricted step; no model turn was started. Pick Claude Code or Pi for unsupported grants.'
+  afterEach(() => cleanup())
+
+  it('renders a readable warning row with the agent, a hint and a Settings link, raw reason behind Details', () => {
+    const [entry] = reduceThread([
+      { seq: 1, ts: '2026-11-25T10:00:00.000Z', type: 'note', message: `model naming unavailable — ${REASON}`, fallback: { kind: 'title', runner: 'codex', reason: REASON } } as RunEvent,
+    ]).turns[0]!.items
+    expect(entry).toMatchObject({ kind: 'note', fallback: { kind: 'title', runner: 'codex' } })
+    render(
+      <MemoryRouter initialEntries={['/p/acme/tasks/r1']}>
+        <NoteLine note={entry as Parameters<typeof NoteLine>[0]['note']} />
+      </MemoryRouter>,
+    )
+    const row = screen.getByRole('note')
+    expect(row.getAttribute('data-slot')).toBe('fallback-note')
+    expect(row.textContent).toContain('Couldn’t name this task automatically — used a fallback title')
+    expect(row.textContent).toContain('Tried Codex. It didn’t start in time')
+    expect(row.textContent).toContain('Settings → Agent accounts.')
+    expect(row.textContent).toContain('The task itself is unaffected.')
+    expect(screen.getByRole('link', { name: 'Agent accounts' }).getAttribute('href')).toBe('/settings/global/accounts')
+    // The raw runner error is secondary: collapsed until Details is opened, then copyable.
+    expect(screen.queryByText(REASON)).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'Details' }))
+    expect(screen.getByText(REASON)).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Copy error' })).toBeTruthy()
+  })
+
+  it('gives a legacy commit-message note the same row, with a project-scoped Agents link', () => {
+    const [entry] = reduceThread([
+      { seq: 1, ts: '2026-11-25T10:00:00.000Z', type: 'note', message: 'commit message named from the files — no cheap model known for codex' } as RunEvent,
+    ]).turns[0]!.items
+    render(
+      <MemoryRouter initialEntries={['/p/acme/tasks/r1']}>
+        <NoteLine note={entry as Parameters<typeof NoteLine>[0]['note']} />
+      </MemoryRouter>,
+    )
+    expect(screen.getByRole('note').textContent).toContain('Couldn’t write the commit message — used a list of changed files')
+    expect(screen.getByRole('link', { name: 'Agents' }).getAttribute('href')).toBe('/p/acme/settings/agents')
+  })
+
+  it('keeps every other note a plain line', () => {
+    render(<NoteLine note={{ kind: 'note', id: 'v1:1', text: 'auto-land — nothing to land', tone: 'dim' }} />)
+    expect(screen.queryByRole('note')).toBeNull()
+    expect(screen.getByText(/auto-land — nothing to land/)).toBeTruthy()
+  })
+})
+
 describe('ProviderAuthRequiredCard', () => {
   const renderIncident = (incident: Partial<ThreadProviderAuthRequired> = {}) => {
     // The listing never answers, so the label below can only come from the seeded cache.
