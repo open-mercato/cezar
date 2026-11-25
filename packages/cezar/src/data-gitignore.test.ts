@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { DATA_GITIGNORE_ENTRIES, ensureDataGitignore } from './data-gitignore.ts';
+import { DATA_COMMITTABLE_ENTRIES, DATA_GITIGNORE_ENTRIES, ensureDataGitignore } from './data-gitignore.ts';
 
 describe('ensureDataGitignore', () => {
   let repoRoot: string;
@@ -42,6 +42,16 @@ describe('ensureDataGitignore', () => {
       'tracker.json',
       'tracker.json.tmp',
     ]));
+  });
+
+  it('never ignores a committable entry — project frameworks are meant for git (framework-board D15)', () => {
+    ensureDataGitignore(repoRoot);
+    const lines = gitignore().split('\n');
+    expect(DATA_COMMITTABLE_ENTRIES).toContain('frameworks');
+    for (const entry of DATA_COMMITTABLE_ENTRIES) {
+      expect(lines, entry).not.toContain(entry);
+      expect(lines, entry).not.toContain(`${entry}/`);
+    }
   });
 
   it('appends what is missing and keeps what the user added', () => {
@@ -109,9 +119,9 @@ describe('DATA_GITIGNORE_ENTRIES covers everything cezar writes under .ai/cezar/
     const wanted: readonly string[] = DATA_GITIGNORE_ENTRIES;
     // The deliberate exceptions: entries under this directory built to be COMMITTED, where absence
     // from the ignore list IS the feature. `workflows/` and `skills/` are the project's own
-    // playbooks; `config.json` is the optional per-repo config a team may well want in git; the
+    // playbooks, `frameworks/` its board templates; `config.json` is the optional per-repo config a team may well want in git; the
     // `.gitignore` is the file itself, which git has to be able to see.
-    const committable = new Set(['workflows', 'skills', 'config.json', '.gitignore']);
+    const committable = new Set<string>(DATA_COMMITTABLE_ENTRIES);
     const missing = [...writtenUnderDataDir()]
       .filter((name) => !committable.has(name))
       .filter((name) => !wanted.includes(name) && !wanted.includes(`${name}/`));

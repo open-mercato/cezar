@@ -293,4 +293,18 @@ describe('the validity button and the palette — the text main revealed', () =>
     const skill = await screen.findByRole('button', { name: /om-fix/ })
     expect(skill.getAttribute('title')).toBe('Fix a reported bug end to end')
   })
+
+  it('keeps framework-internal node types out of the palette (spec 2026-11-15-framework-board)', async () => {
+    const internal = [
+      { type: 'stage.enter', category: 'flow', label: 'Stage enter', description: 'Enters a framework stage.', ports: ['next'], outputs: [], internal: true },
+      { type: 'gate.framework', category: 'flow', label: 'Framework gate', description: 'Waits on the framework state.', ports: ['approve'], outputs: [], internal: true },
+    ]
+    stubFetch({ 'GET /api/v1/workflows/nodes': () => jsonResponse({ nodes: [...NODES, ...internal] }) })
+    renderAt('/workflows/ship-it')
+    await nameField()
+    fireEvent.click(screen.getByRole('button', { name: /Add node/ }))
+    await screen.findByRole('button', { name: /One agent session\./ })
+    expect(screen.queryByRole('button', { name: /Enters a framework stage/ })).toBeNull()
+    expect(screen.queryByRole('button', { name: /Waits on the framework state/ })).toBeNull()
+  })
 })

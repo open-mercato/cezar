@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import type { WorkflowGraph } from '@open-mercato/cezar-api-client'
 
 import {
+  isInternalNode,
   addFork,
   advance,
   advanceFork,
@@ -632,5 +633,12 @@ describe('fork scaffolding', () => {
       'join.failed->',
     ])
     expect(r).toMatchObject({ kind: 'end', status: 'failed' })
+  })
+})
+
+describe('isInternalNode (spec 2026-11-15-framework-board)', () => {
+  it('hides catalog entries flagged internal from the palette', () => {
+    expect(isInternalNode({})).toBe(false)
+    expect(isInternalNode({ internal: true })).toBe(true)
   })
 })

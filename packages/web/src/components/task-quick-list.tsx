@@ -41,6 +41,7 @@ import { usageMetricVisibility } from '@/lib/token-metrics'
 import { useNow } from '@/lib/use-now'
 import { cn } from '@/lib/utils'
 import { ImpactChip } from '@/routes/task-assets/impact-chip'
+import { runRoute } from '@/lib/task-route'
 
 /**
  * The sidebar's task quick-list (spec, "App shell & navigation"): Active/Archived tabs, then the
@@ -497,7 +498,7 @@ const RunRow = React.memo(function RunRow({
       {/* Leads the reference chip, and also opens the task: chips can leave the title link no width.
           A pointer-only duplicate, so the row link carries the status via `aria-describedby`. */}
       <Link
-        to={scopeTo(scope, `/tasks/${run.id}`)}
+        to={scopeTo(scope, runRoute(run))}
         tabIndex={-1}
         aria-hidden="true"
         data-slot="task-row-dot-link"
@@ -516,7 +517,7 @@ const RunRow = React.memo(function RunRow({
         />
       ) : null}
       <Link
-        to={scopeTo(scope, `/tasks/${run.id}`)}
+        to={scopeTo(scope, runRoute(run))}
         // `title` carries the FULL stored title — including a `NNN: ` prefix the chip let the
         // visible text drop — so hover always gives back everything the column could not show.
         title={titleWithModel(title, run)}

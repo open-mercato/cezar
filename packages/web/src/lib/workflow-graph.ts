@@ -39,8 +39,11 @@ const PORTS: Record<GraphNodeType, readonly string[]> = {
   'github.pr-update': ['done', 'failed'],
   'github.issue-comment': ['done', 'failed'],
   'notify.webhook': ['done', 'failed'],
+  'stage.enter': ['next'],
+  'stage.exit': ['pass', 'missing'],
+  'gate.framework': ['approve'],
 }
-const FAILURE_PORTS = new Set(['failed', 'fail', 'exhausted', 'reject', 'red', 'timeout', 'conflict'])
+const FAILURE_PORTS = new Set(['failed', 'fail', 'exhausted', 'reject', 'red', 'timeout', 'conflict', 'missing'])
 
 export function portsOf(node: WorkflowGraphNode): readonly string[] {
   if (node.type === 'agent' && node.verdicts?.length) return [...new Set([...node.verdicts, 'failed'])]
@@ -196,6 +199,13 @@ export function newNode(type: GraphNodeType, taken: Iterable<string>): WorkflowG
       return { id: uniqueId('issue-comment', taken), type, body: 'Update from cezar: {{task}}' }
     case 'notify.webhook':
       return { id: uniqueId('webhook', taken), type, url: 'https://example.com/hook', body: 'cezar: {{task}}' }
+    // Framework stage nodes come from a compiled framework (spec 2026-11-15-framework-board).
+    case 'stage.enter':
+      return { id: uniqueId('stage-enter', taken), type, stage: 'stage' }
+    case 'stage.exit':
+      return { id: uniqueId('stage-exit', taken), type, stage: 'stage', artifacts: [] }
+    case 'gate.framework':
+      return { id: uniqueId('framework-gate', taken), type, stage: 'stage', approve: null }
   }
 }
 
@@ -953,3 +963,7 @@ export function roundedPath(points: readonly { x: number; y: number }[], r = 12)
   const last = points[points.length - 1]!
   return `${d} L ${last.x} ${last.y}`
 }
+
+/** Hidden from the editor palette (the catalog's `internal`): only a framework compiles these
+ *  (spec 2026-11-15-framework-board); read-only views still draw them. */
+export const isInternalNode = (entry: { internal?: boolean }): boolean => entry.internal === true

@@ -362,10 +362,11 @@ export function useTrackerConnection() {
   return useQuery({ queryKey: queryKeys.tracker.connection(), queryFn: ({ signal }) => getTrackerConnection({ signal }) })
 }
 
-export function useTrackerAssociation() {
+export function useTrackerAssociation(enabled = true) {
   return useQuery({
     queryKey: queryKeys.tracker.association(),
     queryFn: ({ signal }) => getTrackerAssociation({ signal }),
+    enabled,
   })
 }
 

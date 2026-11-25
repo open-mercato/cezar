@@ -253,6 +253,11 @@ describe('project-route alias parity (unprefixed vs /api/v1/p/<boot> vs /api/v1/
       method: 'DELETE',
     }));
     await expectParity('/groups/no-such-group/pick', json('POST', { runId: 'x' }));
+    await expectParity('/cards/no-such-run', json('PATCH', { held: false }));
+    await expectParity('/frameworks/no-such-framework/duplicate', json('POST', { newId: 'copy' }));
+    await expectParity('/frameworks/no-such-framework/install', json('POST', {}));
+    await expectParity('/frameworks/generic/install', json('POST', { commit: true }));
+    await expectParity('/project/framework', json('PUT', { framework: 'no-such-framework' }));
     // 409: the follow-up inbox is off (CEZ_FOLLOWUPS unset).
     await expectParity('/todos/t1/start', json('POST', {}));
     // 200 non-GET without observable side effects (no worktrees exist).

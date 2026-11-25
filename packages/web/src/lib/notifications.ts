@@ -1,6 +1,7 @@
 import type { HealthResponse, ManagerSummary, RunRecord, RunStatus } from '@open-mercato/cezar-api-client'
 import type { To } from 'react-router'
 import { deriveAttention, wantsAttention } from './attention'
+import { runRoute } from './task-route'
 
 /* Browser notifications (R6 Step 1.7, spec §"Cross-cutting"): the pure half.
  *
@@ -130,7 +131,7 @@ export function describeRunNotification(run: RunRecord): RunNotificationContent 
     body: `Task ${label}`,
     tag: `cezar-run-${run.id}`,
     // The watched list is the boot project's; `default` is its URL alias.
-    path: `/p/default/tasks/${encodeURIComponent(run.id)}`,
+    path: `/p/default${runRoute({ ...run, id: encodeURIComponent(run.id) })}`,
   }
 }
 

@@ -113,7 +113,8 @@ import { access, constants as fsConstants, lstat, mkdir, readFile, realpath, sta
 import { homedir } from 'node:os';
 import { basename, dirname, join, posix, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { Hono, type Context } from 'hono';
+import { Hono, type Context, type TypedResponse } from 'hono';
+import type { RunRecord as WireRunRecord } from '@open-mercato/cezar-contract';
 import type { Next } from 'hono';
 import { serve, type ServerType } from '@hono/node-server';
 import { bodyLimit } from 'hono/body-limit';
@@ -439,6 +440,8 @@ import { fetchGithub, fetchGithubChecks, fetchGithubComments, fetchGithubPrDiff,
 import { ensureLaunchKey } from './launch-key.ts';
 import { openInTerminal } from './open-in-terminal.ts';
 import { agentSetupRoutes } from './agent-setup-routes.ts';
+import { frameworksRoutes } from './frameworks-routes.ts';
+import type { installFramework } from '../frameworks/install.ts';
 import type { InstallEnv } from './agent-setup.ts';
 import {
   agentCliRunner,
@@ -607,6 +610,9 @@ export interface ServerDeps {
   /** The cockpit build id sent as `x-cezar-build`; defaults to the one stamped in `web/dist`
    *  at boot. Tests pin it (null = no header). */
   webBuildId?: string | null;
+  /** Runs a built-in framework's pinned installer (`POST /frameworks/:id/install`); tests stub it
+   *  so no suite reaches the network. */
+  frameworkInstaller?: typeof installFramework;
   /** cezar's own GitHub star count behind `GET /api/v1/star-count` (the cockpit's ⭐ ask).
    *  Defaults to a reader that asks github.com at most once per ten seconds, paced to GitHub's rate limit, and caches the answer
    *  under `~/.cache/cez/`; tests inject their own so no suite ever reaches the network. */
@@ -5507,7 +5513,7 @@ export function createApp(deps: ServerDeps) {
       if (run && retiresQuestion) manager.notifyQuestionRetired?.(id);
       // Labelled with the button that did it.
       if (run) track(parsed.data.archived !== false ? 'task_archived' : 'task_unarchived', { label: parsed.data.surface ?? 'api' }, { sid: deviceSid(c.req.header('x-cezar-sid')) });
-      return run ? c.json(run) : c.json({ error: 'not found' }, 404);
+      return run ? runJson(c, run) : c.json({ error: 'not found' }, 404);
     })
 
     // Pin one task to the top of this project's list, or unpin it (#935). The archive route's
@@ -5520,7 +5526,7 @@ export function createApp(deps: ServerDeps) {
       const pinned = pin !== false;
       const run = store.setPinned(c.req.param('id'), pinned);
       if (run) track(pinned ? 'task_pinned' : 'task_unpinned', { label: surface ?? 'api' }, { sid: deviceSid(c.req.header('x-cezar-sid')) });
-      return run ? c.json(run) : c.json({ error: 'not found' }, 404);
+      return run ? runJson(c, run) : c.json({ error: 'not found' }, 404);
     })
 
     // The per-task off switch for that resume (the workspace setting is Settings → Resources).
@@ -5538,7 +5544,7 @@ export function createApp(deps: ServerDeps) {
       // No body: opening a thread marks it read, full stop. Stamps `seenAt = now` and
       // returns the updated record (which also rides the `run` SSE via `touch`).
       const run = c.get('project').store.setRead(c.req.param('id'));
-      return run ? c.json(run) : c.json({ error: 'not found' }, 404);
+      return run ? runJson(c, run) : c.json({ error: 'not found' }, 404);
     })
 
     .post('/runs/:id/unread', (c) => {
@@ -5546,7 +5552,7 @@ export function createApp(deps: ServerDeps) {
       // receipt is the whole action, so there is nothing to say about it. Sits under
       // `/runs/:id/`, so the `read-all` registration-order caveat above does not apply.
       const run = c.get('project').store.setUnread(c.req.param('id'));
-      return run ? c.json(run) : c.json({ error: 'not found' }, 404);
+      return run ? runJson(c, run) : c.json({ error: 'not found' }, 404);
     })
 
     .post('/runs', jsonZodValidator(createRunInputSchema), async (c) => {
@@ -5760,7 +5766,7 @@ export function createApp(deps: ServerDeps) {
       if (!store.getRun(id)) return c.json({ error: 'not found' }, 404);
       if (!manager.promote(id)) return c.json({ error: 'run is not queued' }, 409);
       const run = store.getRun(id);
-      return run ? c.json(run) : c.json({ error: 'not found' }, 404);
+      return run ? runJson(c, run) : c.json({ error: 'not found' }, 404);
     })
 
     // "Start now": jump a queued run past the `maxParallel` cap.
@@ -8891,7 +8897,8 @@ export function createApp(deps: ServerDeps) {
     .route('/', repoRoutes)
     .route('/', configRoutes)
     .route('/', agentConfigRoutes)
-    .route('/', terminalRoutes);
+    .route('/', terminalRoutes)
+    .route('/', frameworksRoutes({ localHandoff: () => capabilities().localHandoff, ...(deps.frameworkInstaller ? { installFramework: deps.frameworkInstaller } : {}) }));
 
   // ---- chained family: the cross-project run index (workspace-level) -------
   /**
@@ -9877,6 +9884,15 @@ export function createApp(deps: ServerDeps) {
   );
 
   return routed;
+}
+
+/**
+ * A run answer as a NAMED type: inlined, every single-run route prints a whole RunRecord into
+ * `createApp`'s emitted declaration and pushes it past TS7056's limit. Same wire, same contract.
+ */
+export interface RunAnswer extends WireRunRecord {}
+function runJson(c: Context, run: WireRunRecord) {
+  return c.json(run) as unknown as Response & TypedResponse<RunAnswer, 200, 'json'>;
 }
 
 /** The status route's body: the configured thresholds (the guard's own copy is from its last pass). */

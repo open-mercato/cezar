@@ -68,8 +68,30 @@ describe('the workflow graph API', () => {
       'github.issue-comment',
       'notify.webhook',
       'workflow',
+      'stage.enter',
+      'stage.exit',
+      'gate.framework',
     ]);
     expect(body.nodes.find((n) => n.type === 'loop')?.ports).toEqual(['repeat', 'exhausted']);
+    // Compiled-card only: the palette filters them out, and the validator refuses them below.
+    expect(body.nodes.filter((n) => (n as { internal?: true }).internal).map((n) => n.type)).toEqual(['stage.enter', 'stage.exit', 'gate.framework']);
+  });
+
+  it('refuses framework stage nodes in a user workflow (validate, save and parse)', async () => {
+    const staged = {
+      nodes: [
+        { id: 'start', type: 'start' },
+        { id: 'work', type: 'agent', prompt: '{{task}}' },
+        { id: 'gate', type: 'gate.framework', stage: 'spec', approve: 'spec' },
+      ],
+      edges: [{ from: 'start', to: 'work' }, { from: 'work.done', to: 'gate' }],
+    };
+    const validated = (await (await post('/api/v1/workflows/validate', { graph: staged })).json()) as { issues: string[] };
+    expect(validated.issues.join()).toMatch(/node "gate": gate.framework belongs to a framework card/);
+    const saved = await post('/api/v1/workflows/graph', { name: 'staged', graph: staged });
+    expect(saved.status).toBe(400);
+    const parsed = await post('/api/v1/workflows/parse', { yaml: stringifyYaml({ version: 2, name: 'staged', ...staged }) });
+    expect(parsed.status).toBe(400);
   });
 
   it('validates: [] for a sound graph, issues for an unsound one, 400 for a non-graph', async () => {

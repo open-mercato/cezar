@@ -19,6 +19,7 @@ import {
   describeRunNotification,
   type RunNotificationContent,
 } from '@/lib/notifications'
+import { runRoute } from '@/lib/task-route'
 
 /**
  * The notification trigger (R6 Step 1.7, spec §"Cross-cutting"): browser `Notification` when a
@@ -101,7 +102,7 @@ export function RunNotifications() {
       if (entering.length === 0 || !notificationsAllowed()) return
       for (const run of entering) {
         const content = describeRunNotification(run)
-        fireNotification({ ...content, path: scopeTo(projectId, `/tasks/${encodeURIComponent(run.id)}`) }, navigateRef.current)
+        fireNotification({ ...content, path: scopeTo(projectId, runRoute({ ...run, id: encodeURIComponent(run.id) })) }, navigateRef.current)
       }
     }
 

@@ -26,6 +26,7 @@ import { useTaskOrigin } from '@/lib/task-origin'
 import { taskReference, taskReferences } from '@/lib/tasks-table'
 import { useNow } from '@/lib/use-now'
 import { cn } from '@/lib/utils'
+import { runRoute } from '@/lib/task-route'
 
 /**
  * The sidebar's "Current tasks" (redesign, Proposal 1): the active project's tasks in the Now
@@ -117,7 +118,7 @@ const CurrentTaskRow = React.memo(function CurrentTaskRow({
     >
       {/* Siblings of the row link, never children: an anchor inside an anchor is invalid. */}
       <Link
-        to={`/tasks/${run.id}`}
+        to={runRoute(run)}
         tabIndex={-1}
         aria-hidden="true"
         data-slot="task-row-dot-link"
@@ -130,7 +131,7 @@ const CurrentTaskRow = React.memo(function CurrentTaskRow({
         <TaskReferenceChip run={run} reference={reference} compact className="h-auto shrink-0 gap-[2px] px-1.5 py-px text-micro" />
       ) : null}
       <Link
-        to={`/tasks/${run.id}`}
+        to={runRoute(run)}
         title={title}
         aria-current={current ? 'page' : undefined}
         aria-describedby={statusId}

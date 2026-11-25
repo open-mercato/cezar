@@ -5,6 +5,7 @@ import {
   CopyIcon,
   EllipsisIcon,
   ExternalLinkIcon,
+  LayersIcon,
   PencilIcon,
   SquareTerminalIcon,
 } from 'lucide-react'
@@ -80,6 +81,9 @@ import { activeStepIndex, railWanted, stepTally, WorkflowSteps } from './step-ra
 import { useDraft } from './thread-draft'
 import { copyToClipboard, useCanOpenTerminal, useRunActions, useRunOpenChoices, type RunActions } from './use-run-actions'
 import { writeClipboard } from '@/lib/clipboard'
+import { runRoute } from '@/lib/task-route'
+import { isCard } from '@/lib/cards'
+import { CardMetaLabel, CardStageRail } from './card-stage-rail'
 
 /**
  * The run header (design 2026-11, Proposal 3 "one header"): two lines above the view strip.
@@ -205,6 +209,14 @@ function RunHeaderView({
               <ImpactChip run={run} />
             </span>
             <span className="ml-auto flex shrink-0 items-center gap-2">
+              {isCard(run) ? (
+                <Button asChild variant="outline" size="sm" data-action="open-card">
+                  <Link to={runRoute(run)}>
+                    <LayersIcon aria-hidden="true" />
+                    Open card
+                  </Link>
+                </Button>
+              ) : null}
               <HeaderActions run={run} actions={actions} changesShowing={tab === 'changes'} onRename={() => beginRename.current()} />
               {/* Desktop: fold the meta row and the step rail away, leaving the title and the
                   tabs — the minimalist view short of full screen. Phones keep every line. */}
@@ -267,7 +279,11 @@ function RunHeaderView({
           </div>
 
           {/* The rail earns its row only when it has more to say than "k of n done" (line 2). */}
-          {railWanted(run.steps) ? (
+          {isCard(run) ? (
+            <div className={cn('border-t border-border pt-1 pb-0 md:pt-2 md:pb-1', collapsed && 'md:hidden')}>
+              <CardStageRail run={run} />
+            </div>
+          ) : railWanted(run.steps) ? (
             <div className={cn('border-t border-border pt-1 pb-0 md:pt-2 md:pb-1', collapsed && 'md:hidden')}>
               <WorkflowSteps runId={run.id} steps={run.steps} closedAs={runClosure(run)} />
             </div>
@@ -314,7 +330,7 @@ export function statusChipLabel(run: ApiRun, queuePosition?: number): string | n
     case 'running': {
       if (run.activity === 'monitoring') return 'Monitoring'
       // The step name only where there is more than one to tell apart.
-      const step = run.steps.length > 1 ? run.steps[activeStepIndex(run.steps)]?.name : undefined
+      const step = isCard(run) ? undefined : run.steps.length > 1 ? run.steps[activeStepIndex(run.steps)]?.name : undefined
       return step ? `Running · ${step}` : 'Running'
     }
     case 'failed':
@@ -835,12 +851,14 @@ function MetaRow({
   else if (quietWord) parts.push(<QuietStatusWord key="status" word={quietWord} title={idleClosedDetail(run)} className={phoneOnly} />)
   // `workflowLabel` so an inline chain shows its first step's name, not the bare "(planned)"
   // placeholder — which reads like a status next to the live status chip.
-  parts.push(
+  // A card reads as its framework and stage, not `framework:<id> · k of 23 done` (framework-board).
+  if (isCard(run)) parts.push(<CardMetaLabel key="card" run={run} />)
+  else parts.push(
     <span key="workflow" className={desktopOnly}>
       {workflowLabel(run)}
     </span>,
   )
-  if (run.steps.length > 0) {
+  if (run.steps.length > 0 && !isCard(run)) {
     const tally = stepTally(run.steps)
     // On phones too: "how far along" is line 2's job on every width.
     parts.push(
@@ -1147,7 +1165,7 @@ function DispatchChildrenLine({ run }: { run: ApiRun }) {
             return (
               <Link
                 key={child.id}
-                to={`/tasks/${child.id}`}
+                to={runRoute(child)}
                 data-slot="dispatch-child"
                 data-run-id={child.id}
                 title={`${runTitle(child)} — ${attention.label}`}

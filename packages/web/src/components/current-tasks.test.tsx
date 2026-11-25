@@ -72,6 +72,11 @@ describe('CurrentTasks', () => {
     expect(plainRow.querySelector('[data-slot="task-row-title"]')?.closest('a')?.previousElementSibling?.getAttribute('data-slot')).toBe('task-row-dot-link')
   })
 
+  it('links a framework card into its card wizard, not the task view (framework-board)', () => {
+    renderList([run({ id: 'card', status: 'waiting', card: { framework: 'generic', frameworkHash: 'h', title: 'Card', stage: 'plan', stages: { plan: 'waiting' }, stageOrder: ['plan'] } })])
+    for (const link of rows()[0]!.querySelectorAll('a')) expect(link.getAttribute('href')).toBe('/p/cezar/cards/card')
+  })
+
   it('links each row into the task, scoped to the project, and More… into the table', () => {
     renderList([run({ id: 'a' })])
     expect(screen.getByRole('link', { name: /Task 1|Task \d+/ }).getAttribute('href')).toBe('/p/cezar/tasks/a')

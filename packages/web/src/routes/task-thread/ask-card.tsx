@@ -31,6 +31,9 @@ import type { UiAskQuestion } from '@open-mercato/cezar-api-client'
 
 export { ASK_MORE_INFO_ANSWER }
 
+/** The answer text and completeness rule, shared with the card wizard's compact ask (routes/cards). */
+export { formatAnswer as formatAskAnswer, isAnswered as isAskAnswered }
+
 const EMPTY_ANSWER: AskQuestionAnswer = { labels: [] }
 
 /** An open question is a run waiting on a person: the card wears the tone `deriveAttention`

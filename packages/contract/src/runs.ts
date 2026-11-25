@@ -12,6 +12,7 @@ import { referenceStatusSchema } from './github.ts';
 // consumes them rather than redeclaring. One-way on purpose — see the header of `./workflows.ts`.
 import { workflowDefSchema, workflowStepDefSchema } from './workflows.ts';
 import { taskAskRecordSchema } from './questions.ts';
+import { runCardSchema } from './card-record.ts';
 
 /** `GET /runs` query: `full=1` keeps each run's `workflowDef` (about 1.3 MB per run), which the list omits by default. */
 export const runsListQuerySchema = z.object({ full: z.enum(['1']).optional() });
@@ -555,6 +556,8 @@ export const runRecordSchema = z.object({
       outputs: z.record(z.string(), z.record(z.string(), z.union([z.string(), z.number()]))).optional(),
     })
     .optional(),
+  /** Framework card metadata (spec 2026-11-15-framework-board). Ad-hoc runs never carry it. */
+  card: runCardSchema.optional(),
 });
 export type RunRecord = z.infer<typeof runRecordSchema>;
 

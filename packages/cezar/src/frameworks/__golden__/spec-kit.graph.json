@@ -1,0 +1,186 @@
+{
+  "nodes": [
+    {
+      "id": "start",
+      "type": "start",
+      "stage": "constitution"
+    },
+    {
+      "id": "constitution-enter",
+      "type": "stage.enter",
+      "stage": "constitution"
+    },
+    {
+      "id": "constitution-agent",
+      "type": "agent",
+      "stage": "constitution",
+      "name": "Constitution",
+      "prompt": "/speckit.constitution Tax rules engine v2\n\nRates per region.\n\nYou are working on stage 1/7 \"Constitution\" of the spec-kit framework.\n\nspec-kit needs `.specify` on this branch. If a framework file this stage relies on is missing, stop and report it with CEZ:ASK — never improvise the framework's steps or files by hand."
+    },
+    {
+      "id": "specify-enter",
+      "type": "stage.enter",
+      "stage": "specify"
+    },
+    {
+      "id": "specify-agent",
+      "type": "agent",
+      "stage": "specify",
+      "name": "Specify",
+      "prompt": "/speckit.specify Tax rules engine v2\n\nRates per region.\n\nYou are working on stage 2/7 \"Specify\" of the spec-kit framework.\n\nspec-kit needs `.specify` on this branch. If a framework file this stage relies on is missing, stop and report it with CEZ:ASK — never improvise the framework's steps or files by hand."
+    },
+    {
+      "id": "clarify-enter",
+      "type": "stage.enter",
+      "stage": "clarify"
+    },
+    {
+      "id": "clarify-agent",
+      "type": "agent",
+      "stage": "clarify",
+      "name": "Clarify",
+      "prompt": "/speckit.clarify Tax rules engine v2\n\nRates per region.\n\nYou are working on stage 3/7 \"Clarify\" of the spec-kit framework.\n\nspec-kit needs `.specify` on this branch. If a framework file this stage relies on is missing, stop and report it with CEZ:ASK — never improvise the framework's steps or files by hand.\n\nIf a reviewer asked for changes, their comment:\n{{nodes.plan-gate.comment}}",
+      "mode": "conversation"
+    },
+    {
+      "id": "plan-enter",
+      "type": "stage.enter",
+      "stage": "plan"
+    },
+    {
+      "id": "plan-agent",
+      "type": "agent",
+      "stage": "plan",
+      "name": "Plan",
+      "prompt": "/speckit.plan Tax rules engine v2\n\nRates per region.\n\nYou are working on stage 4/7 \"Plan\" of the spec-kit framework.\n\nspec-kit needs `.specify` on this branch. If a framework file this stage relies on is missing, stop and report it with CEZ:ASK — never improvise the framework's steps or files by hand.\n\nA person reviews this stage's result before the card moves on."
+    },
+    {
+      "id": "plan-gate",
+      "type": "gate.human",
+      "stage": "plan",
+      "message": "Approve the plan?"
+    },
+    {
+      "id": "plan-reject-loop",
+      "type": "loop",
+      "stage": "plan",
+      "max": 2
+    },
+    {
+      "id": "tasks-enter",
+      "type": "stage.enter",
+      "stage": "tasks"
+    },
+    {
+      "id": "tasks-agent",
+      "type": "agent",
+      "stage": "tasks",
+      "name": "Tasks",
+      "prompt": "/speckit.tasks Tax rules engine v2\n\nRates per region.\n\nYou are working on stage 5/7 \"Tasks\" of the spec-kit framework.\n\nspec-kit needs `.specify` on this branch. If a framework file this stage relies on is missing, stop and report it with CEZ:ASK — never improvise the framework's steps or files by hand."
+    },
+    {
+      "id": "analyze-enter",
+      "type": "stage.enter",
+      "stage": "analyze"
+    },
+    {
+      "id": "analyze-agent",
+      "type": "agent",
+      "stage": "analyze",
+      "name": "Analyze",
+      "prompt": "/speckit.analyze Tax rules engine v2\n\nRates per region.\n\nYou are working on stage 6/7 \"Analyze\" of the spec-kit framework.\n\nspec-kit needs `.specify` on this branch. If a framework file this stage relies on is missing, stop and report it with CEZ:ASK — never improvise the framework's steps or files by hand."
+    },
+    {
+      "id": "implement-enter",
+      "type": "stage.enter",
+      "stage": "implement"
+    },
+    {
+      "id": "implement-agent",
+      "type": "agent",
+      "stage": "implement",
+      "name": "Implement",
+      "prompt": "/speckit.implement Tax rules engine v2\n\nRates per region.\n\nYou are working on stage 7/7 \"Implement\" of the spec-kit framework.\n\nspec-kit needs `.specify` on this branch. If a framework file this stage relies on is missing, stop and report it with CEZ:ASK — never improvise the framework's steps or files by hand."
+    },
+    {
+      "id": "end",
+      "type": "end",
+      "status": "success",
+      "stage": "implement"
+    }
+  ],
+  "edges": [
+    {
+      "from": "start.next",
+      "to": "constitution-enter"
+    },
+    {
+      "from": "constitution-enter.next",
+      "to": "constitution-agent"
+    },
+    {
+      "from": "constitution-agent.done",
+      "to": "specify-enter"
+    },
+    {
+      "from": "specify-enter.next",
+      "to": "specify-agent"
+    },
+    {
+      "from": "specify-agent.done",
+      "to": "clarify-enter"
+    },
+    {
+      "from": "clarify-enter.next",
+      "to": "clarify-agent"
+    },
+    {
+      "from": "clarify-agent.done",
+      "to": "plan-enter"
+    },
+    {
+      "from": "plan-enter.next",
+      "to": "plan-agent"
+    },
+    {
+      "from": "plan-agent.done",
+      "to": "plan-gate"
+    },
+    {
+      "from": "plan-gate.reject",
+      "to": "plan-reject-loop"
+    },
+    {
+      "from": "plan-reject-loop.repeat",
+      "to": "clarify-enter"
+    },
+    {
+      "from": "plan-gate.approve",
+      "to": "tasks-enter"
+    },
+    {
+      "from": "tasks-enter.next",
+      "to": "tasks-agent"
+    },
+    {
+      "from": "tasks-agent.done",
+      "to": "analyze-enter"
+    },
+    {
+      "from": "analyze-enter.next",
+      "to": "analyze-agent"
+    },
+    {
+      "from": "analyze-agent.done",
+      "to": "implement-enter"
+    },
+    {
+      "from": "implement-enter.next",
+      "to": "implement-agent"
+    },
+    {
+      "from": "implement-agent.done",
+      "to": "end"
+    }
+  ]
+}

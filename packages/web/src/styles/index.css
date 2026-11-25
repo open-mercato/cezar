@@ -136,6 +136,7 @@
   --danger: #ef4444;
   --danger-foreground: #ffffff;
   --success: #10b981; /* emerald-500 */
+  --success-foreground: #04261a;
   --pending: #fbbf24; /* amber-400 — dots/spinners only, never text */
   /* Waiting on a PERSON — a reference that needs a reviewer, as opposed to one that is done
    * (violet), finished well (success) or broken (danger). The palette had no blue outside the
@@ -392,6 +393,7 @@
   --color-danger: var(--danger);
   --color-danger-foreground: var(--danger-foreground);
   --color-success: var(--success);
+  --color-success-foreground: var(--success-foreground);
   --color-pending: var(--pending);
   --color-pending-strong: var(--pending-strong);
   --color-success-strong: var(--success-strong);

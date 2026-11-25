@@ -9,6 +9,8 @@ import {
   GitCommitIcon,
   GitPullRequestIcon,
   HandIcon,
+  LogInIcon,
+  LogOutIcon,
   MessageCircleQuestionIcon,
   MessageSquareIcon,
   PlayIcon,
@@ -88,6 +90,9 @@ export const TYPE_CATEGORY: Record<GraphNodeType, Category> = {
   'github.pr-update': 'git',
   'github.issue-comment': 'git',
   'notify.webhook': 'scripts',
+  'stage.enter': 'flow',
+  'stage.exit': 'flow',
+  'gate.framework': 'flow',
 }
 
 export const ICONS: Record<GraphNodeType, LucideIcon> = {
@@ -112,6 +117,9 @@ export const ICONS: Record<GraphNodeType, LucideIcon> = {
   'github.pr-update': TagIcon,
   'github.issue-comment': MessageSquareIcon,
   'notify.webhook': WebhookIcon,
+  'stage.enter': LogInIcon,
+  'stage.exit': LogOutIcon,
+  'gate.framework': HandIcon,
 }
 
 export const TONE: Record<PortTone, string> = {
@@ -143,6 +151,9 @@ export const TYPE_LABEL: Record<GraphNodeType, string> = {
   'github.pr-update': 'Update PR',
   'github.issue-comment': 'Issue comment',
   'notify.webhook': 'Webhook',
+  'stage.enter': 'Enter stage',
+  'stage.exit': 'Exit stage',
+  'gate.framework': 'Framework gate',
 }
 
 export const categoryColor = (type: GraphNodeType) =>
@@ -197,6 +208,12 @@ export function nodeDetail(node: WorkflowGraphNode, loopCount?: number): string 
       return node.issue ? `#${node.issue}` : "task's issue"
     case 'notify.webhook':
       return node.url.replace(/^https?:\/\//, '')
+    case 'stage.enter':
+      return [node.stage, node.wip ? `wip ${node.wip}` : ''].filter(Boolean).join(' · ')
+    case 'stage.exit':
+      return node.artifacts.length ? `${node.artifacts.length} artifact(s)` : node.stage
+    case 'gate.framework':
+      return node.approve ? `approve ${node.approve}` : `${node.stage} confirmed`
     case 'if': {
       const c = node.condition
       switch (c.kind) {

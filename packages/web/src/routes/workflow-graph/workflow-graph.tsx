@@ -80,6 +80,7 @@ import {
   advance,
   autoLayout,
   blankGraph,
+  isInternalNode,
   connect,
   disconnect,
   freeSpot,
@@ -888,7 +889,7 @@ function WorkflowGraphEditor() {
             <div className="p-2">
               <p className="px-1.5 pb-2 text-label text-muted-foreground">Drag a node onto the canvas, or click to add it.</p>
               {CATEGORY_ORDER.map((cat) => {
-                const entries = catalog.data.nodes.filter((n) => n.category === cat.id)
+                const entries = catalog.data.nodes.filter((n) => n.category === cat.id && !isInternalNode(n))
                 if (!entries.length) return null
                 return (
                   <section key={cat.id} className="mb-3">
@@ -1414,6 +1415,9 @@ const OUTPUTS: Record<GraphNodeType, string[]> = {
   'github.pr-update': [],
   'github.issue-comment': ['issue'],
   'notify.webhook': ['status'],
+  'stage.enter': [],
+  'stage.exit': ['missing'],
+  'gate.framework': [],
 }
 
 /** A node's template outputs — a fork's agent reports as a subtask (`runId`, `status`, `summary`). */

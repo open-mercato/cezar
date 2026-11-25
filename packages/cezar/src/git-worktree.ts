@@ -157,7 +157,7 @@ export async function uniqueBranchName(
 export async function resolveBaseRef(
   repoRoot: string,
   base: string,
-  opts: { keepDiverged?: boolean; remotes?: TaskRemotes } = {},
+  opts: { keepDiverged?: boolean; remotes?: TaskRemotes; fetch?: boolean } = {},
 ): Promise<string | null> {
   if (!isSafeGitRef(base)) return null;
   const verify = (ref: string) =>
@@ -165,7 +165,7 @@ export async function resolveBaseRef(
   const { base: baseRemote } = opts.remotes ?? (await taskRemotes(repoRoot));
   if (!baseRemote) return (await verify(base)) ? base : null;
   const remoteRef = `${baseRemote}/${base}`;
-  if (!opts.keepDiverged || (await verify(remoteRef))) await fetchBase(repoRoot, baseRemote, base);
+  if (opts.fetch !== false && (!opts.keepDiverged || (await verify(remoteRef)))) await fetchBase(repoRoot, baseRemote, base);
   const [hasLocal, hasRemote] = await Promise.all([verify(base), verify(remoteRef)]);
   if (hasLocal && hasRemote) {
     // `--is-ancestor <remote>/<base> <base>` succeeds iff local is equal-or-ahead.
@@ -203,16 +203,19 @@ export async function chooseForkBase(
   currentBranch: string,
   configured: string | undefined,
   note: (message: string) => void,
+  /** `fetch: false` answers from the refs already known (a read-only preview, no network). */
+  opts: { fetch?: boolean } = {},
 ): Promise<string> {
   const remotes = await taskRemotes(repoRoot);
+  const fetch = opts.fetch ?? true;
   if (configured) {
-    const resolved = await resolveBaseRef(repoRoot, configured, { remotes });
+    const resolved = await resolveBaseRef(repoRoot, configured, { remotes, fetch });
     if (resolved) return resolved;
     note(`configured base branch "${configured}" not found (locally or on the base remote) — using "${currentBranch}"`);
   }
   if (currentBranch === 'HEAD') return currentBranch;
   const keepDiverged = !(await isDefaultBranch(repoRoot, currentBranch, remotes.base));
-  const resolved = (await resolveBaseRef(repoRoot, currentBranch, { keepDiverged, remotes })) ?? currentBranch;
+  const resolved = (await resolveBaseRef(repoRoot, currentBranch, { keepDiverged, remotes, fetch })) ?? currentBranch;
   // Say so when a diverged default branch's local-only commits are left out of the task.
   if (!keepDiverged && resolved !== currentBranch) {
     const contained = await git(repoRoot, ['merge-base', '--is-ancestor', currentBranch, resolved]);

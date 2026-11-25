@@ -66,7 +66,8 @@ export type WorkflowStepDef = z.infer<typeof workflowStepDefSchema>;
 const nodeId = z
   .string()
   .regex(/^[A-Za-z0-9][A-Za-z0-9_-]*$/, 'node ids are letters, digits, "-" and "_" (no dots)');
-const graphNodeBase = { id: nodeId, name: z.string().optional() };
+/** `stage`: the framework stage a node belongs to (spec 2026-11-15-framework-board). */
+const graphNodeBase = { id: nodeId, name: z.string().optional(), stage: nodeId.optional() };
 
 /** Mirrors `waitMs` in `src/workflows/graph.ts` exactly — every node that blocks on a human or
  *  external event bounds its wait the same way (60s–7d). */
@@ -110,6 +111,7 @@ export const workflowGraphNodeSchema = z.discriminatedUnion('type', [
     session: z.object({ continue: nodeId }).optional(),
     review: z.boolean().optional(),
     budgetUsd: z.number().positive().optional(),
+    mode: z.literal('conversation').optional(),
   }),
   z.object({
     ...graphNodeBase,
@@ -167,6 +169,15 @@ export const workflowGraphNodeSchema = z.discriminatedUnion('type', [
   }),
   z.object({ ...graphNodeBase, type: z.literal('github.issue-comment'), issue: z.number().int().positive().optional(), body: z.string().min(1) }),
   z.object({ ...graphNodeBase, type: z.literal('notify.webhook'), url: z.string().url().regex(/^https?:\/\//, 'http(s) URLs only'), body: z.string().optional() }),
+  z.object({
+    ...graphNodeBase,
+    type: z.literal('stage.enter'),
+    stage: nodeId,
+    wip: z.number().int().positive().optional(),
+    precheck: z.string().min(1).optional(),
+  }),
+  z.object({ ...graphNodeBase, type: z.literal('stage.exit'), stage: nodeId, artifacts: z.array(z.string().min(1)) }),
+  z.object({ ...graphNodeBase, type: z.literal('gate.framework'), stage: nodeId, approve: z.string().min(1).nullable() }),
 ]);
 export type WorkflowGraphNode = z.infer<typeof workflowGraphNodeSchema>;
 
@@ -298,12 +309,18 @@ export const workflowNodeCatalogResponseSchema = z.object({
         'github.pr-update',
         'github.issue-comment',
         'notify.webhook',
+        'stage.enter',
+        'stage.exit',
+        'gate.framework',
       ]),
       category: z.enum(['flow', 'agents', 'scripts', 'git']),
       label: z.string(),
       description: z.string(),
       ports: z.array(z.string()),
       outputs: z.array(z.string()),
+      /** Compiled-card only (framework-board): valid in a card's graph, never in a user workflow,
+       *  so the editor palette leaves it out. */
+      internal: z.literal(true).optional(),
     }),
   ),
 });

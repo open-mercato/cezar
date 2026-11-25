@@ -96,6 +96,9 @@ const ProjectTerminalRoute = lazyRoute('terminal', () =>
 /** Lazy because the skill detail renders the skill body through the same markdown stack the
  *  thread carries — thread-chunk weight the home screen must not pay (it used to ride the main
  *  bundle as a static Settings section). */
+const CardWizardRoute = lazyRoute('card-wizard', () =>
+  import('./routes/cards/card-wizard').then((m) => ({ default: m.CardWizardRoute })),
+)
 const SkillsRoute = lazyRoute('skills', () => import('./routes/skills').then((m) => ({ default: m.SkillsRoute })))
 
 /**
@@ -411,6 +414,7 @@ const PAGE_TITLE_ROUTES = [
   { pattern: '/questions', pageLabel: 'Questions' },
   { pattern: '/manager/*', pageLabel: 'Manager' },
   { pattern: '/new', pageLabel: 'New task' },
+  { pattern: '/cards/:runId', pageLabel: 'Card' },
   { pattern: '/compare/:groupId', pageLabel: 'Compare' },
   { pattern: '/git/*', pageLabel: 'Git' },
   { pattern: '/github/*', pageLabel: 'GitHub' },
@@ -480,6 +484,15 @@ export const AppRoutes = memo(function AppRoutes() {
         <Route index element={<NowRoute />} />
         <Route path="tasks" element={<TasksOverviewRoute />} />
         <Route path="new" element={<NewTaskProjectRoute />} />
+        {/* A framework card's wizard (spec 2026-11-15-framework-board, mockups 2–3). */}
+        <Route
+          path="cards/:runId"
+          element={
+            <Suspense fallback={<ScreenLoading label="Loading card…" />}>
+              <CardWizardRoute />
+            </Suspense>
+          }
+        />
 
         <Route
           path="tasks/:id"

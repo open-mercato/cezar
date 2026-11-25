@@ -19,7 +19,9 @@ const nodeId = z
   .string()
   .regex(/^[A-Za-z0-9][A-Za-z0-9_-]*$/, 'node ids are letters, digits, "-" and "_" (no dots)');
 
-const nodeBase = { id: nodeId, name: z.string().optional() };
+/** `stage` tags a node with the framework stage it belongs to (spec 2026-11-15-framework-board);
+ *  the engine reads it, the editor ignores it. */
+const nodeBase = { id: nodeId, name: z.string().optional(), stage: nodeId.optional() };
 
 const numericOp = z.enum(['>', '>=', '<', '<=', '==']);
 export const conditionSchema = z.discriminatedUnion('kind', [
@@ -70,6 +72,8 @@ export const graphNodeSchema = z.discriminatedUnion('type', [
     review: z.boolean().optional(),
     /** Fork branches only: the child task's budget, carved from this run's. */
     budgetUsd: z.number().positive().optional(),
+    /** Park after every turn until the user finishes the stage (framework-board D10). */
+    mode: z.literal('conversation').optional(),
   }),
   z.object({
     ...nodeBase,
@@ -146,6 +150,20 @@ export const graphNodeSchema = z.discriminatedUnion('type', [
   z.object({ ...nodeBase, type: z.literal('github.issue-comment'), issue: z.number().int().positive().optional(), body: z.string().min(1) }),
   /** POST to a URL — a network call, so it only runs with `CEZ_WORKFLOW_WEBHOOKS=1`. */
   z.object({ ...nodeBase, type: z.literal('notify.webhook'), url: z.string().url().regex(/^https?:\/\//, 'http(s) URLs only'), body: z.string().optional() }),
+  // ---- framework stages (spec 2026-11-15-framework-board): cezar runs these, no agent session ----
+  /** WIP admission (D13) and the framework pre-gate; parks `waiting` (no slot) while blocked. */
+  z.object({
+    ...nodeBase,
+    type: z.literal('stage.enter'),
+    stage: nodeId,
+    wip: z.number().int().positive().optional(),
+    precheck: z.string().min(1).optional(),
+  }),
+  /** Required artifacts (D14); a missing glob leaves by `missing`. */
+  z.object({ ...nodeBase, type: z.literal('stage.exit'), stage: nodeId, artifacts: z.array(z.string().min(1)) }),
+  /** Waits for the framework's own state to report the stage approved (D7/D9). No timeout by
+   *  design (D8): a human decision that holds no slot and stays cancellable. */
+  z.object({ ...nodeBase, type: z.literal('gate.framework'), stage: nodeId, approve: z.string().min(1).nullable() }),
 ]);
 
 /** `from` is `<node>` (its default port) or `<node>.<port>`. */
@@ -194,6 +212,9 @@ export const NODE_PORTS: Record<GraphNodeType, readonly string[]> = {
   'github.pr-update': ['done', 'failed'],
   'github.issue-comment': ['done', 'failed'],
   'notify.webhook': ['done', 'failed'],
+  'stage.enter': ['next'],
+  'stage.exit': ['pass', 'missing'],
+  'gate.framework': ['approve'],
 };
 
 export interface NodeCatalogEntry {
@@ -205,6 +226,8 @@ export interface NodeCatalogEntry {
   ports: string[];
   /** Fields readable as `{{nodes.<id>.<field>}}` once the node has run. */
   outputs: string[];
+  /** Compiled framework cards only: `graphIssues` rejects it in a user workflow. */
+  internal?: true;
 }
 
 /** What the editor's palette lists (`GET /workflows/nodes`). Phase-1 types only; the palette
@@ -231,10 +254,13 @@ export const NODE_CATALOG: NodeCatalogEntry[] = [
   { type: 'github.issue-comment', category: 'git', label: 'Issue comment', description: "Comment on the task's issue.", ports: ['done', 'failed'], outputs: ['issue'] },
   { type: 'notify.webhook', category: 'scripts', label: 'Webhook', description: 'POST a message to a URL (needs CEZ_WORKFLOW_WEBHOOKS=1).', ports: ['done', 'failed'], outputs: ['status'] },
   { type: 'workflow', category: 'flow', label: 'Sub-workflow', description: 'Run another saved workflow as a subtask and wait for it.', ports: ['done', 'failed'], outputs: ['runId', 'status', 'summary'] },
+  { type: 'stage.enter', category: 'flow', label: 'Enter stage', description: "A framework stage's entry: WIP limit and pre-gate. Waits without a slot while blocked.", ports: ['next'], outputs: [], internal: true },
+  { type: 'stage.exit', category: 'flow', label: 'Exit stage', description: 'Checks the files a stage must leave; missing fails the run.', ports: ['pass', 'missing'], outputs: ['missing'], internal: true },
+  { type: 'gate.framework', category: 'flow', label: 'Framework gate', description: "Waits until the framework's own state reports the stage approved. Holds no slot.", ports: ['approve'], outputs: [], internal: true },
 ];
 
 /** Ports that end the run as `failed` when left unwired; every other unwired port succeeds. */
-const FAILURE_PORTS = new Set(['failed', 'fail', 'exhausted', 'reject', 'red', 'timeout', 'conflict']);
+const FAILURE_PORTS = new Set(['failed', 'fail', 'exhausted', 'reject', 'red', 'timeout', 'conflict', 'missing']);
 
 export function isFailurePort(port: string): boolean {
   return FAILURE_PORTS.has(port);
@@ -301,8 +327,17 @@ const NODE_REF_RE = /\{\{\s*nodes\.([A-Za-z0-9_-]+)\.([A-Za-z0-9_]+)\s*\}\}/g;
  * node ids — are double-quoted in them: the editor reads a quoted word as the node to highlight. (empty when the graph is
  * sound). Shared by the file loader and, in phase 2, the editor's validate route.
  */
-export function graphIssues(graph: WorkflowGraph): string[] {
+export function graphIssues(graph: WorkflowGraph, opts: { frameworkNodes?: boolean } = {}): string[] {
   const issues: string[] = [];
+  // Framework stage nodes park on wake sources only a card has (framework-board); in a user
+  // workflow they would wait forever. Only a compiled card graph passes `frameworkNodes`.
+  if (!opts.frameworkNodes) {
+    for (const n of graph.nodes) {
+      if (NODE_CATALOG.find((c) => c.type === n.type)?.internal) {
+        issues.push(`node "${n.id}": ${n.type} belongs to a framework card's compiled graph, not to a workflow`);
+      }
+    }
+  }
   const ids = graph.nodes.map((n) => n.id);
   const dup = ids.find((id, i) => ids.indexOf(id) !== i);
   if (dup) issues.push(`duplicate node id "${dup}"`);
@@ -476,6 +511,8 @@ export function templatedText(n: GraphNode): string[] {
       return [n.body];
     case 'notify.webhook':
       return [n.body ?? ''];
+    case 'stage.enter':
+      return [n.precheck ?? ''];
     default:
       return [];
   }
@@ -506,13 +543,16 @@ function walkOrder(graph: WorkflowGraph): GraphNode[] {
 
 export function nodeToStep(node: Extract<GraphNode, { type: 'agent' | 'check' }>): WorkflowStepDef {
   if (node.type === 'check') {
-    const { type, ...rest } = node;
+    const { type, stage, ...rest } = node;
     void type;
+    void stage;
     return rest;
   }
   // Graph-only fields stay on the node; a v1 step never carries them.
-  const { type, verdicts, session, review, budgetUsd, ...rest } = node;
+  const { type, verdicts, session, review, budgetUsd, mode, stage, ...rest } = node;
   void type;
+  void mode;
+  void stage;
   void verdicts;
   void session;
   void review;
