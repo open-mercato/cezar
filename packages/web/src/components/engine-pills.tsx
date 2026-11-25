@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react'
 
 import { hasAccountChoice, useAgentAccounts } from '@/api/agent-accounts'
-import { useConfig, useProviderStatus, useRefreshRunnerModels, useRunnerModels } from '@/api/queries'
-import { runnerDiscoversModels, type CreateRunInput, type Runner } from '@open-mercato/cezar-api-client'
+import { useConfig, useModelRefreshAction, useProviderStatus, useRunnerModels } from '@/api/queries'
+import type { CreateRunInput, Runner } from '@open-mercato/cezar-api-client'
 import { PickerPill, RunnerPill, type RunnerAccountChoice } from '@/components/picker-pill'
 import { ReasoningEffortPill } from '@/components/reasoning-effort-pill'
 import { usableRunners } from '@/lib/provider-status'
@@ -269,7 +269,7 @@ export function EnginePills({
   const { runner, model, reasoningEffort, reasoningEfforts, runners, canRun, modelsLocked } = resolved
   const config = useConfig()
   const catalog = useRunnerModels(runner)
-  const refreshModels = useRefreshRunnerModels()
+  const refreshModels = useModelRefreshAction(runner)
   const models = modelsForRunner(runner, catalog.data, [pick.model, config.data?.defaultModels?.[runner]])
   const unavailable = disabled || !canRun
   const accountChoices = accounts ? resolved.accounts : []
@@ -320,16 +320,7 @@ export function EnginePills({
         onPick={(next) => onChange({ ...pick, model: next, reasoningEffort: null })}
         options={models.map((m) => ({ value: m.id, label: m.label, desc: m.desc }))}
         status={modelCatalogStatus(runner, catalog.data, catalog.isError)}
-        action={
-          runnerDiscoversModels(runner)
-            ? {
-                label: refreshModels.isPending ? 'Refreshing models…' : 'Refresh models…',
-                slot: 'model-pill-refresh',
-                disabled: refreshModels.isPending,
-                onSelect: () => refreshModels.mutate(runner),
-              }
-            : undefined
-        }
+        action={refreshModels}
       />
       <ReasoningEffortPill
         runner={runner}

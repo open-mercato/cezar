@@ -566,6 +566,18 @@ export function useRefreshRunnerModels() {
   })
 }
 
+/** The model pill's "Refresh models…" action — `undefined` for a runner with no host catalog. */
+export function useModelRefreshAction(runner: Runner) {
+  const refresh = useRefreshRunnerModels()
+  if (!runnerDiscoversModels(runner)) return undefined
+  return {
+    label: refresh.isPending ? 'Refreshing models…' : 'Refresh models…',
+    slot: 'model-pill-refresh',
+    disabled: refresh.isPending,
+    onSelect: () => refresh.mutate(runner),
+  }
+}
+
 /**
  * Every runner's catalog at once, keyed by runner — for the screens that render a row PER runner
  * (the Settings default-model selects) rather than one for the runner the user picked.

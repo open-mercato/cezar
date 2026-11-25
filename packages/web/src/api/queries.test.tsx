@@ -23,6 +23,7 @@ import {
   healthRecheckInterval,
   FORGE_RECHECK_MS,
   useRunnerModels,
+  useModelRefreshAction,
   useMarkRunSeen,
   useMarkRunUnseen,
   usePatchRun,
@@ -252,6 +253,33 @@ describe('useRunnerModels', () => {
     await waitFor(() => expect(cursor.current.isError).toBe(true), { timeout: 5000 })
     await waitFor(() => expect(codex.current.isSuccess).toBe(true))
     expect(codex.current.data?.models[0]?.id).toBe('gpt-future')
+  })
+})
+
+describe('useModelRefreshAction', () => {
+  it('offers no action for a runner without a host catalog', () => {
+    const { result } = renderHook(() => useModelRefreshAction('pi'), { wrapper: wrapper() })
+    expect(result.current).toBeUndefined()
+  })
+
+  it('re-probes with refresh=1, disables itself while pending and writes the answer into the picker catalog', async () => {
+    let answer!: (response: Response) => void
+    fetchMock.mockResolvedValueOnce(json({ runner: 'codex', models: [{ id: 'old', label: 'Old', description: '' }], source: 'cache', stale: false }))
+    fetchMock.mockImplementationOnce(() => new Promise<Response>((resolve) => { answer = resolve }))
+    const { result } = renderHook(
+      () => ({ catalog: useRunnerModels('codex'), action: useModelRefreshAction('codex') }),
+      { wrapper: wrapper() },
+    )
+    await waitFor(() => expect(result.current.catalog.data?.models[0]?.id).toBe('old'))
+    expect(result.current.action).toMatchObject({ label: 'Refresh models…', slot: 'model-pill-refresh', disabled: false })
+
+    act(() => result.current.action?.onSelect())
+    await waitFor(() => expect(result.current.action).toMatchObject({ label: 'Refreshing models…', disabled: true }))
+    expect(fetchMock.mock.calls.at(-1)?.[0]).toBe('/api/v1/models?runner=codex&refresh=1')
+
+    answer(json({ runner: 'codex', models: [{ id: 'new', label: 'New', description: '' }], source: 'live', stale: false }))
+    await waitFor(() => expect(result.current.catalog.data?.models[0]?.id).toBe('new'))
+    expect(result.current.action?.disabled).toBe(false)
   })
 })
 

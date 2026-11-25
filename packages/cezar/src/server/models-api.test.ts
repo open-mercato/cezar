@@ -105,6 +105,27 @@ describe('workspace model catalog API', () => {
     expect(calls).toBe(2);
   });
 
+  it('keeps the last good catalog when a refresh=1 probe fails', async () => {
+    let calls = 0;
+    const server = app(async () => {
+      calls += 1;
+      if (calls > 1) throw new Error('offline');
+      return [{ id: 'model-v1', label: 'Model V1', description: '' }];
+    });
+
+    expect(await (await apiRequest(server, '/api/v1/models?runner=claude')).json()).toMatchObject({ source: 'live' });
+    const refreshed = await apiRequest(server, '/api/v1/models?runner=claude&refresh=true');
+    expect(refreshed.status).toBe(200);
+    expect(await refreshed.json()).toMatchObject({ models: [{ id: 'model-v1' }], source: 'cache', stale: true });
+    expect(await (await apiRequest(server, '/api/v1/models?runner=claude')).json()).toMatchObject({ models: [{ id: 'model-v1' }] });
+  });
+
+  it('rejects a refresh value other than 1 or true', async () => {
+    const response = await apiRequest(app(async () => []), '/api/v1/models?runner=claude&refresh=yes');
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({ error: 'refresh must be 1 or true' });
+  });
+
   it('caches each runner separately', async () => {
     const seen: string[] = [];
     const server = createApp({
