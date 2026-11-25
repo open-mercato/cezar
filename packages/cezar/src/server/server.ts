@@ -7526,7 +7526,7 @@ export function createApp(deps: ServerDeps) {
   };
   const putSecret = async (scope: SecretScopeRef, name: string, input: SecretValueInput) => {
     try {
-      await secretStore.set(scope, name, input.value, input.audiences);
+      await secretStore.set(scope, name, input.value, input.audiences, input.binding);
     } catch (error) {
       if (error instanceof SecretsError) return { status: 400 as const, error: error.message };
       return { status: 409 as const, error: 'Could not save the secret. Check local storage permissions.' };

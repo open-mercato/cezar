@@ -139,9 +139,17 @@ export const secretValueInputSchema = z.object({
     if (issue) ctx.addIssue({ code: 'custom', message: issue });
   }),
   audiences: z.array(secretAudienceSchema).min(1).optional(),
+  binding: secretBindingSchema.optional(),
 }).superRefine((input, ctx) => {
-  if (input.audiences?.includes('proxy')) {
-    ctx.addIssue({ code: 'custom', path: ['audiences'], message: 'proxy secrets are set with `cezar secrets set`, not through this route' });
+  const proxy = input.audiences?.includes('proxy') ?? false;
+  if (proxy && input.audiences?.length !== 1) {
+    ctx.addIssue({ code: 'custom', path: ['audiences'], message: 'a proxy secret has no other audience' });
+  }
+  if (proxy && !input.binding) {
+    ctx.addIssue({ code: 'custom', path: ['binding'], message: 'a proxy secret needs hosts, a header and a scheme' });
+  }
+  if (!proxy && input.binding) {
+    ctx.addIssue({ code: 'custom', path: ['binding'], message: 'only a proxy secret carries a destination binding' });
   }
 });
 export type SecretValueInput = z.infer<typeof secretValueInputSchema>;

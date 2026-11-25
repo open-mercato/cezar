@@ -70,6 +70,41 @@ describe('Secrets settings', () => {
     expect(screen.queryByText('s3cret')).toBeNull()
   })
 
+  it('collects the destination binding for a proxy secret and sends it with the value', async () => {
+    const calls = setup()
+    await screen.findByText('OPENAI_API_KEY')
+    expect(screen.queryByLabelText('Hosts')).toBeNull()
+    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'GH_READONLY_TOKEN' } })
+    fireEvent.change(screen.getByLabelText('Value'), { target: { value: 'ghp_x' } })
+    fireEvent.click(screen.getByLabelText(/Outbound proxy/))
+    expect((screen.getByLabelText(/Check steps/) as HTMLInputElement).checked).toBe(false)
+    fireEvent.change(screen.getByLabelText('Hosts'), { target: { value: 'github.com, API.github.com' } })
+    fireEvent.change(screen.getByLabelText('Placeholder env var'), { target: { value: 'gh_token' } })
+    fireEvent.click(screen.getByRole('button', { name: /save secret/i }))
+    await waitFor(() => expect(calls.some((c) => c.method === 'PUT')).toBe(true))
+    expect(JSON.parse(calls.find((c) => c.method === 'PUT')!.body!)).toEqual({
+      value: 'ghp_x',
+      audiences: ['proxy'],
+      binding: { hosts: ['api.github.com', 'github.com'], header: 'Authorization', scheme: 'bearer', sentinel: 'GH_TOKEN' },
+    })
+  })
+
+  it('refuses a wildcard host before sending and shows a stored binding in the table', async () => {
+    const calls = setup({ secrets: [{
+      name: 'GH', audiences: ['proxy'], updatedAt: '2026-10-10T00:00:00Z',
+      binding: { hosts: ['github.com'], header: 'Authorization', scheme: 'basic' },
+    }] as never })
+    await screen.findByText('GH')
+    expect(screen.getByText('github.com · Authorization (basic)')).toBeTruthy()
+    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'X' } })
+    fireEvent.change(screen.getByLabelText('Value'), { target: { value: 'v' } })
+    fireEvent.click(screen.getByLabelText(/Outbound proxy/))
+    fireEvent.change(screen.getByLabelText('Hosts'), { target: { value: '*.github.com' } })
+    fireEvent.click(screen.getByRole('button', { name: /save secret/i }))
+    expect((await screen.findByRole('alert')).textContent).toContain('exact lowercase hostname')
+    expect(calls.some((c) => c.method === 'PUT')).toBe(false)
+  })
+
   it('addresses the workspace routes from the global section', async () => {
     const calls = setup({ scope: 'workspace' })
     await screen.findByText('OPENAI_API_KEY')

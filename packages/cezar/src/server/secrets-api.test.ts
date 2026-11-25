@@ -99,6 +99,24 @@ describe('secrets API (spec 2026-10-10-project-secrets-vault-options)', () => {
     expect(secretsListSchema.parse(await (await apiRequest(instance, '/api/v1/secrets')).json()).secrets).toEqual([]);
   });
 
+  it('stores a proxy secret with its binding and refuses a half-specified one', async () => {
+    const { instance } = await app();
+    const binding = { hosts: ['api.github.com', 'github.com'], header: 'Authorization', scheme: 'bearer', sentinel: 'GH_TOKEN' };
+    expect((await apiRequest(instance, '/api/v1/workspace/secrets/GH_READONLY_TOKEN', put({ value: 'tok-123', audiences: ['proxy'], binding }))).status).toBe(204);
+    const listed = secretsListSchema.parse(await (await apiRequest(instance, '/api/v1/workspace/secrets')).json());
+    expect(listed.secrets).toMatchObject([{ name: 'GH_READONLY_TOKEN', audiences: ['proxy'], binding }]);
+    expect(JSON.stringify(listed)).not.toContain('tok-123');
+    const refused = [
+      { value: 'v', audiences: ['proxy'] },
+      { value: 'v', audiences: ['proxy', 'checks'], binding },
+      { value: 'v', audiences: ['checks'], binding },
+      { value: 'v', audiences: ['proxy'], binding: { ...binding, hosts: ['*.github.com'] } },
+    ];
+    for (const body of refused) {
+      expect((await apiRequest(instance, '/api/v1/workspace/secrets/OTHER', put(body))).status).toBe(400);
+    }
+  });
+
   it('refuses project writes for an unregistered boot project, and still serves the workspace', async () => {
     const instance = createApp({ repoRoot: root, store, manager: {} as RunManager, version: 'test', secrets });
     expect((await apiRequest(instance, '/api/v1/secrets/KEY', put({ value: 'value' }))).status).toBe(409);
