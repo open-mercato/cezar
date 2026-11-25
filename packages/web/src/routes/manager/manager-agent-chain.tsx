@@ -1,5 +1,5 @@
 import { ArrowLeftRightIcon, BotIcon, ChevronLeftIcon, CircleAlertIcon, CircleCheckIcon, GripVerticalIcon, InfoIcon, PlusIcon } from 'lucide-react'
-import { useEffect, useRef, useState, type DragEvent, type FocusEvent, type PointerEvent } from 'react'
+import { useEffect, useId, useRef, useState, type DragEvent, type FocusEvent, type PointerEvent } from 'react'
 
 import { useAgentProfiles, useHealth, useProviderStatus, useRunnerModels } from '@/api/queries'
 import { useUpdateManager } from '@/api/managers'
@@ -100,12 +100,14 @@ function RowSummary({ row, fallbackRunner }: { row: Row; fallbackRunner: string 
   )
 }
 
+const NO_CONNECTORS_TEXT = 'Connectors are Claude-only. While this agent answers, the Manager works without them.'
+
 function NoConnectorsInfo() {
   const [open, setOpen] = useState(false)
+  const descriptionId = useId()
   const triggerRef = useRef<HTMLButtonElement | null>(null)
   const contentRef = useRef<HTMLDivElement | null>(null)
   const closeTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
-  const pointerDown = useRef(false)
 
   const clearTimer = () => clearTimeout(closeTimer.current)
   const scheduleClose = () => {
@@ -119,15 +121,21 @@ function NoConnectorsInfo() {
 
   return (
     <Popover open={open} onOpenChange={(next) => { clearTimer(); setOpen(next) }}>
+      <span id={descriptionId} className="sr-only">{NO_CONNECTORS_TEXT}</span>
       <PopoverTrigger asChild>
         <button
           ref={triggerRef}
           type="button"
           data-slot="manager-chain-no-connectors"
           aria-label="No connectors on this agent"
-          onPointerDown={() => {
-            pointerDown.current = true
-            setTimeout(() => { pointerDown.current = false }, 0)
+          aria-describedby={descriptionId}
+          // Open-only click: hovering or focusing already opens the popover, so letting Radix's
+          // default toggle run would immediately close it on click, tap, or Enter/Space.
+          // Outside-tap and Escape still close it via onOpenChange.
+          onClick={(event) => {
+            event.preventDefault()
+            clearTimer()
+            setOpen(true)
           }}
           onPointerEnter={(event: PointerEvent) => {
             if (event.pointerType === 'touch') return
@@ -138,7 +146,6 @@ function NoConnectorsInfo() {
             if (event.pointerType !== 'touch') scheduleClose()
           }}
           onFocus={() => {
-            if (pointerDown.current) return
             clearTimer()
             setOpen(true)
           }}
@@ -148,7 +155,7 @@ function NoConnectorsInfo() {
               setOpen(false)
             }
           }}
-          className="inline-flex size-6 shrink-0 items-center justify-center rounded-full text-muted-foreground outline-none hover:bg-muted hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50 pointer-coarse:size-9"
+          className="inline-flex size-6 shrink-0 items-center justify-center rounded-full text-muted-foreground outline-none hover:bg-background hover:text-foreground hover:ring-1 hover:ring-border focus-visible:bg-background focus-visible:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50 pointer-coarse:size-11"
         >
           <InfoIcon aria-hidden="true" className="size-3.5" />
         </button>
@@ -166,7 +173,7 @@ function NoConnectorsInfo() {
           if (event.pointerType !== 'touch') scheduleClose()
         }}
       >
-        Connectors are Claude-only. While this agent answers, the Manager works without them.
+        {NO_CONNECTORS_TEXT}
       </PopoverContent>
     </Popover>
   )
@@ -334,7 +341,7 @@ export function AgentChainSection({ manager, onPatch, initialEditing }: { manage
       <ol className="space-y-1.5">
         {rows.map((row, slot) => {
           const status = statusOf(slot)
-          const showNoConnectors = !status && (row.runner ?? fallbackRunner) !== 'claude' && grants
+          const showNoConnectors = (row.runner ?? fallbackRunner) !== 'claude' && grants
           return (
             <li
               key={`${slot}-${keyOf(row)}`}
@@ -343,9 +350,6 @@ export function AgentChainSection({ manager, onPatch, initialEditing }: { manage
               onDrop={() => { if (dragging !== null) move(dragging, slot); setDragging(null) }}
             >
               <div
-                draggable={!phone && rows.length > 1 && canReorder}
-                onDragStart={() => setDragging(slot)}
-                onDragEnd={() => setDragging(null)}
                 className={cn(
                   'flex min-h-11 w-full items-center gap-1 rounded-lg border border-border bg-background px-2 text-sm hover:bg-muted has-[[data-slot="manager-chain-row"]:focus-visible]:ring-[3px] has-[[data-slot="manager-chain-row"]:focus-visible]:ring-ring/50',
                   editing === slot && 'border-primary ring-1 ring-primary',
@@ -356,6 +360,9 @@ export function AgentChainSection({ manager, onPatch, initialEditing }: { manage
                   data-slot="manager-chain-row"
                   data-slot-index={slot}
                   aria-expanded={editing === slot}
+                  draggable={!phone && rows.length > 1 && canReorder}
+                  onDragStart={() => setDragging(slot)}
+                  onDragEnd={() => setDragging(null)}
                   onClick={() => setEditing(editing === slot ? null : slot)}
                   className="flex min-h-11 min-w-0 flex-1 items-center gap-2 outline-none"
                 >
