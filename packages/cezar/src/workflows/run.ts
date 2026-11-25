@@ -1224,31 +1224,46 @@ export function resolveExtraSystemPrompt(
 }
 
 export const GLOBAL_INSTRUCTIONS_HEADING =
-  '## Global instructions\n\nThese user instructions apply to every task and take precedence over repository, project, workflow and skill instructions. Preserve the other instructions wherever they do not conflict.';
+  '## Global instructions\n\nThese user instructions apply to every task and take precedence over repository, project, workflow and skill instructions. Preserve the other instructions wherever they do not conflict. They never lift the cezar task rules that follow them: a read-only task stays read-only, and a task a manager started leaves merges and automation enables to the user.';
 export const PROJECT_INSTRUCTIONS_HEADING =
   '## Project instructions\n\nThese apply to this project unless they conflict with the global instructions above.';
 
 const MANAGER_TASK_SYSTEM_PROMPT = 'A cezar manager started this task. Do not merge pull requests or enable automations: leave that to the user.';
 
+const PART_DIVIDER = '\n\n---\n\n';
+
+/** The body under a `## <title>` heading whose first paragraph explains it, or undefined when absent.
+ *  Keyed on the title, not the explanation, so a record saved under older wording still parses. */
+function headedBody(text: string, title: string): string | undefined {
+  if (!text.startsWith(`${title}\n\n`)) return undefined;
+  const explained = text.indexOf('\n\n', title.length + 2);
+  return explained < 0 ? '' : text.slice(explained + 2);
+}
+
 /**
- * A run's recorded extra prompt with its global-instructions block swapped for the CURRENT one.
- * The record snapshots them at start, so a Continue, resume or agent switch would otherwise keep
- * the text from before the user edited Settings, or none when they were set later.
+ * A run's recorded extra prompt rebuilt around the CURRENT global instructions. The record snapshots
+ * them at start, so a Continue, resume or agent switch would otherwise keep the text from before the
+ * user edited Settings, or none when they were set later. The project text and the task rules after
+ * it (manager line, landing, read-only) are kept as recorded.
  */
 export function withCurrentGlobalInstructions(stored: string | undefined, current: string | undefined): string | undefined {
-  const global = current?.trim();
-  const block = global ? `${GLOBAL_INSTRUCTIONS_HEADING}\n\n${global}` : undefined;
-  const text = stored?.trim();
-  if (block && text?.startsWith(block) && (text.length === block.length || text.startsWith('\n\n---\n\n', block.length))) return text;
-  let rest = text;
-  if (text?.startsWith(GLOBAL_INSTRUCTIONS_HEADING)) {
-    // The block ends where the next part `resolveExtraSystemPrompt`/execute composes after it begins.
-    const ends = [`${PROJECT_INSTRUCTIONS_HEADING}`, MANAGER_TASK_SYSTEM_PROMPT, 'Landing: ', READ_ONLY_PROMPT]
-      .map((next) => text.indexOf(`\n\n---\n\n${next}`))
-      .filter((index) => index >= 0);
-    rest = ends.length ? text.slice(Math.min(...ends) + '\n\n---\n\n'.length) : undefined;
+  const text = stored?.trim() ?? '';
+  // The task rules `execute` composes after the extra prompt.
+  const rules = [MANAGER_TASK_SYSTEM_PROMPT, 'Landing: ', READ_ONLY_PROMPT]
+    .map((next) => text.indexOf(`${PART_DIVIDER}${next}`))
+    .filter((index) => index >= 0);
+  const ruleStart = rules.length ? Math.min(...rules) : -1;
+  const startsWithRule = [MANAGER_TASK_SYSTEM_PROMPT, 'Landing: ', READ_ONLY_PROMPT].some((rule) => text.startsWith(rule));
+  const extra = startsWithRule ? '' : ruleStart >= 0 ? text.slice(0, ruleStart) : text;
+  const tail = startsWithRule ? text : ruleStart >= 0 ? text.slice(ruleStart + PART_DIVIDER.length) : '';
+  let project = extra;
+  const globalBody = headedBody(extra, '## Global instructions');
+  if (globalBody !== undefined) {
+    const split = globalBody.indexOf(`${PART_DIVIDER}## Project instructions\n\n`);
+    project = split < 0 ? '' : globalBody.slice(split + PART_DIVIDER.length);
   }
-  return composeSystemPrompt(block, rest) || undefined;
+  project = headedBody(project, '## Project instructions') ?? project;
+  return composeSystemPrompt(resolveExtraSystemPrompt(project, undefined, current), tail) || undefined;
 }
 
 /**
@@ -5928,6 +5943,13 @@ export class RunManager {
   }
 
   /** Switch the queued job or hand the live run over after its current owner releases the tree. */
+  /** `withCurrentGlobalInstructions` for one session, echoed on the record so it shows what ran. */
+  private async refreshedExtraPrompt(runId: string, stored: string | undefined): Promise<string | undefined> {
+    const refreshed = withCurrentGlobalInstructions(stored, (await loadWorkspaceConfig().catch(() => null))?.systemPrompt);
+    if (refreshed !== stored && this.store.getRun(runId)) this.store.updateRun(runId, { systemPrompt: refreshed });
+    return refreshed;
+  }
+
   switchAgent(runId: string, input: SwitchRunAgentInput & { agentProfile: string }, defaultRunner?: RunnerId): { summary: string } | { error: string } {
     const run = this.store.getRun(runId);
     if (!run) return { error: 'task not found' };
@@ -6928,14 +6950,14 @@ export class RunManager {
       ? `${context}\n\n---\n\n## New user instruction\n${openingPrompt}`
       : openingPrompt;
     state.grantedAttachmentLibrary = this.prepareAttachmentLibrary();
-    const recordedPrompt = withCurrentGlobalInstructions(record?.systemPrompt, (await loadWorkspaceConfig().catch(() => null))?.systemPrompt);
+    const recordedPrompt = await this.refreshedExtraPrompt(runId, record?.systemPrompt);
     const planUsage = this.planUsageTracker(runId, continueProfile.planUsageAccount);
     const launch = (launchSessionId: string, resume: boolean, context: string | undefined): AgentSession => {
       const contextualOpeningPrompt = withContext(context);
       const started = runner.startSession(
         {
           // The Continue step is a fresh agent session on the same run — the
-          // run's extra system prompt (already resolved at execute time and
+          // run's extra system prompt (resolved at execute time, global part refreshed above,
           // echoed on the record) rides along with the handoff contract, and a
           // dispatch prompt rides along with both (spec 2026-09-10-dispatch).
           systemPrompt: composeSystemPrompt(
@@ -9509,7 +9531,7 @@ export class RunManager {
     const stepPrivateMcp = !stepDef || !isReadOnlyWorkflow(stepDef);
     const runner = createRunner(stepBackend);
     const stepMcp = stepPrivateMcp ? await this.privateMcpForLaunch(stepBackend, onEvent) : [];
-    const stepExtraPrompt = withCurrentGlobalInstructions(extraSystemPrompt, (await loadWorkspaceConfig().catch(() => null))?.systemPrompt);
+    const stepExtraPrompt = await this.refreshedExtraPrompt(runId, extraSystemPrompt);
     let session: AgentSession;
     state.currentStepId = step.id;
     this.beginUsageInvocation(runId, state, step.id);

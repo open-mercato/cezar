@@ -44,6 +44,7 @@
 // `MOCK_START=silent` never prints the URL line; `MOCK_START=stderr` prints it on
 // stderr. `MOCK_PATH_DIR` overrides the `directory` `GET /path` reports.
 // `MOCK_API=v2` answers every non-`/api/` POST with 405, as OpenCode 2.x does.
+import { appendFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 
 const args = process.argv.slice(2);
@@ -186,6 +187,7 @@ const server = createServer((req, res) => {
           return '';
         }
       })();
+      if (process.env.MOCK_PROMPTS_FILE) appendFileSync(process.env.MOCK_PROMPTS_FILE, `${JSON.stringify(promptText)}\n`);
       const script = promptText.includes('#drop-then-die')
         ? 'drop-then-die'
         : promptText.includes('#drop-post')

@@ -1,6 +1,6 @@
 import type { ChildProcessWithoutNullStreams } from 'node:child_process';
 import { EventEmitter } from 'node:events';
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -798,6 +798,25 @@ describe('#897 a turn that outlives its prompt POST', () => {
     expect(types(events)).toContain('session');
     expect(types(events).filter((t) => t === 'turn-end')).toHaveLength(1);
     expect(result.text).toContain('Checking the working tree.');
+  }, 30_000);
+
+  it('a reopened session hears the current system prompt before the continuation', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'cez-opencode-prompts-'));
+    const file = join(dir, 'prompts.ndjson');
+    try {
+      const runner = new OpencodeServerRunner({ bin: mockBin, timeoutMs: 60_000 });
+      const session = runner.startSession(
+        { userPrompt: 'continue the existing task', systemPrompt: 'Never run the full suite.', cwd: process.cwd(), sessionId: 'ses_mock_1', resume: true, env: { MOCK_PROMPTS_FILE: file } },
+        () => undefined,
+        { autoEndAfterFirstTurn: true },
+      );
+      expect((await session.result).sessionId).toBe('ses_mock_1');
+      const [prompt] = readFileSync(file, 'utf8').trim().split('\n').map((line) => JSON.parse(line) as string);
+      expect(prompt?.split('Never run the full suite.')).toHaveLength(2);
+      expect(prompt?.indexOf('Never run the full suite.')).toBeLessThan(prompt!.indexOf('continue the existing task'));
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   }, 30_000);
 
   it('a resume the server answers 404 fails with the missing-session marker and posts no prompt', async () => {
