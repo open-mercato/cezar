@@ -19,8 +19,44 @@ import { cn } from '@/lib/utils'
  *    pill row — a mono, semibold chip beside plain ones read as a second typeface);
  *  - `dashed` — an affordance that leads somewhere rather than selecting ("Manage…").
  */
+const chipFaceClass = 'inline-flex items-center gap-1.5 border border-border bg-card px-2.5 text-ui font-medium text-muted-foreground'
+
 export const chipClass =
-  'inline-flex h-7 items-center gap-1.5 rounded-full border border-border bg-card px-2.5 text-ui font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:pointer-events-none disabled:opacity-55'
+  `${chipFaceClass} h-7 rounded-full transition-colors hover:bg-muted hover:text-foreground disabled:pointer-events-none disabled:opacity-55`
+
+/** The `active` face: a selected option. */
+export const chipActiveClass = 'border-foreground font-semibold text-foreground'
+
+/**
+ * A chip that only says something (an answer read back): the same face with no hover, and a
+ * long value wraps inside it — the 14px radius reads as `rounded-full` on one line.
+ */
+export function StaticChip({
+  active = false,
+  dashed = false,
+  icon,
+  className,
+  children,
+  ...props
+}: React.ComponentProps<'span'> & { active?: boolean; dashed?: boolean; icon?: React.ReactNode }) {
+  return (
+    <span
+      data-slot="chip"
+      data-active={active ? 'true' : undefined}
+      className={cn(
+        chipFaceClass,
+        'min-h-7 max-w-full rounded-[14px] py-0.5 break-words',
+        active && chipActiveClass,
+        dashed && 'border-dashed',
+        className,
+      )}
+      {...props}
+    >
+      {icon}
+      <span className="min-w-0">{children}</span>
+    </span>
+  )
+}
 
 export const chipChevron = (
   <ChevronDownIcon aria-hidden="true" className="size-2.5 shrink-0 text-soft-foreground" />
@@ -53,7 +89,7 @@ export function Chip({
       data-skill={skill ? 'true' : undefined}
       className={cn(
         chipClass,
-        active && 'border-foreground font-semibold text-foreground',
+        active && chipActiveClass,
         skill && 'border-violet text-foreground',
         dashed && 'border-dashed',
         className,

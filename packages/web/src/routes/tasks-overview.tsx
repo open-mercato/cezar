@@ -1,5 +1,6 @@
 import { ScheduledTasks } from '@/components/scheduled-tasks'
 import { useScheduledTasksGate } from '@/lib/scheduled-tasks-gate'
+import { runModelLine, titleWithModel } from '@/lib/actual-model'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import {
   ArchiveIcon,
@@ -12,6 +13,8 @@ import {
   CpuIcon,
   DollarSignIcon,
   FileDiffIcon,
+  GaugeIcon,
+  InfoIcon,
   GitBranchIcon,
   ListChecksIcon,
   LinkIcon,
@@ -25,17 +28,20 @@ import {
   XIcon,
 } from 'lucide-react'
 import * as React from 'react'
-import { useLocation } from 'react-router'
+import { useLocation, useNavigate as useRouterNavigate } from 'react-router'
 import { Virtualizer } from 'virtua'
 import { Link, useNavigate } from '@/lib/project-router'
 
 import { archiveFinished, archiveProjectRun, markAllRunsSeen, patchRun, setProjectRunRead } from '@/api/client'
 import { useRunUsage } from '@/api/global-events'
 import { CacheStatusChip } from '@/components/cache-status'
-import { queryKeys, useHealth, usePinRun, useReferenceProjectId, useRepo, useRuns, workspaceQueryKeys, writePatchedRunToCaches } from '@/api/queries'
-import type { RunRecord } from '@open-mercato/cezar-api-client'
+import { isCezarShell } from '@/lib/phone-app'
+import { usePlanUsageConsumers } from '@/api/plan-usage'
+import { queryKeys, useConfig, useHealth, usePinRun, useReferenceProjectId, useRepo, useRuns, workspaceQueryKeys, writePatchedRunToCaches } from '@/api/queries'
+import type { PlanUsageConsumerWindow, RunRecord } from '@open-mercato/cezar-api-client'
 import { queryScope } from '@open-mercato/cezar-api-client'
 import { TaskQuickActions, TaskSelectionCheckbox, TasksSelectionToolbar, useTasksOverviewSelection, type TasksOverviewActionHandler } from './tasks-overview-actions'
+import { planLimitCell, planWindowsByRun, PlanLimitCellView } from './tasks-plan-limit'
 import { CenteredState } from '@/components/centered-state'
 import { FirstRun } from '@/components/first-run'
 import { DiffStatLabel } from '@/components/diff-stat'
@@ -51,6 +57,7 @@ import { Segmented } from '@/components/segmented'
 import { StatusDescription, StatusMark } from '@/components/status-mark'
 import { SubtaskToggle } from '@/components/subtask-toggle'
 import { Button } from '@/components/ui/button'
+import { IconTooltip } from '@/components/ui/icon-tooltip'
 import {
   DropdownMenu,
   DropdownMenuCheckboxItem,
@@ -66,8 +73,11 @@ import { UnreadMarker } from '@/components/unread-marker'
 import { deriveAttention, isIdleClosed, type Attention } from '@/lib/attention'
 import { isReadDoneItem, isUnread, unreadDoneCount } from '@/lib/read-state'
 import {
+  CONTROLS_COLUMN_WIDTH_PX,
+  FOLDED_COLUMN_WIDTH_PX,
   isColumnExpanded,
   normalizeExpandedColumns,
+  tableMinWidth,
   taskColumnsForCapabilities,
   type NormalizedExpandedColumns,
   type TaskColumnDefinition,
@@ -127,6 +137,7 @@ import { cn } from '@/lib/utils'
 import { useAutomationsGate, useAutomationsQuery } from '@/routes/automations/use-automations'
 
 const NO_RUNS: RunRecord[] = []
+const NO_PLAN_WINDOWS: PlanUsageConsumerWindow[] = []
 const DEFAULT_EXPANDED_COLUMNS = normalizeExpandedColumns(undefined)
 const noToggle = (): void => undefined
 const AGE_TICK_MS = 30_000
@@ -166,13 +177,25 @@ export function TasksOverview({
   hasScheduledTasks = !!scheduledTasks,
   firstRun,
   initialQuery = '',
+  initialStatuses,
   cacheStatus,
+  managersAvailable = false,
+  planUsage,
+  defaultRunner,
 }: {
+  /** Plan-limit consumers (one query for the list); undefined until it answers or while folded. */
+  planUsage?: PlanUsageConsumerWindow[]
+  /** The project's default runner, for rows that did not pick one ("not reported" vs "not measured yet"). */
+  defaultRunner?: string
+  /** Manager owns task creation on mobile/app navigation when available. */
+  managersAvailable?: boolean
   /** Undefined while `/api/runs` has not answered: the header renders, the body stays empty —
    *  an empty state before we know there are no runs would be a lie. */
   runs: RunRecord[] | undefined
   /** The search Now hands over (`/tasks?q=`); the box stays session-local after that. */
   initialQuery?: string
+  /** The Status facet a link pre-selects (`/tasks?status=running`, the bottom bar's quick actions). */
+  initialStatuses?: readonly string[]
   scheduledTasks?: React.ReactNode
   hasScheduledTasks?: boolean
   /** First-run onboarding (spec 2026-10-26-first-run-onboarding): replaces the plain
@@ -231,7 +254,8 @@ export function TasksOverview({
     [],
   )
   // The facets are session-local, like the search text; only the origin is remembered.
-  const [filters, setFilters] = React.useState<TaskTableFilters>(NO_TASK_FILTERS)
+  const [filters, setFilters] = React.useState<TaskTableFilters>(() =>
+    initialStatuses?.length ? { ...NO_TASK_FILTERS, statuses: [...initialStatuses] } : NO_TASK_FILTERS)
   // Session-local like the facets; Recent on every fresh visit.
   const [sortBy, setSortBy] = React.useState<SortBy>('recent')
   const all = runs ?? NO_RUNS
@@ -244,6 +268,7 @@ export function TasksOverview({
     [all, origin, filters, automations],
   )
   const counts = React.useMemo(() => listCounts(narrowed), [narrowed])
+  const planByRun = React.useMemo(() => (planUsage ? planWindowsByRun(planUsage) : undefined), [planUsage])
   const matching = React.useMemo(() => filterRuns(narrowed, query), [narrowed, query])
   const visible = React.useMemo(() => sortTableRuns(matching, view, sortBy), [matching, view, sortBy])
   // A live search overrides the fold wholesale: `filterRuns` keeps a child whose parent also
@@ -347,17 +372,19 @@ export function TasksOverview({
         ) : null}
         {/* Only when there is something to sweep, like the legacy header's count-gated broom. */}
         {view === 'active' && finished > 0 ? (
-          <Button
-            type="button"
-            variant="ghost"
-            size="sm"
-            data-slot="archive-finished"
-            className="hidden md:inline-flex"
-            onClick={onArchiveFinished}
-          >
-            <ArchiveIcon className="size-3.5" aria-hidden="true" />
-            Archive finished
-          </Button>
+          <IconTooltip label="Archive every finished task and free its worktree (branches kept; Continue restores one)">
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              data-slot="archive-finished"
+              className="hidden md:inline-flex"
+              onClick={onArchiveFinished}
+            >
+              <ArchiveIcon className="size-3.5" aria-hidden="true" />
+              Archive finished
+            </Button>
+          </IconTooltip>
         ) : null}
         <div className="relative hidden w-60 md:block">
           <SearchIcon
@@ -414,6 +441,7 @@ export function TasksOverview({
         ) : null}
         {runs === undefined ? null : hasScheduledTasks && all.length === 0 ? <p className="text-sm text-muted-foreground">No tasks have started yet.</p> : visible.length === 0 ? (
           <TasksEmptyState
+            managersAvailable={managersAvailable}
             view={view}
             query={query}
             filtered={activeTaskFacetCount(filters) > 0}
@@ -437,11 +465,17 @@ export function TasksOverview({
                 {/* Fixed layout: the Task column takes whatever the fixed-width columns leave,
                     so a title stops truncating at thirty characters while Branch, Ref and Mem keep
                     their room (spec: attention-first cockpit (2026-11-11), Finding 1). */}
-                <table className="w-full table-fixed border-collapse" aria-rowcount={tableWindow.ariaRowCount}>
+                {/* A fixed table ignores the Task cell's own floor: below the columns' sum it gave the
+                    title 0px (iPad portrait), so the table keeps that floor and scrolls instead. */}
+                <table
+                  className="w-full table-fixed border-collapse"
+                  style={{ minWidth: `${tableMinWidth(columns, expandedColumns, Boolean(onTaskAction))}px` }}
+                  aria-rowcount={tableWindow.ariaRowCount}
+                >
                   <colgroup>
                     {/* The checkbox is all the controls column reserves; the quick actions float over
                         the row on hover (owner review, 2026-11-12: "the left side fell apart"). */}
-                    {onTaskAction ? <col data-column-id="controls" style={{ width: '36px' }} /> : null}
+                    {onTaskAction ? <col data-column-id="controls" style={{ width: `${CONTROLS_COLUMN_WIDTH_PX}px` }} /> : null}
                     {columns.map((column) => {
                       const expanded = isColumnExpanded(column.id, expandedColumns)
                       return (
@@ -449,7 +483,7 @@ export function TasksOverview({
                           key={column.id}
                           data-column-id={column.id}
                           data-expanded={expanded}
-                          style={{ width: expanded ? column.width : '42px' }}
+                          style={{ width: expanded ? column.width : `${FOLDED_COLUMN_WIDTH_PX}px` }}
                         />
                       )
                     })}
@@ -515,6 +549,8 @@ export function TasksOverview({
                         sortBy={sortBy}
                         columns={columns}
                         expandedColumns={expandedColumns}
+                        planWindows={planByRun ? (planByRun.get(item.node.run.id) ?? NO_PLAN_WINDOWS) : undefined}
+                        defaultRunner={defaultRunner}
                       />
                     ))}
                     <RowSpacer height={tableWindow.padBottom} colSpan={columns.length + (onTaskAction ? 1 : 0)} />
@@ -581,19 +617,18 @@ export function TasksOverview({
         ))}
       </div>
 
-      {/* The mobile New-task FAB. The desktop CTA lives in the sidebar. A router Link since
-          R4 step 1.3 re-pointed /new at the React composer — no full page load needed. */}
-      <Link
-        to="/new"
-        data-slot="new-task-fab"
-        aria-label="New task"
-        className="fixed right-4 bottom-[calc(16px+var(--phone-bar,0px)+env(safe-area-inset-bottom))] z-20 inline-flex size-14 items-center justify-center rounded-full bg-primary text-primary-foreground shadow-modal md:hidden"
-      >
-        <PlusIcon className="size-[22px]" aria-hidden="true" />
-      </Link>
+      {!managersAvailable ? <ManualTaskFab /> : null}
     </div>
     </LiveNowProvider>
   )
+}
+
+/** The capability fallback stays available when Manager cannot create tasks. */
+function ManualTaskFab() {
+  return <Link to="/new" data-slot="new-task-fab" aria-label="New task"
+    className="fixed right-4 bottom-[calc(16px+var(--phone-bar,0px)+env(safe-area-inset-bottom))] z-20 inline-flex size-14 items-center justify-center rounded-full bg-primary text-primary-foreground shadow-modal md:hidden">
+    <PlusIcon className="size-[22px]" aria-hidden="true" />
+  </Link>
 }
 
 /**
@@ -655,6 +690,7 @@ function TaskCardList({ cards }: { cards: React.ReactElement[] }) {
  * a fact, so those stay flat. `heading="h2"` because the page's h1 is the header's "Tasks".
  */
 function TasksEmptyState({
+  managersAvailable = false,
   view,
   query,
   filtered = false,
@@ -664,6 +700,7 @@ function TasksEmptyState({
   onShowAll = () => undefined,
   firstRun,
 }: {
+  managersAvailable?: boolean
   view: ListView
   query: string
   /** A status/workflow/automation facet is narrowing the list. */
@@ -733,7 +770,10 @@ function TasksEmptyState({
           subtitle="Finished tasks you archive land here."
         />
       ) : firstRun ? (
-        firstRun
+        managersAvailable ? <>
+          <div className={isCezarShell() ? 'p-4' : 'p-4 md:hidden'}><Button asChild><Link to="/manager">Ask a manager to start a task</Link></Button></div>
+          <div className={isCezarShell() ? 'hidden' : 'hidden md:block'}>{firstRun}</div>
+        </> : firstRun
       ) : (
         <CenteredState
           heading="h2"
@@ -743,12 +783,12 @@ function TasksEmptyState({
           title="No tasks yet"
           subtitle="Describe a task to get started."
           actions={
-            <Button asChild>
-              <Link to="/new">
-                <PlusIcon aria-hidden="true" />
-                New task
-              </Link>
-            </Button>
+            <>
+              {managersAvailable ? <Button asChild className={isCezarShell() ? undefined : "md:hidden"}><Link to="/manager">Ask a manager</Link></Button> : null}
+              <Button asChild className={managersAvailable ? (isCezarShell() ? 'hidden' : 'hidden md:inline-flex') : undefined}>
+                <Link to="/new"><PlusIcon aria-hidden="true" />New task</Link>
+              </Button>
+            </>
           }
         />
       )}
@@ -964,8 +1004,10 @@ function TaskColumnHeader({
   }
 
   const action = expanded ? 'Fold' : 'Expand'
+  const hint = expanded ? column.hint : undefined
   return (
     <Th columnId={column.id} right={column.align === 'right'} folded={!expanded}>
+      <span className={cn('flex items-center gap-0.5', hint ? '' : 'contents')}>
       <Tooltip>
         <TooltipTrigger asChild>
           <button
@@ -996,6 +1038,19 @@ function TaskColumnHeader({
         </TooltipTrigger>
         <TooltipContent side="top">{column.label} · {action} column</TooltipContent>
       </Tooltip>
+      {hint ? (
+        <IconTooltip label={hint} side="top">
+          <span
+            data-slot="column-hint"
+            tabIndex={0}
+            aria-label={`About ${column.label}: ${hint}`}
+            className="inline-flex shrink-0 rounded-sm outline-none hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50"
+          >
+            <InfoIcon className="size-3" aria-hidden="true" />
+          </span>
+        </IconTooltip>
+      ) : null}
+      </span>
     </Th>
   )
 }
@@ -1019,6 +1074,8 @@ function TaskColumnIconView({ icon }: { icon?: TaskColumnIcon }) {
       return <CpuIcon className={className} aria-hidden="true" />
     case 'memory':
       return <MemoryStickIcon className={className} aria-hidden="true" />
+    case 'planLimit':
+      return <GaugeIcon className={className} aria-hidden="true" />
     case 'started':
       return <Clock3Icon className={className} aria-hidden="true" />
     default:
@@ -1038,7 +1095,7 @@ const TD_BASE = 'h-11 overflow-hidden border-b border-border px-2.5 whitespace-n
 /**
  * The status grammar (spec: attention-first cockpit (2026-11-11), Proposal 7): a word only where
  * the state is still open. A finished, cancelled, idle-closed or archived row shows its mark and no
- * pill — the mark keeps the state's colour (green done, grey queued/cancelled, orange idle: owner
+ * pill — the mark keeps the state's colour (green done, grey queued/cancelled/idle: owner
  * review, 2026-11-12), the news is elsewhere.
  */
 function isQuietStatus(run: RunRecord): boolean {
@@ -1130,8 +1187,13 @@ const TableRow = React.memo(function TableRow({
   sortBy,
   columns,
   expandedColumns,
+  planWindows,
+  defaultRunner,
   selectable, selectionMode, selected, onSelect, actionsBusy, onAction,
 }: {
+  /** This run's 5-hour plan windows; undefined while the ledger has not answered. */
+  planWindows?: PlanUsageConsumerWindow[]
+  defaultRunner?: string
   ariaRowIndex?: number
   run: RunRecord
   /** Nesting level under the task that dispatched this one; 0 for a top-level row. */
@@ -1247,6 +1309,8 @@ const TableRow = React.memo(function TableRow({
             scheduled={scheduled}
             reference={reference}
             cost={cost}
+            planWindows={planWindows}
+            defaultRunner={defaultRunner}
             to={to}
             onRename={onRename}
             onTogglePin={onTogglePin}
@@ -1271,11 +1335,15 @@ function TaskTableCell({
   scheduled,
   reference,
   cost,
+  planWindows,
+  defaultRunner,
   to,
   onRename,
   onTogglePin,
   sortBy,
 }: {
+  planWindows?: PlanUsageConsumerWindow[]
+  defaultRunner?: string
   column: TaskColumnDefinition
   expanded: boolean
   run: RunRecord
@@ -1369,11 +1437,20 @@ function TaskTableCell({
       return (
         <td
           data-column-id={column.id}
+          title={runModelLine(run)}
           className={cn(TD_BASE, 'text-right font-mono text-xs text-muted-foreground tabular-nums')}
         >
           {cost || <Dash />}
         </td>
       )
+    case 'planLimit': {
+      const cell = planLimitCell(run, planWindows, defaultRunner)
+      return (
+        <td data-column-id={column.id} title={cell.kind === 'share' ? cell.title : undefined} className={cn(TD_BASE, 'text-right')}>
+          <PlanLimitCellView cell={cell} />
+        </td>
+      )
+    }
     case 'started':
       return (
         <td data-column-id={column.id} className={cn(TD_BASE, 'text-right text-xs text-soft-foreground tabular-nums')}>
@@ -1461,7 +1538,7 @@ function TitleCell({
       ) : null}
       <Link
         to={to}
-        title={title}
+        title={titleWithModel(title, run)}
         aria-describedby={quiet ? statusId : undefined}
         className={cn(
           'min-w-0 truncate text-ui',
@@ -1624,6 +1701,25 @@ const TaskCard = React.memo(function TaskCard({
   const statusId = React.useId()
   const quiet = isQuietStatus(run)
 
+  // Open cards put the title on its own line after the status, age and pin: rendered there in the
+  // DOM too, so reading and focus order follow what the eye sees.
+  const title = (
+    <Link
+      to={to}
+      aria-describedby={quiet ? statusId : undefined}
+      data-slot="task-card-title"
+      className={cn(
+        'min-w-0 flex-1 text-ui leading-[1.35] [overflow-wrap:anywhere]',
+        !quiet && 'basis-full',
+        unread ? 'font-semibold text-foreground' : readDone ? 'font-medium text-muted-foreground' : 'font-medium'
+      )}
+    >
+      {runTitle(run)}
+      {quiet ? <StatusDescription id={statusId} attention={attention} /> : null}
+      {unread ? <UnreadMarker /> : null}
+    </Link>
+  )
+
   return (
     <div
       data-slot="task-card"
@@ -1641,7 +1737,9 @@ const TaskCard = React.memo(function TaskCard({
       }}
       className="cursor-pointer rounded-lg border border-border bg-card px-3.5 py-3 shadow-xs"
     >
-      <div className="flex items-start gap-2.5">
+      {/* A status pill beside the title left a phone title one word wide, overlapping the age at
+          large text: the title gets its own full-width line below the pill and age. */}
+      <div data-slot="task-card-head" className={cn('flex items-start gap-2.5', !quiet && 'flex-wrap gap-y-1.5')}>
         {selectable ? <TaskSelectionCheckbox label={`Select ${runTitle(run)}`} checked={selected}
           disabled={actionsBusy} onChange={() => onSelect(run.id)} /> : null}
         {quiet ? (
@@ -1652,18 +1750,7 @@ const TaskCard = React.memo(function TaskCard({
             {scheduled ? <span className="tabular-nums">{scheduled.label}</span> : null}
           </Pill>
         )}
-        <Link
-          to={to}
-          aria-describedby={quiet ? statusId : undefined}
-          className={cn(
-            'min-w-0 flex-1 text-ui leading-[1.35]',
-            unread ? 'font-semibold text-foreground' : readDone ? 'font-medium text-muted-foreground' : 'font-medium'
-          )}
-        >
-          {runTitle(run)}
-          {quiet ? <StatusDescription id={statusId} attention={attention} /> : null}
-          {unread ? <UnreadMarker /> : null}
-        </Link>
+        {quiet ? title : null}
         {/* Same kind chip as the table's Task cell — what this dispatched card is for. */}
         {dispatchKindLabel(run) ? (
           <span
@@ -1683,7 +1770,7 @@ const TaskCard = React.memo(function TaskCard({
             className="mt-px"
           />
         ) : null}
-        <span className="mt-0.5 shrink-0 text-meta text-soft-foreground tabular-nums">
+        <span className={cn('mt-0.5 shrink-0 text-meta text-soft-foreground tabular-nums', !quiet && 'ml-auto')}>
           <RelativeAge at={sortTimestamp(run, sortBy)} />
         </span>
         {/* Always visible here, not hover-revealed: a card has no hover to speak of on the
@@ -1695,6 +1782,7 @@ const TaskCard = React.memo(function TaskCard({
             className="-mr-1 mt-px"
           />
         ) : null}
+        {quiet ? null : title}
       </div>
       <div className="mt-2 flex flex-wrap items-center gap-1.5 font-mono text-meta font-medium text-muted-foreground tabular-nums">
         <span>{workflowLabel(run)}</span>
@@ -1786,6 +1874,26 @@ function BranchSkeleton() {
 }
 
 /**
+ * `?status=` (the bottom bar's quick actions) seeds the Status facet once and leaves the URL, so
+ * clearing the facet stays cleared on Back or a reload. A new seed remounts the table.
+ */
+function useStatusSeed(location: ReturnType<typeof useLocation>): { key: string; statuses: string[] } | null {
+  // The router's own navigate: `location.pathname` is already project-prefixed.
+  const navigate = useRouterNavigate()
+  const param = new URLSearchParams(location.search).get('status')
+  const [seed, setSeed] = React.useState<{ key: string; statuses: string[] } | null>(null)
+  if (param !== null && seed?.key !== location.key) setSeed({ key: location.key, statuses: param.split(',').filter(Boolean) })
+  React.useEffect(() => {
+    if (param === null) return
+    const rest = new URLSearchParams(location.search)
+    rest.delete('status')
+    const query = rest.toString()
+    void navigate({ pathname: location.pathname, search: query ? `?${query}` : '', hash: location.hash }, { replace: true, state: location.state })
+  }, [param, location, navigate])
+  return seed
+}
+
+/**
  * The overview wired to live data: `useRuns()` (kept fresh by the global SSE stream), the shared
  * Active/Archived context (the sidebar's tabs and these are one state), and the archive-finished
  * mutation. The invalidate on success is the authoritative half of the doctrine — the stream will
@@ -1793,7 +1901,10 @@ function BranchSkeleton() {
  */
 export function TasksOverviewRoute() {
   const runs = useRuns()
-  const initialQuery = new URLSearchParams(useLocation().search).get('q') ?? ''
+  const location = useLocation()
+  const search = new URLSearchParams(location.search)
+  const initialQuery = search.get('q') ?? ''
+  const statusSeed = useStatusSeed(location)
   const health = useHealth()
   const metricVisibility = usageMetricVisibility(health.data)
   // Project-scoped, unlike health. Unknown (still loading) counts as git so a fresh task's
@@ -1813,7 +1924,7 @@ export function TasksOverviewRoute() {
     void queryClient.invalidateQueries({ queryKey: [actionScope, 'runs'] })
   }, [actionScope, queryClient])
   const archive = useMutation({
-    mutationFn: archiveFinished,
+    mutationFn: () => archiveFinished(),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.runs.all }),
   })
   // "Mark all read" (#unread-done-items): one call stamps every unread finished run; the
@@ -1848,6 +1959,9 @@ export function TasksOverviewRoute() {
     [pinMutate],
   )
   const taskTableColumns = useTaskTableColumns()
+  // One consumers query for the whole list, asked only while the Plan limit column is open.
+  const planUsage = usePlanUsageConsumers(taskTableColumns.isExpanded('planLimit'))
+  const defaultRunner = useConfig().data?.defaultRunner
   const [origin, setOrigin] = useTaskOrigin()
   // Names for the Automation facet and the Scheduled group. Only asked for while automations are
   // on AND automation rows are on screen or a schedule is known — a project that never ran or
@@ -1893,6 +2007,10 @@ export function TasksOverviewRoute() {
   return (
     <ReferenceStatusProvider projectId={projectId} requests={referenceRequests}>
       <TasksOverview
+        // A new `?status=` while already here (a quick action) re-seeds the facets.
+        key={statusSeed?.key}
+        initialStatuses={statusSeed?.statuses}
+        managersAvailable={health.data?.capabilities?.managers === true}
         scheduledTasks={view === 'active' ? <ScheduledTasks enabled={scheduledGate} /> : undefined}
         hasScheduledTasks={view === 'active' && !!automationsQuery.data?.automations.some(a => a.deferredStart)}
         runs={runs.data}
@@ -1916,6 +2034,8 @@ export function TasksOverviewRoute() {
         // table does) instead of guessing, so it never shows the welcome page to a plain folder.
         firstRun={view === 'active' ? <FirstRun gitRepo={repo.data ? repo.data.info !== null : repo.isError ? true : undefined} /> : undefined}
         initialQuery={initialQuery}
+        planUsage={planUsage.data?.entries}
+        defaultRunner={defaultRunner}
         cacheStatus={<CacheStatusChip queryKey={queryKeys.runs.list()} isFetching={runs.isFetching} isError={runs.isError} />}
       />
     </ReferenceStatusProvider>

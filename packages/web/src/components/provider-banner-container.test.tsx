@@ -62,7 +62,8 @@ describe('ProviderBannerContainer', () => {
   it('persists dismissals optimistically and keeps them hidden after remount', async () => {
     const client = createQueryClient()
     seed(client, { appearance: { accent: 'violet' } })
-    fetchMock.mockResolvedValue(json({
+    // A fresh body per call: the banner's Reconnect also reads the account listing.
+    fetchMock.mockImplementation(async () => json({
       appearance: { accent: 'violet' },
       dismissedProviderAuthFailures: {
         claude: 'claude-1',

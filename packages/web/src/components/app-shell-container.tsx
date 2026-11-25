@@ -2,6 +2,7 @@ import { memo, useEffect, useMemo, useState, type ReactNode } from 'react'
 import { matchPath, useLocation } from 'react-router'
 
 import { useManagers } from '@/api/managers'
+import { useAttention } from '@/api/attention'
 import { useHealth, useProjectRuns, useProjects, useRunsForProject, useSkillsUpdate, useStarCount, useTodos, useWorkspaceConfig, useWorkspaceUiState } from '@/api/queries'
 import type { HealthResponse, ProjectsResponse, RunRecord, SkillsUpdateState } from '@open-mercato/cezar-api-client'
 import { AppShell, type ProjectSwitcher as ProjectSwitcherData, type RepoChip } from '@/components/app-shell'
@@ -9,6 +10,7 @@ import { CommandPalette } from '@/components/command-palette'
 import { TaskPalette } from '@/components/task-palette/task-palette'
 import { ListViewProvider } from '@/components/list-view'
 import { HostUsageWidget } from '@/components/host-usage-widget'
+import { BuildSkewBanner } from '@/components/build-skew-banner'
 import { ProviderBannerContainer } from '@/components/provider-banner-container'
 import { ConnectionBanner } from '@/components/cache-status'
 import { TelemetryConsentBanner } from '@/components/telemetry-consent'
@@ -16,7 +18,9 @@ import { ProjectSwitcher } from '@/components/project-switcher'
 import { CurrentTasksContainer } from '@/components/current-tasks'
 import { ToolsMenuItems, toolsTone, toolsTooltip } from '@/components/tools-menu'
 import { ManagerHeads } from '@/components/manager-heads'
-import { ManagerRail, ManagerSidebar } from '@/routes/manager/manager-sidebar'
+import { ConnectPhoneLink, PhonesLink } from '@/components/connect-phone-link'
+import { RelayAccountNotice } from '@/components/relay-account-notice'
+import { ManagerRail, ManagerSidebar, ProjectQuestionsLink } from '@/routes/manager/manager-sidebar'
 import { useDocumentTitle } from '@/lib/use-document-title'
 import { pathnameProjectId, stripProjectPrefix, useActiveProjectId } from '@/lib/project-router'
 import { withServedBootProject } from '@/lib/served-boot-project'
@@ -29,6 +33,7 @@ import { runTitle } from '@/lib/task-groups'
 import { lastProjectId, managerHref, rememberLastProject, rememberManagerLocation } from '@/lib/manager-location'
 import { whatsNewHasUnseen } from '@/lib/onboarding'
 import { isManagerPathname, managersAttention } from '@/lib/managers'
+import { MANAGER_NOW_PATH, countLive, managerNowEntries } from '@/routes/manager/manager-now-model'
 import { useManagerModeTelemetry } from '@/lib/manager-telemetry'
 import { pageTitleContext, preloadManagerRoutes } from '@/routes'
 
@@ -115,8 +120,10 @@ export const AppShellContainer = memo(function AppShellContainer({ children }: {
   // GitHub automations are opt-in too (#801) — same honesty rule: without the server's word for
   // it the nav must not offer a tab whose every request would 409.
   const automationsAvailable = health.data?.capabilities.automations === true
+  // The project Terminal page (#1526) exists only where a shell is allowed at all.
+  const terminalAvailable = health.data?.capabilities.terminal === true
   const todos = useTodos(inboxAvailable)
-  // Mounted for the session: the switch's dot and the notification path read this cache in Code
+  // Mounted for the session: the switch's dot and the notification path read this cache in Tasks
   // mode too, and the workspace stream keeps it current.
   const managersAvailable = health.data?.capabilities.managers === true
   const managers = useManagers(managersAvailable)
@@ -213,10 +220,12 @@ export const AppShellContainer = memo(function AppShellContainer({ children }: {
           },
     [globalSettings, navProjectId, projectId, navProject?.name, projectName, registry?.projects],
   )
-  const banner = useMemo(() => <><ConnectionBanner /><ProviderBannerContainer /></>, [])
+  const banner = useMemo(() => <><ConnectionBanner /><BuildSkewBanner /><ProviderBannerContainer /><RelayAccountNotice /></>, [])
   // The opt-in ask (docs/telemetry.md): renders nothing once this machine has answered.
   const footerBanner = useMemo(() => <TelemetryConsentBanner />, [])
   const currentTasks = useMemo(() => <CurrentTasksContainer />, [])
+  // With managers off the Questions row moves here (spec 2026-11-17-questions-inbox § F).
+  const workspaceQuestions = useMemo(() => (health.data && !managersAvailable ? <ProjectQuestionsLink /> : null), [health.data, managersAvailable])
   // The machine glance lives in the footer's "⋯" menu now, so it mounts only while that is open;
   // its own wrapper still gates the viewport and transport (nothing below `md` or in remote).
   const hostWidget = useMemo(() => <HostUsageWidget />, [])
@@ -251,9 +260,22 @@ export const AppShellContainer = memo(function AppShellContainer({ children }: {
     now,
   )
   // Slots, because AppShell stays QueryClient-free: each reads the managers cache itself.
-  const managerSidebar = useMemo(() => <ManagerSidebar />, [])
+  // Now is the one list (spec 2026-11-20-phone-notifications-inbox): its badge is the attention total,
+  // the number this computer adds to the phone's icon. The project's own count until it loads.
+  const attention = useAttention()
+  const projectNowCount = attention.data?.counts.total ?? runs.data?.needsYou ?? null
+  // Manager mode's Now is every manager's items (spec 2026-11-23-needs-you-triage), so is its badge.
+  const managerNowCount = useMemo(
+    () => (attention.data && managers.data ? countLive(managerNowEntries(attention.data.items, managers.data.managers)) : null),
+    [attention.data, managers.data],
+  )
+  const nowCount = inManager ? managerNowCount : projectNowCount
+  const managerSidebar = useMemo(() => <ManagerSidebar nowTo={MANAGER_NOW_PATH} nowCount={managerNowCount} />, [managerNowCount])
   const managerRail = useMemo(() => <ManagerRail />, [])
   const managerHeads = useMemo(() => <ManagerHeads />, [])
+  const connectPhone = useMemo(() => <ConnectPhoneLink />, [])
+  const phonesLink = useMemo(() => <PhonesLink />, [])
+  const phonesRail = useMemo(() => <PhonesLink rail />, [])
 
   return (
     // The Active/Archived filter is shared by the quick-list below and the Tasks table (Step 3.4),
@@ -264,6 +286,7 @@ export const AppShellContainer = memo(function AppShellContainer({ children }: {
         repo={repo}
         brandName={workspaceConfig.data?.branding.name ?? 'cezar'}
         brandLogoUrl={workspaceConfig.data?.branding.logoUrl ?? null}
+        computerName={workspaceConfig.data?.computerName}
         version={health.data?.version ?? null}
         latestVersion={health.data?.latestVersion ?? null}
         // The ⭐ ask's count. Same honesty rule as the chips above: `available: false` — offline,
@@ -276,7 +299,7 @@ export const AppShellContainer = memo(function AppShellContainer({ children }: {
         // Same `?? null` honesty: no badge while the list is unknown; a loaded list with none
         // unread is 0, which AppShell also renders as no badge.
         unreadCount={runs.data?.unread ?? null}
-        nowCount={runs.data?.needsYou ?? null}
+        nowCount={nowCount}
         runningCount={runs.data?.running ?? null}
         healthStatus={healthStatus}
         skillsUpdateAvailable={skillsUpdateAvailable}
@@ -289,6 +312,7 @@ export const AppShellContainer = memo(function AppShellContainer({ children }: {
         inboxAvailable={inboxAvailable}
         // Hidden unless health reports the opt-in automations capability (#801).
         automationsAvailable={automationsAvailable}
+        terminalAvailable={terminalAvailable}
         tracker={tracker}
         banner={banner}
         whatsNew={whatsNew}
@@ -299,9 +323,13 @@ export const AppShellContainer = memo(function AppShellContainer({ children }: {
         footerBanner={footerBanner}
         singleProject={singleProject}
         currentTasks={currentTasks}
+        workspaceQuestions={workspaceQuestions}
         switcher={switcher}
         hostWidget={hostWidget}
         toolsMenu={toolsMenu}
+        connectPhone={connectPhone}
+        phonesLink={phonesLink}
+        phonesRail={phonesRail}
         managersAvailable={managersAvailable}
         managerAttention={managersAttention(managers.data?.managers)}
         managerTo={managerTo}

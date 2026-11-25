@@ -121,12 +121,12 @@ describe('StepRail', () => {
   describe('an idle-closed run (#2022)', () => {
     const rows = () => [...document.querySelectorAll('[data-slot="step-row"]')]
 
-    it('the step that closed it wears the orange pause, not the danger X', () => {
+    it('the step that closed it wears a neutral pause, not the danger X', () => {
       render(<StepRail closedAs="idle" steps={[step('done', 'done'), step('t', 'failed', { finishedAt: '2026-11-04T10:00:00.000Z' })]} />)
       expect(rows().map((row) => row.getAttribute('data-visual'))).toEqual(['done', 'idle'])
       const icon = rows()[1]!.querySelector('svg')!.getAttribute('class')!
       expect(icon).toContain('lucide-circle-pause')
-      expect(icon).toContain('text-conflict')
+      expect(icon).toContain('text-soft-foreground')
       expect(icon).not.toContain('text-danger')
     })
 
@@ -185,10 +185,10 @@ describe('StepRail', () => {
       expect(rows()[0]!.querySelector('svg')!.getAttribute('class')).toContain('text-danger')
     })
 
-    it('an idle-closed run keeps its orange pause', () => {
+    it('an idle-closed run keeps its neutral pause', () => {
       render(<StepRail closedAs="idle" steps={[step('t', 'failed', { finishedAt: '2026-11-04T10:00:00.000Z' })]} />)
       expect(rows().map((row) => row.getAttribute('data-visual'))).toEqual(['idle'])
-      expect(rows()[0]!.querySelector('svg')!.getAttribute('class')).toContain('text-conflict')
+      expect(rows()[0]!.querySelector('svg')!.getAttribute('class')).toContain('text-soft-foreground')
     })
   })
 
@@ -273,7 +273,7 @@ describe('WorkflowSteps — the collapsible header summary', () => {
     expect(document.querySelector('[data-slot="step-row"]')).not.toBeNull()
   })
 
-  it('an idle-closed run: the closing step is an orange dot collapsed and an orange pause expanded (#2022)', () => {
+  it('an idle-closed run: the closing step is a neutral dot collapsed and a neutral pause expanded (#2022)', () => {
     const idleSteps = [
       step('implement', 'failed', { name: 'Do the task', finishedAt: '2026-11-04T10:00:00.000Z' }),
       step('fix', 'failed', { name: 'Fix it', finishedAt: '2026-11-04T10:05:00.000Z' }),
@@ -282,13 +282,13 @@ describe('WorkflowSteps — the collapsible header summary', () => {
     const dots = [...document.querySelectorAll('[data-slot="step-dot"]')]
     expect(dots.map((dot) => dot.getAttribute('data-visual'))).toEqual(['failed', 'idle'])
     expect(dots[0]!.getAttribute('class')).toContain('bg-danger')
-    expect(dots[1]!.getAttribute('class')).toContain('bg-conflict')
+    expect(dots[1]!.getAttribute('class')).toContain('bg-soft-foreground')
     expect(dots[1]!.getAttribute('class')).not.toContain('bg-danger')
 
     fireEvent.click(screen.getByRole('button'))
     const rows = [...document.querySelectorAll('[data-slot="step-row"]')]
     expect(rows.map((row) => row.getAttribute('data-visual'))).toEqual(['failed', 'idle'])
-    expect(rows[1]!.querySelector('svg')!.getAttribute('class')).toContain('text-conflict')
+    expect(rows[1]!.querySelector('svg')!.getAttribute('class')).toContain('text-soft-foreground')
   })
 
   it('a run closed on a question: the closing step is a blue dot collapsed and a question mark expanded (#2025)', () => {

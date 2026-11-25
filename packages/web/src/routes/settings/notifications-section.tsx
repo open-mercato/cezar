@@ -12,6 +12,9 @@ import {
   type NotificationSupport,
 } from '@/lib/notifications'
 import { CardNote, FormRow, SettingsCard, useSavedFlash } from './form-row'
+import { NotchToggle, shellHasNotch } from './notch-toggle'
+import { ThisPhoneNotificationsCard } from './phone-notifications'
+import { isCezarShell } from '@/lib/phone-app'
 
 /**
  * Settings → Notifications (R6 Step 1.7, spec §"Cross-cutting").
@@ -50,6 +53,8 @@ export function NotificationsSection() {
   const save = React.useCallback(
     (next: boolean) => {
       setEnabled(next)
+      // A first load still in flight would land after the answer below and flip the switch back.
+      void queryClient.cancelQueries({ queryKey: workspaceQueryKeys.uiState })
       putWorkspaceUiState({ notifications: { enabled: next } })
         .then((merged) => {
           queryClient.setQueryData(workspaceQueryKeys.uiState, merged)
@@ -88,6 +93,8 @@ export function NotificationsSection() {
 
   return (
     <div data-slot="notifications-section" className="flex w-full flex-col gap-5">
+      {/* Inside CezarBot: what this phone hears (spec 2026-11-20-phone-notifications-inbox). */}
+      {isCezarShell() ? <ThisPhoneNotificationsCard /> : null}
       <SettingsCard id="notifications" title="Browser notifications">
         <FormRow
           htmlFor="notifications-enabled"
@@ -135,6 +142,8 @@ export function NotificationsSection() {
           />
         </FormRow>
       </SettingsCard>
+
+      {shellHasNotch() ? <NotchToggle /> : null}
     </div>
   )
 }

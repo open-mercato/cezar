@@ -1,4 +1,4 @@
-import type { ProjectListEntry, RunIndexEntry } from '@open-mercato/cezar-api-client'
+import type { ManagerSummary, ProjectListEntry, RunIndexEntry } from '@open-mercato/cezar-api-client'
 
 import { allProjectTags } from '@/lib/project-tags'
 import { compareIsoDesc, runTitle, sortTimestamp, type SortBy } from '@/lib/task-groups'
@@ -38,6 +38,7 @@ export type { ListView } from '@/lib/task-groups'
 /** Every untagged row shares this array: `toGlobalTasks` runs on each index refetch, and a fresh
  *  `[]` per call would break the row memo's `tags` identity for the common untagged project. */
 const NO_TAGS: readonly string[] = []
+const NO_MANAGERS: readonly string[] = []
 
 /** One row of the global table: an index entry plus everything the registry knows about the
  *  project it came from. Resolved once, so no cell has to look a project up again. */
@@ -52,6 +53,8 @@ export interface GlobalTask {
   projectName: string
   /** The project's tags, normalized server-side; `[]` for an untagged or unknown project. */
   tags: readonly string[]
+  /** Ids of the managers that started or follow this task — the manager facet's values. */
+  managers: readonly string[]
 }
 
 /** The bucket a task with no tags falls into — a filter value and a group key, so it has to be
@@ -93,7 +96,7 @@ export function sortGlobalTasks(tasks: readonly GlobalTask[], sortBy: SortBy): G
 
 /** Which facets exist. Named as a type so the filter bar can render them from one list and the
  *  toggle helper can name the one it edits without a stringly-typed key. */
-export type FacetId = 'tags' | 'statuses' | 'workflows'
+export type FacetId = 'tags' | 'statuses' | 'workflows' | 'managers'
 
 export interface GlobalTaskFilters {
   /** Free text over what the table shows — title, project, workflow, branch, tags. */
@@ -105,6 +108,8 @@ export interface GlobalTaskFilters {
   statuses: readonly string[]
   /** Workflow names. Empty = every workflow. */
   workflows: readonly string[]
+  /** Manager ids: tasks one of them started or follows. Empty = every task. */
+  managers: readonly string[]
 }
 
 export const NO_FILTERS: GlobalTaskFilters = {
@@ -112,6 +117,7 @@ export const NO_FILTERS: GlobalTaskFilters = {
   tags: [],
   statuses: [],
   workflows: [],
+  managers: [],
 }
 
 /** Add or remove one value from a facet — what every chip click and checkbox does. Returns a new
@@ -126,7 +132,7 @@ export function toggleFacetValue(
 /** How many facet values are selected — the number the "Clear" affordance and each facet pill's
  *  badge print. The query is not one of them; it has its own visible input. */
 export function activeFacetCount(filters: GlobalTaskFilters): number {
-  return filters.tags.length + filters.statuses.length + filters.workflows.length
+  return filters.tags.length + filters.statuses.length + filters.workflows.length + filters.managers.length
 }
 
 /** Are any filters narrowing the list? Drives the empty state's wording — "nothing here" and
@@ -167,8 +173,13 @@ export function canReset(state: Pick<GlobalTasksUrlState, 'filters' | 'groupBy'>
 export function toGlobalTasks(
   runs: readonly RunIndexEntry[],
   projects: readonly ProjectListEntry[],
+  managers: readonly Pick<ManagerSummary, 'id' | 'followedTasks'>[] = [],
 ): GlobalTask[] {
   const byId = new Map(projects.map((project) => [project.id, project]))
+  const managersByTask = new Map<string, string[]>()
+  for (const manager of managers) {
+    for (const key of manager.followedTasks) managersByTask.set(key, [...(managersByTask.get(key) ?? []), manager.id])
+  }
   return runs.map((run) => {
     const project = byId.get(run.projectId)
     return {
@@ -176,6 +187,7 @@ export function toGlobalTasks(
       project,
       projectName: project?.name || run.projectId,
       tags: project?.tags ?? NO_TAGS,
+      managers: managersByTask.get(globalTaskKey(run)) ?? NO_MANAGERS,
     }
   })
 }
@@ -292,6 +304,7 @@ export function filterGlobalTasks(
     if (view === 'archived' ? !task.run.archived : task.run.archived) return false
     if (!matchesFacet(filters.statuses, [task.run.status])) return false
     if (!matchesFacet(filters.workflows, [task.run.workflow])) return false
+    if (!matchesFacet(filters.managers, task.managers)) return false
     if (!matchesTags(task, filters.tags)) return false
     if (tokens.length === 0) return true
     const text = haystack(task)
@@ -394,6 +407,7 @@ export const SEARCH_PARAMS = {
   untagged: 'untagged',
   status: 'status',
   workflow: 'workflow',
+  manager: 'manager',
   groupBy: 'group',
   sort: 'sort',
   archived: 'archived',
@@ -443,6 +457,7 @@ export function urlStateToSearchParams(state: GlobalTasksUrlState): URLSearchPar
   }
   for (const status of state.filters.statuses) params.append(SEARCH_PARAMS.status, status)
   for (const workflow of state.filters.workflows) params.append(SEARCH_PARAMS.workflow, workflow)
+  for (const manager of state.filters.managers) params.append(SEARCH_PARAMS.manager, manager)
   if (state.groupBy !== 'none') params.set(SEARCH_PARAMS.groupBy, state.groupBy)
   if (state.sortBy !== 'recent') params.set(SEARCH_PARAMS.sort, state.sortBy)
   if (state.view === 'archived') params.set(SEARCH_PARAMS.archived, '1')
@@ -466,9 +481,51 @@ export function urlStateFromSearchParams(params: URLSearchParams): GlobalTasksUr
       tags,
       statuses: params.getAll(SEARCH_PARAMS.status).filter((status) => status !== ''),
       workflows: params.getAll(SEARCH_PARAMS.workflow).filter((workflow) => workflow !== ''),
+      managers: params.getAll(SEARCH_PARAMS.manager).filter((manager) => manager !== ''),
     },
     groupBy: GROUP_BY_VALUES.has(group) ? (group as GroupBy) : 'none',
     sortBy: params.get(SEARCH_PARAMS.sort) === 'created' ? 'created' : 'recent',
     view: params.get(SEARCH_PARAMS.archived) === '1' ? 'archived' : 'active',
   }
+}
+
+// ---- manager facet -------------------------------------------------------------------------
+
+/** The global Tasks table narrowed to one manager's tasks: the Watching panel's "View all". */
+export function managerTasksPath(managerId: string): string {
+  const params = urlStateToSearchParams({ ...DEFAULT_URL_STATE, filters: { ...NO_FILTERS, managers: [managerId] } })
+  return `/tasks?${params.toString()}`
+}
+
+/** What that link opens on before any other click: the Active view, under the remembered origin. */
+export function managerTaskCount(tasks: readonly GlobalTask[], managerId: string, origin: TaskOrigin): number {
+  const byOrigin = filterGlobalTasksByOrigin(tasks, origin, globalAutomationIndex(tasks))
+  return filterGlobalTasks(byOrigin, { ...NO_FILTERS, managers: [managerId] }, 'active').length
+}
+
+/** Router state asking the Tasks table to come back where it was left (the manager breadcrumb). */
+export const RESTORE_SCROLL_STATE = { restoreScroll: true } as const
+
+export const wantsScrollRestore = (state: unknown): boolean =>
+  (state as { restoreScroll?: unknown } | null | undefined)?.restoreScroll === true
+
+const SCROLL_KEY = 'cez-tasks-scroll:'
+
+/** Where each list was scrolled to, per tab and across a reload: keyed by its query string. */
+export const tasksScroll = {
+  save(search: string, top: number): void {
+    try {
+      sessionStorage.setItem(SCROLL_KEY + search, String(Math.round(top)))
+    } catch {
+      // Storage off or full: the list just opens at the top.
+    }
+  },
+  get(search: string): number | undefined {
+    try {
+      const value = Number(sessionStorage.getItem(SCROLL_KEY + search) ?? Number.NaN)
+      return Number.isFinite(value) ? value : undefined
+    } catch {
+      return undefined
+    }
+  },
 }

@@ -49,7 +49,7 @@ const SKILLS: Skill[] = [
 /** The composer fetches `/api/v1/skills` (only once `/` has been typed) and `/api/v1/ui-state`
  *  (#519: the autocomplete's usage order + bump). `uiState: null` answers the GET with a 404
  *  (the "ui-state unavailable" case); PUT bodies are recorded in `uiStatePuts`. */
-function stubSkillsFetch(uiState: Record<string, unknown> | null = {}) {
+function stubSkillsFetch(uiState: Record<string, unknown> | null = {}, skills = SKILLS) {
   const uiStatePuts: unknown[] = []
   const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input)
@@ -61,7 +61,7 @@ function stubSkillsFetch(uiState: Record<string, unknown> | null = {}) {
         new Response(body, { status, headers: { 'content-type': 'application/json' } }),
       )
     }
-    const body = url.includes('/api/v1/skills') ? JSON.stringify(SKILLS) : '[]'
+    const body = url.includes('/api/v1/skills') ? JSON.stringify(skills) : '[]'
     return Promise.resolve(
       new Response(body, { status: 200, headers: { 'content-type': 'application/json' } }),
     )
@@ -73,8 +73,9 @@ function stubSkillsFetch(uiState: Record<string, unknown> | null = {}) {
 function renderComposer(
   props: Partial<ComposerProps> = {},
   uiState: Record<string, unknown> | null = {},
+  skills = SKILLS,
 ) {
-  const { fetchMock, uiStatePuts } = stubSkillsFetch(uiState)
+  const { fetchMock, uiStatePuts } = stubSkillsFetch(uiState, skills)
   const onSubmit = vi.fn(() => Promise.resolve({}))
   render(
     <QueryClientProvider client={createQueryClient()}>
@@ -701,13 +702,25 @@ describe('/ skills autocomplete (#380)', () => {
     expect(rendered[2]!.textContent).toContain('global-deploy')
   })
 
+  it('labels missing shared skills and still lets users complete the skill name in their draft', async () => {
+    const missing: Skill = { name: 'om-auto-review-pr', body: '', path: '/p/om-auto-review-pr.md', source: 'ai', missingShared: true }
+    const { onSubmit, textarea } = renderComposer({}, {}, [...SKILLS, missing])
+    type(textarea, '/om-auto')
+
+    await screen.findByRole('option', { name: /om-auto-review-pr\s*Shared skill missing/ })
+    fireEvent.keyDown(textarea, { key: 'Enter' })
+
+    expect(textarea.value).toBe('/om-auto-review-pr ')
+    expect(onSubmit).not.toHaveBeenCalled()
+  })
+
   it('the menu is clamped to the popper available height (mobile keyboard, #mobile-kb)', async () => {
     const { textarea } = renderComposer()
     type(textarea, '/')
     await screen.findByText('om-fix')
     const menu = document.querySelector('[data-slot="composer-menu"]')!
-    // The clamp keeps the list inside the visual viewport once PopoverContent's
-    // keyboard-aware collisionPadding has shrunk the popper's available space.
+    // The clamp keeps the list inside the room Radix measures within the visual viewport,
+    // which the open keyboard shrinks.
     expect(menu.className).toContain('--radix-popover-content-available-height')
   })
 
@@ -980,6 +993,19 @@ describe('disabled state', () => {
   it('the mic is hidden entirely when the Web Speech API is absent — no fake button', () => {
     renderComposer()
     expect(screen.queryByText('Dictation')).toBeNull()
+  })
+
+  it.each([false, true])('a host can omit dictation and its language option (compact: %s)', (compact) => {
+    const recognition = vi.fn()
+    vi.stubGlobal('SpeechRecognition', recognition)
+    renderComposer({ compact, dictation: false, options: { rows: [{ id: 'host', label: 'Host option', control: <button>Choose</button> }] } })
+    expect(screen.queryByRole('button', { name: 'Start dictation' })).toBeNull()
+    if (!compact) {
+      fireEvent.click(screen.getByRole('button', { name: 'Options' }))
+      expect(screen.getByText('Host option')).toBeTruthy()
+      expect(screen.queryByRole('combobox', { name: 'Dictation language' })).toBeNull()
+    }
+    expect(recognition).not.toHaveBeenCalled()
   })
 })
 

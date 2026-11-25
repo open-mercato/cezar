@@ -545,7 +545,8 @@ export function CommandPalette() {
   const [open, setOpen] = React.useState(false)
   const navigate = useNavigate()
 
-  useCommandShortcut('k', () => setOpen((current) => !current))
+  // inEditable: no text field binds ⌘K, and from the composer the browser's search would win (#2321).
+  useCommandShortcut('k', () => setOpen((current) => !current), { inEditable: true })
   const newTask = React.useCallback(() => {
     setOpen(false)
     navigate('/new')
@@ -848,6 +849,7 @@ function PaletteContent({ close }: { close: () => void }) {
             forge: activeForge != null,
             inbox: health.data?.capabilities.followups === true,
             automations: health.data?.capabilities.automations === true,
+            terminal: health.data?.capabilities.terminal === true,
             tracker: registry?.projects.find((project) => project.id === (activeProjectId ?? registry.bootProject))?.tracker,
           }).map((item) => {
             const Icon = item.icon
@@ -1000,12 +1002,13 @@ function PaletteContent({ close }: { close: () => void }) {
                 keywords={skill.description ? [skill.description] : undefined}
                 data-slot="palette-skill"
                 data-skill={skill.name}
-                onSelect={() => go(`/new?skill=${encodeURIComponent(skill.name)}`)}
+                onSelect={() => go(`${skill.missingShared ? '/skills' : '/new'}?skill=${encodeURIComponent(skill.name)}`)}
               >
-                <span className="shrink-0 font-medium">{skill.name}</span>
+                <span className={cn('truncate font-medium', !skill.missingShared && 'shrink-0')}>{skill.name}</span>
                 {skill.description ? (
                   <span className="min-w-0 flex-1 truncate text-label text-muted-foreground">{skill.description}</span>
                 ) : null}
+                {skill.missingShared ? <span className="shrink-0 text-label text-warning">Shared skill missing</span> : null}
               </CommandItem>
             ))}
           </CommandGroup>

@@ -52,8 +52,26 @@ function Eyes({ x, y, scale = 1 }: { x: number; y: number; scale?: number }) {
   return <>{eye(x)}{eye(x + 4.2 * scale)}</>
 }
 
-/** A manager's persona. Decorative: the name always sits beside it. */
-export function ManagerAvatar({ avatar, mascot, className, sizes = '44px' }: { avatar: number; mascot?: ManagerMascot | undefined; className?: string; sizes?: string }) {
+/** A manager's persona. Decorative: the name always sits beside it. `inactive` greys it and adds a
+ *  pause badge, so colour is never the only cue (spec 2026-11-19-manager-deactivate). */
+export function ManagerAvatar({ avatar, mascot, className, sizes = '44px', inactive = false }: { avatar: number; mascot?: ManagerMascot | undefined; className?: string; sizes?: string; inactive?: boolean | undefined }) {
+  if (!inactive) return <AvatarFace avatar={avatar} mascot={mascot} className={className} sizes={sizes} />
+  return (
+    <span data-slot="manager-avatar-inactive" title="Inactive" className={cn('relative inline-flex size-11 shrink-0', className)}>
+      <AvatarFace avatar={avatar} mascot={mascot} sizes={sizes} className={cn(className, 'size-full grayscale opacity-50')} />
+      <span
+        aria-hidden="true"
+        data-slot="manager-avatar-pause"
+        className="absolute -right-0.5 -bottom-0.5 flex size-[42%] min-h-3 min-w-3 items-center justify-center gap-[12%] rounded-full border-2 border-card bg-muted text-muted-foreground"
+      >
+        <span className="h-[40%] w-[14%] rounded-[1px] bg-current" />
+        <span className="h-[40%] w-[14%] rounded-[1px] bg-current" />
+      </span>
+    </span>
+  )
+}
+
+function AvatarFace({ avatar, mascot, className, sizes }: { avatar: number; mascot?: ManagerMascot | undefined; className?: string | undefined; sizes: string }) {
   const gloss = useId()
   const [failedMascot, setFailedMascot] = useState<string>()
   const parts = avatarParts(avatar)

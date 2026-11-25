@@ -29,8 +29,8 @@ import { shortAge } from '@/lib/format'
 type Confirming = { kind: 'reclaim' } | { kind: 'delete'; runId: string; title: string } | { kind: 'orphan'; worktreeId: string; title: string } | null
 
 /**
- * Settings → Resources: the worktrees management panel (#483). Lists every task
- * worktree materialized on disk with its size, age and retention state; a
+ * Project settings → Worktrees: the management panel (#483). Lists every task
+ * worktree materialized on disk with its size, last activity and retention state; a
  * per-row Delete (reclaims the directory AND branch, the spec-006 route), a
  * footer with the total disk used and the keep-limit, and a "Reclaim now" button
  * that runs the count-based enforcer immediately. Both destructive actions
@@ -58,7 +58,7 @@ export function WorktreesPanel() {
         result.reclaimed.length === 0
           ? configured || managed.some(item => item.operation || item.autoCleanupSuppressed)
             ? 'No worktrees reclaimed yet. Pending cleanup or retained worktrees may keep usage above the limit.'
-            : 'Nothing to reclaim — all worktrees are within the limit'
+            : 'Nothing to reclaim — all worktrees are within the keep-limit and idle age'
           : `Reclaimed ${result.reclaimed.length} worktree${result.reclaimed.length === 1 ? '' : 's'} (branch kept)`,
       )
     },
@@ -101,6 +101,8 @@ export function WorktreesPanel() {
   }
 
   const { worktrees: rows, totalBytes, keep } = worktrees.data
+  // Older servers answer without `idleDays`; treat that as off rather than inventing a limit.
+  const idleDays = worktrees.data.idleDays ?? 0
   const busy = reclaim.isPending || remove.isPending || removeOrphan.isPending
 
   const runConfirmed = () => {
@@ -125,7 +127,7 @@ export function WorktreesPanel() {
                 <th scope="col" className="px-3 py-2 font-medium">Task</th>
                 <th scope="col" className="px-3 py-2 font-medium">Status</th>
                 <th scope="col" className="px-3 py-2 font-medium">Size</th>
-                <th scope="col" className="px-3 py-2 font-medium">Age</th>
+                <th scope="col" className="px-3 py-2 font-medium">Last activity</th>
                 <th scope="col" className="px-3 py-2 font-medium text-right">Actions</th>
               </tr>
             </thead>
@@ -150,6 +152,8 @@ export function WorktreesPanel() {
           {totalBytes !== null ? ` · ${formatMem(totalBytes) || '0 kB'} on disk` : ' · size unavailable'}
           {' · '}
           {keep === 0 ? 'keeping all (unlimited)' : `keeping the last ${keep}`}
+          {' · '}
+          {idleDays === 0 ? 'no idle age limit' : `idle trees reclaimed after ${idleDays} day${idleDays === 1 ? '' : 's'}`}
         </p>
         <Button
           type="button"
@@ -191,7 +195,7 @@ export function WorktreesPanel() {
                   </span>
                 </>
               ) : (
-                'Finished worktrees beyond the keep-limit are reclaimed now (directory only). Their branches are kept, so the work stays recoverable.'
+                'Finished worktrees beyond the keep-limit, and trees idle past the age limit (in review and waiting included), are reclaimed now — directory only. Their branches are kept and Continue restores a tree, so the work stays recoverable.'
               )}
             </AlertDialogDescription>
           </AlertDialogHeader>
@@ -226,6 +230,7 @@ function WorktreeRow({
   // finished worktree stays plain text (calm when done).
   const attention = deriveAttention({ status: worktree.status })
   const calm = attention.bucket === 'none'
+  const lastActivity = shortAge(worktree.lastActivityAt ?? worktree.finishedAt ?? undefined)
   const deleteButton = (
     <Button
       type="button"
@@ -268,7 +273,9 @@ function WorktreeRow({
       <td className="px-3 py-2 tabular-nums text-soft-foreground">
         {worktree.sizeBytes !== null ? formatMem(worktree.sizeBytes) || '0 kB' : '—'}
       </td>
-      <td className="px-3 py-2 tabular-nums text-soft-foreground">{shortAge(worktree.finishedAt ?? undefined) || '—'}</td>
+      <td data-slot="worktree-last-activity" className="px-3 py-2 tabular-nums text-soft-foreground">
+        {lastActivity ? `${lastActivity} ago` : '—'}
+      </td>
       <td className="px-3 py-2 text-right">
         {/* A disabled button swallows pointer events (`disabled:pointer-events-none`), so the
             tooltip hangs off a wrapper that still receives them. */}

@@ -1,10 +1,11 @@
-import type { RunRecord } from '@open-mercato/cezar-api-client'
+import type { ProviderId, RunRecord } from '@open-mercato/cezar-api-client'
 
 import {
   budgetStop,
   deriveAttention,
   isAwaitingAnswer,
   isIdleClosed,
+  signInAccountKey,
   type AttentionTone,
 } from '@/lib/attention'
 import { lastActivityAt } from '@/lib/task-groups'
@@ -78,6 +79,8 @@ function money(usd: number): string {
 
 export function needsYouReason(run: RunRecord): NeedsYouReason | undefined {
   if (run.archived) return undefined
+  // Parked on an expired login: the "Sign-in needed" group above owns it (`signInGroups`).
+  if (signInAccountKey(run)) return undefined
   if (run.worktreeLifecycle?.needsAttention) return 'lifecycle'
   if (isAwaitingAnswer(run)) return 'question'
   if (run.status === 'review') return 'review'
@@ -122,6 +125,27 @@ function needsYouRow(run: RunRecord, reason: NeedsYouReason): NeedsYouRow {
       return { ...base, label: 'Failed', ...(detail ? { detail } : {}) }
     }
   }
+}
+
+/** Runs parked on an expired agent login, one group per account (spec
+ *  2026-11-18-inline-account-reconnect): one Reconnect unblocks the whole group. Newest first. */
+export interface SignInGroup {
+  provider: ProviderId
+  profileId: string
+  runs: RunRecord[]
+}
+
+export function signInGroups(runs: readonly RunRecord[]): SignInGroup[] {
+  const groups = new Map<string, SignInGroup>()
+  for (const run of runs) {
+    const key = run.archived ? undefined : signInAccountKey(run)
+    if (!key || !run.parked) continue
+    const group = groups.get(key) ?? { provider: run.parked.provider, profileId: run.parked.profileId, runs: [] }
+    group.runs.push(run)
+    groups.set(key, group)
+  }
+  const newest = (group: SignInGroup) => group.runs.reduce((at, run) => (run.parked!.at > at ? run.parked!.at : at), '')
+  return [...groups.values()].sort((a, b) => newest(b).localeCompare(newest(a)))
 }
 
 /** The "Needs you" rows: questions first, then the review gate, then waits, then failures;

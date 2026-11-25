@@ -14,9 +14,11 @@ import { useHealth, useProjects, useProviderStatus, useWorkspaceUiState } from '
 import { ProjectScopeProvider } from './api/project-scope-context'
 import { lazyRoute } from './lib/telemetry'
 import { bareRootLanding, locationToRestore, readStoredLastLocation } from './lib/last-location'
-import { isFirstLocation, isPhone, phoneLanding, rememberFirstLocation } from './lib/phone-app'
+import { isCezarShell, isFirstLocation, isPhone, phoneLanding, rememberFirstLocation } from './lib/phone-app'
 import { noteManagerEntry } from './lib/manager-telemetry'
 import { Navigate as ScopedNavigate, pathnameProjectId, stripProjectPrefix } from './lib/project-router'
+import { AgentStep } from './components/first-run'
+import { hasSignedInAgent } from './lib/onboarding'
 import { ScreenLoading } from './components/loading-state'
 import { AutomationsLoading } from './routes/automations/automations-loading'
 import { CompareLoading } from './routes/compare-loading'
@@ -39,7 +41,7 @@ import {
   settingsSectionPath,
 } from './routes/settings/settings-shell'
 import { TasksOverviewRoute } from './routes/tasks-overview'
-import { NowRoute } from './routes/now/now'
+import { NowRoute, nowScopeFromState } from './routes/now/now'
 import { GlobalTasksRoute } from './routes/global-tasks'
 
 // Dashboard charts, drag controls and exports are paid for only on this route.
@@ -87,6 +89,10 @@ const WorkflowGraphRoute = lazyRoute('workflow-graph', () =>
   import('./routes/workflow-graph/workflow-graph').then((m) => ({ default: m.WorkflowGraphRoute })),
 )
 
+/** Lazy: xterm is the heaviest chunk a page can pull in (#1526). */
+const ProjectTerminalRoute = lazyRoute('terminal', () =>
+  import('./routes/project-terminal/project-terminal').then((m) => ({ default: m.ProjectTerminalRoute })),
+)
 /** Lazy because the skill detail renders the skill body through the same markdown stack the
  *  thread carries — thread-chunk weight the home screen must not pay (it used to ride the main
  *  bundle as a static Settings section). */
@@ -118,6 +124,17 @@ const managerNew = preloadableRoute('manager', () =>
 )
 const managerChat = preloadableRoute('manager', () =>
   import('./routes/manager/manager-chat').then((m) => m.ManagerChatRoute),
+)
+/** Now in Manager mode: every manager's items, a filter for one (spec 2026-11-23-needs-you-triage). */
+const ManagerNowRoute = lazyRoute('manager', () =>
+  import('./routes/manager/manager-now').then((m) => ({ default: m.ManagerNowRoute })),
+)
+const ManagerApprovalsRoute = lazyRoute('manager', () =>
+  import('./routes/manager/manager-approvals').then((m) => ({ default: m.ManagerApprovalsRoute })),
+)
+/** Workspace-level, with or without managers (spec 2026-11-17-questions-inbox). */
+const QuestionsRoute = lazyRoute('questions', () =>
+  import('./routes/questions/questions-route').then((m) => ({ default: m.QuestionsRoute })),
 )
 const ManagerIndexRoute = managerIndex.Route
 const ManagerNewRoute = managerNew.Route
@@ -299,12 +316,11 @@ function LegacyPathRedirect() {
     // its project is still worth waiting for.
     if (projects.data === undefined && !projects.isError) return <ScopeResolving />
 
-    const restored = locationToRestore(
-      readStoredLastLocation(),
-      projects.data,
-      resolvedBoot,
-    )
-    if (restored !== null) return <Navigate to={restored} replace />
+    // A Now scope handoff (the bottom bar) asks for Now itself, not the last page this browser was on.
+    const restored = nowScopeFromState(location.state) === undefined
+      ? locationToRestore(readStoredLastLocation(), projects.data, resolvedBoot)
+      : null
+    if (restored !== null) return <Navigate to={restored} replace state={location.state} />
 
     // Nothing remembered. The boot folder is the landing project only while the registry lists
     // it: since `/api/v1/projects` stopped listing an unregistered boot folder once the user has
@@ -313,7 +329,7 @@ function LegacyPathRedirect() {
     // The most recently opened registered project is what the sidebar leads with, so it is what
     // a bare launch opens. `/p/<bootProject>/` and every legacy deep link below still resolve.
     const landing = bareRootLanding(projects.data, boot)
-    if (landing !== boot) return <Navigate to={`/p/${encodeURIComponent(landing)}/`} replace />
+    if (landing !== boot) return <Navigate to={`/p/${encodeURIComponent(landing)}/`} replace state={location.state} />
   }
 
   // A bare `/p` (or `/p/`) names no project — send it to the boot project's home rather than
@@ -323,6 +339,8 @@ function LegacyPathRedirect() {
     <Navigate
       to={`/p/${encodeURIComponent(boot)}${path}${location.search}${location.hash}`}
       replace
+      // A handoff in state (the bottom bar's Now scope) survives the hop into the project.
+      state={location.state}
     />
   )
 }
@@ -331,22 +349,35 @@ function LegacyPathRedirect() {
  *  Its own component so nobody else pays for its queries; anything but a yes is the restore. */
 function PhoneFreshLoad() {
   const health = useHealth()
-  const projects = useProjects()
   const providers = useProviderStatus()
-  const uiState = useWorkspaceUiState()
   const landing = phoneLanding({
     health: health.data,
     healthFailed: health.isError,
-    registry: projects.data,
-    registryFailed: projects.isError,
     providers: providers.data,
     providersFailed: providers.isError,
-    agentCheckSkipped: uiState.data && uiState.data.onboarding?.agentCheckSkipped === true,
-    uiStateFailed: uiState.isError,
   })
   if (landing === 'wait') return <ScopeResolving />
   if (landing === 'manager') noteManagerEntry('phone_default')
   return landing === 'manager' ? <Navigate to="/manager" replace /> : <LegacyPathRedirect />
+}
+
+/** Both native shells launch /manager directly, including on existing installs. */
+function MobileManagerEntry() {
+  return isPhone() || isCezarShell() ? <ManagerAgentSetup /> : <ManagerIndexRoute />
+}
+
+function ManagerAgentSetup() {
+  const providers = useProviderStatus()
+  const uiState = useWorkspaceUiState()
+  const signedIn = hasSignedInAgent(providers.data)
+  // A skipped sign-in page is final, as in FirstRun: no wait on provider detection.
+  if (uiState.data?.onboarding?.agentCheckSkipped === true) return <ManagerIndexRoute />
+  if (signedIn === undefined && !providers.isError) return <ManagerIndexLoading />
+  if (signedIn === false) {
+    if (uiState.data === undefined && !uiState.isError) return <ManagerIndexLoading />
+    if (!uiState.data?.onboarding?.agentCheckSkipped) return <AgentStep />
+  }
+  return <ManagerIndexRoute />
 }
 
 /** Everything `/` and flat. Only the first location may count: the Tasks link and every Back to
@@ -355,7 +386,7 @@ function FlatPathRoute() {
   const location = useLocation()
   const freshBareRoot =
     location.pathname === '/' && location.search === '' && location.hash === '' && isFirstLocation(location.key)
-  return freshBareRoot && isPhone() ? <PhoneFreshLoad /> : <LegacyPathRedirect />
+  return freshBareRoot && (isPhone() || isCezarShell()) ? <PhoneFreshLoad /> : <LegacyPathRedirect />
 }
 
 /** Outside `Routes` so it runs on a deep-link boot too, which never reaches `FlatPathRoute`. */
@@ -374,6 +405,10 @@ const PAGE_TITLE_ROUTES = [
   { pattern: '/tasks', pageLabel: 'Tasks' },
   { pattern: '/dashboard', pageLabel: 'Dashboard' },
   { pattern: '/manager/new', pageLabel: 'New manager' },
+  { pattern: '/manager/now', pageLabel: 'Now' },
+  { pattern: '/manager/approvals', pageLabel: 'Approvals' },
+  { pattern: '/manager/questions', pageLabel: 'Questions' },
+  { pattern: '/questions', pageLabel: 'Questions' },
   { pattern: '/manager/*', pageLabel: 'Manager' },
   { pattern: '/new', pageLabel: 'New task' },
   { pattern: '/compare/:groupId', pageLabel: 'Compare' },
@@ -381,6 +416,7 @@ const PAGE_TITLE_ROUTES = [
   { pattern: '/github/*', pageLabel: 'GitHub' },
   { pattern: '/tracker/*', pageLabel: 'Tracker' },
   { pattern: '/assets', pageLabel: 'Assets' },
+  { pattern: '/terminal', pageLabel: 'Terminal' },
   { pattern: '/automations/*', pageLabel: 'Automations' },
   { pattern: '/skills', pageLabel: 'Skills' },
   { pattern: '/inbox', pageLabel: 'Inbox' },
@@ -401,6 +437,16 @@ export function pageTitleContext(pathname: string): PageTitleContext {
     matchPath({ path: pattern, end: true }, projectPath),
   )
   return { pageLabel: route?.pageLabel ?? null, taskId: null }
+}
+
+/** One Questions page, two URLs: `/manager/questions` with managers on, `/questions` without (§ F). */
+function QuestionsGate({ managersRoute }: { managersRoute: boolean }) {
+  const health = useHealth()
+  if (health.data) {
+    const managers = health.data.capabilities.managers === true
+    if (managers !== managersRoute) return <Navigate to={managers ? '/manager/questions' : '/questions'} replace />
+  }
+  return <Suspense fallback={<ScreenLoading label="Loading questions…" />}><QuestionsRoute /></Suspense>
 }
 
 /** `CEZ_MANAGERS=0`: a pasted `/manager` link lands on the cockpit instead of a page of 409s. The
@@ -703,6 +749,7 @@ export const AppRoutes = memo(function AppRoutes() {
         {/* The project Assets page (spec 2026-10-22-html-artifacts-and-impact, Phase 3): a table, no
             preview — light enough to ride the main bundle like the inbox. */}
         <Route path="assets" element={<AssetsRoute />} />
+        <Route path="terminal" element={<Suspense fallback={<ScopeResolving />}><ProjectTerminalRoute /></Suspense>} />
 
         {/* The workflow node editor (spec 2026-09-30-workflow-node-editor): /workflows opens a new
             canvas, /workflows/:name deep-links a saved workflow (v1 files open as graphs). */}
@@ -772,8 +819,12 @@ export const AppRoutes = memo(function AppRoutes() {
       <Route path="/dashboard" element={<Suspense fallback={<ScreenLoading label="Loading dashboard…" />}><DashboardRoute /></Suspense>} />
 
       {/* Managers are global (spec 2026-10-31-managers): no project owns one. */}
-      <Route path="/manager" element={<ManagersGate fallback={<ManagerIndexLoading />}><ManagerIndexRoute /></ManagersGate>} />
+      <Route path="/manager" element={<ManagersGate fallback={<ManagerIndexLoading />}><MobileManagerEntry /></ManagersGate>} />
       <Route path="/manager/new" element={<ManagersGate fallback={<ScreenLoading label="Loading setup…" />}><ManagerNewRoute /></ManagersGate>} />
+      <Route path="/manager/now" element={<ManagersGate fallback={<ScreenLoading label="Loading Now…" />}><ManagerNowRoute /></ManagersGate>} />
+      <Route path="/manager/approvals" element={<ManagersGate fallback={<ScreenLoading label="Loading approvals…" />}><ManagerApprovalsRoute /></ManagersGate>} />
+      <Route path="/manager/questions" element={<QuestionsGate managersRoute />} />
+      <Route path="/questions" element={<QuestionsGate managersRoute={false} />} />
       <Route path="/manager/:id" element={<ManagersGate fallback={<ManagerChatLoading />}><ManagerChatRoute /></ManagersGate>} />
 
       {/* Global settings (multi-project spec, step 3.5) — the one cockpit area that is NOT

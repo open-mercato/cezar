@@ -1,0 +1,348 @@
+import type { Phone, PhonePairing, PhonePairingFailure, StartPhonePairingResponse } from '@open-mercato/cezar-api-client'
+import { useMutation, useQueryClient } from '@tanstack/react-query'
+import { ChevronRightIcon, PencilIcon, SmartphoneIcon, Trash2Icon } from 'lucide-react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
+
+import {
+  approvePhonePairing, denyPhonePairing, phoneKeys, removePhone, renamePhone, revealPhoneCode, startPhonePairing, usePhones, useRelayAccount,
+} from '@/api/phones'
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog'
+import { Button } from '@/components/ui/button'
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
+import { Input } from '@/components/ui/input'
+import { toast } from '@/components/ui/toaster'
+import { QrSvg } from '@/components/qr-svg'
+import { GetTheApp } from './get-the-app'
+import { setPhoneSettings } from '@/api/attention'
+import { PhoneNotificationsForm, usePhoneNotificationsEditor } from './phone-notifications'
+import { AccountStep, ComputerNameField, RelayAccountPanel } from './relay-account'
+import { RelayAddressForm } from './relay-address'
+import { RelayStatusPanel } from './relay-status-panel'
+
+const FAILURES: Record<PhonePairingFailure, string> = {
+  'device-limit': 'This relay cannot take another phone. Remove one first.',
+  'relay-error': 'The relay did not confirm the phone, so it was not added.',
+  timeout: 'Nobody answered in time.',
+  cancelled: 'The pairing was cancelled.',
+  contested: 'A second phone tried to use this code, so it was cancelled. Show a new code and try again.',
+  'bad-payload': 'The phone sent something cezar cannot read.',
+  'tunnel-unsupported': 'This phone and this cezar need updating to work together.',
+  'phone-left': 'The phone went away before pairing finished.',
+  'terms-required': 'The relay needs your email and accepted terms before it adds a phone. Enter them above and try again.',
+}
+
+const PENDING = new Set<PhonePairing['status']>(['waiting', 'handshaking', 'confirm', 'approving'])
+
+function useCountdown(expiresAt: string | undefined): number {
+  const [now, setNow] = useState(() => Date.now())
+  useEffect(() => {
+    if (!expiresAt) return undefined
+    setNow(Date.now())
+    const timer = setInterval(() => setNow(Date.now()), 1000)
+    return () => clearInterval(timer)
+  }, [expiresAt])
+  return expiresAt ? Math.max(0, Math.ceil((Date.parse(expiresAt) - now) / 1000)) : 0
+}
+
+const clock = (seconds: number) => `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`
+
+function lastSeen(phone: Phone): string {
+  if (phone.connected) return 'Connected'
+  if (!phone.lastSeenAt) return 'Not connected yet'
+  return `Seen ${new Date(phone.lastSeenAt).toLocaleString()}`
+}
+
+function ApprovalDialog({ pairing, onDecide, deciding }: { pairing: PhonePairing; onDecide: (approve: boolean) => void; deciding: boolean }) {
+  return (
+    <AlertDialog open>
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle>Add this phone?</AlertDialogTitle>
+          <AlertDialogDescription>
+            Check that your phone shows the same number. This phone can run tasks on this computer, with everything a task can do.
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+        <p className="text-center font-mono text-5xl font-semibold tracking-widest tabular-nums" data-testid="phone-digits">
+          {pairing.digits}
+        </p>
+        <p className="text-center text-sm text-muted-foreground">
+          {pairing.phone?.name} ({pairing.phone?.platform}), as reported by the phone
+        </p>
+        <p className="text-sm text-muted-foreground">
+          Approve only if you scanned or typed this inside the CezarBot app, on your own phone.
+        </p>
+        <AlertDialogFooter>
+          <AlertDialogCancel disabled={deciding} onClick={() => onDecide(false)}>Deny</AlertDialogCancel>
+          <AlertDialogAction disabled={deciding} onClick={() => onDecide(true)}>Approve</AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
+  )
+}
+
+function PhoneRow({ phone, onRemove }: { phone: Phone; onRemove: () => void }) {
+  const queryClient = useQueryClient()
+  const [editing, setEditing] = useState(false)
+  const [label, setLabel] = useState(phone.label)
+  const [notificationsOpen, setNotificationsOpen] = useState(false)
+  const editor = usePhoneNotificationsEditor(phone.prefs, (next) => setPhoneSettings(phone.deviceId, next), () => {
+    void queryClient.invalidateQueries({ queryKey: phoneKeys.list })
+  })
+  const rename = useMutation({
+    mutationFn: () => renamePhone(phone.deviceId, label.trim()),
+    onSuccess: async () => { setEditing(false); await queryClient.invalidateQueries({ queryKey: phoneKeys.list }) },
+    onError: (error: Error) => toast(error.message, { tone: 'danger' }),
+  })
+  return (
+    <li className="py-2">
+      <Collapsible open={notificationsOpen} onOpenChange={setNotificationsOpen}>
+        <div className="flex items-center gap-3">
+          <SmartphoneIcon className="size-4 shrink-0 text-muted-foreground" aria-hidden />
+          <div className="min-w-0 flex-1">
+            {editing ? (
+              <form onSubmit={(event) => { event.preventDefault(); if (label.trim()) rename.mutate() }}>
+                <Input aria-label="Phone name" value={label} maxLength={64} autoFocus onChange={(event) => setLabel(event.target.value)} onBlur={() => setEditing(false)} />
+              </form>
+            ) : (
+              <p className="truncate text-sm">{phone.label}</p>
+            )}
+            <p className="text-xs text-muted-foreground">{lastSeen(phone)}{phone.push ? ' · Notifications on' : ''}</p>
+          </div>
+          <Button variant="ghost" size="icon" aria-label={`Rename ${phone.label}`} onClick={() => { setLabel(phone.label); setEditing(true) }}>
+            <PencilIcon className="size-4" aria-hidden />
+          </Button>
+          <CollapsibleTrigger asChild>
+            <Button variant="ghost" size="sm" data-slot="phone-notifications-toggle" aria-label={`Notifications for ${phone.label}`}>
+              Notifications
+              <ChevronRightIcon className={notificationsOpen ? 'size-3.5 rotate-90 transition-transform' : 'size-3.5 transition-transform'} aria-hidden />
+            </Button>
+          </CollapsibleTrigger>
+          <Button variant="ghost" size="icon" aria-label={`Remove ${phone.label}`} onClick={onRemove}>
+            <Trash2Icon className="size-4" aria-hidden />
+          </Button>
+        </div>
+      <CollapsibleContent>
+          {editor.value ? (
+            <div className="mt-2 rounded-lg border border-border">
+              <PhoneNotificationsForm value={editor.value} onChange={editor.change} saved={editor.saved} idPrefix={`phone-${phone.deviceId}`} timeZone={phone.prefs.quiet?.timeZone} />
+            </div>
+          ) : null}
+        </CollapsibleContent>
+      </Collapsible>
+    </li>
+  )
+}
+
+function Step({ n, title, id, children }: { n: number; title: string; id?: string; children: ReactNode }) {
+  return (
+    <li className="flex gap-3" id={id} data-testid={`phone-step-${n}`}>
+      <span aria-hidden="true" className="flex size-6 shrink-0 items-center justify-center rounded-full border border-border text-xs font-medium text-muted-foreground">{n}</span>
+      <div className="min-w-0 flex-1 space-y-2">
+        <h3 className="text-sm font-medium">{title}</h3>
+        {children}
+      </div>
+    </li>
+  )
+}
+
+/** Nothing here connects until the button: that click is the consent (QR2). */
+export function PhonesSection() {
+  const queryClient = useQueryClient()
+  const list = usePhones()
+  const account = useRelayAccount()
+  const [credentials, setCredentials] = useState<StartPhonePairingResponse | null>(null)
+  const [code, setCode] = useState<string | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const [removing, setRemoving] = useState<Phone | null>(null)
+  const refresh = () => queryClient.invalidateQueries({ queryKey: phoneKeys.list })
+
+  const pairing = list.data?.pairing ?? null
+  const mine = credentials && pairing?.id === credentials.id ? pairing : null
+  const seconds = useCountdown(credentials?.expiresAt)
+  const showing = credentials !== null && (mine === null || mine.status === 'waiting') && seconds > 0
+
+  const start = useMutation({
+    mutationFn: startPhonePairing,
+    onMutate: () => { setError(null); setCode(null) },
+    onSuccess: async (started) => { setCredentials(started); await refresh() },
+    onError: (failure: Error) => setError(failure.message),
+  })
+  const reveal = useMutation({
+    mutationFn: (id: string) => revealPhoneCode(id),
+    onSuccess: (revealed) => setCode(revealed.code),
+    onError: (failure: Error) => setError(failure.message),
+  })
+  const decide = useMutation({
+    mutationFn: ({ id, approve }: { id: string; approve: boolean }) => (approve ? approvePhonePairing(id) : denyPhonePairing(id)),
+    onSuccess: refresh,
+    onError: (failure: Error) => toast(failure.message, { tone: 'danger' }),
+  })
+  const remove = useMutation({
+    mutationFn: (deviceId: string) => removePhone(deviceId),
+    onSuccess: async () => { setRemoving(null); await refresh() },
+    onError: (failure: Error) => toast(failure.message, { tone: 'danger' }),
+  })
+
+  useEffect(() => {
+    if (mine?.status !== 'approved') return
+    toast(`${mine.phone?.name ?? 'Phone'} added`)
+    setCredentials(null)
+  }, [mine?.status, mine?.phone?.name])
+
+  // A closed screen discards an undecided pairing, so a forgotten tab shows nothing usable.
+  const openPairing = useRef<string | null>(null)
+  openPairing.current = credentials && (!mine || PENDING.has(mine.status)) ? credentials.id : null
+  useEffect(() => () => {
+    if (openPairing.current) void denyPhonePairing(openPairing.current).catch(() => {})
+  }, [])
+
+  const failed = mine?.status === 'failed' ? FAILURES[mine.failure ?? 'phone-left'] : null
+  const denied = mine?.status === 'denied' ? 'You denied that phone. Nothing was added.' : null
+  const expired = credentials !== null && !showing && (mine === null || mine.status === 'expired' || mine.status === 'waiting')
+  const phones = list.data?.phones ?? []
+  const badRelay = list.data?.relaySource === 'env-invalid'
+  // § 18: no code before an email and accepted terms, unless this relay has no accounts at all.
+  const accountReady = account.data?.problem === 'unsupported'
+    || (list.data?.account.attached === true && account.data?.status?.email !== null)
+  // The notice bar's Add email lands here (`?email=1`): bring step 2 into view.
+  useEffect(() => {
+    if (new URLSearchParams(window.location.search).get('email') === '1') document.getElementById('phone-step-email')?.scrollIntoView?.()
+  }, [])
+
+  return (
+    <div className="space-y-6 p-4 md:p-6">
+      {list.data ? <RelayStatusPanel data={list.data} accountState={account.data?.status?.state} /> : null}
+      <section aria-labelledby="connect-phone" className="space-y-3">
+        <h2 id="connect-phone" className="text-sm font-medium">Connect a phone</h2>
+        <ol className="space-y-5">
+          <Step n={1} title="Get the CezarBot app">
+            <GetTheApp />
+          </Step>
+          <Step n={2} title="Your email and the terms" id="phone-step-email">
+            <ComputerNameField name={list.data?.account.computerName ?? account.data?.local.computerName} />
+            {account.data?.problem === 'unsupported' ? (
+              <p className="text-sm text-muted-foreground">This relay needs no account.</p>
+            ) : accountReady ? (
+              <RelayAccountPanel account={account.data} loading={account.isLoading} />
+            ) : account.isLoading ? (
+              <p className="text-sm text-muted-foreground">Checking your relay account…</p>
+            ) : (
+              <AccountStep account={account.data} onDone={() => {}} />
+            )}
+          </Step>
+          <Step n={3} title="Pair this computer with the app">
+            {showing ? (
+              <div className="flex flex-col gap-4 sm:flex-row sm:items-start">
+                <figure className="space-y-2">
+                  <figcaption className="text-sm font-medium">Scan in the CezarBot app</figcaption>
+                  <QrSvg value={credentials.qr} label="Pairing QR code: scan it in the CezarBot app" className="size-56" />
+                </figure>
+                <div className="space-y-2 text-sm sm:pt-7">
+                  <p>Open the CezarBot app and scan this there, not with your camera app.</p>
+                  <p className="text-muted-foreground" aria-live="off">Expires in {clock(seconds)}</p>
+                  {code ? (
+                    <dl className="space-y-1">
+                      <dt className="text-muted-foreground">Code</dt>
+                      <dd className="font-mono text-lg tracking-wider">{code}</dd>
+                      <dt className="text-muted-foreground">Relay address</dt>
+                      <dd className="font-mono break-all">{credentials.relayOrigin}</dd>
+                    </dl>
+                  ) : (
+                    <Button variant="outline" size="sm" disabled={reveal.isPending} onClick={() => reveal.mutate(credentials.id)}>
+                      Type a code instead
+                    </Button>
+                  )}
+                  {code ? <p className="text-xs text-muted-foreground">The QR code is safer: only it lets the app check it reached this computer.</p> : null}
+                </div>
+              </div>
+            ) : (
+              <div className="space-y-2">
+                <p className="text-sm text-muted-foreground">
+                  Traffic crosses the relay encrypted. The relay can drop it, not read it. You confirm each phone here.
+                </p>
+                <p className="text-sm text-muted-foreground">
+                  The relay is end-to-end encrypted, so it cannot read prompts, code or keys. It does see IP addresses and the timing and volume of traffic.
+                </p>
+                <p className="text-sm text-muted-foreground">
+                  Scan the code inside the CezarBot app. A camera app cannot use it, and it is a secret, so do not copy or search for what a camera shows.
+                </p>
+                {badRelay ? (
+                  <p role="alert" className="text-sm text-destructive">
+                    <code>CEZ_RELAY_URL</code> is not a valid relay address. Fix or unset it, then restart cezar.
+                  </p>
+                ) : null}
+                <Button disabled={start.isPending || badRelay || !accountReady} onClick={() => start.mutate()}>
+                  {expired || failed || denied ? 'Show a new code' : 'Connect a phone'}
+                </Button>
+                {!accountReady && !account.isLoading ? <p className="text-xs text-muted-foreground">Finish step 2 first.</p> : null}
+              </div>
+            )}
+        {mine?.status === 'handshaking' ? <p className="text-sm text-muted-foreground">Phone found. Checking it…</p> : null}
+        {mine?.status === 'approving' ? <p className="text-sm text-muted-foreground">Adding the phone…</p> : null}
+        {failed ?? denied ? <p role="status" className="text-sm text-muted-foreground">{failed ?? denied}</p> : null}
+        {error ? <p role="alert" className="text-sm text-destructive">{error}</p> : null}
+          </Step>
+        </ol>
+      </section>
+
+      <section aria-labelledby="your-phones" className="space-y-2">
+        <h2 id="your-phones" className="text-sm font-medium">Your phones</h2>
+        {list.isError ? <p role="alert" className="text-sm text-destructive">{list.error.message}</p> : null}
+        {phones.length === 0 ? (
+          <p className="text-sm text-muted-foreground">No phones yet.</p>
+        ) : (
+          <ul className="divide-y divide-border">
+            {phones.map((phone) => <PhoneRow key={phone.deviceId} phone={phone} onRemove={() => setRemoving(phone)} />)}
+          </ul>
+        )}
+        {list.data?.undeniedGrants ? (
+          <p className="text-sm text-muted-foreground">
+            The relay could not cancel every notification permission for a removed phone. It lapses within 90 days.
+          </p>
+        ) : null}
+      </section>
+
+      {list.data ? (
+        <Collapsible>
+          <CollapsibleTrigger asChild>
+            <Button variant="ghost" size="sm" className="group -ml-2">
+              <ChevronRightIcon className="size-4 transition-transform group-data-[state=open]:rotate-90" aria-hidden />
+              Advanced
+            </Button>
+          </CollapsibleTrigger>
+          <CollapsibleContent>
+            <RelayAddressForm phones={list.data} onSaved={() => { setCredentials(null); setCode(null); setError(null) }} />
+          </CollapsibleContent>
+        </Collapsible>
+      ) : null}
+
+      {pairing?.status === 'confirm' ? (
+        <ApprovalDialog pairing={pairing} deciding={decide.isPending} onDecide={(approve) => decide.mutate({ id: pairing.id, approve })} />
+      ) : null}
+
+      <AlertDialog open={removing !== null} onOpenChange={(open) => { if (!open) setRemoving(null) }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Remove {removing?.label}?</AlertDialogTitle>
+            <AlertDialogDescription>
+              It loses access to this computer at once. To use it again, pair it again.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={() => { if (removing) remove.mutate(removing.deviceId) }}>Remove</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </div>
+  )
+}

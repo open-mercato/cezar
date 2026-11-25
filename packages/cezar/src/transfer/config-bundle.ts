@@ -45,10 +45,12 @@ export const WORKSPACE_EXCLUDED: Record<string, string> = {
   browseRoot: 'machine path',
   projectsDir: 'machine path',
   updateChannel: 'per-install update policy',
+  versionRetention: 'per-install cleanup of installed cezar versions',
   cezarId: 'install identity',
   telemetry: 'consent is per machine and never granted by a file',
   lastActiveOn: 'telemetry bookkeeping',
   projects: 'absolute repo paths',
+  relayAddress: 'phones are paired through this machine\'s relay',
 };
 
 export const PROJECT_EXCLUDED: Record<string, string> = {
@@ -56,6 +58,7 @@ export const PROJECT_EXCLUDED: Record<string, string> = {
   maxParallel: 'workspace-wide now (resources)',
   memoryLimitMb: 'workspace-wide now (resources)',
   landing: 'auto-landing is a grant made on the machine that pushes',
+  bypassPermissions: 'skipping permission prompts is a grant made on the machine that runs the agent',
 };
 
 /** `host/owner/repo` — never the URL, which may carry `user:token@`. */

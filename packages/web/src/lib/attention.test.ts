@@ -9,6 +9,7 @@ import {
   deriveAttention,
   isIdleClosed,
   isNeedsYouStatus,
+  signInAccountKey,
   runClosure,
   wantsAttention,
   type Attention,
@@ -209,11 +210,20 @@ describe('a run the inactivity timer closed (spec 2026-11-04-idle-closed-attenti
   const AT = '2026-11-04T10:00:00.000Z'
   const idle = run({ status: 'failed', idleClosedAt: AT })
 
-  it('is "closed · idle" in orange: not an error, not "needs you", no notification', () => {
-    expect(deriveAttention(idle)).toEqual({ bucket: 'none', tone: 'idle', pulse: false, label: 'closed · idle' })
+  it('a legacy failed record is a quiet neutral "idle": not an error, not "needs you", no notification', () => {
+    expect(deriveAttention(idle)).toEqual({ bucket: 'none', tone: 'neutral', pulse: false, label: 'idle' })
     expect(wantsAttention(idle)).toBe(false)
     expect(isNeedsYouStatus(idle)).toBe(false)
     expect(isIdleClosed(idle)).toBe(true)
+  })
+
+  it('a waiting run the timer closed stays plain "needs you" — no idle special case', () => {
+    const parked = run({ status: 'waiting', idleClosedAt: AT })
+    expect(deriveAttention(parked)).toEqual(deriveAttention(run({ status: 'waiting' })))
+    expect(deriveAttention(parked)).toMatchObject({ bucket: 'waiting', label: 'needs you' })
+    expect(isIdleClosed(parked)).toBe(false)
+    expect(runClosure(parked)).toBeUndefined()
+    expect(isNeedsYouStatus(parked)).toBe(true)
   })
 
   it('an unanswered question stays yellow "needs you"', () => {
@@ -351,4 +361,19 @@ it('shows a pending fallback as switching agent without asking for attention', (
   const record = run({ status: 'queued', fallbackEpisode: { pending: true, attempted: ['claude:default'] } })
   expect(deriveAttention(record)).toEqual({ bucket: 'running', tone: 'violet', pulse: true, label: 'switching agent' })
   expect(wantsAttention(record)).toBe(false)
+})
+
+describe('parked on an expired login (spec 2026-11-18-inline-account-reconnect)', () => {
+  const parked = run({ status: 'waiting', parked: { kind: 'auth', provider: 'claude', profileId: 'work', at: '2026-07-14T10:00:00.000Z' } })
+
+  it('needs you for a sign-in: amber, still', () => {
+    expect(deriveAttention(parked)).toEqual({ bucket: 'waiting', tone: 'pending', pulse: false, label: 'sign-in needed' })
+    expect(wantsAttention(parked)).toBe(true)
+  })
+
+  it('names its account only while it waits', () => {
+    expect(signInAccountKey(parked)).toBe('claude:work')
+    expect(signInAccountKey({ ...parked, status: 'running' })).toBeUndefined()
+    expect(signInAccountKey(run({ status: 'waiting' }))).toBeUndefined()
+  })
 })

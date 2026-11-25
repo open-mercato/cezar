@@ -19,6 +19,7 @@ export function managerFixture(overrides: Partial<ManagerSummary> = {}): Manager
     pendingActions: 0,
     pendingQuestions: 0,
     costUsd: 0,
+    followedTasks: [],
     ...overrides,
   }
 }

@@ -1,6 +1,8 @@
 import { act, cleanup, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
+import { fireEvent } from '@testing-library/react'
+
 import { Toaster, UNREACHABLE_TOAST, onDangerToast, resetToasts, toast } from './toaster'
 
 beforeEach(() => {
@@ -207,3 +209,32 @@ describe('onDangerToast', () => {
     off()
   })
 })
+
+describe('an undo toast (spec 2026-11-23-needs-you-triage)', () => {
+  it('pauses while hovered, says so, and its Undo runs once and closes it', () => {
+    const held: boolean[] = []
+    const onClick = vi.fn()
+    render(<Toaster />)
+    act(() => { toast('Dismissed “Q”', { durationMs: 1000, action: { label: 'Undo', onClick }, onHold: (on) => held.push(on) }) })
+    const node = screen.getByRole('status')
+    fireEvent.pointerEnter(node)
+    act(() => { vi.advanceTimersByTime(5000) })
+    expect(node.getAttribute('data-state')).toBe('open')
+    fireEvent.pointerLeave(node)
+    expect(held).toEqual([true, false])
+    act(() => { vi.advanceTimersByTime(999) })
+    expect(screen.getByRole('status').getAttribute('data-state')).toBe('open')
+    fireEvent.click(screen.getByRole('button', { name: 'Undo' }))
+    expect(onClick).toHaveBeenCalledTimes(1)
+    expect(screen.getByRole('status').getAttribute('data-state')).toBe('closed')
+  })
+
+  it('a toast without onHold keeps its plain clock', () => {
+    render(<Toaster />)
+    act(() => { toast('Saved', { durationMs: 1000 }) })
+    fireEvent.pointerEnter(screen.getByRole('status'))
+    act(() => { vi.advanceTimersByTime(1000) })
+    expect(screen.getByRole('status').getAttribute('data-state')).toBe('closed')
+  })
+})
+

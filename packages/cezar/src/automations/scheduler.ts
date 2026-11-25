@@ -39,7 +39,8 @@ export interface ProjectAutomationHandle {
   store: AutomationStore;
   /** The zone every schedule is evaluated in — the server's own. */
   timeZone: string;
-  github?: { owner: string; repo: string; poller: GithubPoller };
+  /** `onPullRequestClosed` hears every merged or closed PR a poll saw, so managers close its merge cards. */
+  github?: { owner: string; repo: string; poller: GithubPoller; onPullRequestClosed?: (number: number, state: 'merged' | 'closed') => void };
   /** `getDriver` re-resolves the project's tracker connection on every poll (it can be added,
    *  removed or reconnected between ticks) rather than being captured once at handle build time. */
   tracker?: { getDriver: () => Promise<TrackerDriver | TrackerFailure>; poller: TrackerPoller };
@@ -112,6 +113,10 @@ export class ProjectAutomationScheduler {
             climbedTo = budget;
           }
           exhausted = pinned(result);
+        }
+        for (const candidate of result.candidates) {
+          if (candidate.event === 'pull_request.merged') github.onPullRequestClosed?.(candidate.number, 'merged');
+          else if (candidate.event === 'pull_request.closed') github.onPullRequestClosed?.(candidate.number, 'closed');
         }
         return result;
       },

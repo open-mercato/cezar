@@ -65,10 +65,14 @@ const PROBE_TIMEOUT_MS = 10_000;
 
 function npmGlobalPrefix(platform: NodeJS.Platform): Promise<string | null> {
   return new Promise((resolve) => {
-    execFile('npm', ['prefix', '-g'], { timeout: PROBE_TIMEOUT_MS, shell: platform === 'win32' }, (error, stdout) => {
-      const prefix = stdout?.toString().trim();
-      resolve(error || !prefix ? null : prefix);
-    });
+    try {
+      execFile('npm', ['prefix', '-g'], { timeout: PROBE_TIMEOUT_MS, shell: platform === 'win32' }, (error, stdout) => {
+        const prefix = stdout?.toString().trim();
+        resolve(error || !prefix ? null : prefix);
+      });
+    } catch {
+      resolve(null); // a synchronous spawn throw degrades like a failed probe (#2312)
+    }
   });
 }
 

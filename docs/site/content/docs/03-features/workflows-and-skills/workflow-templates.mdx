@@ -9,8 +9,12 @@ sources:
     path: packages/cezar/src/workflows/templates.ts
     line: 203
     commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+  - label: "Restricted Codex execution"
+    path: packages/cezar/src/core/codex-app-server-runner.ts
+    line: 531
+    commit: 49ffb98e20cb00d1a0abbdafba51ba95a7ef1dea
 ---
-Templates cover implementation with tests (implement-and-verify), implementation with review and a PR (implement-review-pr), review by several agents (review-council), and CI repair (fix-ci). Select a template, adapt its test commands and prompts, then save your own copy.
+Templates cover implementation with tests (implement-and-verify), implementation with review and a PR (implement-review-pr), review by several agents (review-council), a read-only review of a pull request (review-pr), and CI repair (fix-ci). Select a template, adapt its test commands and prompts, then save your own copy.
 
 ## Where to find it
 
@@ -18,8 +22,22 @@ Workflows → built-in templates
 
 ## How to use it
 
-1. Choose implement-and-verify, implement-review-pr, review-council, or fix-ci.
+1. Choose implement-and-verify, implement-review-pr, review-council, review-pr, or fix-ci.
 2. Adapt test commands and prompts.
 3. Save your own copy of the workflow.
 
-> **Good to know**: review-council runs three reviewers and a separate agent that decides the outcome.
+## Review a pull request without touching it
+
+Start a task with the review-pr workflow and the pull request's URL as the task text. Correctness, security and tests reviewers read it with `gh pr view` and `gh pr diff`, then a judge ends with a verdict (approve, changes or reject), the findings as `path:line`, and a draft review comment for each, in its final message. Nothing is posted.
+
+Its agents get Read, Grep, Glob and a Bash limited to read-only `gh` and `git` commands, with no private MCP servers. Claude Code, Pi and supported Codex installations enforce those limits. Other backends refuse to start this workflow. Claude Code’s own settings can still widen its allow rules.
+
+Codex uses an isolated configuration and a read broker. Native shell tools and execution environments stay disabled, including after Continue, restart and fork. The broker validates every operation and refuses writes, pushes, PR mutations, unrestricted shell and MCP calls. Explicit empty grants stay empty in dispatched tasks.
+
+> **Good to know**: Restricted Codex execution requires Codex 0.169.0 or newer on macOS or Linux. Older versions, system policy or authentication settings produce a diagnostic before a model turn. Your ordinary unrestricted Codex tasks keep their native settings. A Codex manager uses the same isolated mode, with its `cez-manager` commands checked and run by cezar. Planning and naming can use isolated no-tools calls.
+
+## What each workflow can do
+
+The workflow list (`GET /api/v1/workflows`) reports `capabilities` for every workflow: `push`, `openPr` and `postToGithub`, read from its definition. Draft PR means push and open PR; Push means push; PR comment, Issue comment and Update PR mean post to GitHub. An agent with an unrestricted shell, a dispatched subtask, or a check command that is not a read-only `gh`/`git` command counts as all three, because it could. Managers use this to pick a safe workflow.
+
+> **Good to know**: review-council runs three reviewers and a separate agent that decides the outcome, then asks you before it opens a draft PR, whatever the verdict. A saved copy of review-council keeps the graph it was saved with; its Draft PR still opens nothing when the branch has no new commits.

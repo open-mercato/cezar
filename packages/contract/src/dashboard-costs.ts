@@ -34,7 +34,7 @@ export const dashboardCostTaskSchema = z.object({
   /** Carried so a `failed` run still awaiting an answer reads as "needs you" here too — and so
    *  reconciling the dashboard's live overlay from cost rows never erases it. */
   awaitingAnswerSince: z.string().optional(),
-  /** A `failed` run the inactivity timer closed: "closed · idle", not a failure. */
+  /** The inactivity timer closed the run's session: never a failure (spec 2026-11-04-idle-closed-attention-state). */
   idleClosedAt: z.string().optional(),
   archived: z.boolean(),
   subtask: z.boolean(),

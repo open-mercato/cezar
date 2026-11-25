@@ -1,9 +1,12 @@
 import { worktreeLifecycleInvalidationSchema } from '@open-mercato/cezar-api-client'
 import { lifecycleQueryKeys } from './worktree-lifecycle'
-import { applyManagerEvent, managerKeys, MANAGER_EVENT_NAMES, refreshManagerChats } from './managers'
+import { applyAccountReconnectedEvent, applyAgentLoginEvent } from './agent-login'
+import { applyManagerEvent, managerKeys, MANAGER_EVENT_NAMES, refreshManagerApprovalLists, refreshManagerChats } from './managers'
 import { dashboardProjectTransition, dashboardTransition } from './dashboard-truth'
 import { dashboardWorkspaceUsageSchema } from '@open-mercato/cezar-api-client'
 import { dashboardLive } from './dashboard-live'
+import { connectionStatus, nativeConnectionStatus } from './connection-status'
+import { reconnectTopics } from './ws'
 import {
   runArtifactsEventSchema,
   trackerChangedEventSchema,
@@ -32,7 +35,9 @@ import {
 } from './events'
 import { apiPath, getApiScope, queryScope } from '@open-mercato/cezar-api-client'
 import { queryKeys, useHealthSubscription, workspaceQueryKeys } from './queries'
-import { ApiError, getProjectRun } from './client'
+import { noteQuestionsMaybeChanged, questionKeys, useQuestionsSubscription } from './questions'
+import { attentionKeys, noteAttentionMaybeChanged } from './attention'
+import { ApiError, getHealth, getProjectRun } from './client'
 import { HIDDEN_STREAM_GRACE_MS, RUN_EVENT_BATCH_MS } from './run-events'
 import { hiddenTabAwaitsUiState, hiddenTabNeedsWorkspaceStream } from './hidden-stream'
 import type {
@@ -69,8 +74,9 @@ import type {
 // stream is workspace-level and never scoped).
 const SSE_URL = `${apiPath('/workspace/events')}?slim=1`
 
-/** `EventSource.CLOSED`. Spelled as the literal so nothing here depends on the global's statics —
+/** `EventSource.OPEN`/`CLOSED`. Spelled as literals so nothing here depends on the global's statics —
  *  the same reason the constructor is read off `globalThis` below. */
+const OPEN = 1
 const CLOSED = 2
 
 /** How long to wait before rebuilding a stream the browser gave up on. Long enough that a server
@@ -78,6 +84,18 @@ const CLOSED = 2
  *  reader notices. Only reached in the permanent-failure case: an ordinary drop is EventSource's
  *  own retry, which we neither can nor should replace. */
 const REOPEN_DELAY_MS = 3_000
+
+/** A visible return whose stream heard nothing for this long (one missed 15 s ping) reopens at
+ *  once: an iOS WebView resumed from the background keeps a dead socket reporting OPEN. */
+export const RETURN_SILENCE_MS = 20_000
+
+/** While the stream is down on a visible page, ask for everything this often instead: plain HTTP
+ *  can work where the stream does not (a proxy that drops SSE), and the reader still sees changes. */
+export const POLL_WHILE_DOWN_MS = 30_000
+/** At most one plain-HTTP probe per this long while the stream keeps erroring, sent this long
+ *  after the drop (well inside the banner's 5 s delay) so a blip that reconnects at once sends none. */
+export const PROBE_WHILE_DOWN_MS = 10_000
+export const PROBE_DELAY_MS = 2_000
 
 /** Everything the stream is allowed to say. An unknown name never reaches `parseGlobalEvent`,
  *  because SSE only delivers named events to a matching listener in the first place. */
@@ -89,7 +107,7 @@ const EVENT_NAMES = ['run', 'run-deleted', 'todos', 'usage', 'ping'] as const
  * projects query (the sidebar grows/loses a group without a reload) and fan out to whoever
  * subscribed via `onWorkspaceEvent`.
  */
-const WORKSPACE_EVENT_NAMES = ['project-added', 'project-removed', 'checkout-progress', 'automation-change', 'tracker-changed'] as const
+const WORKSPACE_EVENT_NAMES = ['project-added', 'project-removed', 'checkout-progress', 'automation-change', 'tracker-changed', 'phone-pairing'] as const
 
 type WorkspaceEventName = (typeof WORKSPACE_EVENT_NAMES)[number]
 
@@ -473,6 +491,10 @@ async function reconcile(queryClient: QueryClient): Promise<void> {
     workspaceQueryKeys.skillsUpdateAll,
     // Replies and approvals produced while the stream was down; the chats catch up below.
     managerKeys.list,
+    // Questions opened or closed while we were away; a remote cockpit has no topic for them.
+    questionKeys.all,
+    // Now's Needs you (spec 2026-11-20-phone-notifications-inbox).
+    attentionKeys.all,
     ['run-history', activeScope] as const,
     ['run-history-context', activeScope] as const,
   ] as const
@@ -490,6 +512,7 @@ async function reconcile(queryClient: QueryClient): Promise<void> {
       queryClient.invalidateQueries({queryKey: ['worktree-lifecycle'], refetchType: 'none'}),
       // Only each chat's newest page: invalidating the infinite query re-reads every loaded one.
       refreshManagerChats(queryClient),
+      refreshManagerApprovalLists(queryClient),
       ...cachedProjectScopes(queryClient)
         .filter((scope) => scope !== activeScope)
         .flatMap((scope) => eventQueryKeys(scope).map((queryKey) =>
@@ -709,7 +732,22 @@ export function useGlobalEvents(usage: UsageStore, url: string = SSE_URL): void 
       refetchUncachedProviderStatus()
     }
 
+    let lastReconcileAt = Date.now()
+    // The banner reads the LAST request's outcome, usually from before the drop: ask once, shortly, so a
+    // dead server says "reconnecting" rather than "paused". Throttled past the browser's own retries.
+    let lastProbeAt = 0
+    let probeTimer: ReturnType<typeof setTimeout> | undefined
+    const probeRequests = (): void => {
+      if (probeTimer !== undefined || Date.now() - lastProbeAt < PROBE_WHILE_DOWN_MS) return
+      probeTimer = setTimeout(() => {
+        probeTimer = undefined
+        if (disposed || dashboardLive.isConnected()) return
+        lastProbeAt = Date.now()
+        void getHealth().catch(() => {})
+      }, PROBE_DELAY_MS)
+    }
     const reconcileNow = (): void => {
+      lastReconcileAt = Date.now()
       reconciliationDepth += 1
       runEventBatcher.beginReconcile()
       void reconcile(queryClient).finally(() => {
@@ -772,6 +810,8 @@ export function useGlobalEvents(usage: UsageStore, url: string = SSE_URL): void 
         clearTimeout(reopenReconcileTimer)
         reopenReconcileTimer = undefined
         if (everOpened || reconcileOnOpen) reconcileNow()
+        connectionStatus.opened()
+        nativeConnectionStatus.clear()
         dashboardLive.connected(true)
         everOpened = true
         reconcileOnOpen = false
@@ -792,6 +832,8 @@ export function useGlobalEvents(usage: UsageStore, url: string = SSE_URL): void 
           // in a background tab, so coming back to one showed yesterday's rows until a reload.
           runsIndexRefresher.onEvent(parsed.event)
           if (parsed.event.type === 'run' || parsed.event.type === 'run-deleted') {
+            noteQuestionsMaybeChanged(queryClient)
+            noteAttentionMaybeChanged(queryClient)
             stageDashboardRefresh()
             if (parsed.project) dashboardTransition(parsed.project, parsed.event.type === 'run-deleted' ? parsed.event.id : parsed.event.run)
             if (parsed.project && (parsed.event.type === 'run-deleted' || parsed.event.run.status !== 'running')) dashboardLive.remove(parsed.project, parsed.event.type === 'run-deleted' ? parsed.event.id : parsed.event.run.id)
@@ -906,8 +948,20 @@ export function useGlobalEvents(usage: UsageStore, url: string = SSE_URL): void 
           if (disposed || source !== current) return
           lastFrameAt = Date.now()
           applyManagerEvent(queryClient, name, (event as MessageEvent<string>).data)
+          if (name !== 'manager-delta') {
+            noteQuestionsMaybeChanged(queryClient)
+            noteAttentionMaybeChanged(queryClient)
+          }
         })
       }
+
+      // A snooze ending, a phone's dismissal, a PR closing: nothing else on the stream says so
+      // (spec 2026-11-23-needs-you-triage).
+      current.addEventListener('attention-change', () => {
+        if (disposed || source !== current) return
+        lastFrameAt = Date.now()
+        noteAttentionMaybeChanged(queryClient)
+      })
 
       current.addEventListener('provider-status', (event) => {
         if (disposed || source !== current) return
@@ -927,6 +981,23 @@ export function useGlobalEvents(usage: UsageStore, url: string = SSE_URL): void 
         applyProviderStatusEvent(row)
       })
 
+      // Inline account reconnect (spec 2026-11-18-inline-account-reconnect): host-wide, like
+      // provider-status, so neither event passes the project filter.
+      current.addEventListener('agent-login', (event) => {
+        if (disposed || source !== current) return
+        lastFrameAt = Date.now()
+        let payload: unknown
+        try { payload = JSON.parse((event as MessageEvent<string>).data) } catch { return }
+        applyAgentLoginEvent(queryClient, payload)
+      })
+      current.addEventListener('account-reconnected', (event) => {
+        if (disposed || source !== current) return
+        lastFrameAt = Date.now()
+        let payload: unknown
+        try { payload = JSON.parse((event as MessageEvent<string>).data) } catch { return }
+        applyAccountReconnectedEvent(queryClient, payload)
+      })
+
       current.addEventListener('error', () => {
         if (disposed || source !== current) return
         // An ordinary drop leaves the stream CONNECTING and the browser retries it on its own —
@@ -935,6 +1006,8 @@ export function useGlobalEvents(usage: UsageStore, url: string = SSE_URL): void 
         // boots). Nothing would ever reopen it, so the cockpit would sit there looking live and
         // showing yesterday's state.
         dashboardLive.connected(false)
+        connectionStatus.failedAttempt()
+        probeRequests()
         if (current.readyState === CLOSED) reopenLater()
       })
     }
@@ -976,6 +1049,16 @@ export function useGlobalEvents(usage: UsageStore, url: string = SSE_URL): void 
       if (document.visibilityState === 'hidden') hiddenTimer ??= setTimeout(releaseWhileHidden, HIDDEN_STREAM_GRACE_MS)
     }
 
+    // Skip whatever backoff is running (ours or the browser's own EventSource retry) and reopen
+    // now; the `open` reconciles, or the timer in `reconcileOnReopen` does if the stream stays down.
+    const reconnectNow = (): void => {
+      if (disposed) return
+      clearTimeout(reopenTimer)
+      reopenTimer = undefined
+      reconcileOnReopen()
+      connect()
+    }
+
     const onVisibilityChange = (): void => {
       if (document.visibilityState === 'hidden') {
         armHiddenTimer()
@@ -985,17 +1068,26 @@ export function useGlobalEvents(usage: UsageStore, url: string = SSE_URL): void 
       hiddenTimer = undefined
       // The phone-in-a-pocket case: mobile browsers freeze background tabs, so the stream may have
       // been dead for an hour with no error handler ever running. Whatever is on screen right now
-      // is what the reader is about to trust, so ask the server before they read it.
-      if (!source || source.readyState === CLOSED) {
-        // Don't make them wait out a backoff that started while they were away.
-        clearTimeout(reopenTimer)
-        reopenTimer = undefined
-        reconcileOnReopen()
-        connect()
+      // is what the reader is about to trust, so ask the server before they read it. A stream
+      // silent past a ping is not trusted to recover on its own schedule.
+      if (!source || source.readyState === CLOSED || Date.now() - lastFrameAt > RETURN_SILENCE_MS) {
+        reconnectNow()
         return
       }
       reconcileNow()
     }
+
+    // The network came back (a Wi-Fi handover, airplane mode off): don't wait out a backoff.
+    const onOnline = (): void => {
+      if (source?.readyState === OPEN && dashboardLive.isConnected()) return
+      reconnectNow()
+    }
+
+    const unregisterReconnect = connectionStatus.setReconnect(() => {
+      reconnectNow()
+      reconnectTopics()
+      void queryClient.invalidateQueries({ queryKey: queryKeys.health })
+    })
 
     const onPageHide = (): void => {
       // Full navigation away. React never unmounts for those — the document goes to the
@@ -1024,13 +1116,16 @@ export function useGlobalEvents(usage: UsageStore, url: string = SSE_URL): void 
     // that cannot — a socket still reported OPEN that has silently stopped delivering.
     livenessTimer = setInterval(() => {
       if (disposed || document.visibilityState !== 'visible') return
+      if (!dashboardLive.isConnected() && reconciliationDepth === 0 && Date.now() - lastReconcileAt >= POLL_WHILE_DOWN_MS) reconcileNow()
       if (Date.now() - lastFrameAt <= STALE_MS) return
+      connectionStatus.failedAttempt()
       clearTimeout(reopenTimer)
       reopenTimer = undefined
       connect()
     }, LIVENESS_CHECK_MS)
 
     document.addEventListener('visibilitychange', onVisibilityChange)
+    window.addEventListener('online', onOnline)
     window.addEventListener('pagehide', onPageHide)
     window.addEventListener('pageshow', onPageShow)
     connect()
@@ -1041,6 +1136,7 @@ export function useGlobalEvents(usage: UsageStore, url: string = SSE_URL): void 
       clearTimeout(reopenTimer)
       clearTimeout(reopenReconcileTimer)
       clearInterval(livenessTimer)
+      clearTimeout(probeTimer)
       clearTimeout(hiddenTimer)
       dashboardLive.connected(false)
       clearTimeout(dashboardTimer); clearTimeout(dashboardMax)
@@ -1052,6 +1148,8 @@ export function useGlobalEvents(usage: UsageStore, url: string = SSE_URL): void 
       pendingTodos.clear()
       pendingProviderRows = []
       document.removeEventListener('visibilitychange', onVisibilityChange)
+      window.removeEventListener('online', onOnline)
+      unregisterReconnect()
       window.removeEventListener('pagehide', onPageHide)
       window.removeEventListener('pageshow', onPageShow)
       // Explicit: an EventSource keeps its socket (and its retry loop) alive on its own, so a
@@ -1080,6 +1178,8 @@ export function GlobalEventsProvider({ children }: { children: ReactNode }) {
   // mounted for the app's whole life, so health stays live continuously instead of flapping with
   // the lifecycles of the ~15 `useHealth` readers below.
   useHealthSubscription()
+  // The same, for the Questions badge (spec 2026-11-17-questions-inbox § Counts).
+  useQuestionsSubscription()
   return <UsageContext.Provider value={usage}>{children}</UsageContext.Provider>
 }
 

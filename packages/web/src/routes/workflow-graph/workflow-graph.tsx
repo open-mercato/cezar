@@ -47,6 +47,7 @@ import {
 } from '@/api/client'
 import { queryKeys, useSkills, useWorkflowNodes, useWorkflows } from '@/api/queries'
 import { RUNNER_IDS, type WorkflowGraph, type WorkflowGraphNode } from '@open-mercato/cezar-api-client'
+import { resolveNodeId } from './node-id'
 import { CenteredState } from '@/components/centered-state'
 import {
   AlertDialog,
@@ -1458,13 +1459,20 @@ function Inspector({
           value={draftId}
           onChange={(e) => setDraftId(e.target.value)}
           onBlur={() => {
-            const id = draftId.trim()
-            if (!id || id === node.id) return setDraftId(node.id)
-            if (!/^[A-Za-z0-9][A-Za-z0-9_-]*$/.test(id) || graph.nodes.some((n) => n.id === id)) {
-              toast(`“${id}” is taken or not a valid id (letters, digits, - and _).`, { tone: 'danger' })
+            const r = resolveNodeId(draftId, node.id, graph.nodes.map((n) => n.id))
+            if (!r.ok) {
+              if (r.reason !== 'empty') {
+                toast(
+                  r.reason === 'taken'
+                    ? `Another node already uses the id “${r.id}”.`
+                    : `“${draftId.trim()}” has no usable characters — ids use letters, digits, - and _.`,
+                  { tone: 'danger' },
+                )
+              }
               return setDraftId(node.id)
             }
-            onChange({ ...node, id })
+            if (r.id === node.id) return setDraftId(node.id)
+            onChange({ ...node, id: r.id })
           }}
           className="h-8"
         />

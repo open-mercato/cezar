@@ -37,6 +37,18 @@ import { atomicWriteJsonSync } from '../workspace/config.ts';
  * write must show up here without an event.
  */
 
+const sessionMetaSchema = z
+  .object({
+    startedAt: z.string(),
+    lastAt: z.string(),
+    turns: z.number().int().min(0),
+    contextTokens: z.number().int().min(0).optional(),
+    /** The open cards this transcript was last shown in full (`openCardsDigest`). */
+    cardsDigest: z.string().optional(),
+  })
+  .optional()
+  .catch(undefined);
+
 const stateSchema = z
   .object({
     sessionId: z.string().optional().catch(undefined),
@@ -45,6 +57,9 @@ const stateSchema = z
     jobSessionId: z.string().optional().catch(undefined),
     /** `runner|account` the session belongs to: a transcript does not follow either change. */
     sessionKey: z.string().optional().catch(undefined),
+    /** Per transcript: when it started, its last turn, how many turns and how much context it holds
+     *  (spec 2026-11-21-manager-short-sessions-and-memory § 2.2–2.3). */
+    sessions: z.object({ chat: sessionMetaSchema, watch: sessionMetaSchema, job: sessionMetaSchema }).catch({}),
     lastCheckAt: z.string().optional().catch(undefined),
     /** Attention keys already spoken about, → when. A key that disappears is forgotten. */
     reported: z.record(z.string(), z.string()).catch({}),
@@ -54,12 +69,26 @@ const stateSchema = z
     /** Replies still streaming at that read: at or under `readSeq`, yet unread once they settle. */
     readStreaming: z.array(z.string()).catch([]),
     watchFailures: z.number().int().min(0).catch(0),
+    /** Diagnostics: the newest failed turn's cause, as the agent printed it. Never shown raw. */
+    lastFailure: z
+      .object({ at: z.string(), turn: z.string(), kind: z.string(), cause: z.string() })
+      .optional()
+      .catch(undefined),
+    /** The one notice a run of failed watch checks keeps rewriting, rather than adding lines. */
+    watchNoticeId: z.string().optional().catch(undefined),
     /** What the chat session has not heard yet (a decision, a question asked elsewhere). */
     notes: z.array(z.string()).catch([]),
     /** Tasks this manager hears about, `<projectId>/<runId>` → since when (spec § Followed tasks). */
-    follows: z.record(z.string(), z.object({ at: z.string(), created: z.boolean().optional() })).catch({}),
-    /** Followed-task events the follow-up turn has not taken up yet, one line each. */
-    followups: z.array(z.string()).catch([]),
+    follows: z.record(z.string(), z.object({
+      at: z.string(),
+      created: z.boolean().optional(),
+      /** When its recent follow-up turns were owed: bounds a manager↔task ping-pong. */
+      turns: z.array(z.string()).optional(),
+    })).catch({}),
+    /** Tasks it created, `<projectId>/<runId>` → when: kept past an unfollow (the Tasks table's manager facet). */
+    created: z.record(z.string(), z.string()).catch({}),
+    /** Followed-task events the follow-up turn has not taken up yet; `ledger` is the event's identity. */
+    followups: z.array(z.object({ ledger: z.string(), line: z.string() })).catch([]),
     /** The MCP servers the last Claude session reported (spec 2026-11-12-manager-connectors). */
     connectors: z
       .object({
@@ -68,6 +97,10 @@ const stateSchema = z
       })
       .optional()
       .catch(undefined),
+    /** Bash commands the policy refused, newest first (spec 2026-10-31-managers, Safety). */
+    bashDenials: z
+      .array(z.object({ command: z.string(), reason: z.string(), at: z.string(), count: z.number().int().min(1) }))
+      .catch([]),
     /** A usage limit's reset: no timed turn runs before it, then the chat it cut off replays. */
     resume: z
       .object({
@@ -75,6 +108,15 @@ const stateSchema = z
         /** The assistant messages showing the hint, cleared when it fires or is cancelled. */
         messageIds: z.array(z.string()),
         chat: z.object({ text: z.string(), paths: z.array(z.string()), messageIds: z.array(z.string()) }).optional(),
+      })
+      .optional()
+      .catch(undefined),
+    /** The chat a rejected login cut off (spec 2026-11-18-inline-account-reconnect): a reconnect
+     *  of that account replays it once. Cleared by the next chat turn either way. */
+    authRetry: z
+      .object({
+        messageId: z.string(),
+        chat: z.object({ text: z.string(), paths: z.array(z.string()), messageIds: z.array(z.string()) }),
       })
       .optional()
       .catch(undefined),

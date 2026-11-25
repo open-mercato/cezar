@@ -9,6 +9,7 @@ import { GlobalInstructionsCard } from './global-instructions-section'
 
 const CONFIG: WorkspaceConfigResponse = {
   branding: { name: 'cezar', logoUrl: null },
+  computerName: 'Test Mac',
   browseRoot: '~/',
   projectsDir: '~/cezar/projects',
   skillsAutoUpdate: null,
@@ -23,7 +24,7 @@ const CONFIG: WorkspaceConfigResponse = {
     monitoringWakeIntervalMinutes: null,
     autoResumeOnUsageLimit: true,
     memoryLimitMb: null,
-    worktreeRetentionDefault: 10,
+    worktreeRetentionDefault: 10, worktreeIdleDaysDefault: 7, archivedTaskDeleteDaysDefault: 90, diskGuard: { minFreePercent: 10, minFreeGb: 5, maxWorktreesGb: 20 },
   },
   agentDefaults: {},
 }

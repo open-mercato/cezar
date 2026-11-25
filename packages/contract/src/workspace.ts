@@ -33,6 +33,8 @@ export const workspaceConfigResponseSchema = z.object({
     name: z.string(),
     logoUrl: z.string().nullable(),
   }),
+  /** This computer's name, as phones pair with it (the relay account's label): what CezarBot's Devices row shows. */
+  computerName: z.string(),
   /** Root exposed by the Add-project directory browser — stored as written (`~` kept). */
   browseRoot: z.string(),
   /** Checkout root for GUI-cloned projects — stored as written (`~` kept). */
@@ -61,6 +63,12 @@ export const workspaceConfigResponseSchema = z.object({
     autoResumeOnUsageLimit: z.boolean(),
     memoryLimitMb: z.number().nullable(),
     worktreeRetentionDefault: z.number(),
+    /** Age retention seed (days); 0 = off. */
+    worktreeIdleDaysDefault: z.number(),
+    /** Archived tasks are deleted after this many days; 0 = never. */
+    archivedTaskDeleteDaysDefault: z.number(),
+    /** Disk guard thresholds; each 0 = that trigger off. */
+    diskGuard: z.object({ minFreePercent: z.number(), minFreeGb: z.number(), maxWorktreesGb: z.number() }),
   }),
   /**
    * What a repo that has set none of its own runs (spec 2026-07-29-agent-profiles).
@@ -123,6 +131,15 @@ export const setWorkspaceConfigInputSchema = z.object({
       autoResumeOnUsageLimit: z.boolean().optional(),
       memoryLimitMb: z.number().int().min(0).max(1_048_576).nullable().optional(),
       worktreeRetentionDefault: z.number().int().min(0).max(1000).optional(),
+      worktreeIdleDaysDefault: z.number().int().min(0).max(365).optional(),
+      archivedTaskDeleteDaysDefault: z.number().int().min(0).max(3650).optional(),
+      diskGuard: z
+        .object({
+          minFreePercent: z.number().min(0).max(50).optional(),
+          minFreeGb: z.number().min(0).max(10_000).optional(),
+          maxWorktreesGb: z.number().min(0).max(100_000).optional(),
+        })
+        .optional(),
     })
     .optional(),
 });
@@ -315,6 +332,8 @@ export const workspaceUiStateSchema = z.looseObject({
   /** Layouts the user saved by name in a task's Layout menu — offered in every task of every
    *  project. One bad entry drops the list rather than the whole file. */
   savedLayouts: z.array(savedWorkspaceLayoutSchema).catch([]).optional(),
+  /** Questions inbox: days before an open question moves to Older (absent = 7, 0 = off). */
+  questions: z.looseObject({ olderAfterDays: z.number().int().min(0).max(365).optional() }).optional(),
   /** Which approval types ask for confirmation; one value per server (mobile spec, Q13). */
   managerConfirm: managerConfirmSchema.optional(),
   /** First-run onboarding (spec 2026-10-26-first-run-onboarding). Workspace-wide — the same
@@ -439,6 +458,16 @@ export const configResponseSchema = z.object({
   /** Keep the last N finished worktrees on disk (#483); 0 = unlimited. Older ones are reclaimed
    *  (directory only — branch kept, so work is recoverable). */
   worktreeRetention: z.number(),
+  /** Reclaim a non-active task's worktree after N days without activity; 0 = off. The effective
+   *  value: the repo's own, else the workspace default. */
+  worktreeIdleDays: z.number(),
+  /** True when the repo sets its own `worktreeIdleDays` (false = inherits the workspace default). */
+  worktreeIdleDaysOwn: z.boolean(),
+  /** Delete archived tasks after N days; 0 = never. Effective value: the repo's own, else the
+   *  workspace default. */
+  archivedTaskDeleteDays: z.number(),
+  /** True when the repo sets its own `archivedTaskDeleteDays`. */
+  archivedTaskDeleteDaysOwn: z.boolean(),
   /** Live title updates: null = no config key, the `CEZ_TITLE_UPDATES` env default (ON) decides. */
   liveTitleUpdates: z.boolean().nullable(),
   /** Optional review gate (#489): null = no config key, the `CEZ_REVIEW_GATE` env default (OFF)
@@ -456,6 +485,10 @@ export const configResponseSchema = z.object({
   askSkill: z.string().nullable(),
   /** False when `skillsRepos` is `[]` — team skill repositories are off for this project. */
   teamSkills: z.boolean(),
+  /** Claude Code tasks skip every permission prompt (`--permission-mode bypassPermissions`). */
+  bypassPermissions: z.boolean(),
+  /** Why `bypassPermissions` is not honored here (a git-tracked config.json), or null. */
+  bypassPermissionsBlocked: z.string().nullable(),
 });
 export type ConfigResponse = z.infer<typeof configResponseSchema>;
 
@@ -498,6 +531,10 @@ export const setConfigInputSchema = z.object({
   memoryLimitMb: z.number().int().min(0).max(1_048_576).nullable().optional(),
   /** Keep last N finished worktrees (#483); 0 = unlimited, null clears back to the default (10). */
   worktreeRetention: z.number().int().min(0).max(1000).nullable().optional(),
+  /** Age retention in days (0 = off); null clears back to the workspace default. */
+  worktreeIdleDays: z.number().int().min(0).max(365).nullable().optional(),
+  /** Archived-task lifetime in days (0 = never); null clears back to the workspace default. */
+  archivedTaskDeleteDays: z.number().int().min(0).max(3650).nullable().optional(),
   /** null clears the key back to the env-default behavior. */
   liveTitleUpdates: z.boolean().nullable().optional(),
   /** null clears the key back to the env-default behavior (OFF). */
@@ -512,6 +549,8 @@ export const setConfigInputSchema = z.object({
   askSkill: z.string().trim().max(200).nullable().optional(),
   /** `false` writes `skillsRepos: []`; `true` drops that override back to the default repos. */
   teamSkills: z.boolean().optional(),
+  /** `true` turns permission prompts off for Claude Code tasks; `false`/`null` turns them back on. */
+  bypassPermissions: z.boolean().nullable().optional(),
 });
 export type SetConfigInput = z.infer<typeof setConfigInputSchema>;
 
@@ -602,6 +641,14 @@ export type ProviderStatusResponse = z.infer<typeof providerStatusResponseSchema
 /** `POST /api/v1/providers/connect` — either a terminal was handed the login command, or the
  *  provider turned out to be connected already. Every other outcome is a 409/500 carrying the
  *  same `command` for the clipboard fallback. */
+export const providerConnectSchema = z.object({
+  provider: providerIdSchema,
+  profileId: z.string().max(64).optional(),
+  /** Explicitly open sign-in even when the CLI reports an existing login. */
+  reconnect: z.boolean().optional(),
+}).strict();
+export type ProviderConnectInput = z.infer<typeof providerConnectSchema>;
+
 export const providerConnectResponseSchema = z.discriminatedUnion('opened', [
   z.object({ opened: z.literal(true), command: z.string() }),
   z.object({ opened: z.literal(false), connected: z.literal(true), command: z.string() }),

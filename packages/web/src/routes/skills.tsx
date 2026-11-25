@@ -1,14 +1,15 @@
-import { useMutation, useQueryClient } from '@tanstack/react-query'
+import { useQueryClient } from '@tanstack/react-query'
 import { ArrowLeftIcon, ListChevronsUpDownIcon, RefreshCwIcon, SparklesIcon, TriangleAlertIcon } from 'lucide-react'
 import { useCallback, useMemo, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router'
 
 import { Link, useActiveProjectId } from '@/lib/project-router'
 
-import { putUiState, refreshSkills } from '@/api/client'
+import { putUiState } from '@/api/client'
 import {
   queryKeys,
   useImportableSkills,
+  useRefreshSkillCatalog,
   useSkills,
   useSkillsUpdate,
   useUiState,
@@ -135,14 +136,9 @@ function SkillsCatalog() {
     })
   }, [allImportableNames, projectId, queryClient])
 
-  const refresh = useMutation({
-    mutationFn: () => refreshSkills(),
-    onSuccess: (catalog) => {
-      // The POST answers the merged catalog — seed the shared query instead of refetching.
-      queryClient.setQueryData(queryKeys.skills, catalog)
-      queryClient.setQueryData(queryKeys.skillsReady, catalog)
-      toast('Team skills refreshed.')
-    },
+  const refresh = useRefreshSkillCatalog()
+  const refreshTeamSkills = () => refresh.mutate(undefined, {
+    onSuccess: () => toast('Team skills refreshed.'),
     onError: (error) => toast(error.message, { tone: 'danger' }),
   })
 
@@ -159,6 +155,7 @@ function SkillsCatalog() {
   }
 
   const skills = orderSkills(skillsQuery.data ?? [])
+  const missingShared = skills.filter((skill) => skill.missingShared).map((skill) => skill.name)
   const activeNames = new Set(skills.map((skill) => skill.name))
   const catalog = orderSkills<SkillCatalogItem>([
     ...skills.map((skill) => ({
@@ -230,7 +227,7 @@ function SkillsCatalog() {
               type="button"
               data-slot="skills-refresh"
               disabled={refresh.isPending}
-              onClick={() => refresh.mutate()}
+              onClick={refreshTeamSkills}
               className="flex h-8 shrink-0 items-center gap-1.5 rounded-md border border-border bg-card px-2.5 text-label font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-55"
             >
               <RefreshCwIcon
@@ -241,6 +238,32 @@ function SkillsCatalog() {
             </button>
           </IconTooltip>
         </div>
+        {missingShared.length ? (
+          <div
+            data-slot="skills-missing-shared"
+            role="status"
+            className="mx-3 mb-2 flex shrink-0 flex-col gap-2 rounded-md border border-warning/40 bg-warning/10 p-2.5 text-meta"
+          >
+            <span className="flex items-start gap-1.5">
+              <TriangleAlertIcon aria-hidden="true" className="mt-0.5 size-3 shrink-0" />
+              <span>
+                Only this repository's extension is here for {missingShared.join(', ')} — the shared skill is not
+                installed, so a task cannot run it.
+              </span>
+            </span>
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              data-action="skills-install-shared"
+              className="self-start"
+              disabled={refresh.isPending}
+                onClick={refreshTeamSkills}
+            >
+              Install skills
+            </Button>
+          </div>
+        ) : null}
         {repoGroups.length > 1 ? (
           <div className="shrink-0 px-3 pb-2">
             {/* The cockpit select (native `<select>` is retired): same name, same `__all__` sentinel. */}

@@ -30,6 +30,10 @@ export interface ResolvedAgentProfile {
   path: string;
   /** True for the discovered account, which is never stored and cannot be edited or deleted. */
   isDefault: boolean;
+  /** cezar made the folder (spec 2026-11-24-add-account-in-cockpit). */
+  managed?: boolean;
+  /** No sign-in confirmed yet. */
+  pending?: boolean;
 }
 
 /**
@@ -89,6 +93,8 @@ export function resolveStoredProfile(account: AgentAccount): ResolvedAgentProfil
     configDir: account.configDir,
     path: expandTilde(account.configDir),
     isDefault: false,
+    ...(account.managed ? { managed: true } : {}),
+    ...(account.pending ? { pending: true } : {}),
   };
 }
 

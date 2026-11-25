@@ -50,6 +50,7 @@ const WORKFLOWS: WorkflowsResponse = {
     {
       name: 'fix-and-verify',
       source: 'file',
+      capabilities: { push: true, openPr: true, postToGithub: true },
       steps: [{ id: 'fix', name: 'Fix', skill: 'om-fix' }],
     },
   ],

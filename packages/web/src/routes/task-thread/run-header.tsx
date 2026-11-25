@@ -8,11 +8,13 @@ import {
   PencilIcon,
   SquareTerminalIcon,
 } from 'lucide-react'
+import { hasWorkflowGraph } from '@/lib/has-workflow-graph'
 import { ManagerBackLink } from '../manager/manager-back-link'
 import { cloneElement, Fragment, isValidElement, memo, useEffect, useId, useMemo, useReducer, useRef, useState, type ReactNode, type RefObject } from 'react'
 import { Link, useNavigate } from '@/lib/project-router'
 
 import {
+  useConfig,
   useHealth,
   usePatchRun,
   useProjectRepoBase,
@@ -198,7 +200,7 @@ function RunHeaderView({
               {/* The status word, open states only (Proposal 7). On phones it leads line 2. */}
               {statusLabel ? <StatusChip label={statusLabel} className="max-md:hidden" /> : null}
               {/* A closed task keeps a word too — quiet text, not a pill (calm when done). */}
-              {quietWord ? <QuietStatusWord word={quietWord} className="max-md:hidden" /> : null}
+              {quietWord ? <QuietStatusWord word={quietWord} title={idleClosedDetail(run)} className="max-md:hidden" /> : null}
               {/* In the title row so a folded header still shows it (main had it here). */}
               <ImpactChip run={run} />
             </span>
@@ -305,6 +307,7 @@ export function statusChipLabel(run: ApiRun, queuePosition?: number): string | n
     case 'review':
       return 'Needs review'
     case 'waiting':
+      if (run.parked?.kind === 'auth') return 'Needs sign-in'
       return budgetStop(run) ? 'Budget reached' : 'Asked'
     case 'queued':
       return run.fallbackEpisode?.pending ? 'Switching agent' : `Queued${queuePosition !== undefined ? ` #${queuePosition}` : ''}`
@@ -327,15 +330,20 @@ const sentence = (label: string) => label.charAt(0).toUpperCase() + label.slice(
  *  header still says how the task ended without a pill (calm when done). */
 export function closedStatusWord(run: ApiRun): string | null {
   if (statusChipLabel(run) !== null) return null
-  if (isIdleClosed(run)) return 'Closed · idle'
+  // A legacy idle close reads like the calm outcome; the close itself is only a tooltip (spec 2026-11-04-idle-closed-attention-state).
+  if (isIdleClosed(run)) return 'Done'
   if (run.status === 'done') return 'Done'
   if (run.status === 'cancelled') return 'Cancelled'
   return null
 }
 
-function QuietStatusWord({ word, className }: { word: string; className?: string }) {
+/** The subtle, neutral detail an idle close may carry: a tooltip, never a status. */
+export const idleClosedDetail = (run: ApiRun): string | undefined =>
+  isIdleClosed(run) ? 'The session closed after inactivity. Write to the task to reopen it.' : undefined
+
+function QuietStatusWord({ word, className, title }: { word: string; className?: string; title?: string }) {
   return (
-    <span data-slot="run-status-word" className={cn('shrink-0 text-label text-muted-foreground', className)}>
+    <span data-slot="run-status-word" title={title} className={cn('shrink-0 text-label text-muted-foreground', className)}>
       {word}
     </span>
   )
@@ -377,6 +385,7 @@ function HeaderActions({
   const canTerminal = useCanOpenTerminal(run)
   const { choices, canResumeHere, open: openIn } = useRunOpenChoices(run, canTerminal)
   const terminalAvailable = useHealth().data?.capabilities?.terminal === true
+  const archivedDeleteDays = useConfig().data?.archivedTaskDeleteDays
   const navigate = useNavigate()
   const { bindings } = useKeybindings()
   const owned = ownedTaskPr(run)
@@ -397,6 +406,7 @@ function HeaderActions({
       terminalAvailable,
       openChoices: choices,
       ...(prUrl ? { prUrl } : {}),
+      ...(archivedDeleteDays !== undefined ? { archivedDeleteDays } : {}),
       taskUrl: '',
     },
     {
@@ -444,9 +454,17 @@ function HeaderActions({
     if (bridge) return bridge.openView('changes')
     navigate(`/tasks/${run.id}/changes`)
   }
+  // Answer goes to the open question card; the composer only when there is no structured question (#2297).
+  const toQuestion = () => {
+    const bridge = taskWorkspaceFor(run.id)
+    if (bridge?.focusQuestion) return bridge.focusQuestion()
+    if (bridge) return toComposer()
+    navigate(`/tasks/${run.id}#ask`)
+  }
   const perform = (kind: Exclude<NonNullable<typeof primary>['kind'], 'git'>) => {
     switch (kind) {
       case 'answer':
+        return toQuestion()
       case 'retry':
         return toComposer()
       case 'review':
@@ -636,7 +654,7 @@ function OpenInMenuForRun({
  *  (`stripGroups`), as links to each view's page. */
 function FallbackTabs({ run, tab, terminalAvailable }: { run: ApiRun; tab: RunTab; terminalAvailable: boolean }) {
   const views = FIXED_VIEW_ORDER.filter(
-    (view) => (view !== 'graph' || Boolean(run.workflowDef)) && (view !== 'terminal' || terminalAvailable),
+    (view) => (view !== 'graph' || hasWorkflowGraph(run)) && (view !== 'terminal' || terminalAvailable),
   )
   const activeView: ViewId | 'notes' = tab === 'preview' ? 'browser' : tab
   const groups = stripGroups(stripTabs(views))
@@ -814,7 +832,7 @@ function MetaRow({
   const desktopOnly = detailsOpen ? undefined : 'max-md:hidden'
   const parts: ReactNode[] = []
   if (statusLabel) parts.push(<StatusChip key="status" label={statusLabel} className={phoneOnly} />)
-  else if (quietWord) parts.push(<QuietStatusWord key="status" word={quietWord} className={phoneOnly} />)
+  else if (quietWord) parts.push(<QuietStatusWord key="status" word={quietWord} title={idleClosedDetail(run)} className={phoneOnly} />)
   // `workflowLabel` so an inline chain shows its first step's name, not the bare "(planned)"
   // placeholder — which reads like a status next to the live status chip.
   parts.push(

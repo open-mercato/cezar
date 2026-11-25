@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ProjectScopeProvider } from '@/api/project-scope-context'
 import { lifecycleQueryKeys } from '@/api/worktree-lifecycle'
 import { queryKeys } from '@/api/queries'
+import type { RunHistoryState } from '@/api/run-history'
 import { Toaster, resetToasts } from '@/components/ui/toaster'
 import { createQueryClient } from '@/api/query-client'
 import type {
@@ -21,6 +22,7 @@ import { TaskThreadRoute, ThreadView, liveTurnStart } from './task-thread'
 import { buildTranscriptRows, mainTranscriptSections } from './session-transcript'
 import { reduceThread, type ThreadTurn } from './thread-state'
 import quotaFailure from './__fixtures__/codex-usage-limit.json'
+import { clearThreadScrollCaches, saveThreadScroll } from './thread-scroll'
 
 afterEach(() => {
   act(() => resetToasts())
@@ -112,6 +114,23 @@ const transcriptRows = (fixture: ApiRun, thread = reduceThread(EVENTS)) =>
   buildTranscriptRows(mainTranscriptSections(fixture, thread), fixture.id)
 
 describe('ThreadView', () => {
+  it.each([
+    [{}, 'showing the complete session'],
+    [{ isFetchingOlder: true }, 'loading earlier items'],
+    [{ isFetchingOlder: true, olderError: 'Could not load earlier items' }, 'earlier items could not be loaded'],
+  ])('claims a complete fallback session only once nothing is left to refill (#882): %j', (state, copy) => {
+    const history = {
+      fallback: true,
+      hasOlder: false,
+      isFetchingOlder: false,
+      retainedPages: 0,
+      ...state,
+    } as unknown as RunHistoryState
+    renderView(<ThreadView run={run('done')} thread={reduceThread([])} history={history} />)
+
+    expect(document.querySelector('[data-slot="history-fallback"]')?.textContent).toContain(copy)
+  })
+
   it('keeps provider authorization recovery visible after the run reaches done', () => {
     const authRequired = [
       line(1, 'provider-auth-required', { provider: 'codex', authFailureId: 'incident-1' }),
@@ -119,10 +138,28 @@ describe('ThreadView', () => {
     ]
     renderView(<ThreadView run={run('done')} thread={reduceThread(authRequired)} />)
 
-    expect(screen.getByRole('alert').textContent).toContain('This run needed Codex authorization')
-    expect(screen.getByRole('link', { name: 'Open provider settings' }).getAttribute('href')).toBe(
-      '/settings/agents#providers',
-    )
+    // The inline reconnect card (spec 2026-11-18-inline-account-reconnect) outlives the run.
+    const card = screen.getByRole('group', { name: /Codex · .* is signed out/ })
+    expect(card.closest('[data-slot="provider-auth-required"]')).not.toBeNull()
+    expect(screen.getByRole('button', { name: /^Reconnect/ })).toBeTruthy()
+    // Not parked, so a reconnect resumes nothing by itself: the card says to Continue.
+    expect(card.textContent).toContain('Reconnect, then Continue the task.')
+    expect(card.textContent).not.toContain('continues from the same session')
+  })
+
+  it('a run parked on an expired login carries the reconnect card in its dock when the transcript has none', () => {
+    const parked = { kind: 'auth' as const, provider: 'claude' as const, profileId: 'default', at: '2026-11-18T10:00:00Z' }
+    renderView(<ThreadView run={run('waiting', { parked })} thread={reduceThread([line(1, 'done')])} />)
+    expect(screen.getByRole('group', { name: /Claude Code · .* is signed out/ })).toBeTruthy()
+    expect(document.querySelector('[data-slot="sign-in-hint"]')).toBeNull()
+  })
+
+  it('a parked run whose transcript already shows the card gets only the dock hint', () => {
+    const parked = { kind: 'auth' as const, provider: 'claude' as const, profileId: 'default', at: '2026-11-18T10:00:00Z' }
+    const events = [line(1, 'provider-auth-required', { provider: 'claude', authFailureId: 'incident-1' })]
+    renderView(<ThreadView run={run('waiting', { parked })} thread={reduceThread(events)} />)
+    expect(screen.getAllByRole('group', { name: /Claude Code · .* is signed out/ })).toHaveLength(1)
+    expect(document.querySelector('[data-slot="sign-in-hint"]')).not.toBeNull()
   })
 
   it('a running run clocks its open turn and last activity on the Working… line; a closed run shows none', () => {
@@ -258,6 +295,11 @@ describe('ThreadView', () => {
     const hint = document.querySelector('[data-slot="thread-dock"] [data-slot="paused-hint"]')
     expect(hint?.textContent).toContain('The agent is paused, waiting for your reply')
     expect(hint?.querySelector('[data-slot="status-dot"]')).not.toBeNull()
+    // A phone wraps the hint text in its own column; End session stays one line and finger-sized.
+    const end = hint?.querySelector('[data-slot="end-session"]')
+    expect(end?.className).toContain('whitespace-nowrap')
+    expect(end?.className).toContain('pointer-coarse:max-md:min-h-11')
+    expect(hint?.querySelector('[aria-hidden="true"].max-sm\\:hidden')?.textContent).toBe('·')
     // No body footer for waiting — the dock owns that state now.
     expect(document.querySelector('[data-slot="thread-footer"]')).toBeNull()
     const textarea = screen.getByLabelText('Reply to the agent') as HTMLTextAreaElement
@@ -702,7 +744,7 @@ describe('ThreadView', () => {
     expect(document.querySelector('[data-slot="footer-continue"]')).toBeNull()
   })
 
-  it('an idle-closed run says so without a failure, and its Continue is still the action', async () => {
+  it('a legacy idle-closed run reads as a quiet closed session, not a failure', () => {
     renderView(
       <ThreadView
         run={run('failed', {
@@ -716,9 +758,10 @@ describe('ThreadView', () => {
       />,
     )
     const footer = document.querySelector('[data-slot="thread-footer"]') as HTMLElement
-    expect(footer.textContent).toContain('Closed after inactivity — Continue to pick it up')
+    expect(footer.textContent).toContain('Session closed')
     expect(footer.textContent).not.toContain('Session failed')
-    await waitFor(() => expect(document.querySelector('[data-slot="footer-continue"]')).not.toBeNull())
+    expect(footer.textContent).not.toContain('inactivity')
+    expect(document.querySelector('[data-slot="outcome-card"]')?.getAttribute('data-kind')).toBe('idle')
   })
 
   it('the same advice stays plain text when there is no session to continue', () => {
@@ -808,6 +851,19 @@ describe('ThreadView', () => {
     fireEvent.click(badge)
     const details = await screen.findByRole('dialog')
     expect(details.querySelector('[data-slot="agent-badge-engine-picker"] [data-slot="follow-up-model-pill"]')).not.toBeNull()
+  })
+
+  it('shows a legacy run’s reported model from the current context without its start on the visible page', () => {
+    const session = line(1, 'session.started', { sessionId: 's1', backend: 'claude', model: 'claude-opus-5' })
+    renderView(
+      <ThreadView
+        run={run('done', { runner: 'claude' })}
+        thread={reduceThread(EVENTS.slice(2))}
+        currentThread={reduceThread([session])}
+      />,
+    )
+
+    expect(screen.getByRole('button', { name: 'Agent: claude, model auto → claude-opus-5' })).toBeTruthy()
   })
 
   /** #472 — stacked messages render as their own bubbles, after the task. */
@@ -2087,4 +2143,52 @@ it('shows lifecycle recovery before agent activity and prevents misleading reply
   expect(screen.queryByRole('textbox')).toBeNull()
   // No composer, no usage line under it either.
   expect(document.querySelector('[data-slot="session-usage"]')).toBeNull()
+})
+
+describe('Manager source task arrivals', () => {
+  const questions = [{ header: 'Publish', question: 'Publish this report?', options: [{ label: 'Publish report' }, { label: 'Hold report' }] }]
+
+  function renderSourceTask(events: RunEvent[]) {
+    vi.spyOn(HTMLElement.prototype, 'scrollHeight', 'get').mockReturnValue(2000)
+    vi.spyOn(HTMLElement.prototype, 'clientHeight', 'get').mockReturnValue(500)
+    vi.stubGlobal('fetch', vi.fn(() => new Promise(() => {})))
+    saveThreadScroll('r1:main', { top: 640, atBottom: false })
+    return render(
+      <QueryClientProvider client={createQueryClient()}>
+        <MemoryRouter initialEntries={['/p/alpha/tasks/r1/chat#ask']}>
+          <main data-slot="main"><ThreadView run={run('waiting')} thread={reduceThread(events)} /></main>
+        </MemoryRouter>
+      </QueryClientProvider>,
+    )
+  }
+
+  afterEach(() => {
+    cleanup()
+    clearThreadScrollCaches()
+    vi.restoreAllMocks()
+  })
+
+  it.each([false, true])('opens a plain-text waiting request at latest (historical answered card: %s)', (answeredCard) => {
+    const earlier = answeredCard ? [
+      line(8, 'ask.requested', { requestId: 'old-ask', questions }),
+      line(9, 'user-message', { text: 'Publish: Hold report' }),
+      line(9.5, 'ask.closed', { requestId: 'old-ask', reason: 'answered', answer: 'Publish: Hold report' }),
+    ] : []
+    renderSourceTask([...EVENTS, ...earlier, line(10, 'text', { text: 'Please review the updated report before I publish it.' })])
+    expect(screen.queryByRole('button', { name: 'Publish report' })).toBeNull()
+    expect((document.querySelector('[data-slot="main"]') as HTMLElement).scrollTop).toBe(1500)
+  })
+
+  it('still reveals and focuses an unanswered structured question', () => {
+    const reveal = vi.fn()
+    Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', { configurable: true, value: reveal })
+    try {
+      renderSourceTask([...EVENTS, line(8, 'ask.requested', { requestId: 'open-ask', questions })])
+      const choice = screen.getByRole('button', { name: 'Publish report' })
+      expect(document.activeElement).toBe(choice)
+      expect(reveal).toHaveBeenCalledWith({ block: 'center' })
+    } finally {
+      Reflect.deleteProperty(HTMLElement.prototype, 'scrollIntoView')
+    }
+  })
 })

@@ -351,3 +351,85 @@ describe('AssetsView — Ask bridge and docked composer (R4)', () => {
     expect(input.value).toBe('')
   })
 })
+
+describe('AssetsView — comments on HTML elements', () => {
+  const STORED = {
+    kind: 'asset',
+    id: 'e1',
+    asset: 'demo.html',
+    selector: 'main > h1',
+    label: 'Title',
+    excerpt: '<h1>Title</h1>',
+    body: 'bigger',
+  }
+  let puts: string[]
+
+  beforeEach(() => {
+    seam.deliver.mockClear()
+    listing = { artifacts: [DEMO, NOTES], truncated: false }
+    puts = []
+    let stored = JSON.stringify([STORED])
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL, init: RequestInit = {}) => {
+        const path = String(input)
+        const json = (body: unknown) => new Response(JSON.stringify(body), { headers: { 'content-type': 'application/json' } })
+        if ((init.method ?? 'GET') === 'PUT') {
+          stored = (JSON.parse(String(init.body)) as { text: string }).text
+          puts.push(stored)
+          return json({ text: stored, images: [], updatedAt: '2026-10-22T00:00:00.000Z' })
+        }
+        if (path.endsWith('/runs/r1/artifacts')) return json(listing)
+        if (path.endsWith('/runs/r1/drafts')) {
+          return json({ surfaces: stored === '' ? {} : { 'diff-comments': { text: stored, images: [], updatedAt: '2026-10-22T00:00:00.000Z' } } })
+        }
+        if (path.endsWith('/artifacts/notes.md')) return new Response('# Notes', { status: 200 })
+        return new Response('not found', { status: 404 })
+      }),
+    )
+  })
+
+  it('loads an HTML asset with the picker and offers Comment with the asset count', async () => {
+    mount('/tasks/r1/assets/demo.html', true, RUN)
+    await waitFor(() => expect(frame()).not.toBeNull())
+    expect(frame()!.getAttribute('src')).toMatch(/^\/api\/v1\/runs\/r1\/artifacts\/demo\.html\?picker=1#theme=/)
+    const toggle = await waitFor(() => {
+      const button = document.querySelector<HTMLButtonElement>('[data-action="assets-comment"]')
+      if (!button || button.disabled) throw new Error('not ready')
+      return button
+    })
+    expect(toggle.querySelector('[data-slot="comment-count"]')?.textContent).toBe('1')
+    fireEvent.click(toggle)
+    expect(toggle.getAttribute('aria-pressed')).toBe('true')
+    expect(screen.getByText('Click an element to comment · Esc to stop')).toBeTruthy()
+    // Esc with the keyboard still on the toggle leaves comment mode.
+    fireEvent.keyDown(toggle, { key: 'Escape' })
+    expect(toggle.getAttribute('aria-pressed')).toBe('false')
+    expect(screen.queryByText('Click an element to comment · Esc to stop')).toBeNull()
+    // Open and Download stay the plain file.
+    expect(document.querySelector('[data-action="assets-open"]')?.getAttribute('href')).toBe('/api/v1/runs/r1/artifacts/demo.html')
+  })
+
+  it('changes nothing for other asset kinds, or without the run', async () => {
+    mount('/tasks/r1/assets/notes.md', true, RUN)
+    await waitFor(() => expect(document.querySelector('[data-slot="assets-markdown"]')).not.toBeNull())
+    expect(document.querySelector('[data-action="assets-comment"]')).toBeNull()
+    cleanup()
+    mount('/tasks/r1/assets/demo.html')
+    await waitFor(() => expect(frame()).not.toBeNull())
+    expect(frame()!.getAttribute('src')).not.toContain('picker')
+    expect(document.querySelector('[data-action="assets-comment"]')).toBeNull()
+  })
+
+  it('shows the comments as chips in the docked composer and sends them as one review', async () => {
+    mount('/tasks/r1/assets/demo.html', true, RUN)
+    await waitFor(() => expect(document.querySelector('[data-slot="assets-ask-comments"]')).not.toBeNull())
+    fireEvent.click(document.querySelector('[data-action="assets-ask-send"]')!)
+    await waitFor(() => expect(seam.deliver).toHaveBeenCalledTimes(1))
+    const [message] = seam.deliver.mock.calls[0]!
+    expect(message).toContain('Review comments on assets:')
+    expect(message).toContain('- `demo.html` (HTML asset) element `main > h1` — "Title":')
+    await waitFor(() => expect(document.querySelector('[data-slot="assets-ask-comments"]')).toBeNull())
+    await waitFor(() => expect(puts.at(-1)).toBe(''))
+  })
+})

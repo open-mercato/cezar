@@ -8,6 +8,8 @@ import {
   type ManagerDeltaEvent,
   type ManagerActionDecisionInput,
   type ManagerConnectorsResponse,
+  type ManagerMemoryResponse,
+  type PutManagerMemoryInput,
   type ManagerListResponse,
   type ManagerMessage,
   type ManagerMessagesResponse,
@@ -24,7 +26,10 @@ import {
 } from '@tanstack/react-query'
 import { useMemo } from 'react'
 
-import { cez, unwrap } from './client'
+import { uuidv7 } from '@/lib/sid'
+
+import { bounded } from './bounded'
+import { ApiError, cez, unwrap } from './client'
 import { cachedAt } from './query-persist'
 
 /**
@@ -48,6 +53,16 @@ export async function updateManager(id: string, patch: UpdateManagerInput): Prom
   return unwrap(await managers()[':id'].$patch({ param: managerParam(id), json: patch }), managerPath(id))
 }
 
+/** Deactivate or reactivate (spec 2026-11-19-manager-deactivate); `catchUp` runs one forced check. */
+export async function setManagerActive(id: string, active: boolean, opts?: { catchUp?: boolean }): Promise<ManagerSummary> {
+  return updateManager(id, { active, ...(active && opts?.catchUp ? { catchUp: true as const } : {}) })
+}
+
+/** Every manager at once (the bulk route): the ids whose state changed. */
+export async function setManagersActive(active: boolean): Promise<string[]> {
+  return (await unwrap(await managers().activity.$post({ json: { active } }), '/workspace/managers/activity')).changed
+}
+
 export async function deleteManager(id: string) {
   return unwrap(await managers()[':id'].$delete({ param: managerParam(id) }), managerPath(id))
 }
@@ -57,12 +72,13 @@ export const MANAGER_PAGE_SIZE = 50
 export async function getManagerMessages(
   id: string,
   before: number | undefined,
-  opts?: { signal?: AbortSignal; pending?: boolean },
+  opts?: { signal?: AbortSignal; pending?: boolean; kind?: 'user'; limit?: number },
 ): Promise<ManagerMessagesResponse> {
   const query = {
-    limit: String(MANAGER_PAGE_SIZE),
+    limit: String(opts?.limit ?? MANAGER_PAGE_SIZE),
     ...(before === undefined ? {} : { before: String(before) }),
     ...(opts?.pending ? { pending: '1' as const } : {}),
+    ...(opts?.kind ? { kind: opts.kind } : {}),
   }
   const since = streamClock
   const page = await unwrap(
@@ -87,9 +103,102 @@ export async function getOldestPendingAction(id: string): Promise<ManagerMessage
   }
 }
 
-export async function sendManagerMessage(id: string, text: string, images?: AttachmentEntry[], askId?: string) {
-  const json = { text, ...(images?.length ? { images } : {}), ...(askId ? { askId } : {}) }
-  const sent = await unwrap(await managers()[':id'].messages.$post({ param: managerParam(id), json }), managerPath(id, '/messages'))
+/** Workspace approvals must include cards older than the newest chat page. */
+export async function getPendingManagerActions(id: string, signal?: AbortSignal): Promise<ManagerMessage[]> {
+  let before: number | undefined
+  const messages: ManagerMessage[] = []
+  for (;;) {
+    const page = await getManagerMessages(id, before, { pending: true, signal })
+    messages.unshift(...page.messages.filter((message) => message.kind === 'action' && message.status === 'pending'))
+    const first = page.messages[0]
+    if (!page.hasMore || !first) return messages
+    before = first.seq
+  }
+}
+
+/** The cursor ends at this action even when it is older than the newest chat page. A successful
+ * decision response acknowledges the request; its actual outcome lives on the action message. */
+export async function getManagerActionResult(id: string, action: Pick<ManagerMessage, 'id' | 'seq'>) {
+  const page = await bounded((signal) => getManagerMessages(id, action.seq + 1, { signal }), MANAGER_SEND_TIMEOUT_MS, 'The action result could not be loaded. Retry or open the manager’s chat.')
+  const result = page.messages.find((message) => message.id === action.id)
+  if (result?.kind !== 'action' || result.status === 'pending' || result.status === 'running') {
+    throw new Error('The action result is not available yet. Retry or open the manager’s chat.')
+  }
+  return result
+}
+
+/** How long a send may stay unanswered. The route answers at once; a request still open after this
+ *  went into a dropped tunnel, and nothing else would ever settle it (relay incident 2026-11-15). */
+export const MANAGER_SEND_TIMEOUT_MS = 30_000
+const MANAGER_SEND_WITH_FILES_TIMEOUT_MS = 90_000
+export const MANAGER_SEND_INTERRUPTED =
+  "Couldn't reach cezar, so this message may not have been sent. It's back in the box: send it again once you're reconnected."
+
+/** As long as the server remembers a key (message-receipts.ts). */
+const SEND_KEY_TTL_MS = 10 * 60_000
+/** The key of each message whose send has not been answered, by what it says: the composer hands an
+ *  interrupted message back, and sending that same message again must not deliver it twice. */
+type UnansweredSend = { key: string; at: number; managerId: string; inFlight: number; settledAt?: number }
+const unansweredSends = new Map<string, UnansweredSend>()
+
+function sendKey(fingerprint: string, managerId: string): { entry: UnansweredSend; reused: boolean } {
+  const now = Date.now()
+  for (const [entry, { at, inFlight }] of unansweredSends) if (inFlight === 0 && now - at > SEND_KEY_TTL_MS) unansweredSends.delete(entry)
+  const known = unansweredSends.get(fingerprint)
+  if (known) return { entry: known, reused: true }
+  const entry: UnansweredSend = { key: uuidv7(now), at: now, managerId, inFlight: 0 }
+  unansweredSends.set(fingerprint, entry)
+  return { entry, reused: false }
+}
+
+/** A new message that landed ends the resend window of the manager's sends that had already given
+ *  up before it started: the same text after it is a new message, which an old key would drop.
+ *  One still in flight, or handed back since, keeps its key, so its resend stays deduped. */
+function forgetSettledSends(managerId: string, since: number): void {
+  for (const [entry, sent] of unansweredSends) {
+    if (sent.managerId === managerId && sent.inFlight === 0 && sent.settledAt !== undefined && sent.settledAt <= since) unansweredSends.delete(entry)
+  }
+}
+
+/** Test seam. */
+export function resetManagerSendKeys(): void {
+  unansweredSends.clear()
+}
+
+export async function sendManagerMessage(id: string, text: string, images?: AttachmentEntry[], askId?: string, opts?: { reactivate?: boolean }) {
+  // Staging may re-upload a file under a new id, so a file counts by its name, not its upload.
+  const files = (images ?? []).map((image) => ('data' in image ? `${image.mediaType}:${image.data.length}` : image.name ?? '?'))
+  const fingerprint = JSON.stringify([id, askId ?? '', text, files])
+  // `reactivate`: the user confirmed waking an inactive manager for this message (spec 2026-11-19-manager-deactivate).
+  const base = { text, ...(images?.length ? { images } : {}), ...(opts?.reactivate ? { reactivate: true as const } : {}) }
+  const timeout = images?.length ? MANAGER_SEND_WITH_FILES_TIMEOUT_MS : MANAGER_SEND_TIMEOUT_MS
+  const post = (json: typeof base & { askId?: string; idempotencyKey?: string }) => bounded(async (signal) =>
+    unwrap(await managers()[':id'].messages.$post({ param: managerParam(id), json }, { init: { signal } }), managerPath(id, '/messages')), timeout, MANAGER_SEND_INTERRUPTED)
+  // A server older than this page rejects a key it does not know, and names it: send without it.
+  // Without `askId` (#2179) the answer closes every open card, as the composer does there; without
+  // `idempotencyKey` only a resend is unguarded.
+  const send = async (json: typeof base & { askId?: string; idempotencyKey?: string }): Promise<Awaited<ReturnType<typeof post>>> =>
+    post(json).catch((failure: unknown) => {
+      if (!(failure instanceof ApiError) || failure.status !== 400) throw failure
+      const known = Object.fromEntries(Object.entries(json).filter(([key]) => key === 'text' || key === 'images' || key === 'reactivate' || !failure.message.includes(key)))
+      if (Object.keys(known).length === Object.keys(json).length) throw failure
+      return send(known as typeof json)
+    })
+  const startedAt = Date.now()
+  const { entry, reused } = sendKey(fingerprint, id)
+  entry.inFlight += 1
+  const sent = await send({ ...base, idempotencyKey: entry.key, ...(askId ? { askId } : {}) })
+    .catch((failure: unknown) => {
+      // The server answered, so it did not take the message: its next send is a new one.
+      if (failure instanceof ApiError && failure.status !== 0) unansweredSends.delete(fingerprint)
+      throw failure
+    })
+    .finally(() => {
+      entry.inFlight -= 1
+      entry.settledAt = Date.now()
+    })
+  unansweredSends.delete(fingerprint)
+  if (!reused) forgetSettledSends(id, startedAt)
   // A server older than this page drops what it does not know and still answers ok. Rejecting
   // hands the draft back; a silent success would lose the user's files.
   if ((images?.length ?? 0) > 0 && sent.attachments !== images?.length) {
@@ -113,11 +222,11 @@ export async function markManagerRead(id: string) {
   return unwrap(await managers()[':id'].read.$post({ param: managerParam(id) }), managerPath(id, '/read'))
 }
 
-export async function decideManagerAction(id: string, actionId: string, decision: ManagerActionDecisionInput['decision']) {
+export async function decideManagerAction(id: string, actionId: string, decision: ManagerActionDecisionInput['decision'], opts?: { onlyIfStale?: boolean }) {
   return unwrap(
     await managers()[':id'].actions[':actionId'].decision.$post({
       param: { ...managerParam(id), actionId: encodeURIComponent(actionId) },
-      json: { decision },
+      json: { decision, ...(opts?.onlyIfStale ? { onlyIfStale: true } : {}) },
     }),
     managerPath(id, `/actions/${encodeURIComponent(actionId)}/decision`),
   )
@@ -131,21 +240,43 @@ export async function refreshManagerConnectors(id: string): Promise<ManagerConne
   return unwrap(await managers()[':id'].connectors.refresh.$post({ param: managerParam(id) }), managerPath(id, '/connectors/refresh'))
 }
 
+export async function getManagerMemory(id: string, opts?: { signal?: AbortSignal }): Promise<ManagerMemoryResponse> {
+  return unwrap(await managers()[':id'].memory.$get({ param: managerParam(id) }, { init: { signal: opts?.signal } }), managerPath(id, '/memory'))
+}
+
+export async function putManagerMemory(id: string, key: string, input: PutManagerMemoryInput): Promise<ManagerMemoryResponse> {
+  return unwrap(
+    await managers()[':id'].memory[':key'].$put({ param: { ...managerParam(id), key }, json: input }),
+    managerPath(id, `/memory/${encodeURIComponent(key)}`),
+  )
+}
+
+export async function deleteManagerMemory(id: string, key: string): Promise<ManagerMemoryResponse> {
+  return unwrap(
+    await managers()[':id'].memory[':key'].$delete({ param: { ...managerParam(id), key } }),
+    managerPath(id, `/memory/${encodeURIComponent(key)}`),
+  )
+}
+
 // ---- cache ---------------------------------------------------------------------------------
 
 export const managerKeys = {
   all: ['workspace', 'managers'] as const,
   list: ['workspace', 'managers', 'list'] as const,
   messages: (id: string) => ['workspace', 'managers', 'messages', id] as const,
+  approvals: (id: string) => ['workspace', 'managers', 'approvals', id] as const,
+  allApprovals: ['workspace', 'managers', 'approvals'] as const,
   connectors: (id: string) => ['workspace', 'managers', 'connectors', id] as const,
+  memory: (id: string) => ['workspace', 'managers', 'memory', id] as const,
 }
 
 type MessagePages = InfiniteData<ManagerMessagesResponse, number | undefined>
 
 /** Most recently active first; a manager that never spoke sorts by its creation. */
+/** Most recent first, inactive managers after the active ones (spec 2026-11-19-manager-deactivate). */
 export function orderManagers(managers: readonly ManagerSummary[]): ManagerSummary[] {
   const at = (manager: ManagerSummary) => Date.parse(manager.lastActivityAt ?? manager.createdAt) || 0
-  return [...managers].sort((a, b) => at(b) - at(a))
+  return [...managers].sort((a, b) => Number(a.inactive !== undefined) - Number(b.inactive !== undefined) || at(b) - at(a))
 }
 
 export function applyManagerChange(
@@ -310,16 +441,25 @@ export function applyManagerEvent(queryClient: QueryClient, name: ManagerEventNa
       else remember(message)
     }
     queryClient.setQueryData<MessagePages>(managerKeys.messages(managerId), (pages) => applyManagerMessage(pages, message))
+    if (message.kind === 'action') {
+      refreshInFlightManagerList(queryClient)
+      void refreshManagerApprovals(queryClient, managerId)
+    }
     return
   }
   const parsed = managerChangeEventSchema.safeParse(payload)
   if (!parsed.success) return
   const { id, manager, deleted = false } = parsed.data
+  refreshInFlightManagerList(queryClient)
   const before = queryClient.getQueryData<ManagerListResponse>(managerKeys.list)?.managers.find((row) => row.id === id)
   queryClient.setQueryData<ManagerListResponse>(managerKeys.list, (list) => applyManagerChange(list, id, manager, deleted))
   if (deleted) {
     queryClient.removeQueries({ queryKey: managerKeys.messages(id) })
+    queryClient.removeQueries({ queryKey: managerKeys.approvals(id) })
     for (const [messageId, entry] of live) if (entry.managerId === id) forget(messageId)
+  }
+  else if (manager?.pendingActions !== before?.pendingActions) {
+    void refreshManagerApprovals(queryClient, id)
   }
   // A frame that raced the page fetch would otherwise leave a half-written reply until reload.
   if (before?.status === 'working' && manager && manager.status !== 'working') {
@@ -357,6 +497,35 @@ function fetchIdle(queryClient: QueryClient, key: readonly unknown[]): Promise<v
       resolve()
     })
   })
+}
+
+const managerListCatchups = new WeakSet<QueryClient>()
+
+/** The full list is also an approvals gate. Keep its completeness guarantee (never seed it from
+ * one frame), but repair a cold/refetch snapshot that predates a live action, summary or deletion.
+ * Coalesce frames during one read; events during the follow-up can schedule another catch-up. */
+function refreshInFlightManagerList(queryClient: QueryClient): void {
+  const query = queryClient.getQueryCache().find({ queryKey: managerKeys.list, exact: true })
+  if (query?.state.fetchStatus !== 'fetching' || managerListCatchups.has(queryClient)) return
+  managerListCatchups.add(queryClient)
+  void fetchIdle(queryClient, managerKeys.list).then(() => {
+    managerListCatchups.delete(queryClient)
+    return queryClient.invalidateQueries({ queryKey: managerKeys.list, exact: true })
+  })
+}
+
+/** Invalidation during a first fetch is deduplicated against its stale snapshot. Re-read after
+ * that fetch settles so an action/summary frame cannot disappear with the initial response. */
+async function refreshManagerApprovals(queryClient: QueryClient, id: string): Promise<void> {
+  const key = managerKeys.approvals(id)
+  await fetchIdle(queryClient, key)
+  await queryClient.invalidateQueries({ queryKey: key, exact: true })
+}
+
+/** Reconnects use the same post-fetch guarantee as individual action and summary frames. */
+export async function refreshManagerApprovalLists(queryClient: QueryClient): Promise<void> {
+  const ids = queryClient.getQueryCache().findAll({ queryKey: managerKeys.allApprovals }).map((query) => String(query.queryKey[3]))
+  await Promise.all(ids.map((id) => refreshManagerApprovals(queryClient, id)))
 }
 
 /**
@@ -414,6 +583,30 @@ export function useManagerMessages(id: string) {
   })
 }
 
+/**
+ * Every message the user sent, oldest first, for the "your messages" list
+ * (spec 2026-11-17-my-message-navigation). Pages back with `before` until the start.
+ */
+export function useManagerUserMessages(id: string, enabled: boolean) {
+  return useQuery({
+    queryKey: ['workspace', 'managers', 'user-messages', id] as const,
+    queryFn: async ({ signal }) => {
+      const out: ManagerMessage[] = []
+      let before: number | undefined
+      // 20 × 500 messages; a chat longer than that lists its newest 10,000.
+      for (let page = 0; page < 20; page += 1) {
+        const { messages, hasMore } = await getManagerMessages(id, before, { signal, kind: 'user', limit: 500 })
+        out.unshift(...messages)
+        if (!hasMore || messages.length === 0) break
+        before = messages[0]!.seq
+      }
+      return out
+    },
+    enabled,
+    staleTime: 15_000,
+  })
+}
+
 /** The flattened chat, oldest first. */
 export function managerChat(pages: { pages: ManagerMessagesResponse[] } | undefined): ManagerMessage[] {
   return (pages?.pages ?? []).flatMap((page) => page.messages).sort((a, b) => a.seq - b.seq)
@@ -428,10 +621,30 @@ export function useManagerChat(id: string) {
 export function useUpdateManager(id: string) {
   const queryClient = useQueryClient()
   return useMutation({
+    scope: { id: `manager-settings:${id}` },
     mutationFn: (patch: UpdateManagerInput) => updateManager(id, patch),
     onSuccess: (manager) => {
       queryClient.setQueryData<ManagerListResponse>(managerKeys.list, (list) => applyManagerChange(list, id, manager, false))
     },
+  })
+}
+
+/** Deactivate or reactivate any manager; the list row updates from the answer. */
+export function useSetManagerActive() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, active, catchUp }: { id: string; active: boolean; catchUp?: boolean }) => setManagerActive(id, active, { ...(catchUp ? { catchUp } : {}) }),
+    onSuccess: (manager) => {
+      queryClient.setQueryData<ManagerListResponse>(managerKeys.list, (list) => applyManagerChange(list, manager.id, manager, false))
+    },
+  })
+}
+
+export function useSetManagersActive() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ active }: { active: boolean }) => setManagersActive(active),
+    onSettled: () => queryClient.invalidateQueries({ queryKey: managerKeys.list }),
   })
 }
 
@@ -448,6 +661,24 @@ export function useRefreshManagerConnectors(id: string) {
   return useMutation({
     mutationFn: () => refreshManagerConnectors(id),
     onSuccess: (response) => queryClient.setQueryData(managerKeys.connectors(id), response),
+  })
+}
+
+export function useManagerMemory(id: string, enabled = true) {
+  return useQuery({
+    queryKey: managerKeys.memory(id),
+    queryFn: ({ signal }) => getManagerMemory(id, { signal }),
+    enabled,
+  })
+}
+
+/** Spec 2026-11-21-manager-short-sessions-and-memory § 2.1: the user's own edits to a manager's memory. */
+export function useManagerMemoryWrite(id: string) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (change: { key: string; input?: PutManagerMemoryInput }) =>
+      change.input ? putManagerMemory(id, change.key, change.input) : deleteManagerMemory(id, change.key),
+    onSuccess: (response) => queryClient.setQueryData(managerKeys.memory(id), response),
   })
 }
 
@@ -469,6 +700,7 @@ export function useDeleteManager(id: string) {
     onSuccess: () => {
       queryClient.setQueryData<ManagerListResponse>(managerKeys.list, (list) => applyManagerChange(list, id, undefined, true))
       queryClient.removeQueries({ queryKey: managerKeys.messages(id) })
+      queryClient.removeQueries({ queryKey: managerKeys.approvals(id) })
     },
   })
 }

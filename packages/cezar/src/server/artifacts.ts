@@ -4,6 +4,7 @@ import { dirname, join } from 'node:path';
 import { Readable } from 'node:stream';
 import type { RunArtifact, RunArtifactsEvent, RunArtifactVersion } from '@open-mercato/cezar-contract';
 import { imageMimeType } from './git-changes.ts';
+import { artifactPickerScript } from './preview/picker-script.ts';
 
 /**
  * Serving run artifacts (spec `.ai/specs/2026-10-22-html-artifacts-and-impact.md` § Serving).
@@ -63,6 +64,52 @@ export function artifactsBaseUrl(requestUrl: string): string | undefined {
   return /^[A-Za-z0-9:/._~%@[\]-]+$/.test(base) ? base : undefined;
 }
 
+/**
+ * The cockpit origins an artifact's picker may talk to: the request's authority over both
+ * `http:` and `https:` (a TLS proxy in front sees one, this server the other). `undefined` for
+ * a URL that is not http(s) — the page is then served unmodified.
+ */
+export function artifactPickerOrigins(requestUrl: string): string[] | undefined {
+  let url: URL;
+  try {
+    url = new URL(requestUrl);
+  } catch {
+    return undefined;
+  }
+  if ((url.protocol !== 'http:' && url.protocol !== 'https:') || !url.host) return undefined;
+  return [`http://${url.host}`, `https://${url.host}`];
+}
+
+/** The inline `<script>` appended to a picked HTML artifact; `</` is escaped so nothing in it ends the element. */
+export function artifactPickerTag(origins: string[]): string {
+  return `\n<script>${artifactPickerScript(origins).replace(/<\//g, '<\\/')}</script>\n`;
+}
+
+/**
+ * The file's bytes, then `tail` — streamed, never buffered. Appended, not prepended: a script
+ * before the doctype would drop the page into quirks mode.
+ */
+export function appendToStream(stream: ReadableStream<Uint8Array>, tail: string): ReadableStream<Uint8Array> {
+  const reader = stream.getReader();
+  let done = false;
+  return new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      if (done) return;
+      const chunk = await reader.read();
+      if (!chunk.done) {
+        controller.enqueue(chunk.value);
+        return;
+      }
+      done = true;
+      controller.enqueue(new TextEncoder().encode(tail));
+      controller.close();
+    },
+    cancel(reason) {
+      return reader.cancel(reason);
+    },
+  });
+}
+
 /** Response headers for one listed artifact, by kind. */
 export function artifactHeaders(artifact: RunArtifact, cdnEnabled: boolean, ownBase?: string): Record<string, string> {
   const common = { 'x-content-type-options': 'nosniff', 'cache-control': 'no-store' };
@@ -118,10 +165,23 @@ export async function openArtifact(dir: string, name: string): Promise<ReadableS
   return Readable.toWeb(handle.createReadStream()) as ReadableStream<Uint8Array>;
 }
 
-async function sameFileInside(dir: string, path: string, opened: { dev: number; ino: number }): Promise<boolean> {
+/**
+ * Exported for tests. On win32 `stat().dev` is 0 while a handle's fstat reports the volume
+ * serial (#2359), so `dev` is not comparable there: identity is `ino` plus `size`.
+ */
+export async function sameFileInside(
+  dir: string,
+  path: string,
+  opened: { dev: number; ino: number; size?: number },
+  platform: NodeJS.Platform = process.platform,
+  statFn: (p: string) => Promise<{ dev: number; ino: number; size: number }> = stat,
+): Promise<boolean> {
   const [root, real] = await Promise.all([realpath(dir), realpath(path)]);
   if (dirname(dirname(real)) !== root) return false;
-  const now = await stat(real);
+  const now = await statFn(real);
+  if (platform === 'win32') {
+    return now.ino === opened.ino && (opened.size === undefined || now.size === opened.size);
+  }
   return now.dev === opened.dev && now.ino === opened.ino;
 }
 

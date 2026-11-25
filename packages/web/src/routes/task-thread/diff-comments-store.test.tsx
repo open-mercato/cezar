@@ -274,3 +274,35 @@ describe('diff comments across windows', () => {
     await waitFor(() => expect(server.stored().map((c) => c.body)).toEqual(['edited in A', 'new in B']))
   })
 })
+
+describe('asset comments in the shared store', () => {
+  it('keeps asset comments apart from line comments, persists both in one entry, and sends both', async () => {
+    const server = statefulServer([C1])
+    const { changes } = mountChangesHost()
+    await waitFor(() => expect(changes.result.current.ready).toBe(true))
+
+    let id: string | undefined
+    act(() => {
+      id = changes.result.current.addAsset({ asset: 'm.html', selector: 'main > h1', label: 'Title', excerpt: '<h1>Title</h1>', body: 'bigger' })
+    })
+    expect(id).toBeTruthy()
+    expect(changes.result.current.comments).toEqual([C1])
+    expect(changes.result.current.assetComments).toMatchObject([{ kind: 'asset', id, asset: 'm.html', selector: 'main > h1' }])
+    expect(changes.result.current.all).toHaveLength(2)
+    await waitFor(() => expect(server.stored()).toHaveLength(2))
+
+    // A reload: a fresh window reads both back from the draft store.
+    const other = openWindow()
+    await waitFor(() => expect(other.view.result.current.assetComments).toHaveLength(1))
+
+    let held: unknown[] = []
+    await act(async () => {
+      await changes.result.current.submit(async (comments) => {
+        held = comments
+      })
+    })
+    expect(held).toHaveLength(2)
+    expect(changes.result.current.all).toEqual([])
+    await waitFor(() => expect(server.stored()).toEqual([]))
+  })
+})

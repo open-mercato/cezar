@@ -1,3 +1,4 @@
+import { bounded } from '@/api/bounded'
 import { deleteStagedUpload, stageUpload } from '@/api/client'
 import { reportAttachmentStagingFailed, trackAttachmentsRestaged } from '@/lib/telemetry'
 import { ATTACHMENT_UPLOAD_MISSING, type AttachmentEntry } from '@open-mercato/cezar-api-client'
@@ -42,9 +43,20 @@ export function stageAttachment(attachment: PendingAttachment): Promise<string |
   return pending
 }
 
+/** How long a send waits for an upload. One stuck in a dropped tunnel never settles, and the
+ *  composer would sit on Sending… with it (relay incident 2026-11-15). */
+export const STAGING_TIMEOUT_MS = 90_000
+export const STAGING_INTERRUPTED =
+  "Couldn't reach cezar to upload your files, so this message was not sent. It's back in the box: send it again once you're reconnected."
+
 /** What goes on the wire: a reference once staged, the bytes inline when staging failed. */
 export async function toWireAttachment(attachment: PendingAttachment): Promise<AttachmentEntry> {
-  const uploadId = await stageAttachment(attachment)
+  const pending = stageAttachment(attachment)
+  const uploadId = await bounded(() => pending, STAGING_TIMEOUT_MS, STAGING_INTERRUPTED).catch((error: unknown) => {
+    // The hung upload is forgotten, so the next send starts a fresh one.
+    if (staged.get(attachment.data) === pending) staged.delete(attachment.data)
+    throw error
+  })
   // #1735: a 413 on the upload (a proxy's body limit) cannot be dodged by sending the bytes inline.
   const refused = tooLarge.get(attachment.data)
   if (uploadId === null && refused) throw refused

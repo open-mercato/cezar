@@ -13,13 +13,20 @@ function quantize(bytes: number, step: number): number {
 }
 
 interface DiskHealth {
-  disk?: { freeBytes: number; totalBytes: number; level: DiskLevel; worktreesBytes?: number };
+  disk?: { freeBytes: number; totalBytes: number; level: DiskLevel; worktreesBytes?: number; guardWarning?: string };
+}
+
+/** What the disk guard (runs/disk-guard.ts) adds once reclaiming was not enough. */
+export interface DiskGuardHealth {
+  warning?: string;
+  worktreesBytes?: number;
 }
 
 export function diskHealth(
   repoRoot: string,
   probe: (path: string) => DiskSpace | undefined = probeDiskSpace,
   sizer: (path: string) => Promise<number | null> = worktreeSizeBytes,
+  guard: DiskGuardHealth = {},
 ): DiskHealth {
   const worktrees = join(repoRoot, WORKTREES_DIR);
   const space = probe(worktrees);
@@ -27,9 +34,18 @@ export function diskHealth(
   const level = diskLevel(space);
   const freeBytes = quantize(space.freeBytes, level === 'ok' ? 1024 * MIB : 100 * MIB);
   // Spread, never `worktreesBytes: undefined` — the contract says optional (contract-parity).
-  const worktreesBytes = level === 'ok' ? undefined : cachedDirSize(worktrees, sizer);
+  // While the guard warns, its every-project total is the number the warning names.
+  const worktreesBytes = guard.warning && guard.worktreesBytes !== undefined
+    ? quantize(guard.worktreesBytes, 100 * MIB)
+    : level === 'ok' ? undefined : cachedDirSize(worktrees, sizer);
   return {
     // Whole GiB: health is CORS-open (#431), and an exact volume size is a stable cross-origin fingerprint.
-    disk: { freeBytes, totalBytes: quantize(space.totalBytes, 1024 * MIB), level, ...(worktreesBytes !== undefined ? { worktreesBytes } : {}) },
+    disk: {
+      freeBytes,
+      totalBytes: quantize(space.totalBytes, 1024 * MIB),
+      level,
+      ...(worktreesBytes !== undefined ? { worktreesBytes } : {}),
+      ...(guard.warning ? { guardWarning: guard.warning } : {}),
+    },
   };
 }

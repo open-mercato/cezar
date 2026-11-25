@@ -1,0 +1,58 @@
+---
+title: "Reconnect an account where it failed"
+description: "Sign an expired agent account back in from the chat or task that needs it, and resume everything that waited on it."
+nav_title: "Inline reconnect"
+related:
+  links:
+    - features/agents-and-models/profiles
+    - features/agents-and-models/account-recheck
+sources:
+  - label: "Reconnect card"
+    path: packages/web/src/components/reconnect/reconnect-card.tsx
+    line: 50
+    commit: 21c0a0ee4c57ab890b214bb481c6f44bec216100
+  - label: "Login sessions"
+    path: packages/cezar/src/core/login-session.ts
+    line: 120
+    commit: 21c0a0ee4c57ab890b214bb481c6f44bec216100
+  - label: "Resume after reconnect"
+    path: packages/cezar/src/workflows/run.ts
+    line: 4584
+    commit: 21c0a0ee4c57ab890b214bb481c6f44bec216100
+  - label: "Design"
+    path: .ai/specs/2026-11-18-inline-account-reconnect.md
+    line: 1
+    commit: 21c0a0ee4c57ab890b214bb481c6f44bec216100
+---
+When an agent account's login expires, the manager chat or task that hit it shows a reconnect card in place of the error. The card signs that account back in without a terminal. Once the sign-in is confirmed, Cezar resumes the turn that failed and every other task or manager that was waiting on the same account.
+
+A task whose login is rejected no longer fails. It waits with **Needs sign-in** and keeps its session, so it continues where it stopped.
+
+## Where to find it
+
+- Manager chat → the turn that failed
+- Task → Chat → the step that failed
+- Now → **Sign-in needed**, grouped per account
+- The sign-in banner at the top of the cockpit
+
+## How to use it
+
+1. Choose **Reconnect** on the card. Cezar starts the agent's own sign-in for that account and shows what it needs: a sign-in link to copy into your browser, a one-time code to enter, a code to paste back, or an API key.
+2. Finish the sign-in. The card confirms it and lists what is resuming.
+3. To keep working without signing in, choose **Use … instead** to switch this task or manager to another signed-in account. A task then starts a fresh session.
+
+| Agent | How the card signs in |
+| --- | --- |
+| Claude Code | A sign-in link on this computer, which finishes by itself. Elsewhere, a sign-in link and a code you paste back. |
+| Codex | A sign-in link on this computer, which finishes by itself. Elsewhere, a device code. An API key also works. |
+| Cursor | A sign-in link that works on any device. |
+| GitHub Copilot CLI | A device code. |
+| OpenCode | The provider's own sign-in through OpenCode, or an API key. |
+| Kimi Code, pi, Gemini CLI, Antigravity CLI, Junie, OMP | The agent's sign-in in a terminal. The card notices when it finishes. |
+
+> **Good to know**:
+>
+> - Cezar never sees or stores a token. The agent's own CLI completes the sign-in and keeps the credentials. A pasted code or key goes straight to that CLI and is never saved or logged.
+> - Each blocked task or manager restarts once per reconnect. Tasks queue behind the parallel-task limit. Watch checks and jobs are not re-run; their next scheduled run goes ahead.
+> - **More options** on the card has **Check again**, a link to Settings → Agent accounts, and the terminal command as a last resort.
+> - A hosted cockpit starts a sign-in on the host only with `CEZ_REMOTE_AGENT_ACCOUNTS=1`. Without it, the card shows the command to run there. A paired phone and the cockpit on this computer can always start one.

@@ -12,6 +12,39 @@ sources:
 ---
 The desktop app starts a local Cezar process and opens its cockpit in a separate window. It supports updates and switching between installed versions. External links open in the system browser.
 
+## Install
+
+On macOS 12 or newer, install it with Homebrew:
+
+```sh
+brew trust --cask open-mercato/tap/cezar
+brew install --cask open-mercato/tap/cezar
+```
+
+The app updates itself (`auto_updates`), so `brew upgrade` skips it unless you pass `--greedy`.
+
+Or download the installer for your system:
+
+| Platform | Download |
+| --- | --- |
+| macOS | [Apple silicon (.dmg)](https://github.com/open-mercato/cezar/releases/download/desktop-latest/cezar-macos-aarch64.dmg) |
+| macOS | [Intel (.dmg)](https://github.com/open-mercato/cezar/releases/download/desktop-latest/cezar-macos-x86_64.dmg) |
+| Windows | [x64 installer (.exe)](https://github.com/open-mercato/cezar/releases/download/desktop-latest/cezar-windows-x86_64-setup.exe) |
+| Linux | [AppImage](https://github.com/open-mercato/cezar/releases/download/desktop-latest/cezar-linux-x86_64.AppImage) |
+| Debian, Ubuntu | [.deb package](https://github.com/open-mercato/cezar/releases/download/desktop-latest/cezar-linux-x86_64.deb) |
+| Arch, Omarchy, Manjaro | [.pkg.tar.zst](https://github.com/open-mercato/cezar/releases/download/desktop-latest/cezar-linux-x86_64.pkg.tar.zst) |
+
+All files are on the [latest desktop release](https://github.com/open-mercato/cezar/releases/tag/desktop-latest).
+
+## The `cez` command
+
+On macOS the app carries the `cez` and `cezar` terminal commands. They run the cezar version the app manages (`~/.cezar/versions/current`, or `$CEZ_HOME`), with your Node 20+ or, without one, the Node the app downloaded. Arguments and the exit status pass through unchanged. Before the app's first start they print "Open Cezar once to finish setup" and exit with status 1.
+
+- **Homebrew**: the cask links both commands into Homebrew's `bin`, and `brew uninstall` removes them.
+- **Downloaded app**: choose **Cezar → Install 'cez' command in PATH…**. Pick `/usr/local/bin` (macOS asks for your password when needed) or `~/.local/bin` (no password, but it must be on your `PATH`). If a `cez` or `cezar` already there belongs to something else, the app asks before replacing it. **Cezar → Uninstall 'cez' command** removes only the links the app made.
+
+> **Good to know**: If you also installed cezar with `npm i -g @open-mercato/cezar`, the `cez` in the directory that comes first on your `PATH` runs. `which -a cez` lists them in order. Both use the same `~/.cezar` state. The npm copy runs its own installed version, and the app's command runs the version selected in the app.
+
 ## Where to find it
 
 Cezar app → version / update menu

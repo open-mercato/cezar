@@ -113,6 +113,10 @@ const agentAccountSchema = z
       .refine((v) => !CONTROL_CHARS_RE.test(v), 'configDir must not contain control characters'),
     label: z.string().max(200).catch(''),
     addedAt: z.string().max(64).catch(''),
+    /** cezar created `configDir` under `agentHomesDir()` and may delete it (spec 2026-11-24). */
+    managed: z.boolean().optional().catch(undefined),
+    /** Added from the cockpit and no sign-in confirmed yet: pickers and selections skip it. */
+    pending: z.boolean().optional().catch(undefined),
   })
   .passthrough();
 
