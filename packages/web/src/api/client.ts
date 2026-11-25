@@ -566,9 +566,11 @@ export async function putTelemetryConsent(input: SetTelemetryConsentInput): Prom
  *  Workspace-level: one CLI/account serves every project. */
 export async function getRunnerModels(
   runner: ModelDiscoveryRunner,
-  opts?: ReadOptions,
+  opts?: ReadOptions & { refresh?: boolean },
 ): Promise<RunnerModelCatalogResponse> {
-  return unwrap(await cez.api.v1.models.$get({ query: { runner } }, init(opts)), '/models')
+  const query: { runner: ModelDiscoveryRunner; refresh?: string } = { runner }
+  if (opts?.refresh) query.refresh = '1'
+  return unwrap(await cez.api.v1.models.$get({ query }, init(opts)), '/models')
 }
 
 /** Host-local authentication state shared by every project. */
