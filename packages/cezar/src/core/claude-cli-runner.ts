@@ -15,6 +15,7 @@ import type {
   ContentBlock,
   SessionOptions,
 } from './agent-runner.ts';
+import { DEFAULT_ALLOWED_TOOLS } from './agent-runner.ts';
 
 // Re-exported for backends and the run manager that still import them from here.
 export type { AgentSession, SessionOptions } from './agent-runner.ts';
@@ -146,6 +147,7 @@ export class ClaudeCliRunner implements AgentRunner {
       const env = buildChildEnv({ backend: this.backend, extraEnv: spec.env });
       // `--strict-mcp-config` drops configured servers; claude.ai connectors need their own switch.
       if (spec.noMcpServers) env.ENABLE_CLAUDEAI_MCP_SERVERS = 'false';
+      applyClaudeArtifactEnv(env, process.env);
       sessionCost = new ClaudeSessionCost(spec.sessionId, spec.resume === true, spec.cwd, env.CLAUDE_CONFIG_DIR);
       // Mock auth replays share one marker directory across worktrees.
       if (this.bin === mockClaudePath()) env.CEZ_HOME = resolvePath(cezarHomeDir(env));
@@ -444,6 +446,44 @@ export class ClaudeCliRunner implements AgentRunner {
 /** What a read-only Claude run is denied, whatever the user's or repo's settings allow. */
 export const CLAUDE_WRITE_TOOLS = ['Bash', 'Edit', 'Write', 'MultiEdit', 'NotebookEdit'];
 
+/** `CEZ_CLAUDE_ARTIFACTS=1` opts Claude tasks into claude.ai artifacts (#2195); off by default. */
+export function claudeArtifactsEnabled(env: NodeJS.ProcessEnv): boolean {
+  return env.CEZ_CLAUDE_ARTIFACTS === '1';
+}
+
+/** Only a step on the default tool list gets `Artifact`; an explicit `allowedTools` list wins. */
+function isDefaultToolSet(tools: readonly string[] | undefined): boolean {
+  return !!tools && tools.length === DEFAULT_ALLOWED_TOOLS.length && DEFAULT_ALLOWED_TOOLS.every((t) => tools.includes(t));
+}
+
+/** Host switches that keep Claude Code's Artifact tool off even when opted in (#2195). */
+export function claudeArtifactBlockers(env: NodeJS.ProcessEnv): string[] {
+  const out: string[] = [];
+  if (env.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC) out.push('CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC is set');
+  const base = env.ANTHROPIC_BASE_URL;
+  if (base) {
+    let host = '';
+    try { host = new URL(base).hostname; } catch { /* not a URL: treat as third party */ }
+    if (host !== 'api.anthropic.com') out.push('ANTHROPIC_BASE_URL points at a non-Anthropic gateway');
+  }
+  return out;
+}
+
+/** Opted in: tell Claude Code its SDK entrypoint may use Artifact; `child` is the spawn env. */
+export function applyClaudeArtifactEnv(child: NodeJS.ProcessEnv, host: NodeJS.ProcessEnv): void {
+  if (!claudeArtifactsEnabled(host)) return;
+  child.CLAUDE_CODE_ARTIFACT = '1';
+  warnArtifactsBlocked(child);
+}
+
+let artifactWarned = false;
+function warnArtifactsBlocked(env: NodeJS.ProcessEnv): void {
+  const blockers = claudeArtifactBlockers(env);
+  if (artifactWarned || blockers.length === 0) return;
+  artifactWarned = true;
+  console.warn(`[cezar] CEZ_CLAUDE_ARTIFACTS=1, but Claude's Artifact tool stays off: ${blockers.join('; ')}.`);
+}
+
 /**
  * Build the headless argv. `--print` is spelled out because both stream-json
  * formats are documented as "only works with --print"; `--input-format
@@ -488,6 +528,7 @@ export function buildClaudeArgs(
     }
   }
   const allowed = buildAllowedTools(spec.allowedTools ?? [], spec.bashAllowlist);
+  if (claudeArtifactsEnabled(env) && isDefaultToolSet(spec.allowedTools)) allowed.push('Artifact');
   // Private MCP servers (spec 2026-10-07-private-project-mcp): `--mcp-config` ADDS to the repo's
   // own MCP config, and their tools are allowed — `dontAsk` would deny every one of them otherwise.
   if (spec.noMcpServers) {
