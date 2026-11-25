@@ -673,7 +673,8 @@ export function useStartAgentSetup() {
     mutationFn: ({ provider, action, force }: { provider: AgentSetupProvider; action: AgentSetupAction; force?: boolean }) => startAgentSetup(provider, action, force),
     retry: false,
     // Written straight in: the polling above starts from this, even if the next read fails.
-    onSuccess: (session) => queryClient.setQueryData<AgentSetupState>(workspaceQueryKeys.agentSetup, (state) => (state?.available ? { ...state, session } : state)),
+    // `joined` is the client's own note on the response, not part of the contract: kept out of the cache.
+    onSuccess: ({ joined: _joined, ...session }) => queryClient.setQueryData<AgentSetupState>(workspaceQueryKeys.agentSetup, (state) => (state?.available ? { ...state, session } : state)),
     onSettled: () => queryClient.invalidateQueries({ queryKey: workspaceQueryKeys.agentSetup }),
   })
 }

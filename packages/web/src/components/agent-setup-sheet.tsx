@@ -39,6 +39,11 @@ const REJOINS: Record<AgentSetupSheetAction, readonly AgentSetupSession['action'
 
 const SIGN_IN_POLL_MS = 3_000
 const RECHECK_MS = 2_000
+
+// Sessions a sheet is cancelling or has cancelled. Module-level, so it outlives the sheet: its
+// openers only watch the `latest` listing, the main one is dropped on close (gcTime 0), and a
+// sheet reopened while the DELETE is in flight reads the login as still running.
+const cancelling = new Set<string>()
 const WAIT_POLL_MS = 5_000
 
 export function AgentSetupSheet({
@@ -125,11 +130,10 @@ export function AgentSetupFlow({ provider, action, onClose }: { provider: AgentS
 
   // A session for this agent already running (a reload, another tab) is rejoined, not restarted.
   const idle = phase === 'confirm' || (phase === 'sign-in' && shown === null)
-  // A login cancelled here still reads as running until the next listing: never rejoin it.
-  const dropped = React.useRef<string | null>(null)
+  // A login being cancelled still reads as running until the DELETE lands: never rejoin it.
   React.useEffect(() => {
     if (!session || session.provider !== provider || session.exitCode !== null || !idle) return
-    if (session.id === dropped.current) return
+    if (cancelling.has(session.id)) return
     if (!REJOINS[action].includes(session.action)) return
     track(session)
   }, [action, idle, provider, session, track])
@@ -143,6 +147,10 @@ export function AgentSetupFlow({ provider, action, onClose }: { provider: AgentS
   const checking = React.useRef<string | null>(null)
   const [vanished, setVanished] = React.useState<AgentSetupSession | null>(null)
   const [recheck, setRecheck] = React.useState(0)
+  const recheckTimer = React.useRef<number | null>(null)
+  React.useEffect(() => () => {
+    if (recheckTimer.current !== null) window.clearTimeout(recheckTimer.current)
+  }, [])
   const watching = phase === 'running' || phase === 'sign-in'
   React.useEffect(() => {
     if (!shown || !setup.data) return
@@ -158,7 +166,7 @@ export function AgentSetupFlow({ provider, action, onClose }: { provider: AgentS
       if (shownNow.current?.id !== lost.id) return
       // A failed read keeps the old listing: it says nothing about the session, so ask again later.
       if (next.isError) {
-        window.setTimeout(() => setRecheck((count) => count + 1), RECHECK_MS)
+        recheckTimer.current = window.setTimeout(() => setRecheck((count) => count + 1), RECHECK_MS)
         return
       }
       const fresh = next.data?.session
@@ -171,10 +179,20 @@ export function AgentSetupFlow({ provider, action, onClose }: { provider: AgentS
   // A session being cancelled leaves the cached listing before the DELETE goes out, so a sheet
   // reopened meanwhile cannot rejoin it; the listing is read again once the DELETE settles.
   const forget = React.useCallback((id: string) => {
+    cancelling.add(id)
     queryClient.setQueryData<AgentSetupState>(workspaceQueryKeys.agentSetup, (state) =>
       state?.available && state.session?.id === id ? { ...state, session: null } : state)
   }, [queryClient])
-  const reread = React.useCallback(() => void queryClient.invalidateQueries({ queryKey: workspaceQueryKeys.agentSetup }), [queryClient])
+  const reread = React.useCallback(() => queryClient.invalidateQueries({ queryKey: workspaceQueryKeys.agentSetup }), [queryClient])
+  // Stopped: once the listing has been read again without it, it needs no guarding.
+  const stopped = React.useCallback((id: string) => {
+    void reread().finally(() => cancelling.delete(id))
+  }, [reread])
+  // A cancel that failed: the server still runs the session, so it may be shown again.
+  const keep = React.useCallback((id: string) => {
+    cancelling.delete(id)
+    void reread()
+  }, [reread])
 
   // A login terminal nobody watches holds the one setup slot. Closing cancels only one this sheet
   // started (StrictMode's mount-time remount has nothing to cancel, and another tab's survives);
@@ -188,16 +206,27 @@ export function AgentSetupFlow({ provider, action, onClose }: { provider: AgentS
     const login = ownedLoginNow.current
     if (!login) return
     forget(login)
-    void cancelAgentSetup(login).catch(() => {}).finally(reread)
-  }, [forget, reread])
+    void cancelAgentSetup(login).then(() => stopped(login), () => keep(login))
+  }, [forget, keep, stopped])
   const cancelMutate = cancel.mutate
+  // A landed sign-in whose terminal could not be stopped: it still holds the setup slot, so say so.
+  const [stranded, setStranded] = React.useState<string | null>(null)
+  const closeLanded = React.useCallback((id: string) => {
+    setStranded(null)
+    forget(id)
+    cancelMutate(id, {
+      onSuccess: () => stopped(id),
+      onError: () => {
+        keep(id)
+        setStranded(id)
+      },
+    })
+  }, [cancelMutate, forget, keep, stopped])
   React.useEffect(() => {
     if (phase !== 'done' || !liveLogin) return
-    dropped.current = liveLogin
-    forget(liveLogin)
     setShown(null)
-    cancelMutate(liveLogin)
-  }, [cancelMutate, forget, liveLogin, phase])
+    closeLanded(liveLogin)
+  }, [closeLanded, liveLogin, phase])
   // Cancel is the user's own click, so it stops a rejoined login too. A failed cancel brings the
   // terminal and its Cancel back: the server still holds the slot.
   const cancelLogin = () => {
@@ -205,12 +234,12 @@ export function AgentSetupFlow({ provider, action, onClose }: { provider: AgentS
     const id = liveLogin
     const was = shown
     setFailure(null)
-    dropped.current = id
     forget(id)
     setShown(null)
     cancelMutate(id, {
+      onSuccess: () => stopped(id),
       onError: () => {
-        dropped.current = null
+        keep(id)
         setShown((current) => current ?? was)
         setFailure('cezar could not stop the sign-in terminal. Try again.')
       },
@@ -226,6 +255,11 @@ export function AgentSetupFlow({ provider, action, onClose }: { provider: AgentS
         { provider, action: kind, ...(force ? { force } : {}) },
         {
           onSuccess: (next) => {
+            // Joined the login a cancel is still stopping: it is about to end, so do not show it.
+            if (next.joined && cancelling.has(next.id)) {
+              setFailure('The last sign-in terminal is still stopping. Try again in a moment.')
+              return
+            }
             // A 201 that joined another tab's login is not ours to cancel on close.
             if (next.action === 'login' && !next.joined) owned.current.add(next.id)
             track(next)
@@ -391,7 +425,7 @@ export function AgentSetupFlow({ provider, action, onClose }: { provider: AgentS
         </div>
       ) : null}
       {phase === 'sign-in' ? (
-        <SignIn provider={provider} entry={entry} interactive={interactive && available} session={shown?.action === 'login' ? shown : null} failure={failure} busy={start.isPending} onTerminal={() => run('login')} onCheck={() => refreshMutate()} onCancel={cancelLogin} />
+        <SignIn provider={provider} entry={entry} interactive={interactive && available} session={shown?.action === 'login' ? shown : null} failure={failure} busy={start.isPending || cancel.isPending} onTerminal={() => run('login')} onCheck={() => refreshMutate()} onCancel={cancelLogin} />
       ) : null}
       {phase === 'failed' ? (
         <div className="flex flex-wrap items-center justify-between gap-3">
@@ -411,6 +445,12 @@ export function AgentSetupFlow({ provider, action, onClose }: { provider: AgentS
               : `${label} is ready.`}
           </p>
           <Button size="sm" className="font-normal" onClick={onClose}>Done</Button>
+        </div>
+      ) : null}
+      {phase === 'done' && stranded ? (
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <p role="alert" className="min-w-0 flex-1 text-ui text-danger">cezar could not close the sign-in terminal, and it blocks setting up other agents.</p>
+          <Button size="sm" variant="outline" className="font-normal" disabled={cancel.isPending} onClick={() => closeLanded(stranded)}>Close it</Button>
         </div>
       ) : null}
     </div>

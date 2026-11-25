@@ -1,5 +1,5 @@
 import { QueryClientProvider } from '@tanstack/react-query'
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import * as React from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -633,16 +633,94 @@ describe('AgentSetupFlow: terminal sign-in and lost sessions (#2474 re-review)',
   it('does not cancel on close a sign-in its own start only joined (another tab started it)', async () => {
     statuses = { antigravity: 'disconnected' }
     agents = [entry('antigravity', { installed: true, loginCommand: "'agy'" })]
-    renderFlow('antigravity', 'sign-in')
+    const client = createQueryClient()
+    renderFlow('antigravity', 'sign-in', { client })
     await screen.findByRole('button', { name: 'Open terminal here' })
     // Another tab starts the login after this sheet's last listing; this sheet's start joins it.
     session = live({ provider: 'antigravity', action: 'login' })
     joinNext = true
+    // The read after the start fails, so the cache keeps exactly what the start wrote into it.
+    listFails = true
     fireEvent.click(screen.getByRole('button', { name: 'Open terminal here' }))
     await waitFor(() => expect(screen.getByTestId('terminal').getAttribute('data-session')).toBe('live-1'))
+    // `joined` is the client's note on the response, never written into the contract-typed cache.
+    expect(client.getQueryData<{ session: Record<string, unknown> }>(['workspace', 'providers', 'setup'])?.session).not.toHaveProperty('joined')
     cleanup()
     await pause(50)
     expect(cancelled).toEqual([])
+  })
+  it('without a page holding the listing, a sheet reopened during the close’s DELETE does not rejoin it', async () => {
+    statuses = { antigravity: 'disconnected' }
+    agents = [entry('antigravity', { installed: true, loginCommand: "'agy'" })]
+    // The real openers watch only the `latest` listing: the main one is dropped when the sheet closes.
+    const client = createQueryClient()
+    const first = renderFlow('antigravity', 'sign-in', { client })
+    fireEvent.click(await screen.findByRole('button', { name: 'Open terminal here' }))
+    await screen.findByTestId('terminal')
+    let release!: () => void
+    cancelGate = new Promise<void>((resolve) => { release = resolve })
+    first.unmount()
+    await waitFor(() => expect(cancelled).toEqual(['s1']))
+    renderFlow('antigravity', 'sign-in', { client })
+    await screen.findByRole('button', { name: 'Open terminal here' })
+    await pause(100)
+    expect(screen.queryByTestId('terminal')).toBeNull()
+    release()
+    await pause(300)
+    expect(screen.queryByTestId('terminal')).toBeNull()
+    expect(screen.queryByRole('alert')).toBeNull()
+  })
+
+  it('keeps Open terminal here disabled until the Cancel settles', async () => {
+    statuses = { antigravity: 'disconnected' }
+    agents = [entry('antigravity', { installed: true, loginCommand: "'agy'" })]
+    renderFlow('antigravity', 'sign-in')
+    fireEvent.click(await screen.findByRole('button', { name: 'Open terminal here' }))
+    await screen.findByTestId('terminal')
+    let release!: () => void
+    cancelGate = new Promise<void>((resolve) => { release = resolve })
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+    const open = await screen.findByRole('button', { name: 'Open terminal here' })
+    expect((open as HTMLButtonElement).disabled).toBe(true)
+    release()
+    await waitFor(() => expect((screen.getByRole('button', { name: 'Open terminal here' }) as HTMLButtonElement).disabled).toBe(false))
+    fireEvent.click(screen.getByRole('button', { name: 'Open terminal here' }))
+    await waitFor(() => expect(screen.getByTestId('terminal').getAttribute('data-session')).toBe('s2'))
+  })
+
+  it('does not show a login its start joined while another sheet is still cancelling it', async () => {
+    statuses = { antigravity: 'disconnected' }
+    agents = [entry('antigravity', { installed: true, loginCommand: "'agy'" })]
+    const closing = renderFlow('antigravity', 'sign-in')
+    fireEvent.click(await within(closing.container).findByRole('button', { name: 'Open terminal here' }))
+    await within(closing.container).findByTestId('terminal')
+    let release!: () => void
+    cancelGate = new Promise<void>((resolve) => { release = resolve })
+    closing.unmount()
+    await waitFor(() => expect(cancelled).toEqual(['s1']))
+    // A second sheet's start reaches the server before the kill: the server joins the dying login.
+    joinNext = true
+    renderFlow('antigravity', 'sign-in')
+    fireEvent.click(await screen.findByRole('button', { name: 'Open terminal here' }))
+    expect((await screen.findByRole('alert')).textContent).toContain('The last sign-in terminal is still stopping.')
+    expect(screen.queryByTestId('terminal')).toBeNull()
+    release()
+  })
+
+  it('says so when the terminal of a landed sign-in cannot be closed, and closes it on retry', async () => {
+    statuses = { antigravity: 'disconnected' }
+    agents = [entry('antigravity', { installed: true, loginCommand: "'agy'" })]
+    renderFlow('antigravity', 'sign-in')
+    fireEvent.click(await screen.findByRole('button', { name: 'Open terminal here' }))
+    await screen.findByTestId('terminal')
+    cancelFails = true
+    statuses = { antigravity: 'connected' }
+    await waitFor(() => expect(phase()).toBe('done'), WAIT)
+    expect((await screen.findByRole('alert')).textContent).toContain('could not close the sign-in terminal')
+    cancelFails = false
+    fireEvent.click(screen.getByRole('button', { name: 'Close it' }))
+    await waitFor(() => expect(screen.queryByRole('alert')).toBeNull())
+    expect(cancelled).toEqual(['s1', 's1'])
   })
 
   it('does not settle on a stale listing without the session while the server still runs it', async () => {
@@ -675,7 +753,6 @@ describe('AgentSetupFlow: terminal sign-in and lost sessions (#2474 re-review)',
     session = null
     await waitFor(() => expect(phase()).toBe('failed'), WAIT)
   })
-
 
   it('keeps the sign-in terminal and its Cancel when the cancel fails', async () => {
     cancelFails = true
