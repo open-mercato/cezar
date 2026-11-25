@@ -142,6 +142,11 @@ describe('task-needs-you', () => {
     expect(needsYou(run({ id: 'r', status: 'waiting', waitingSince: at, attentionRequest: question }))[0]?.detail).toBe('Ship it?');
   });
 
+  it('says it in one line, without the text below a --- line (#2477)', () => {
+    const long = { requestId: 'q1', askedAt: at, questions: [{ question: 'Ship it?\nTests pass.\n---\nStep 1: background' }] } as RunRecord['attentionRequest'];
+    expect(needsYou(run({ id: 'r', status: 'waiting', waitingSince: at, attentionRequest: long }))[0]?.detail).toBe('Ship it? Tests pass.');
+  });
+
   it('reports a question whose session closed instead of filing it as a failure', () => {
     const closed = run({ id: 'r', status: 'failed', finishedAt: at, awaitingAnswerSince: at });
     expect(taskAttention('p', [closed], NOW).map((item) => item.kind)).toEqual(['task-needs-you']);

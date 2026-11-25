@@ -3,7 +3,8 @@ import type { ReactNode } from 'react'
 
 import { Button } from '@/components/ui/button'
 import { shortAge } from '@/lib/format'
-import type { QuestionClosed } from '@open-mercato/cezar-api-client'
+import { cn } from '@/lib/utils'
+import { questionSummary, type QuestionClosed } from '@open-mercato/cezar-api-client'
 
 /**
  * The two card states the Questions inbox adds to every chat (spec 2026-11-17-questions-inbox,
@@ -56,7 +57,7 @@ export function QuietClosedAsk({ closed, questions, asker, id, link, className }
         {age ? <span aria-hidden="true">· {age} ago</span> : null}
         {questions.map((question, index) => <span key={index} className="rounded bg-muted px-1.5 py-px text-micro font-semibold">{question.header}</span>)}
       </span>
-      {questions.map((question, index) => <s key={index} className="break-words">{question.question}</s>)}
+      {questions.map((question, index) => <s key={index} className="break-words">{questionSummary(question.question)}</s>)}
       {closed.reason === 'answered' && closed.answer ? <span data-slot="ask-closed-answer" className="break-words text-foreground">{closed.answer}</span> : null}
       {detail || link ? (
         <span className="flex flex-wrap items-baseline gap-x-2">
@@ -65,6 +66,18 @@ export function QuietClosedAsk({ closed, questions, asker, id, link, className }
         </span>
       ) : null}
     </div>
+  )
+}
+
+/** A question's text below its `---` line, folded under a collapsed "Details" (#2477). */
+export function QuestionDetails({ children, className }: { children: ReactNode; className?: string }) {
+  return (
+    <details data-slot="ask-details" className={cn('text-label text-muted-foreground', className)}>
+      <summary className="w-fit cursor-pointer rounded-sm font-medium text-foreground outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50 pointer-coarse:py-2">
+        Details
+      </summary>
+      <p className="mt-1.5 break-words whitespace-pre-wrap">{children}</p>
+    </details>
   )
 }
 

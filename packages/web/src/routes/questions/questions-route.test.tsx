@@ -703,6 +703,49 @@ describe('references on the Questions page (#2306)', () => {
   })
 })
 
+describe('multi-line questions on the Questions page (#2477)', () => {
+  const long = 'Approve the plan?\nTwo tables change.\n---\nStep 1: add the column\nStep 2: backfill'
+  const asked = (header: string) => ({ questions: [{ header, question: long, options: [{ label: 'Yes' }, { label: 'No' }] }] })
+  const details = (root: Element) => root.querySelector<HTMLDetailsElement>('[data-slot="ask-details"]')
+
+  it('an open card keeps the line breaks and folds the text after --- under a collapsed Details', async () => {
+    data.open = [taskItem('ask_1', 'Plan', asked('Plan'))]
+    renderPage()
+    const question = within(await screen.findByRole('group', { name: 'Plan' })).getByRole('group', { name: /^Approve the plan\?/ })
+    const text = question.querySelector('p')!
+    expect(text.textContent).toBe('Approve the plan?\nTwo tables change.')
+    expect(text.className).toContain('whitespace-pre-wrap')
+    const fold = details(question)!
+    expect(fold.open).toBe(false)
+    expect(fold.querySelector('p')!.textContent).toBe('Step 1: add the column\nStep 2: backfill')
+  })
+
+  it('an answered card shows the asked words with their line breaks and the same fold', async () => {
+    data.open = [managerItem('m1', 'Plan', asked('Plan'))]
+    renderPage()
+    fireEvent.click(within(await screen.findByRole('group', { name: 'Plan' })).getByRole('button', { name: 'Yes' }))
+    const locked = await waitFor(() => {
+      const found = card('Plan').querySelector('[data-slot="question-locked-text"]')
+      expect(found).toBeTruthy()
+      return found!
+    })
+    const text = locked.querySelector('p')!
+    expect(text.textContent).toBe('Plan Approve the plan?\nTwo tables change.')
+    expect(text.className).toContain('whitespace-pre-wrap')
+    expect(details(locked)!.open).toBe(false)
+    expect(details(locked)!.querySelector('p')!.textContent).toBe('Step 1: add the column\nStep 2: backfill')
+  })
+
+  it('a closed row strikes through the one-line summary only', async () => {
+    data.closed = [taskItem('ask_2', 'Plan', { ...asked('Plan'), closed: { reason: 'expired', at: ago(HOUR) } })]
+    renderPage()
+    fireEvent.click(await screen.findByRole('button', { name: /Closed · 1/ }))
+    const row = document.querySelector('[data-slot="question-closed"]')!
+    expect(row.querySelector('s')?.textContent).toBe('Approve the plan? Two tables change.')
+    expect(row.textContent).not.toContain('Step 1')
+  })
+})
+
 describe('question helpers', () => {
   it('answerShown drops a lone header and cuts long text', () => {
     expect(answerShown(managerItem('m1', 'Design'), 'Design: Yes')).toBe('Yes')

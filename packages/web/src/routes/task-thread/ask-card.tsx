@@ -2,7 +2,7 @@ import { useQueryClient } from '@tanstack/react-query'
 import { CheckIcon } from 'lucide-react'
 import { type ReactNode, useContext, useEffect, useId, useRef, useState } from 'react'
 
-import { questionKey, type ApiRun } from '@open-mercato/cezar-api-client'
+import { questionKey, splitQuestionText, type ApiRun } from '@open-mercato/cezar-api-client'
 import { scheduleDismiss, undoDismiss, usePendingDismissals, useQuestions } from '@/api/questions'
 import { StatusDot } from '@/components/status-dot'
 import { Button } from '@/components/ui/button'
@@ -14,7 +14,7 @@ import { useLocation } from 'react-router'
 import { Link, useActiveProjectId } from '@/lib/project-router'
 import { cn } from '@/lib/utils'
 
-import { DismissingNote, QuietClosedAsk, StaleNote } from '@/routes/questions/question-states'
+import { DismissingNote, QuestionDetails, QuietClosedAsk, StaleNote } from '@/routes/questions/question-states'
 
 import { useAskAnswer, type AskAnswerDelivery } from './ask-answer'
 import { AskTextContext } from './ask-text'
@@ -340,6 +340,7 @@ function AskQuestionBlock({
 }) {
   const multiSelect = question.multiSelect === true
   const text = useContext(AskTextContext)
+  const body = splitQuestionText(question.question)
   const newlineOnEnter = useEnterInsertsNewline()
   const questionId = useId()
   const otherOpen = answer.other !== undefined
@@ -389,10 +390,12 @@ function AskQuestionBlock({
           <span aria-hidden="true" className="ml-auto text-micro text-soft-foreground">select all that apply</span>
         ) : null}
       </div>
-      <p id={questionId} className="mb-2.5 break-words text-body font-semibold text-foreground">
-        {text.render(question.question)}
+      {/* A workflow writes its gate text with line breaks, and they carry meaning (#2477). */}
+      <p id={questionId} className="mb-2.5 break-words whitespace-pre-wrap text-body font-semibold text-foreground">
+        {text.render(body.main)}
         {multiSelect ? <span className="sr-only"> (select all that apply)</span> : null}
       </p>
+      {body.details !== undefined ? <QuestionDetails className="mb-2.5">{text.render(body.details)}</QuestionDetails> : null}
       <div className="flex flex-col gap-2">
         {question.options.map((option) => (
           <AskChoice
@@ -423,7 +426,7 @@ function AskQuestionBlock({
             <Textarea
               ref={otherInput}
               rows={2}
-              aria-label={`Your own answer: ${text.plain(question.question)}`}
+              aria-label={`Your own answer: ${text.plain(body.main)}`}
               placeholder="Type your own answer"
               value={answer.other}
               disabled={disabled}

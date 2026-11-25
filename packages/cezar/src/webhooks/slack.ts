@@ -1,4 +1,4 @@
-import { webhookEventSchema } from '@open-mercato/cezar-contract';
+import { questionSummary, webhookEventSchema } from '@open-mercato/cezar-contract';
 
 const labels = {
   'task.attention_required': 'Needs your input', 'task.review_ready': 'Ready for review',
@@ -33,7 +33,7 @@ export function renderSlackMessage(eventJson: string, ctx: { receiverName?: stri
   if (event.type === 'task.attention_required' && event.data.questions?.length) {
     let questions = '';
     for (const [index, question] of event.data.questions.entries()) {
-      const line = `${index + 1}. ${escape(question.question)}${(question.options ?? []).map(option =>
+      const line = `${index + 1}. ${escape(questionSummary(question.question))}${(question.options ?? []).map(option =>
         `\n• ${escape(option.label)}${option.description ? ` — ${escape(option.description)}` : ''}`).join('')}`;
       if (questions && questions.length + line.length + 1 > 2900) break;
       questions += `${questions ? '\n' : ''}${clip(line)}`;

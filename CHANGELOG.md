@@ -9,6 +9,7 @@
 - ✨ New built-in `review-pr` workflow: give it a pull request URL and correctness, security and tests reviewers plus a judge write a verdict (approve, changes or reject), findings with `path:line` and draft review comments, without pushing, opening a PR or posting to GitHub. It runs on Claude Code, Pi and Codex, which enforce its read-only tools; other agents refuse it. *(@patzick)*
 - ✨ The workflow list reports what each workflow can do outside the machine (`capabilities`: push, open a PR, post to GitHub), so a manager can pick a safe one. *(@patzick)*
 - ✨ A manager can stop and steer the tasks it starts: `cez-manager task cancel <run> --reason "…"` cancels a task and everything it dispatched, keeps the worktree and branch, and the task shows who cancelled it and why. It cancels only its own tasks unless you turn on **Cancel any task** in its settings. `task create --model opus --effort max` (and `task say` on a finished task) picks the model and effort, refusing an unknown one with the valid choices; `task retry` restarts a failed task. Its task list now marks tasks you started yourself and the pull request each task opened, `workflows` marks what each workflow can do, and every `cez-manager` command takes `--help` and names the valid subcommands on a typo. *(@patzick)*
+- ✨ Question cards, in the task chat and the Questions inbox, keep the line breaks a workflow or agent wrote, and the text after a line that is exactly `---` folds under a collapsed **Details**, so a gate with long context shows its question first. One-line views (closed rows, Now, Slack and Discord) show only the part above `---`. The `review-council` gate now asks first and folds the judge's summary. (#2477) *(@msuchy96)*
 
 ## 🐛 Fixes
 - 🐛 Read-only Codex steps run again on Codex 0.170 and newer: `review-pr` and other restricted steps were refused with "the installed Codex protocol has not been verified" because cezar accepted only Codex 0.169.0. A newer Codex now has every native feature turned off for the step, and checked, before the model starts. ChatGPT workspace accounts that set a model policy work too. A refusal that every step repeats is shown once. *(@patzick)*
@@ -20,6 +21,7 @@
 ## 👥 Contributors
 
 - @martaradziszewska
+- @msuchy96
 - @patzick
 
 # 0.19.0 (2026-11-08)

@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import {
+  questionSummary,
   RUN_PR_REF_RANK,
   type AttentionCounts,
   type AttentionItem,
@@ -103,7 +104,7 @@ function questionItem(item: QuestionItem, muted: (managerId: string) => boolean,
   return {
     key: `question:${item.key}`,
     kind: 'question',
-    title: first?.question ?? 'A question for you',
+    title: first ? questionSummary(first.question) : 'A question for you',
     ...(item.questions.length > 1 ? { detail: `${item.questions.length} questions` } : {}),
     since: item.askedAt,
     counted: source.kind !== 'manager' || !muted(source.managerId),

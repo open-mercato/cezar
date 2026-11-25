@@ -136,6 +136,52 @@ describe('AskCard — who asks', () => {
   })
 })
 
+describe('AskCard — multi-line text and a Details section (#2477)', () => {
+  const gateAsk = (question: string): ThreadAsk => ({
+    ...singleAsk,
+    fromWorkflow: true,
+    questions: [{ header: 'Approval', question, options: [{ label: 'Approve' }, { label: 'Reject' }] }],
+  })
+  // `<details>` is a group too, so find the question's own by its attribute.
+  const questionText = () => document.getElementById(document.querySelector('[role="group"]')!.getAttribute('aria-labelledby')!)!
+
+  it('keeps the line breaks the workflow wrote', () => {
+    renderAsk(gateAsk('Approve the plan?\nTwo tables change.\n\nNothing is dropped.'))
+    const text = questionText()
+    expect(text.textContent).toBe('Approve the plan?\nTwo tables change.\n\nNothing is dropped.')
+    expect(text.className).toContain('whitespace-pre-wrap')
+    expect(document.querySelector('[data-slot="ask-details"]')).toBeNull()
+  })
+
+  it('folds the text after a --- line under a collapsed Details', () => {
+    renderAsk(gateAsk('Approve the plan?\n---\nStep 1: add the column\nStep 2: backfill'))
+    expect(questionText().textContent).toBe('Approve the plan?')
+    expect(screen.getByRole('group', { name: 'Approve the plan?' })).toBeTruthy()
+    const details = document.querySelector<HTMLDetailsElement>('[data-slot="ask-details"]')!
+    expect(details.open).toBe(false)
+    expect(details.querySelector('summary')?.textContent).toBe('Details')
+    const body = details.querySelector('p')!
+    expect(body.textContent).toBe('Step 1: add the column\nStep 2: backfill')
+    expect(body.className).toContain('whitespace-pre-wrap')
+    fireEvent.click(details.querySelector('summary')!)
+    expect(details.open).toBe(true)
+  })
+
+  it('a text with no --- line renders one question text, unchanged', () => {
+    renderAsk(singleAsk)
+    expect(questionText().textContent).toBe('Which date library should I standardize on?')
+    expect(document.querySelector('[data-slot="ask-details"]')).toBeNull()
+  })
+
+  it('shows markup in the text as text, never as HTML', () => {
+    renderAsk(gateAsk('Run <b>this</b>?\n---\n<img src=x onerror="alert(1)"><script>bad()</script>'))
+    const card = document.querySelector('[data-slot="ask-card"]')!
+    expect(card.querySelector('b, img, script')).toBeNull()
+    expect(questionText().textContent).toBe('Run <b>this</b>?')
+    expect(card.querySelector('[data-slot="ask-details"] p')?.textContent).toBe('<img src=x onerror="alert(1)"><script>bad()</script>')
+  })
+})
+
 describe('AskCard', () => {
   it('renders the header, question and each option with its description', () => {
     renderAsk(singleAsk)
@@ -673,6 +719,14 @@ describe('AskCard — closed by the server', () => {
     expect(screen.queryByRole('button', { name: /date-fns/ })).toBeNull()
     if (reason === 'replaced') expect(screen.getByRole('link', { name: 'Go to the newer question ↓' }).getAttribute('href')).toBe('/#ask')
     if (reason === 'ended') expect(closed.textContent).toContain('The task was cancelled.')
+  })
+
+  it('strikes through the one-line summary of a multi-line question, without its Details (#2477)', () => {
+    const question = { ...singleAsk.questions[0]!, question: 'Approve the plan?\nTwo tables change.\n---\nStep 1: background' }
+    renderAsk({ ...singleAsk, questions: [question], resolved: true, closed: { reason: 'expired' } })
+    const closed = document.querySelector('[data-slot="ask-closed"]')!
+    expect(closed.querySelector('s')?.textContent).toBe('Approve the plan? Two tables change.')
+    expect(closed.textContent).not.toContain('Step 1')
   })
 
   it('an answer from the card keeps the answered summary', () => {

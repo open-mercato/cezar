@@ -35,6 +35,12 @@ describe('Slack rendering', () => {
     expect(Buffer.byteLength(result)).toBeLessThanOrEqual(40_000);
     for (const block of JSON.parse(result).blocks) if (block.text) expect(block.text.text.length).toBeLessThanOrEqual(2900);
   });
+  it('shows a question as one line, without the text below its --- line (#2477)', () => {
+    const value = event('task.attention_required', true);
+    Object.assign(value.data, { questions: [{ question: 'Approve the plan?\nTwo tables change.\n---\nStep 1: background', options: [{ label: 'Approve' }] }] });
+    const section = JSON.parse(renderSlackMessage(JSON.stringify(value))).blocks.find((block: { text?: { text: string } }) => block.text?.text.startsWith('1. '));
+    expect(section.text.text).toBe('1. Approve the plan? Two tables change.\n• Approve');
+  });
   it('preserves validated links without allowing link delimiters to inject markup', () => {
     const value = event('task.finished');
     Object.assign(value, { links: { issue: 'https://example.com/issues/1?q=a|b', cockpit: 'https://cockpit.example/task' } });

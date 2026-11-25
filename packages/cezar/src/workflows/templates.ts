@@ -177,7 +177,8 @@ export const REVIEW_COUNCIL = builtIn(
         id: 'gate',
         type: 'gate.human',
         name: 'Your call',
-        message: 'Council verdict: {{nodes.judge.verdict}}.\n\n{{nodes.judge.summary}}\n\nOpen a PR for “{{task}}”?',
+        // The question comes first: the judge's summary folds under Details, so a `---` in it can never hide the question (#2477).
+        message: 'Council verdict: {{nodes.judge.verdict}}. Open a PR for “{{task}}”?\n---\n{{nodes.judge.summary}}',
       },
       { id: 'pr', type: 'github.draft-pr', name: 'Draft PR' },
       { id: 'done', type: 'end', name: 'PR opened', status: 'success' },

@@ -220,7 +220,7 @@ import {
   type GraphTransition,
   type WorkflowGraph,
 } from './graph.ts';
-import { GATE_APPROVE, GATE_FULL_PR, GATE_REJECT, classifyGateReply, gateInstructionsPrompt, gateOpensPr } from './gate-reply.ts';
+import { GATE_APPROVE, GATE_FULL_PR, GATE_REJECT, classifyGateReply, gateCardText, gateInstructionsPrompt, gateOpensPr } from './gate-reply.ts';
 import { resolveContinuationModel } from './run-continuation-model.ts';
 
 /** Backends whose runner honors `resume` (AgentRunSpec) — graph `session.continue` and the
@@ -8304,7 +8304,7 @@ export class RunManager {
       case 'gate.human': {
         const header = node.name ?? 'Approval';
         const options = [GATE_APPROVE, ...(opensPr ? [GATE_FULL_PR] : []), GATE_REJECT].map((label) => ({ label }));
-        const question = render(node.message) + (gateNote ? `\n\n${gateNote}` : '');
+        const question = gateCardText(render(node.message), gateNote);
         const outcome = await this.parkForUser(runId, state, node.id, [{ header, question, options }], node.timeoutMs);
         if (outcome.kind !== 'answer') return outcome.kind === 'timeout' ? 'timeout' : 'finished';
         const reply = cardReply(outcome.text, header);
