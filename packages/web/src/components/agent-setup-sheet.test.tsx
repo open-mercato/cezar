@@ -29,6 +29,8 @@ let interactive = true
 let statuses: Record<string, string> = {}
 let session: Record<string, unknown> | null = null
 let posted: Array<Record<string, unknown>> = []
+/** How long a start takes to answer: long enough, and the sheet re-renders while it is in flight. */
+let postDelayMs = 0
 
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } })
 
@@ -64,6 +66,7 @@ beforeEach(() => {
     if (url.pathname === '/api/v1/providers/setup/sessions' && method === 'POST') {
       const body = JSON.parse(String(init?.body)) as Record<string, unknown>
       posted.push(body)
+      if (postDelayMs) await new Promise((resolve) => setTimeout(resolve, postDelayMs))
       session = {
         id: `s${posted.length}`, runId: 'agent-setup', cwd: '/home/me', shell: '/bin/sh', cols: 80, rows: 24, startedAt: 'now', exitCode: null,
         label: 'x', busy: false, topic: 't', provider: body.provider, action: body.action, command: `run ${String(body.action)}`,
@@ -81,6 +84,7 @@ afterEach(() => {
   statuses = {}
   session = null
   posted = []
+  postDelayMs = 0
   cleanup()
   fetchMock.mockReset()
   vi.unstubAllGlobals()
@@ -200,14 +204,53 @@ describe('AgentSetupFlow', () => {
   })
 })
 
-describe('DefaultAgentPicker actions', () => {
-  it('puts Install, Sign in and Update on the rows that need them, and a version chip beside', async () => {
+describe('AgentSetupFlow: an update that waits for tasks', () => {
+  afterEach(() => vi.useRealTimers())
+
+  it('starts the update exactly once when the tasks finish, then reads the new version', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    postDelayMs = 2_000
+    statuses = { claude: 'connected' }
+    const claude = (over: Partial<AgentSetupEntry>) => entry('claude', {
+      installed: true, version: '2.0.14', versionState: 'update-available', method: 'native', activeRuns: 1,
+      update: { command: "'claude' update", runnable: true, method: 'native', sudo: false },
+      ...over,
+    })
+    agents = [claude({})]
+    renderFlow('claude', 'update')
+    fireEvent.click(await screen.findByRole('button', { name: 'Update when they finish' }))
+    await waitFor(() => expect(phase()).toBe('waiting'))
+    expect(posted).toEqual([])
+
+    // The task ends; the next poll sees no task on Claude Code.
+    agents = [claude({ activeRuns: 0 })]
+    await act(async () => { await vi.advanceTimersByTimeAsync(5_100) })
+    // The start is in flight for two seconds; the sheet keeps re-rendering meanwhile.
+    await act(async () => { await vi.advanceTimersByTimeAsync(2_100) })
+    await waitFor(() => expect(phase()).toBe('running'), WAIT)
+    // Further polls and re-renders while the start is in flight must not start it again.
+    await act(async () => { await vi.advanceTimersByTimeAsync(12_000) })
+    expect(posted).toEqual([{ provider: 'claude', action: 'update' }])
+
+    // It ends: the sheet re-reads the listing before it says done, and names the version.
+    agents = [claude({ activeRuns: 0, version: '2.1.3', versionState: 'current' })]
+    session = { ...session, exitCode: 0 }
+    await act(async () => { await vi.advanceTimersByTimeAsync(1_100) })
+    await waitFor(() => expect(phase()).toBe('done'), WAIT)
+    expect(screen.getByText(/It reports 2\.1\.3 now/)).toBeTruthy()
+    expect(posted).toHaveLength(1)
+  })
+})
+
+describe('DefaultAgentPicker with the setup catalog', () => {
+  it('keeps only pickable agents in the strip and groups the rest by their next step', async () => {
     const onAgentAction = vi.fn()
     const setup = [
       entry('claude', { installed: true, version: '2.0.14', latestVersion: '2.1.3', versionState: 'update-available', update: { command: "'claude' update", runnable: true, method: 'native', sudo: false } }),
       entry('gemini', { install: { command: 'npm install -g @google/gemini-cli', runnable: false, method: 'npm', sudo: false } }),
       entry('codex', { install: { command: 'npm install -g @openai/codex', runnable: true, method: 'npm', sudo: false } }),
-      entry('copilot', { installed: true }),
+      entry('copilot', { installed: true, version: '1.0.88' }),
+      entry('pi'),
     ]
     render(
       <DefaultAgentPicker
@@ -222,6 +265,7 @@ describe('DefaultAgentPicker actions', () => {
             { provider: 'gemini', status: 'not-installed', enabled: true },
             { provider: 'codex', status: 'not-installed', enabled: true },
             { provider: 'copilot', status: 'disconnected', enabled: true },
+            { provider: 'pi', status: 'not-installed', enabled: false },
           ] },
         }}
         setup={setup}
@@ -229,15 +273,55 @@ describe('DefaultAgentPicker actions', () => {
         onPick={() => {}}
       />,
     )
+    // The strip: what can be picked, and nothing else.
+    expect(screen.getAllByRole('radio').map((radio) => radio.getAttribute('data-value'))).toEqual(['claude'])
+    const group = (id: string) => [...document.querySelectorAll(`[data-group="${id}"] [data-slot="agents-setup-row"]`)].map((row) => row.getAttribute('data-runner'))
+    expect(group('update')).toEqual(['claude'])
+    expect(group('sign-in')).toEqual(['copilot'])
+    expect(group('install')).toEqual(['codex', 'gemini'])
+    expect(group('off')).toEqual(['pi'])
     const action = (runner: string) => document.querySelector(`[data-slot="agents-runner-action"][data-runner="${runner}"]`)
     expect(action('claude')?.textContent).toBe('Update')
     expect(action('gemini')?.textContent).toBe('How to install')
     expect(action('codex')?.textContent).toBe('Install')
     expect(action('copilot')?.textContent).toBe('Sign in')
-    expect(document.querySelector('[data-slot="agents-version-chip"][data-runner="claude"]')?.textContent).toBe('2.1.3 available')
-    // The row itself stays unselectable until the agent is connected.
-    expect((screen.getByRole('radio', { name: /codex/ }) as HTMLButtonElement).disabled).toBe(true)
+    expect(action('pi')).toBeNull()
+    expect(screen.getByText('2.0.14 → 2.1.3')).toBeTruthy()
     await act(async () => fireEvent.click(action('codex')!))
     expect(onAgentAction).toHaveBeenCalledWith('codex', 'install')
+  })
+
+  it('keeps the checked agent in the strip even when it is signed out', () => {
+    render(
+      <DefaultAgentPicker
+        rows={agentPickerRows([])}
+        runner="codex"
+        accountFor={() => null}
+        providerStatus={{ isPending: false, isError: false, data: { providers: [
+          { provider: 'claude', status: 'connected', enabled: true },
+          { provider: 'codex', status: 'disconnected', enabled: true },
+        ] } }}
+        setup={[entry('codex', { installed: true })]}
+        onAgentAction={() => {}}
+        onPick={() => {}}
+      />,
+    )
+    const radios = screen.getAllByRole('radio')
+    expect(radios.map((radio) => radio.getAttribute('data-value'))).toEqual(['claude', 'codex'])
+    expect((radios[1] as HTMLButtonElement).disabled).toBe(true)
+  })
+
+  it('without the catalog, is the strip it always was', () => {
+    render(
+      <DefaultAgentPicker
+        rows={agentPickerRows([])}
+        runner="claude"
+        accountFor={() => null}
+        providerStatus={{ isPending: false, isError: false, data: { providers: [{ provider: 'claude', status: 'connected', enabled: true }] } }}
+        onPick={() => {}}
+      />,
+    )
+    expect(screen.getAllByRole('radio').length).toBeGreaterThan(1)
+    expect(document.querySelector('[data-slot="agents-setup-groups"]')).toBeNull()
   })
 })
