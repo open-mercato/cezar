@@ -517,9 +517,8 @@ export function buildClaudeArgs(
     args.push('--settings', JSON.stringify({ ...hook, ...sandbox }));
   }
   // Settings allow rules widen `--allowedTools`; only a deny rule outranks them.
-  if (spec.enforceReadOnly) {
-    args.push('--disallowedTools', CLAUDE_WRITE_TOOLS.join(','));
-  }
+  const disallowed = [...(spec.enforceReadOnly ? CLAUDE_WRITE_TOOLS : []), ...claudeReadOnlyPathRules(spec.readOnlyPaths)];
+  if (disallowed.length > 0) args.push('--disallowedTools', disallowed.join(','));
   if (spec.model) {
     args.push('--model', spec.model);
   }
@@ -621,6 +620,12 @@ export function claudeArtifactsWriteRule(spec: Pick<AgentRunSpec, 'artifactsWrit
   // Absolute POSIX paths only, and nothing a rule would read as a glob or end its specifier with.
   if (!dir.startsWith('/') || /[*?[\](),\n]/.test(dir)) return undefined;
   return `Edit(/${dir.replace(/\/+$/, '')}/**)`;
+}
+
+/** `Edit(//<path>)` deny rules — Claude applies Edit rules to every file-writing tool. A path a
+ *  rule cannot express (relative, or with a rule's own delimiters) is dropped, never widened. */
+export function claudeReadOnlyPathRules(paths: readonly string[] | undefined): string[] {
+  return (paths ?? []).filter((p) => p.startsWith('/') && !/[?[\](),\n]/.test(p)).map((p) => `Edit(/${p})`);
 }
 
 /**

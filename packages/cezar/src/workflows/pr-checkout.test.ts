@@ -1,14 +1,16 @@
 import { execFileSync } from 'node:child_process';
-import { existsSync, lstatSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, lstatSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { checkoutPr, parsePrUrl, prRemote, type Exec } from './pr-checkout.ts';
+import { checkoutPr, parsePrUrl, pickPr, prRemote, type Exec } from './pr-checkout.ts';
 
 const GIT_ID = ['-c', 'user.name=test', '-c', 'user.email=test@local'];
 const PR = { host: 'github.com', owner: 'o', repo: 'r', number: 7, url: 'https://github.com/o/r/pull/7' };
 const REF_PREFIX = 'refs/cezar/pr-checkouts/test-run';
 const NO_SLEEP = async () => {};
+/** `git config --get-regexp` output naming `origin` as the PR's repository. */
+const ORIGIN_IS_PR = { ok: true, stdout: 'remote.origin.url https://github.com/o/r.git' };
 
 describe('parsePrUrl', () => {
   it('reads the first GitHub PR URL in the task text', () => {
@@ -38,9 +40,27 @@ describe('prRemote', () => {
     ].join('\n') }]]);
     expect(await prRemote('/w', PR, exec)).toBe('upstream');
   });
+  it('matches an SSH host alias, but never the same owner/repo on another GitHub host, nor an unsafe remote name', async () => {
+    const alias = scripted([['git config --get-regexp', { ok: true, stdout: 'remote.work.url git@github-work:o/r.git' }]]);
+    expect(await prRemote('/w', PR, alias.exec)).toBe('work');
+    const otherHost = scripted([['git config --get-regexp', { ok: true, stdout: 'remote.ghe.url https://foo.ghe.com/o/r.git' }]]);
+    expect(await prRemote('/w', PR, otherHost.exec)).toBeUndefined();
+    const unsafe = scripted([['git config --get-regexp', { ok: true, stdout: 'remote.-x.url https://github.com/o/r.git' }]]);
+    expect(await prRemote('/w', PR, unsafe.exec)).toBeUndefined();
+  });
   it("picks none when no remote is the PR's repository", async () => {
     const { exec } = scripted([['git config --get-regexp', { ok: true, stdout: 'remote.origin.url git@github.com:me/r.git' }]]);
     expect(await prRemote('/w', PR, exec)).toBeUndefined();
+  });
+});
+
+describe('pickPr', () => {
+  it("takes the first PR URL of a repository this checkout has a remote for, else the first", async () => {
+    const { exec } = scripted([['git config --get-regexp', ORIGIN_IS_PR]]);
+    const text = 'see https://github.com/evil/x/pull/1 first, then review https://github.com/o/r/pull/7';
+    expect(await pickPr('/w', text, exec)).toMatchObject({ owner: 'o', repo: 'r', number: 7 });
+    expect(await pickPr('/w', 'only https://github.com/evil/x/pull/1', exec)).toMatchObject({ owner: 'evil', number: 1 });
+    expect(await pickPr('/w', 'no url', exec)).toBeUndefined();
   });
 });
 
@@ -59,9 +79,90 @@ describe('checkoutPr, scripted', () => {
     expect(JSON.parse(readFileSync(res.metaPath, 'utf8'))).toMatchObject({ number: 7, checkedOut: false, headVerified: false });
   });
 
+  it("fetches nothing from a repository this checkout has no remote for, and still saves gh's diff", async () => {
+    const { exec, calls } = scripted([
+      ['git config', { ok: true, stdout: 'remote.origin.url git@github.com:me/fork.git' }],
+      ['gh pr view', { ok: true, stdout: '{}' }],
+      ['gh pr diff', { ok: true, stdout: 'GH DIFF' }],
+    ]);
+    const res = await checkoutPr({ cwd: '/w', dir: join(dir, 'pr'), pr: PR, refPrefix: REF_PREFIX, exec });
+    expect(calls.filter((c) => c.startsWith('git fetch'))).toEqual([]);
+    expect(res.checkedOut).toBe(false);
+    expect(res.problems).toEqual(['no remote of this repository is o/r on github.com; the PR was not fetched']);
+    expect(readFileSync(res.diffPath, 'utf8')).toBe('GH DIFF');
+  });
+
+  it('never throws: an unwritable PR folder is a failed checkout', async () => {
+    writeFileSync(join(dir, 'file'), 'x');
+    const { exec } = scripted([['git config', ORIGIN_IS_PR]]);
+    const res = await checkoutPr({ cwd: '/w', dir: join(dir, 'file', 'pr'), pr: PR, refPrefix: REF_PREFIX, exec });
+    expect(res).toMatchObject({ checkedOut: false, head: '', tree: '', diffPath: '', metaPath: '' });
+    expect(res.problems[0]).toMatch(/^the PR checkout failed — /);
+  });
+
+  it('never throws: an unwritable artifacts folder is a failed checkout, with no tree left behind', async () => {
+    writeFileSync(join(dir, 'file'), 'x');
+    const { exec } = scripted([
+      ['git config', ORIGIN_IS_PR],
+      ['gh pr view', { ok: true, stdout: JSON.stringify({ headRefOid: 'abc' }) }],
+      ['gh pr diff', { ok: true, stdout: 'D' }],
+      ['git fetch', { ok: true }],
+      [`git rev-parse --verify ${REF_PREFIX}/head^{commit}`, { ok: true, stdout: 'abc\n' }],
+      ['git -c core.symlinks=false read-tree', { ok: true }],
+      ['git -c core.symlinks=false checkout-index', { ok: true }],
+      ['git update-ref -d', { ok: true }],
+    ]);
+    const pr = join(dir, 'pr');
+    const res = await checkoutPr({ cwd: '/w', dir: pr, copyTo: join(dir, 'file', 'artifacts'), pr: PR, refPrefix: REF_PREFIX, exec });
+    expect(res.checkedOut).toBe(false);
+    expect(res.problems[0]).toMatch(/^the PR checkout failed — /);
+    expect(existsSync(join(pr, 'tree'))).toBe(false);
+  });
+
+  it('leaves no partial tree and no throwaway index when the export fails', async () => {
+    const pr = join(dir, 'pr');
+    const exec: Exec = async (file, args) => {
+      const line = [file, ...args].join(' ');
+      if (line.startsWith('git config')) return { ...ORIGIN_IS_PR, stderr: '' };
+      if (line.startsWith('gh pr view')) return { ok: true, stdout: JSON.stringify({ headRefOid: 'abc' }), stderr: '' };
+      if (line.startsWith('gh pr diff')) return { ok: true, stdout: 'D', stderr: '' };
+      if (line.startsWith('git fetch') || line.startsWith('git update-ref') || line.includes('read-tree')) {
+        if (line.includes('read-tree')) writeFileSync(join(pr, 'index.tmp'), 'idx');
+        return { ok: true, stdout: '', stderr: '' };
+      }
+      if (line.startsWith('git rev-parse --verify')) return { ok: true, stdout: 'abc\n', stderr: '' };
+      if (line.includes('checkout-index')) {
+        // Half the files written, then the disk filled up.
+        execFileSync('mkdir', ['-p', join(pr, 'tree', 'half')]);
+        return { ok: false, stdout: '', stderr: 'error: unable to write file: No space left on device' };
+      }
+      return { ok: false, stdout: '', stderr: `unscripted: ${line}` };
+    };
+    const res = await checkoutPr({ cwd: '/w', dir: pr, pr: PR, refPrefix: REF_PREFIX, exec });
+    expect(res.checkedOut).toBe(false);
+    expect(res.problems).toEqual(['could not export abc — error: unable to write file: No space left on device']);
+    expect(existsSync(join(pr, 'tree'))).toBe(false);
+    expect(existsSync(join(pr, 'index.tmp'))).toBe(false);
+  });
+
+  it('refuses an unsafe base branch name instead of fetching it', async () => {
+    const { exec, calls } = scripted([
+      ['git config', ORIGIN_IS_PR],
+      ['gh pr view', { ok: true, stdout: JSON.stringify({ baseRefName: '--upload-pack=touch /tmp/x' }) }],
+      ['gh pr diff', { ok: false, stderr: 'HTTP 502' }],
+      ['git fetch', { ok: true }],
+      [`git rev-parse --verify ${REF_PREFIX}/head^{commit}`, { ok: true, stdout: 'abc\n' }],
+      ['git -c core.symlinks=false', { ok: true }],
+      ['git update-ref -d', { ok: true }],
+    ]);
+    const res = await checkoutPr({ cwd: '/w', dir: join(dir, 'pr'), pr: PR, refPrefix: REF_PREFIX, exec });
+    expect(calls.filter((c) => c.includes('upload-pack'))).toEqual([]);
+    expect(res.problems).toContain('the base branch name "--upload-pack=touch /tmp/x" is not a safe git ref; no diff was made');
+  });
+
   it('records an unreadable fetched ref, cleans it up, and stops', async () => {
     const { exec, calls } = scripted([
-      ['git config', { ok: true, stdout: '' }],
+      ['git config', ORIGIN_IS_PR],
       ['gh pr view', { ok: true, stdout: '{}' }],
       ['gh pr diff', { ok: true, stdout: 'D' }],
       ['git fetch', { ok: true }],
@@ -80,7 +181,7 @@ describe('checkoutPr, scripted', () => {
     let headReads = 0;
     const exec: Exec = async (file, args) => {
       const line = [file, ...args].join(' ');
-      if (line.startsWith('git config')) return { ok: true, stdout: '', stderr: '' };
+      if (line.startsWith('git config')) return { ...ORIGIN_IS_PR, stderr: '' };
       if (line.startsWith('gh pr view')) return { ok: true, stdout: JSON.stringify({ number: 7, headRefOid: 'newsha' }), stderr: '' };
       if (line.startsWith('gh pr diff')) return { ok: true, stdout: 'DIFF', stderr: '' };
       if (line.startsWith('git fetch')) return { ok: true, stdout: '', stderr: '' };
@@ -108,7 +209,7 @@ describe('checkoutPr, scripted', () => {
   it('gives up after one re-fetch when refs/pull/N/head still disagrees with headRefOid', async () => {
     const waits: number[] = [];
     const { exec, calls } = scripted([
-      ['git config', { ok: true, stdout: '' }],
+      ['git config', ORIGIN_IS_PR],
       ['gh pr view', { ok: true, stdout: JSON.stringify({ number: 7, headRefOid: 'newsha' }) }],
       ['gh pr diff', { ok: true, stdout: 'DIFF' }],
       ['git fetch', { ok: true }],
@@ -128,39 +229,39 @@ describe('checkoutPr, scripted', () => {
 
   it('names an Enterprise repo with its host, merges metadata, and falls back to the local baseRefName', async () => {
     const { exec, calls } = scripted([
-      ['git config', { ok: true, stdout: '' }],
+      ['git config', { ok: true, stdout: 'remote.ghe.url git@ghe.example.com:o/r.git' }],
       ['gh pr view', { ok: true, stdout: JSON.stringify({ title: 'Fix it', baseRefName: 'develop', number: 3 }) }],
       ['gh pr diff', { ok: false, stderr: 'warning\nHTTP 502: bad gateway' }],
-      [`git fetch --no-tags --quiet --no-write-fetch-head https://ghe.example.com/o/r.git +refs/heads/develop:${REF_PREFIX}/base`, { ok: false, stderr: 'fatal: offline' }],
+      [`git fetch --no-tags --quiet --no-write-fetch-head ghe +refs/heads/develop:${REF_PREFIX}/base`, { ok: false, stderr: 'fatal: offline' }],
       ['git fetch', { ok: true }],
       [`git rev-parse --verify ${REF_PREFIX}/head^{commit}`, { ok: true, stdout: 'abc123\n' }],
       ['git -c core.symlinks=false read-tree abc123', { ok: true }],
       ['git -c core.symlinks=false checkout-index', { ok: true }],
-      ['git rev-parse --verify develop^{commit}', { ok: true, stdout: 'd1\n' }],
-      ['git merge-base develop abc123', { ok: true, stdout: 'base1\n' }],
+      ['git rev-parse --verify ghe/develop^{commit}', { ok: true, stdout: 'd1\n' }],
+      ['git merge-base ghe/develop abc123', { ok: true, stdout: 'base1\n' }],
       ['git diff --no-color --no-ext-diff base1 abc123', { ok: true, stdout: 'DIFF' }],
       ['git update-ref -d', { ok: true }],
     ]);
     const res = await checkoutPr({ cwd: '/w', dir: join(dir, 'pr'), pr: GHE, baseBranch: 'main', refPrefix: REF_PREFIX, exec });
-    expect(calls).toContain(`git fetch --no-tags --quiet --no-write-fetch-head https://ghe.example.com/o/r.git +refs/pull/3/head:${REF_PREFIX}/head`);
+    expect(calls).toContain(`git fetch --no-tags --quiet --no-write-fetch-head ghe +refs/pull/3/head:${REF_PREFIX}/head`);
     expect(calls).toContain(`git update-ref -d ${REF_PREFIX}/head`);
     expect(calls).toContain(`git update-ref -d ${REF_PREFIX}/base`);
     expect(calls.find((c) => c.startsWith('gh pr view'))).toContain('--repo ghe.example.com/o/r');
     expect(calls.find((c) => c.startsWith('gh pr diff'))).toContain('--repo ghe.example.com/o/r');
     expect(res.problems).toEqual([
       'gh pr diff failed — HTTP 502: bad gateway',
-      'the diff is against the local develop, which may be behind the PR\'s base',
+      'the diff is against the local ghe/develop, which may be behind the PR\'s base',
     ]);
     expect(readFileSync(res.diffPath, 'utf8')).toBe('DIFF');
     // gh named no head, so nothing from GitHub confirms the fetched one.
     expect(JSON.parse(readFileSync(res.metaPath, 'utf8'))).toMatchObject({
-      title: 'Fix it', baseRefName: 'develop', headRefOid: 'abc123', headVerified: false, diffBase: 'local develop (may be stale)', checkedOut: true,
+      title: 'Fix it', baseRefName: 'develop', headRefOid: 'abc123', headVerified: false, diffBase: 'local ghe/develop (may be stale)', checkedOut: true,
     });
   });
 
   it('reports a failed gh pr view and keeps what it knows', async () => {
     const { exec } = scripted([
-      ['git config', { ok: true, stdout: '' }],
+      ['git config', ORIGIN_IS_PR],
       ['gh pr view', { ok: false, stderr: 'GraphQL: Could not resolve to a PullRequest' }],
       ['gh pr diff', { ok: true, stdout: 'GH DIFF' }],
       ['git fetch', { ok: false, stderr: 'fatal: could not read from remote' }],
@@ -169,7 +270,7 @@ describe('checkoutPr, scripted', () => {
     const res = await checkoutPr({ cwd: '/w', dir: join(dir, 'pr'), pr: { ...PR, number: 9 }, refPrefix: REF_PREFIX, exec });
     expect(res.problems).toEqual([
       'gh pr view failed — GraphQL: Could not resolve to a PullRequest',
-      'git fetch https://github.com/o/r.git pull/9/head failed — fatal: could not read from remote',
+      'git fetch origin pull/9/head failed — fatal: could not read from remote',
     ]);
     expect(readFileSync(res.diffPath, 'utf8')).toBe('GH DIFF');
     expect(JSON.parse(readFileSync(res.metaPath, 'utf8'))).toEqual({ number: 9, url: PR.url, repository: 'o/r', headVerified: false, diffBase: 'github', checkedOut: false });
@@ -221,8 +322,9 @@ describe('checkoutPr', { timeout: 30_000 }, () => {
     git(work, 'push', '-q', 'origin', 'HEAD:refs/pull/7/head');
     git(work, 'checkout', '-q', 'main'); git(work, 'branch', '-q', '-D', 'feature');
     git(work, 'checkout', '-q', '-b', 'cez/task');
-    // `origin` is a local path, so no remote names o/r: the checkout fetches the PR's URL, mapped here.
+    // `origin` is a local path, so `upstream` is the remote that names o/r, mapped onto it here.
     git(work, 'config', `url.${origin}.insteadOf`, 'https://github.com/o/r.git');
+    git(work, 'remote', 'add', 'upstream', 'https://github.com/o/r.git');
   });
   afterEach(() => rmSync(root, { recursive: true, force: true }));
 
@@ -261,6 +363,31 @@ describe('checkoutPr', { timeout: 30_000 }, () => {
     expect(res.diffPath).toBe(join(dir, 'pr-7.diff'));
   });
 
+  it('writes the diff and metadata read-only, beside the tree and in the artifacts, and a re-run replaces them', async () => {
+    const first = await checkoutPr({ cwd: work, dir, copyTo: artifacts, pr: PR, baseBranch: 'main', refPrefix: REF_PREFIX, exec: withGh(prSha), sleep: NO_SLEEP });
+    for (const file of [first.diffPath, first.metaPath, join(artifacts, 'pr-7.diff'), join(artifacts, 'pr-7.json')]) {
+      expect(statSync(file).mode & 0o222).toBe(0);
+    }
+    const newer = pushPr({ 'a.txt': 'one\nnewer\n' });
+    const again = await checkoutPr({ cwd: work, dir, copyTo: artifacts, pr: PR, baseBranch: 'main', refPrefix: REF_PREFIX, exec: withGh(newer), sleep: NO_SLEEP });
+    expect(again.problems).toEqual([]);
+    expect(JSON.parse(readFileSync(join(artifacts, 'pr-7.json'), 'utf8'))).toMatchObject({ headRefOid: newer });
+  });
+
+  // GIT_ATTR_SOURCE needs git 2.42; older git exports as before.
+  const gitMinor = (() => { const m = /(\d+)\.(\d+)/.exec(execFileSync('git', ['--version'], { encoding: 'utf8' })); return m ? Number(m[1]) * 100 + Number(m[2]) : 0; })();
+  it.skipIf(gitMinor < 242)("never runs a filter driver the PR's .gitattributes names", async () => {
+    const marker = join(root, 'filter-ran');
+    git(work, 'config', 'filter.evil.smudge', `sh -c 'touch ${marker}; cat'`);
+    git(work, 'config', 'filter.evil.clean', 'cat');
+    const head = pushPr({ '.gitattributes': '* filter=evil\n', 'a.txt': 'one\nfiltered?\n' });
+    rmSync(marker, { force: true });
+    const res = await checkoutPr({ cwd: work, dir, pr: PR, baseBranch: 'main', refPrefix: REF_PREFIX, exec: withGh(head), sleep: NO_SLEEP });
+    expect(res.checkedOut).toBe(true);
+    expect(readFileSync(join(res.tree, 'a.txt'), 'utf8')).toBe('one\nfiltered?\n');
+    expect(existsSync(marker)).toBe(false);
+  });
+
   it('re-exports a newer head after a push to the PR, leaving nothing of the old one', async () => {
     await checkoutPr({ cwd: work, dir, pr: PR, baseBranch: 'main', refPrefix: REF_PREFIX, exec: withGh(prSha), sleep: NO_SLEEP });
     writeFileSync(join(dir, 'tree', 'stale.txt'), 'left over\n');
@@ -272,7 +399,7 @@ describe('checkoutPr', { timeout: 30_000 }, () => {
     expect(existsSync(join(res.tree, 'stale.txt'))).toBe(false);
   });
 
-  it("fetches the PR's own repository URL, never another remote's pull ref", async () => {
+  it("fetches from the remote that is the PR's repository, never another remote's pull ref", async () => {
     // `other` has a refs/pull/7/head too — of a different repository. It must not be used.
     const other = join(root, 'other.git');
     git(root, 'init', '-q', '--bare', '-b', 'main', other);
@@ -295,7 +422,7 @@ describe('checkoutPr', { timeout: 30_000 }, () => {
   it('exports nothing when the PR ref cannot be fetched', async () => {
     const res = await checkoutPr({ cwd: work, dir, pr: { ...PR, number: 8 }, baseBranch: 'main', refPrefix: REF_PREFIX, exec: withGh(), sleep: NO_SLEEP });
     expect(res.checkedOut).toBe(false);
-    expect(res.problems.join('\n')).toContain('git fetch https://github.com/o/r.git pull/8/head failed');
+    expect(res.problems.join('\n')).toContain('git fetch upstream pull/8/head failed');
     expect(JSON.parse(readFileSync(res.metaPath, 'utf8'))).toMatchObject({ number: 8, checkedOut: false });
     expect(res.diffPath).toBe('');
   });
@@ -329,8 +456,12 @@ describe('checkoutPr', { timeout: 30_000 }, () => {
     expect(diff).not.toContain('upstream.txt');
     expect(readFileSync(fetchHeadPath, 'utf8')).toBe(`${baseSha}\t\tbranch 'main' of origin\n`);
     expect(git(work, 'for-each-ref', 'refs/cezar/pr-checkouts/')).toBe('');
-    expect(JSON.parse(readFileSync(res.metaPath, 'utf8'))).toMatchObject({ headVerified: false, diffBase: 'main fetched from https://github.com/o/r.git' });
-    expect(res.problems).toEqual(['gh pr view failed — gh: offline', 'gh pr diff failed — gh: offline']);
+    expect(JSON.parse(readFileSync(res.metaPath, 'utf8'))).toMatchObject({ headVerified: false, diffBase: "main (the task's base: GitHub did not name the PR's) fetched from upstream" });
+    expect(res.problems).toEqual([
+      'gh pr view failed — gh: offline',
+      'gh pr diff failed — gh: offline',
+      "the diff is against the task's base main, which may not be the PR's base",
+    ]);
   });
 
   it('says so when it can only diff against a local base', async () => {
@@ -338,6 +469,6 @@ describe('checkoutPr', { timeout: 30_000 }, () => {
     const res = await checkoutPr({ cwd: work, dir, pr: PR, baseBranch: 'trunk', refPrefix: REF_PREFIX, exec: withGh(), sleep: NO_SLEEP });
     expect(readFileSync(res.diffPath, 'utf8')).toContain('+two from the PR');
     expect(res.problems).toContain('the diff is against the local trunk, which may be behind the PR\'s base');
-    expect(JSON.parse(readFileSync(res.metaPath, 'utf8'))).toMatchObject({ diffBase: 'local trunk (may be stale)' });
+    expect(JSON.parse(readFileSync(res.metaPath, 'utf8'))).toMatchObject({ diffBase: "local trunk (the task's base: GitHub did not name the PR's) (may be stale)" });
   });
 });

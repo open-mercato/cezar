@@ -105,13 +105,13 @@ import {
 import { commentOnIssue, commentOnPr, fetchPrHeadChecks, fetchPrWatchFingerprint, findBranchPr, resolvePrTarget, updatePr } from '../server/forge/github.ts';
 import { createDraftPr } from '../server/pr.ts';
 import { baseDivergence, createOrSwitchBranch } from '../server/git-changes.ts';
-import { isReadOnlyWorkflow, readOnlyWorkflowRefusal } from './capabilities.ts';
+import { grantsFileWrites, isReadOnlyWorkflow, readOnlyWorkflowRefusal } from './capabilities.ts';
 import { getHeadCommit, getRepoInfo } from '../server/git.ts';
 import { loadWorkflows, newerCatalogWorkflow } from './load.ts';
 import type { QueuedMessage, RunRecord, RunStore, StepState } from '../runs/store.ts';
 import { switchedWorkflowAgent, taskAgentSelection, workflowAgentSwitch } from '../runs/agent-selection.ts';
 import { artifactsDir, authParkForAccount, isIdleParked, prCheckoutDir } from '../runs/store.ts';
-import { checkoutPr, parsePrUrl } from './pr-checkout.ts';
+import { checkoutPr, pickPr } from './pr-checkout.ts';
 import { artifactsPromptPart, scanArtifacts, watchArtifacts } from '../runs/artifacts.ts';
 import { backstopRender } from '../impact/publish.ts';
 // Task dispatch (spec 2026-09-10-dispatch). Every import below is inert unless the feature is
@@ -795,24 +795,30 @@ interface ActiveRun {
 }
 
 /**
- * What a workflow's own shape changes about an agent launch. A read-only workflow (review-pr)
- * never runs with Claude's bypassPermissions, and its Claude steps may write the run's own
- * artifacts directory; an Ask task gets neither widening. A workflow that checks a PR out lets
- * every step read the PR's folder (`prCheckoutDir`) — read, never run in: the agents' working
+ * What a workflow's own shape changes about an agent launch. A read-only workflow (review-pr) —
+ * one that can neither publish nor grant a file-writing tool — never runs with Claude's
+ * bypassPermissions, and its Claude steps may write the run's own artifacts directory; an Ask task
+ * gets neither widening. A workflow that checks a PR out lets every step read the PR's folder
+ * (`prCheckoutDir`) once it exists — read, never run in, and never written: the agents' working
  * directory stays the task's own tree.
  */
 export function workflowLaunchSpec(
   def: WorkflowDef | undefined,
   state: Pick<ActiveRun, 'readOnly'>,
   dirs: { artifacts: string; prCheckout: string },
-): { readOnlyWorkflow: boolean; artifactsWriteDir?: string; prDirs: string[] } {
-  const readOnlyWorkflow = !!def && isReadOnlyWorkflow(def);
+  exists: (path: string) => boolean = existsSync,
+): { readOnlyWorkflow: boolean; artifactsWriteDir?: string; prDirs: string[]; readOnlyPaths: string[] } {
+  const readOnlyWorkflow = !!def && isReadOnlyWorkflow(def) && !grantsFileWrites(def);
   const checksOutPr = !!def?.graph?.nodes.some((n) => n.type === 'github.pr-checkout');
   return {
     readOnlyWorkflow,
     ...(readOnlyWorkflow && !state.readOnly ? { artifactsWriteDir: dirs.artifacts } : {}),
-    // The folder itself, never its `tree/`: Claude reads `.claude/skills` from an added folder's root.
-    prDirs: checksOutPr ? [dirs.prCheckout] : [],
+    // The folder itself, never its `tree/`; and only once made — `--add-dir` of a missing path fails.
+    prDirs: checksOutPr && exists(dirs.prCheckout) ? [dirs.prCheckout] : [],
+    // What the judge and the user read must stay what the checkout wrote.
+    readOnlyPaths: checksOutPr
+      ? [`${dirs.prCheckout}/**`, `${dirs.artifacts}/pr-*.diff`, `${dirs.artifacts}/pr-*.json`]
+      : [],
   };
 }
 
@@ -6956,6 +6962,7 @@ export class RunManager {
           ...(state.bypassPermissions && !continuationTools.enforceReadOnly && !continueLaunch.readOnlyWorkflow ? { bypassPermissions: true } : {}),
           ...(continueLaunch.artifactsWriteDir ? { artifactsWriteDir: continueLaunch.artifactsWriteDir } : {}),
           ...(continueLaunch.readOnlyWorkflow ? { strictPermissions: true } : {}),
+          ...(continueLaunch.readOnlyPaths.length ? { readOnlyPaths: continueLaunch.readOnlyPaths } : {}),
           additionalDirectories: [
             ...agentDirectories(
               join(this.dataDir, 'runs'),
@@ -8446,7 +8453,7 @@ export class RunManager {
       }
       case 'github.pr-checkout': {
         const run = record();
-        const pr = parsePrUrl(task);
+        const pr = await pickPr(state.cwd, task);
         // Rendered into prompts: a placeholder reads better than an empty path.
         const NONE = '(none)';
         if (!run || !pr) {
@@ -8469,7 +8476,7 @@ export class RunManager {
           head: res.head || NONE,
           tree: res.tree || NONE,
           diff: res.diffPath || NONE,
-          meta: res.metaPath,
+          meta: res.metaPath || NONE,
           checkedOut: res.checkedOut ? 'yes' : 'no',
         });
         for (const problem of res.problems) note(problem, 'danger');
@@ -9579,6 +9586,7 @@ export class RunManager {
           ...(state.bypassPermissions && !stepTools.enforceReadOnly && !stepLaunch.readOnlyWorkflow ? { bypassPermissions: true } : {}),
           ...(stepLaunch.artifactsWriteDir ? { artifactsWriteDir: stepLaunch.artifactsWriteDir } : {}),
           ...(stepLaunch.readOnlyWorkflow ? { strictPermissions: true } : {}),
+          ...(stepLaunch.readOnlyPaths.length ? { readOnlyPaths: stepLaunch.readOnlyPaths } : {}),
           // The handoff file lives outside the worktree — grant access.
           additionalDirectories: [
             ...agentDirectories(

@@ -521,20 +521,31 @@ whose counter never resets within a run, so every run is finite.
   `paths-changed` (`glob`: `*` within a folder, `**` across), `output` (`ref:
   <node>.<field>`, `op`, `value` — numeric when both sides are numbers) and `branch`
   (`equals` / `matches` on the base branch).
-- **`github.pr-checkout`** fetches `pull/<n>/head` for the PR URL in the task — from the remote
-  that is the PR's repository, else from that repository's URL, into a private ref deleted
-  afterwards (never `FETCH_HEAD`) — and, when GitHub reports the PR's head, only if the two agree
-  (re-fetching once after a short wait if `refs/pull/<n>/head` lags a push). It exports that head
-  under `~/.cezar/pr-checkouts/<repo>/<run>/tree` (symlinks as plain files), outside every working
-  directory — in-place runs included — so the task's branch, files, Changes and merge/push/PR
-  actions stay the base's. Beside the tree it saves `pr-<n>.json` and `pr-<n>.diff` (`gh pr diff`,
-  else a diff against the PR's base fetched fresh; `headVerified` and `diffBase` say how much
-  GitHub confirmed); the run's artifacts get copies. Every step of the workflow can read that
-  folder (added at the folder root, never `tree/`), and none runs in it, so the PR's own
-  `.claude`/`.pi` settings, hooks, skills, `CLAUDE.md` and `.mcp.json` never load. The exported
-  `tree/` is reclaimed on the idle-worktree schedule (default 7 days; re-exported on re-run), and
-  the whole folder is deleted with the task. It posts nothing, leaves by `failed` when nothing was
-  exported, and under `CEZ_DRY_RUN=1` fetches nothing.
+- **`github.pr-checkout`** takes the first PR URL in the task whose repository this checkout has a
+  remote for (same owner/repo on the PR's host, or on an SSH host alias such as
+  `git@github-work:o/r`), and fetches its `pull/<n>/head` from that remote into a private ref
+  deleted afterwards (never `FETCH_HEAD`); with no such remote it fetches nothing. When GitHub
+  reports the PR's head, the two must agree (one re-fetch after a short wait if
+  `refs/pull/<n>/head` lags a push). It exports that head under
+  `~/.cezar/pr-checkouts/<repo>/<run>/tree` (symlinks as plain files, no LFS download, and on git
+  2.42+ none of the PR's `.gitattributes` filter drivers), outside every working directory —
+  in-place runs included — so the task's branch, files, Changes and merge/push/PR actions stay the
+  base's. Beside the tree it saves read-only `pr-<n>.json` and `pr-<n>.diff` (`gh pr diff`, else a
+  diff against the PR's base fetched fresh; `headVerified` and `diffBase` say how much GitHub
+  confirmed, and `diffBase` names the task's base when GitHub did not name the PR's); the run's
+  artifacts get read-only copies. Every Claude step can read that folder once it exists (added at
+  the folder root, never `tree/`) and may write none of it, nor the artifacts copies (deny rules,
+  in every permission mode). No step runs in it, so the PR's `.claude`/`.pi` settings, hooks and
+  `.mcp.json` never load; a check against Claude Code 2.1.328 also found that a `CLAUDE.md` or
+  `.claude/skills` nested in `tree/` did not load on reading files there, and review steps have no
+  Skill tool. The exported `tree/` is freed on the idle-worktree schedule (default 7 days), on
+  archive and on a manual reclaim (`pr-<n>.json` then says `checkedOut: false`; a re-run exports
+  it again), and the whole folder is deleted with the task. It never throws: a disk error, no
+  remote, an old git without `--no-write-fetch-head` (2.29+) or a private repo the remote cannot
+  reach leaves by `failed`, and the reviewers fall back to `gh pr view`/`gh pr diff`. It posts
+  nothing, and under `CEZ_DRY_RUN=1` fetches nothing.
+  Your own Claude settings still apply to these steps: a broad allow rule there (say
+  `Bash(npm run:*)`) widens what a reviewer may run, now with the PR's code on disk.
 - **`git.sync-base`** merges the freshest base into the task branch. On a conflict it
   leaves the merge in progress and leaves by `conflict` — wire that to an agent to
   resolve it (`{{nodes.<id>.conflicts}}` lists the files).

@@ -4,7 +4,7 @@
 // to reclaim (directory only — the `cez/<id8>` branch is kept, so the work stays
 // recoverable) and the thin I/O enforcer that performs the reclaim. The selector
 // is pure and unit-testable; the enforcer never throws (helper discipline).
-import { existsSync, rmSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { branchFor, createWorktree, localBranchExists, removeWorktree, worktreeHasUnpreservedWork } from '../git-worktree.ts';
 import { prunePrHeadRefs } from '../automations/pr-head.ts';
@@ -269,6 +269,7 @@ export async function reclaimSelectedWorktrees(
   opts: IdleReclaimOptions,
 ): Promise<string[]> {
   if (ids.length === 0) return [];
+  freePrCheckoutsOf(store, ids, opts.isLive);
   try {
     const wanted = new Set(ids);
     const inUse = await worktreesInUse(store.listRuns().filter((run) => wanted.has(run.id)), opts.holders);
@@ -341,11 +342,44 @@ async function sweepPrHeadRefs(repoRoot: string, store: RetentionStore): Promise
   await prunePrHeadRefs(repoRoot, needed).catch(() => undefined);
 }
 
+/** Whether a run's PR review export may go now: idle, not pinned, not about to resume, not live. */
+function prCheckoutReclaimable(run: RunRecord, isLive: (runId: string) => boolean): boolean {
+  return IDLE_STATUSES.has(run.status) && !run.pinned && !run.autoResumeAt && !run.monitoringWakeAt
+    && !isLive(run.id) && !claimedForResume(run.id);
+}
+
+/**
+ * Remove a run's exported PR `tree/` and say so in its `pr-N.json` (`checkedOut: false`), so a
+ * Continue reads no path to a deleted tree. Its diff stays; a re-run exports the tree again.
+ * Never throws; true when a tree was removed.
+ */
+export function freePrCheckoutTree(store: RetentionStore, runId: string, now = () => new Date().toISOString()): boolean {
+  if (!store.prCheckoutDir) return false;
+  const dir = store.prCheckoutDir(runId);
+  const tree = join(dir, 'tree');
+  try {
+    if (!existsSync(tree)) return false;
+    rmSync(tree, { recursive: true, force: true });
+    for (const name of readdirSync(dir)) {
+      if (!/^pr-\d+\.json$/.test(name)) continue;
+      try {
+        const meta = JSON.parse(readFileSync(join(dir, name), 'utf8')) as Record<string, unknown>;
+        delete meta.tree;
+        // Read-only on disk (`pr-checkout.ts`): replaced, never written over.
+        rmSync(join(dir, name), { force: true });
+        writeFileSync(join(dir, name), `${JSON.stringify({ ...meta, checkedOut: false, treeReclaimedAt: now() }, null, 2)}\n`, { mode: 0o444 });
+      } catch { /* an unreadable metadata file stays as it was */ }
+    }
+    return true;
+  } catch {
+    return false; // retried on the next pass
+  }
+}
+
 /**
  * A PR review's exported tree (`github.pr-checkout`, a full copy of the repository) on the idle
  * worktree schedule: removed once its run has been idle `days` (0 = off). In-place runs too, which
- * have no worktree. Its diff and metadata stay; a re-run exports the tree again. Never throws;
- * returns the run ids whose tree was removed.
+ * have no worktree. Never throws; returns the run ids whose tree was removed.
  */
 export function reclaimIdlePrCheckouts(
   store: RetentionStore,
@@ -355,18 +389,20 @@ export function reclaimIdlePrCheckouts(
   if (!store.prCheckoutDir || !Number.isFinite(days) || days <= 0) return [];
   const cutoff = (opts.nowMs ?? Date.now)() - days * 86_400_000;
   const activity = opts.activity ?? ((run: RunRecord) => lastActivityAt(run));
-  const removed: string[] = [];
-  for (const run of store.listRuns()) {
-    if (!IDLE_STATUSES.has(run.status) || run.pinned || run.autoResumeAt || run.monitoringWakeAt || opts.isLive(run.id) || claimedForResume(run.id)) continue;
-    if (!(Date.parse(activity(run)) < cutoff)) continue;
-    const tree = join(store.prCheckoutDir(run.id), 'tree');
-    try {
-      if (!existsSync(tree)) continue;
-      rmSync(tree, { recursive: true, force: true });
-      removed.push(run.id);
-    } catch { /* retried on the next pass */ }
-  }
-  return removed;
+  return store.listRuns()
+    .filter((run) => prCheckoutReclaimable(run, opts.isLive) && Date.parse(activity(run)) < cutoff)
+    .filter((run) => freePrCheckoutTree(store, run.id))
+    .map((run) => run.id);
+}
+
+/** Archive and a manual reclaim free these runs' PR exports whatever their age. Never throws. */
+export function freePrCheckoutsOf(store: RetentionStore, ids: readonly string[], isLive: (runId: string) => boolean): string[] {
+  if (!store.prCheckoutDir || ids.length === 0) return [];
+  const wanted = new Set(ids);
+  return store.listRuns()
+    .filter((run) => wanted.has(run.id) && prCheckoutReclaimable(run, isLive))
+    .filter((run) => freePrCheckoutTree(store, run.id))
+    .map((run) => run.id);
 }
 
 /** A store's last-activity function: record stamps plus the event-log mtime when it has one. */
@@ -391,6 +427,8 @@ export async function enforceWorktreeRetention(
   reclaimIdlePrCheckouts(store, days, { activity: storeActivity(store), isLive: opts.isLive });
   // An archived task's tree goes whatever its age (archive frees disk); this retries one that was
   // still in use when it was archived.
+  // In-place archived runs have no worktree, but may have a PR export.
+  freePrCheckoutsOf(store, store.listRuns().filter((run) => run.archived).map((run) => run.id), opts.isLive);
   const archived = store.listRuns().filter((run) => run.archived && isIdleReclaimable(run) && !opts.isLive(run.id));
   const byArchive = await reclaimSelectedWorktrees(repoRoot, store, archived.map((run) => run.id), opts);
   return [...byCount, ...byAge, ...byArchive];

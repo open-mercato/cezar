@@ -709,11 +709,19 @@ unknown ui-state keys. It does not touch per-repo files.
   read the PR there and run in the task's untouched tree. A saved copy of `review-pr` keeps the
   graph it was saved with.
 - **Wider grant, read-only workflows only**: a Claude agent step (and its Continue) in any workflow
-  whose capabilities are all false may now write its own run's artifacts directory
+  whose capabilities are all false and that grants no file-writing tool (Edit, Write, MultiEdit,
+  NotebookEdit, unrestricted Bash) may now write its own run's artifacts directory
   (`Edit(//<artifacts>/**)`). Ask tasks and every other workflow are unchanged.
-- **Narrower permission**: a read-only workflow's Claude steps always run in `dontAsk` — never the
+- **Narrower permission**: such a workflow's Claude steps always run in `dontAsk` — never the
   project's `bypassPermissions` (as Ask tasks already did not) and never `acceptEdits` under
-  `CEZ_APPROVAL_GATE=1`, so an agent cannot edit the read-only PR folder.
+  `CEZ_APPROVAL_GATE=1`. A workflow that can only Read/Edit/Write keeps both.
+- **New deny rules**: every Claude step of a workflow with a `github.pr-checkout` node gets
+  `--disallowedTools` `Edit(//<pr folder>/**)`, `Edit(//<artifacts>/pr-*.diff)` and
+  `Edit(//<artifacts>/pr-*.json)`, and those files are written read-only (`0444`). A user's own
+  file named `pr-<n>.diff` in such a run's artifacts is no longer writable by its agents.
+- **Narrower PR choice**: the checkout uses the first PR URL of a repository the checkout has a
+  remote for, and fetches nothing for a repository it has none for (it used to fetch that
+  repository's URL). Reviewers then read the PR through `gh`.
 
 ## Workflows — a human gate before every review-council PR, 2026-11-12
 

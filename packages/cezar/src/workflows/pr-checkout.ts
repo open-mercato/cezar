@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { copyFileSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, copyFileSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { ghEnv } from '../core/gh-env.ts';
 import { parseRemote } from '../git-remotes.ts';
@@ -21,14 +21,30 @@ export interface PrRef {
   url: string;
 }
 
-/** The first GitHub pull-request URL in `text`. */
-export function parsePrUrl(text: string): PrRef | undefined {
+/** Every GitHub pull-request URL in `text`, in order. */
+export function parsePrUrls(text: string): PrRef[] {
+  const out: PrRef[] = [];
   for (const m of text.matchAll(/https?:\/\/([A-Za-z0-9.-]+)\/([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+)\/pull\/(\d+)/g)) {
     const [url, host = '', owner = '', repo = '', n = ''] = m;
-    if (!isGithubHost(host.toLowerCase())) continue;
-    return { host: host.toLowerCase(), owner, repo: repo.replace(/\.git$/i, ''), number: Number(n), url };
+    if (isGithubHost(host.toLowerCase())) out.push({ host: host.toLowerCase(), owner, repo: repo.replace(/\.git$/i, ''), number: Number(n), url });
   }
-  return undefined;
+  return out;
+}
+
+/** The first GitHub pull-request URL in `text`. */
+export function parsePrUrl(text: string): PrRef | undefined {
+  return parsePrUrls(text)[0];
+}
+
+/**
+ * The PR this checkout reviews: the first URL in the task that is a pull request of a repository
+ * this checkout has a remote for — a URL quoted from an issue body or another project is never
+ * fetched into the user's object store. Falls back to the first URL (its checkout then refuses).
+ */
+export async function pickPr(cwd: string, text: string, run: Exec = exec): Promise<PrRef | undefined> {
+  const prs = parsePrUrls(text);
+  for (const pr of prs) if (await prRemote(cwd, pr, run)) return pr;
+  return prs[0];
 }
 
 export type Exec = (file: string, args: string[], opts: { cwd: string; timeoutMs: number; env?: NodeJS.ProcessEnv }) => Promise<{ ok: boolean; stdout: string; stderr: string }>;
@@ -72,13 +88,18 @@ export interface PrCheckoutResult {
   problems: string[];
 }
 
-/** The remote whose URL IS the PR's repository; undefined when none is (then the URL is fetched). */
+/**
+ * The remote whose URL IS the PR's repository: same owner/repo on the PR's host, or on a host that
+ * is no GitHub host (an SSH alias, `git@github-work:o/r`). Another GitHub host is another
+ * repository. Undefined when none is — then nothing is fetched.
+ */
 export async function prRemote(cwd: string, pr: PrRef, run: Exec = exec): Promise<string | undefined> {
   const res = await run('git', ['config', '--get-regexp', '^remote\\..*\\.url$'], { cwd, timeoutMs: 10_000 });
   for (const line of res.ok ? res.stdout.split('\n') : []) {
     const m = /^remote\.(.+)\.url (.*)$/.exec(line.trim());
     const parsed = m ? parseRemote(m[2] ?? '') : null;
-    if (m && parsed && isSafeGitRef(m[1]!) && parsed.host.toLowerCase() === pr.host
+    const host = parsed?.host.toLowerCase();
+    if (m && parsed && host && isSafeGitRef(m[1]!) && (host === pr.host || !isGithubHost(host))
       && parsed.owner.toLowerCase() === pr.owner.toLowerCase() && parsed.repo.toLowerCase() === pr.repo.toLowerCase()) return m[1]!;
   }
   return undefined;
@@ -86,7 +107,34 @@ export async function prRemote(cwd: string, pr: PrRef, run: Exec = exec): Promis
 
 const lastLine = (s: string) => s.trim().split('\n').pop()?.slice(0, 300) ?? '';
 
+/** The sha-1 and sha-256 empty trees: `GIT_ATTR_SOURCE` there means the PR's own `.gitattributes`
+ *  cannot name a local filter driver for the export (git 2.42+; older git ignores it). */
+const EMPTY_TREE = { sha1: '4b825dc642cb6eb9a060e54bf8d69288fbee4904', sha256: '6ef19b41225c5369f1c104d45d8d85efa9b057b53b14b4b9b939dd74decc5321' };
+
+/** Files the checkout wrote are read-only on disk too: a reviewer's write is refused by the OS as
+ *  well as by its tool rules. */
+function writeReadOnly(path: string, content: string): void {
+  rmSync(path, { force: true });
+  writeFileSync(path, content, { mode: 0o444 });
+}
+
+/**
+ * Never throws: a disk error (read-only home, full disk) is a failed checkout, so the walk takes
+ * `checkout.failed` and the reviewers fall back to `gh`.
+ */
 export async function checkoutPr(input: PrCheckoutInput): Promise<PrCheckoutResult> {
+  try {
+    return await checkoutPrOrThrow(input);
+  } catch (err) {
+    try { rmSync(join(input.dir, 'tree'), { recursive: true, force: true }); } catch { /* nothing more to do */ }
+    return {
+      checkedOut: false, head: '', tree: '', diffPath: '', metaPath: '',
+      problems: [`the PR checkout failed — ${lastLine(err instanceof Error ? err.message : String(err))}`],
+    };
+  }
+}
+
+async function checkoutPrOrThrow(input: PrCheckoutInput): Promise<PrCheckoutResult> {
   const run = input.exec ?? exec;
   const { cwd, pr, dir } = input;
   const git = (args: string[], timeoutMs = 30_000, env?: NodeJS.ProcessEnv) => run('git', args, { cwd, timeoutMs, ...(env ? { env } : {}) });
@@ -116,8 +164,7 @@ export async function checkoutPr(input: PrCheckoutInput): Promise<PrCheckoutResu
   const ghHead = typeof meta.headRefOid === 'string' ? meta.headRefOid : '';
 
   const remote = await prRemote(cwd, pr, run);
-  // No remote of this repository is the PR's (a fork's PR, a clone of something else): fetch its URL.
-  const source = remote ?? `https://${pr.host}/${pr.owner}/${pr.repo}.git`;
+  const source = remote ?? '';
   const headRef = `${input.refPrefix}/head`;
   const baseRef = `${input.refPrefix}/base`;
   const touchedRefs = new Set<string>();
@@ -132,6 +179,7 @@ export async function checkoutPr(input: PrCheckoutInput): Promise<PrCheckoutResu
   const pullRef = `refs/pull/${pr.number}/head`;
   try {
     if (input.offline) problems.push('CEZ_DRY_RUN=1: the PR was not fetched or checked out');
+    else if (!remote) problems.push(`no remote of this repository is ${pr.owner}/${pr.repo} on ${pr.host}; the PR was not fetched`);
     else {
       let got = await fetchInto(pullRef, headRef);
       // GitHub moves refs/pull/N/head a moment after a push: one more look before calling it a mismatch.
@@ -154,28 +202,38 @@ export async function checkoutPr(input: PrCheckoutInput): Promise<PrCheckoutResu
       // A throwaway index, so neither the task's index nor its files are touched. Symlinks become
       // plain files (a PR's link cannot point a reader elsewhere), and no LFS download runs.
       const index = join(dir, 'index.tmp');
-      const env = { ...process.env, GIT_INDEX_FILE: index, GIT_LFS_SKIP_SMUDGE: '1' };
+      const format = (await git(['rev-parse', '--show-object-format'])).stdout.trim() === 'sha256' ? 'sha256' : 'sha1';
+      const env = { ...process.env, GIT_INDEX_FILE: index, GIT_LFS_SKIP_SMUDGE: '1', GIT_ATTR_SOURCE: EMPTY_TREE[format] };
       const read = await git(['-c', 'core.symlinks=false', 'read-tree', head], 60_000, env);
       const out = read.ok ? await git(['-c', 'core.symlinks=false', 'checkout-index', '-a', '-f', `--prefix=${tree}/`], 300_000, env) : read;
       rmSync(index, { force: true });
       if (out.ok) checkedOut = true;
-      else problems.push(`could not export ${head.slice(0, 12)} — ${lastLine(out.stderr)}`);
+      else {
+        // A half-written tree is no checkout: nothing may read it as one.
+        rmSync(tree, { recursive: true, force: true });
+        problems.push(`could not export ${head.slice(0, 12)} — ${lastLine(out.stderr)}`);
+      }
     }
 
     if (diff === undefined && head) {
       // No gh: the PR's commits against its base, fetched fresh; a local base may be stale.
-      const named = typeof meta.baseRefName === 'string' ? meta.baseRefName : input.baseBranch;
+      const fromGithub = typeof meta.baseRefName === 'string';
+      const named = fromGithub ? meta.baseRefName as string : input.baseBranch;
       const baseName = named && isSafeGitRef(named) ? named : undefined;
+      if (named && !baseName) problems.push(`the base branch name ${JSON.stringify(named.slice(0, 80))} is not a safe git ref; no diff was made`);
+      // GitHub did not name the PR's base: the task's may be another branch altogether.
+      const whose = fromGithub ? '' : ' (the task\'s base: GitHub did not name the PR\'s)';
+      if (baseName && !fromGithub) problems.push(`the diff is against the task's base ${baseName}, which may not be the PR's base`);
       let base: string | undefined;
       if (baseName) {
         const fetched = await fetchInto(`refs/heads/${baseName}`, baseRef);
-        if (fetched.sha) { base = fetched.sha; diffBase = `${baseName} fetched from ${source}`; }
+        if (fetched.sha) { base = fetched.sha; diffBase = `${baseName}${whose} fetched from ${source}`; }
         else {
           for (const local of [...(remote ? [`${remote}/${baseName}`] : []), baseName]) {
             if ((await git(['rev-parse', '--verify', `${local}^{commit}`])).ok) { base = local; break; }
           }
           if (base) {
-            diffBase = `local ${base} (may be stale)`;
+            diffBase = `local ${base}${whose} (may be stale)`;
             problems.push(`the diff is against the local ${base}, which may be behind the PR's base`);
           }
         }
@@ -198,15 +256,20 @@ export async function checkoutPr(input: PrCheckoutInput): Promise<PrCheckoutResu
     ...(checkedOut ? { tree } : {}),
   };
   const metaPath = join(dir, `pr-${pr.number}.json`);
-  writeFileSync(metaPath, `${JSON.stringify(meta, null, 2)}\n`);
+  writeReadOnly(metaPath, `${JSON.stringify(meta, null, 2)}\n`);
   let diffPath = '';
   if (diff !== undefined) {
     diffPath = join(dir, `pr-${pr.number}.diff`);
-    writeFileSync(diffPath, diff);
+    writeReadOnly(diffPath, diff);
   } else problems.push('no diff could be saved');
   if (input.copyTo) {
     mkdirSync(input.copyTo, { recursive: true });
-    for (const file of [metaPath, diffPath].filter(Boolean)) copyFileSync(file, join(input.copyTo, file.slice(dir.length + 1)));
+    for (const file of [metaPath, diffPath].filter(Boolean)) {
+      const target = join(input.copyTo, file.slice(dir.length + 1));
+      rmSync(target, { force: true }); // a re-run's copy replaces a read-only one
+      copyFileSync(file, target);
+      chmodSync(target, 0o444);
+    }
   }
   return { checkedOut, head, tree: checkedOut ? tree : '', diffPath, metaPath, problems };
 }

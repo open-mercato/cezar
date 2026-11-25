@@ -2478,12 +2478,12 @@ export class RunStore extends EventEmitter {
     }
   }
 
-  /** The event log's mtime in ms, or undefined when it has none — age retention's activity clock. */
   /** Where a run's PR review export lives (`prCheckoutDir`). */
   prCheckoutDir(runId: string): string {
     return prCheckoutDir(this.dataDir, runId);
   }
 
+  /** The event log's mtime in ms, or undefined when it has none — age retention's activity clock. */
   eventsMtimeMs(runId: string): number | undefined {
     try { return statSync(this.eventsPath(runId)).mtimeMs; } catch { return undefined; }
   }

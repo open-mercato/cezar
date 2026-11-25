@@ -112,6 +112,21 @@ export function isReadOnlyWorkflow(def: WorkflowDef, catalog: readonly WorkflowD
   return !c.push && !c.openPr && !c.postToGithub;
 }
 
+const FILE_WRITE_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit']);
+
+/**
+ * Whether any agent step may write files: a "read-only" workflow for the launch (no
+ * bypassPermissions, no acceptEdits) must also be one that cannot edit, not only one that cannot
+ * publish. Unrestricted Bash counts too.
+ */
+export function grantsFileWrites(def: WorkflowDef): boolean {
+  const writes = (step: Pick<WorkflowStepDef, 'allowedTools' | 'bashAllowlist'>) =>
+    (step.allowedTools ?? DEFAULT_ALLOWED_TOOLS).some((tool) => FILE_WRITE_TOOLS.has(tool) || (tool === 'Bash' && !step.bashAllowlist?.length));
+  return def.graph
+    ? def.graph.nodes.some((node) => node.type === 'agent' && writes(node))
+    : def.steps.some((step) => stepKind(step) === 'agent' && writes(step));
+}
+
 /**
  * Backends that hold an agent to its `allowedTools`/`bashAllowlist` (AGENT_PROTOCOL.md). A
  * Record, so a new runner does not compile until someone decides. Pi drops Bash entirely under
