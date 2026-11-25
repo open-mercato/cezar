@@ -1,4 +1,4 @@
-import { stepToolPolicySchema, deferredBindingSchema, modelUsageSchema, queueWaitReasonSchema, taskAskRecordSchema, trackerAccessSchema, type QuestionClosed, type QuestionStale, type TaskAskRecord } from '@open-mercato/cezar-contract';
+import { RUN_PR_REF_RANK, stepToolPolicySchema, deferredBindingSchema, modelUsageSchema, queueWaitReasonSchema, runAgentSwitchSchema, taskAskRecordSchema, trackerAccessSchema, type QuestionClosed, type QuestionStale, type TaskAskRecord } from '@open-mercato/cezar-contract';
 import { EventEmitter } from 'node:events';
 import { runLifecycleSnapshot, type RunLifecycleObserver, type RunLifecycleSnapshot } from './lifecycle.ts';
 import { randomUUID } from 'node:crypto';
@@ -236,6 +236,8 @@ export const runRecordSchema = z.object({
     enabled: z.boolean(),
     candidates: z.array(z.object({ provider: z.string(), profileId: z.string(), model: z.string().optional() })).max(10),
     revision: z.number().int().nonnegative(), incarnation: z.string().nullable(), revocation: z.string().nullable(),
+    source: z.literal('manager').optional().catch(undefined),
+    managerId: z.string().optional().catch(undefined),
   }).optional().catch(undefined),
   /** Echo of the extra system prompt this run actually used (R2): the
    *  `POST /api/runs` override, or the `config.json` default it fell back to.
@@ -363,6 +365,7 @@ export const runRecordSchema = z.object({
   /** Why a `cancelled` run was stopped and who stopped it, when the canceller said (`POST /runs/:id/cancel`). */
   cancelReason: z.string().optional(),
   cancelledBy: z.string().optional(),
+  agentSwitch: runAgentSwitchSchema.optional(),
   /**
    * When the current wait on the user began: stamped by `updateRun` on entering `waiting` or on a
    * new question while there, so a wait has an identity even without a question. It outlives the
@@ -897,12 +900,8 @@ function refUrlNumber(url: string | undefined): number | undefined {
 }
 
 const PR_REF_CAP = 8;
-const PR_REF_RANK: Record<RunPrRef['origin'], number> = {
-  created: 0,
-  marker: 1,
-  legacy: 2,
-  derived: 3,
-};
+/** Which association speaks for the task; shared with the attention list (`currentTaskPr`). */
+const PR_REF_RANK = RUN_PR_REF_RANK;
 
 function legacyPrRefs(run: RunRecord): RunPrRef[] {
   const at = run.createdAt;
@@ -951,6 +950,12 @@ function appendPrRefToRun(run: RunRecord, ref: Omit<RunPrRef, 'at'> & { at?: str
     }
     if (!existing.url && ref.url) {
       existing.url = ref.url;
+      changed = true;
+    }
+    // Declared again (`CEZ:PR`): it is the task's current PR from now on (spec 2026-11-23-needs-you-triage).
+    // Only a declaration: a patch re-sending `pullRequestUrl` is not news.
+    if (ref.origin === 'marker' && Date.parse(at) > Date.parse(existing.at)) {
+      existing.at = at;
       changed = true;
     }
   } else {
@@ -1762,7 +1767,10 @@ export class RunStore extends EventEmitter {
   setLiveUsage(runId: string, status: AgentUsageStatus): void {
     const run = this.runs.get(runId);
     if (!run) return;
-    run.liveUsage = { ...run.liveUsage, ...status, at: new Date().toISOString() };
+    // Per-request and per-turn token splits feed manager turn stats, not a task's header gauges.
+    const { cacheWriteTokens: _write, turnTokens: _turn, ...gauges } = status;
+    if (Object.keys(gauges).length === 0) return;
+    run.liveUsage = { ...run.liveUsage, ...gauges, at: new Date().toISOString() };
     this.touch(run);
   }
 

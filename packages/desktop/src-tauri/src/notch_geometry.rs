@@ -42,9 +42,9 @@ pub struct ScreenMetrics {
 pub struct Housing {
     /// 0 on a screen without a notch: the shapes then float as capsules.
     pub width: f64,
-    /// The band the pills fill: the notch, else the floating height.
+    /// The band the pills fill: the notch, else the menu bar less an inset above and below.
     pub height: f64,
-    /// Distance from the panel's top to pill 1: a floating pill sits below the menu bar.
+    /// Distance from the panel's top to pill 1: a floating pill sits inside the menu bar.
     pub top: f64,
     /// The camera or the screen's centre, from the panel's left edge. Off the panel's middle only
     /// when the screen is narrower than the panel.
@@ -56,27 +56,52 @@ pub struct Placement {
     pub origin_x: f64,
     pub origin_y: f64,
     pub housing: Housing,
+    /// No notch and no menu bar reported (auto-hidden, or full screen): the strip, in AppKit
+    /// coordinates, the bar slides into. The pills show only while it is revealed.
+    pub hidden_bar: Option<Rect>,
 }
 
-const FLOATING_HEIGHT: f64 = 32.0;
-const FLOATING_GAP: f64 = 6.0;
+/// The classic menu bar, for a screen that reports none: hidden, or `visibleFrame` reaching the top
+/// as macOS 26 sometimes does. Not above macOS 26's 30pt bar, so a pill sized by it stays inside.
+const FALLBACK_MENU_BAR: f64 = 24.0;
+const FLOATING_INSET: f64 = 2.0;
+
+/// The menu bar strip on a screen without a notch. Below it is the frontmost app's own toolbar
+/// (a browser's tabs), so nothing collapsed may reach past it.
+pub fn menu_bar_height(screen: &ScreenMetrics) -> f64 {
+    let bar = screen.frame.y + screen.frame.height - screen.visible_top;
+    if bar > 0.0 { bar } else { FALLBACK_MENU_BAR }
+}
 
 /// A notch needs both reported ears: an external display answers zero insets, and a safe area with
 /// no ears is not a camera housing. The panel centres on the housing, not the screen, and never
-/// crosses onto the neighbouring display.
+/// crosses onto the neighbouring display. Without a notch the pills float inside the menu bar.
 pub fn place(screen: &ScreenMetrics, panel: PanelSize) -> Placement {
     let frame = screen.frame;
     let top = frame.y + frame.height;
     let notched = screen.safe_area_top > 0.0 && screen.aux_left_width > 0.0 && screen.aux_right_width > 0.0;
+    let hidden = !notched && top - screen.visible_top <= 0.0;
     let (centre, (width, height, housing_top)) = if notched {
         let width = (frame.width - screen.aux_left_width - screen.aux_right_width).max(0.0);
         (frame.x + screen.aux_left_width + width / 2.0, (width, screen.safe_area_top, 0.0))
     } else {
-        let bar = (top - screen.visible_top).max(0.0);
-        (frame.x + frame.width / 2.0, (0.0, FLOATING_HEIGHT, bar + FLOATING_GAP))
+        let bar = menu_bar_height(screen);
+        (frame.x + frame.width / 2.0, (0.0, bar - FLOATING_INSET * 2.0, FLOATING_INSET))
     };
     let origin_x = (centre - panel.width / 2.0).min(frame.x + frame.width - panel.width).max(frame.x);
-    Placement { origin_x, origin_y: top - panel.height, housing: Housing { width, height, top: housing_top, centre: centre - origin_x } }
+    let hidden_bar = hidden.then_some(Rect { x: frame.x, y: top - FALLBACK_MENU_BAR, width: frame.width, height: FALLBACK_MENU_BAR });
+    Placement { origin_x, origin_y: top - panel.height, housing: Housing { width, height, top: housing_top, centre: centre - origin_x }, hidden_bar }
+}
+
+/// Whether the collapsed pills may be on screen, given whether they were. Under an auto-hidden bar
+/// the top strip is the app's own (a full-screen browser's tabs): only the pointer reaching the top
+/// edge reveals the bar, and the pills with it, and they stay while it stays in the strip, as the
+/// bar does. An open list stays until it folds. `mouseLocation` reaches `frame.maxY` on the top row.
+pub fn pills_visible(placement: &Placement, revealed: bool, expanded: bool, x: f64, y: f64) -> bool {
+    let Some(strip) = placement.hidden_bar else { return true };
+    let top = strip.y + strip.height;
+    let on_screen = x >= strip.x && x < strip.x + strip.width && y <= top;
+    expanded || (on_screen && (y >= top - 1.0 || (revealed && y >= strip.y)))
 }
 
 /// The display a point is on, or the first one when it is on none (a just-removed display).
@@ -166,9 +191,10 @@ mod tests {
         aux_left_width: 654.0,
         aux_right_width: 658.0,
     };
+    /// An external display on macOS 26, as `NSScreen` reports it there: a 30pt menu bar, no insets.
     const EXTERNAL: ScreenMetrics = ScreenMetrics {
         frame: Rect { x: 1512.0, y: -200.0, width: 2560.0, height: 1440.0 },
-        visible_top: 1215.0,
+        visible_top: 1210.0,
         safe_area_top: 0.0,
         aux_left_width: 0.0,
         aux_right_width: 0.0,
@@ -182,19 +208,73 @@ mod tests {
         assert_eq!(placed.origin_y + PANEL.height, 982.0);
     }
 
+    /// Where the collapsed pills end, in AppKit coordinates.
+    fn pill_bottom(screen: &ScreenMetrics) -> f64 {
+        let placed = place(screen, PANEL);
+        placed.origin_y + PANEL.height - placed.housing.top - placed.housing.height
+    }
+
     #[test]
-    fn no_notch_floats_a_pill_at_top_centre_below_the_menu_bar() {
+    fn no_notch_floats_a_pill_at_top_centre_inside_the_menu_bar() {
         let placed = place(&EXTERNAL, PANEL);
-        assert_eq!(placed.housing.width, 0.0);
-        assert_eq!(placed.housing.top, 25.0 + 6.0);
+        assert_eq!(placed.housing, Housing { width: 0.0, height: 26.0, top: 2.0, centre: 400.0 });
         assert_eq!(placed.origin_x + PANEL.width / 2.0, 1512.0 + 1280.0);
         assert_eq!(placed.origin_y + PANEL.height, 1240.0);
     }
 
     #[test]
-    fn a_hidden_menu_bar_lets_the_pill_rise() {
+    fn a_collapsed_pill_never_reaches_below_the_menu_bar() {
+        // A browser's tab bar starts at `visible_top`: the pills must end above it.
+        for bar in [22.0, 24.0, 25.0, 30.0, 37.0] {
+            let screen = ScreenMetrics { visible_top: 1240.0 - bar, ..EXTERNAL };
+            assert!(pill_bottom(&screen) > screen.visible_top, "bar {bar}");
+            assert!(place(&screen, PANEL).housing.top > 0.0, "bar {bar}");
+        }
+    }
+
+    #[test]
+    fn a_screen_reporting_no_menu_bar_keeps_the_pill_in_the_classic_strip() {
+        // A hidden bar, or macOS 26 answering `visibleFrame` up to the top edge.
         let full_screen = ScreenMetrics { visible_top: 1240.0, ..EXTERNAL };
-        assert_eq!(place(&full_screen, PANEL).housing.top, 6.0);
+        assert_eq!(menu_bar_height(&full_screen), 24.0);
+        let placed = place(&full_screen, PANEL);
+        assert_eq!((placed.housing.top, placed.housing.height), (2.0, 20.0));
+        assert!(pill_bottom(&full_screen) > 1240.0 - 24.0);
+    }
+
+    #[test]
+    fn an_auto_hidden_menu_bar_hides_the_pills_until_it_reveals() {
+        let auto_hidden = ScreenMetrics { visible_top: 1240.0, ..EXTERNAL };
+        let placed = place(&auto_hidden, PANEL);
+        // The app owns the top strip: a pointer on its tabs, below the edge, shows nothing.
+        assert!(!pills_visible(&placed, false, false, 2792.0, 1230.0));
+        assert!(!pills_visible(&placed, false, false, 2792.0, 1000.0));
+        // The pointer at the top edge reveals the bar, and the pills with it.
+        assert!(pills_visible(&placed, false, false, 2792.0, 1240.0));
+        // Revealed, they stay while the pointer stays in the strip, and go when it leaves.
+        assert!(pills_visible(&placed, true, false, 1512.0, 1220.0));
+        assert!(!pills_visible(&placed, true, false, 2792.0, 1215.0));
+        // On the neighbouring display, the same height reveals nothing here.
+        assert!(!pills_visible(&placed, false, false, 1000.0, 1240.0));
+        // An open list stays until it folds.
+        assert!(pills_visible(&placed, false, true, 2792.0, 1000.0));
+    }
+
+    #[test]
+    fn a_visible_menu_bar_or_a_notch_always_shows_the_pills() {
+        assert_eq!(place(&EXTERNAL, PANEL).hidden_bar, None);
+        assert!(pills_visible(&place(&EXTERNAL, PANEL), false, false, 0.0, -5000.0));
+        // A notched screen with its bar hidden still has the camera housing to sit on.
+        let notched_full_screen = ScreenMetrics { visible_top: 982.0, ..NOTCHED };
+        assert_eq!(place(&notched_full_screen, PANEL).hidden_bar, None);
+    }
+
+    #[test]
+    fn a_notched_screen_keeps_the_housing_whatever_its_menu_bar() {
+        // The notch path never reads the menu bar, so a taller macOS 26 bar cannot move it.
+        let tall_bar = ScreenMetrics { visible_top: 982.0 - 44.0, ..NOTCHED };
+        assert_eq!(place(&tall_bar, PANEL), place(&NOTCHED, PANEL));
+        assert_eq!(place(&NOTCHED, PANEL).housing.top, 0.0);
     }
 
     #[test]

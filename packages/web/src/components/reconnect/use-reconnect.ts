@@ -1,5 +1,4 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { useEffect, useRef } from 'react'
 import type { LoginMethod, ProviderId } from '@open-mercato/cezar-api-client'
 
 import { useAccountReconnected, useLoginSession } from '@/api/agent-login'
@@ -18,7 +17,7 @@ import { toast } from '@/components/ui/toaster'
 import { isPhone } from '@/lib/phone-app'
 import { useMediaQuery } from '@/lib/use-media-query'
 
-import { agentName, OPENS_A_TAB } from './copy'
+import { agentName } from './copy'
 
 export type ReconnectView = 'expired' | 'signing' | 'success' | 'failed'
 
@@ -52,7 +51,6 @@ export function useReconnect(provider: ProviderId, profileId: string) {
   const start = useStartLoginSession()
   const cancel = useCancelLoginSession()
   const recheck = useRecheckAgentAccount()
-  const pendingTab = useRef<Window | null>(null)
   const setStartError = (value: ReconnectStartError | null) => queryClient.setQueryData(startErrorKey(provider, profileId), value)
 
   const view: ReconnectView = startError ? 'failed'
@@ -61,29 +59,9 @@ export function useReconnect(provider: ProviderId, profileId: string) {
     : session?.phase === 'failed' ? 'failed'
     : 'expired'
 
-  // The tab opened inside the click learns its URL once the vendor prints it.
-  useEffect(() => {
-    const tab = pendingTab.current
-    if (!tab) return
-    if (session?.url) {
-      tab.location.href = session.url
-      pendingTab.current = null
-    } else if (startError || (session && (!isActiveLoginSession(session) || session.method === 'key' || session.method === 'terminal'))) {
-      tab.close()
-      pendingTab.current = null
-    }
-  }, [session, startError])
-
   const reconnect = (method?: LoginMethod) => {
     setStartError(null)
-    // Synchronously, inside the click: a tab opened after the answer arrives is a blocked popup.
-    if (!remote && !narrow && method === undefined && OPENS_A_TAB.has(provider) && typeof window !== 'undefined') {
-      const tab = window.open('', '_blank')
-      if (tab) {
-        tab.opener = null
-        pendingTab.current = tab
-      }
-    }
+    // Never opens a browser: the link is shown to copy, so the user picks the profile (spec 2026-11-24).
     start.mutate(
       { provider, ...(profileId !== 'default' ? { profileId } : {}), ...(method ? { method } : {}) },
       {

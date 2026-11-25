@@ -3,6 +3,7 @@ import { useEffect, useState } from 'react'
 import { BrowserRouter } from 'react-router'
 
 import { GlobalEventsProvider } from './api/global-events'
+import { AddAccountProvider } from './components/add-account/add-account-host'
 import { HostUsageProvider } from './api/host-usage'
 import { createQueryClient } from './api/query-client'
 import { keepFirstScreenPersisted, restoreFirstScreen } from './api/query-persist'
@@ -55,26 +56,28 @@ export function App() {
                 half of the same boot contract — mirror pre-paints, server truth reconciles. */}
             <AppearanceProvider>
               <BrowserRouter>
-                <LastLocationController />
-                {/* Watches the run-list cache the stream patches (and reconciliation refetches),
-                    turning attention transitions into browser notifications when the tab is
-                    hidden (R6 1.7). In the router so a click opens the task or chat. */}
-                <RunNotifications />
-                {/* Page views + error hooks; the server forwards them only after the user opted in
-                    (docs/telemetry.md). Renders nothing. */}
-                <Telemetry />
-                {/* At the root for the same reason the event stream is: the sidebar, the task table
-                    and an open run header all paint PR/issue chips, often the SAME ones, and each
-                    asking for itself was several round trips and a staggered wave of colour. They
-                    register what they are painting here instead, and it goes out as one request per
-                    project. */}
-                <ReferenceStatusRegistry>
-                  <AppShellContainer>
-                    <AppRoutes />
-                  </AppShellContainer>
-                </ReferenceStatusRegistry>
-                {/* One toast outlet for the whole app — `toast()` is a module-level call. */}
-                <Toaster />
+                <AddAccountProvider>
+                  <LastLocationController />
+                  {/* Watches the run-list cache the stream patches (and reconciliation refetches),
+                      turning attention transitions into browser notifications when the tab is
+                      hidden (R6 1.7). In the router so a click opens the task or chat. */}
+                  <RunNotifications />
+                  {/* Page views + error hooks; the server forwards them only after the user opted in
+                      (docs/telemetry.md). Renders nothing. */}
+                  <Telemetry />
+                  {/* At the root for the same reason the event stream is: the sidebar, the task table
+                      and an open run header all paint PR/issue chips, often the SAME ones, and each
+                      asking for itself was several round trips and a staggered wave of colour. They
+                      register what they are painting here instead, and it goes out as one request per
+                      project. */}
+                  <ReferenceStatusRegistry>
+                    <AppShellContainer>
+                      <AppRoutes />
+                    </AppShellContainer>
+                  </ReferenceStatusRegistry>
+                  {/* One toast outlet for the whole app — `toast()` is a module-level call. */}
+                  <Toaster />
+                </AddAccountProvider>
               </BrowserRouter>
             </AppearanceProvider>
           </ThemeProvider>

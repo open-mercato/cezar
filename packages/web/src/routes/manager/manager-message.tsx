@@ -248,7 +248,11 @@ function ManagerQuestions({
   }
   const send = async (text: string) => {
     const reactivate = chatActions.confirmReactivate
-    if (reactivate && !(await reactivate(text))) return `Not sent: ${origin.name} is still inactive. Dismiss closes the question without waking it.`
+    if (reactivate && !(await reactivate(text))) {
+      const message = `Not sent: ${origin.name} is still inactive. Dismiss closes the question without waking it.`
+      setError(message)
+      return message
+    }
     sentHere.current = true
     setPending(true)
     setError(undefined)
@@ -322,7 +326,6 @@ function AssistantMessage({
   planUsage,
 }: {
   message: Extract<ManagerMessage, { kind: 'assistant' }>
-  planUsage?: ReplyUsage | undefined
   origin: ManagerOrigin
   projects: readonly ManagerReferenceProject[]
   answerOnCard: boolean
@@ -330,6 +333,8 @@ function AssistantMessage({
   /** The newest failure on its account: the live card. Older ones collapse to a quiet line. */
   authLive?: boolean
   onRetry?: (() => void) | undefined
+  /** This reply's plan-limit estimate; absent when the ledger has none (never shown as 0). */
+  planUsage?: ReplyUsage | undefined
 }) {
   const segments = useMemo(
     () => parseManagerText(message.text, message.commands, projects),
@@ -530,8 +535,6 @@ export const ManagerMessageRow = memo(function ManagerMessageRow({
 }: {
   message: ManagerMessage
   origin: ManagerOrigin
-  /** This reply's plan-limit estimate; absent when the ledger has none (never shown as 0). */
-  planUsage?: ReplyUsage | undefined
   /** False for an older failure on an account whose newest failure draws the live card. */
   authLive?: boolean
   /** Sends the question again; only the newest failed chat reply has one. */
@@ -542,6 +545,8 @@ export const ManagerMessageRow = memo(function ManagerMessageRow({
   projects?: readonly ManagerReferenceProject[]
   /** Whether this question card is superseded by a newer card with the same header. */
   superseded?: boolean
+  /** This reply's plan-limit estimate (spec 2026-11-20-manager-plan-usage-popover, restored 2026-11-22). */
+  planUsage?: ReplyUsage | undefined
   onDecide: DecideAction
 }) {
   return (

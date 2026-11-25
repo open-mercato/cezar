@@ -91,7 +91,6 @@
 		081B05DA8DFEE2EE6987CBE3 /* ConnectionBanner.swift in Sources */ = {isa = PBXBuildFile; fileRef = EBF25645568FEB142B42D58F /* ConnectionBanner.swift */; };
 		34E897AE43ED53D9A45A6715 /* ConnectionBannerText.swift in Sources */ = {isa = PBXBuildFile; fileRef = 686B260970B42E5227F07CE0 /* ConnectionBannerText.swift */; };
 		2E5F55148ABD5CFE6B72E2A1 /* RequestGate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 305058F2830B5E4D5A83EBBB /* RequestGate.swift */; };
-		4072261A72294ADC2A2B29D7 /* FirstPaint.swift in Sources */ = {isa = PBXBuildFile; fileRef = B3AF5521E67DC81A1CE6FB72 /* FirstPaint.swift */; };
 		454CB0ECEB65006ABF9405B3 /* BundleCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5B1C87E0290667E14A41FCAB /* BundleCache.swift */; };
 		4E2C2410C74FC6E2911C96E9 /* LaunchHold.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2C9E0FC49DC3285D16CDBE39 /* LaunchHold.swift */; };
 		CBD1846CA1BD62F78E8F3E00 /* AccountClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = FFD28EE9BC870443E146A664 /* AccountClient.swift */; };
@@ -111,6 +110,12 @@
 		9577AC492E3EEB5D8D58DDD0 /* NetworkChange.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2538D2293E3C9833B322E9CC /* NetworkChange.swift */; };
 		A6686A55E8AB397B6B0C43DB /* StartupLog.swift in Sources */ = {isa = PBXBuildFile; fileRef = BEF84CFA11CD4ACC2C3ED3FD /* StartupLog.swift */; };
 		61B693B35D540287B21185A1 /* CezarList.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1131421F12FEA5067FEF625D /* CezarList.swift */; };
+		0C0C1822AC83F12863689DED /* AppUpdate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9C6D116D2C946F895A3D1027 /* AppUpdate.swift */; };
+		EBA620D61920CFD8AFD58B70 /* PageCheck.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4B557E994B389F049BD8C0DB /* PageCheck.swift */; };
+		0E303DF92B4EE0FA0E475756 /* StartupWatchdog+Relay.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9C86240E76ECD65D05420E6E /* StartupWatchdog+Relay.swift */; };
+		9ED0A7E559D66D83674C1E75 /* StartupWatchdog.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9139334FFE0443E6F4A415D8 /* StartupWatchdog.swift */; };
+		ACE532EFD7B448ABEF639A65 /* LaunchCover.swift in Sources */ = {isa = PBXBuildFile; fileRef = AF301530785A217FACD5C7CE /* LaunchCover.swift */; };
+		9EDAA682235FC0F792BD9FAA /* BadgeRefresh.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4849D2ABBE19E843768C20F1 /* BadgeRefresh.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -225,7 +230,6 @@
 		EBF25645568FEB142B42D58F /* ConnectionBanner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConnectionBanner.swift; sourceTree = "<group>"; };
 		686B260970B42E5227F07CE0 /* ConnectionBannerText.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConnectionBannerText.swift; sourceTree = "<group>"; };
 		305058F2830B5E4D5A83EBBB /* RequestGate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RequestGate.swift; sourceTree = "<group>"; };
-		B3AF5521E67DC81A1CE6FB72 /* FirstPaint.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FirstPaint.swift; sourceTree = "<group>"; };
 		5B1C87E0290667E14A41FCAB /* BundleCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BundleCache.swift; sourceTree = "<group>"; };
 		2C9E0FC49DC3285D16CDBE39 /* LaunchHold.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LaunchHold.swift; sourceTree = "<group>"; };
 		FFD28EE9BC870443E146A664 /* AccountClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AccountClient.swift; sourceTree = "<group>"; };
@@ -245,6 +249,12 @@
 		2538D2293E3C9833B322E9CC /* NetworkChange.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NetworkChange.swift; sourceTree = "<group>"; };
 		BEF84CFA11CD4ACC2C3ED3FD /* StartupLog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StartupLog.swift; sourceTree = "<group>"; };
 		1131421F12FEA5067FEF625D /* CezarList.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CezarList.swift; sourceTree = "<group>"; };
+		9C6D116D2C946F895A3D1027 /* AppUpdate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppUpdate.swift; sourceTree = "<group>"; };
+		4B557E994B389F049BD8C0DB /* PageCheck.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PageCheck.swift; sourceTree = "<group>"; };
+		9C86240E76ECD65D05420E6E /* StartupWatchdog+Relay.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "StartupWatchdog+Relay.swift"; sourceTree = "<group>"; };
+		9139334FFE0443E6F4A415D8 /* StartupWatchdog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StartupWatchdog.swift; sourceTree = "<group>"; };
+		AF301530785A217FACD5C7CE /* LaunchCover.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LaunchCover.swift; sourceTree = "<group>"; };
+		4849D2ABBE19E843768C20F1 /* BadgeRefresh.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BadgeRefresh.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -333,11 +343,13 @@
 				C59B0EDBD99B57011E10E328 /* Scanner */,
 				11D67ADF6682D911C4B94110 /* UI */,
 				305058F2830B5E4D5A83EBBB /* RequestGate.swift */,
-				B3AF5521E67DC81A1CE6FB72 /* FirstPaint.swift */,
 				2C9E0FC49DC3285D16CDBE39 /* LaunchHold.swift */,
 				0808F575B3923BE2C44480A1 /* DeviceLanding.swift */,
 				08F31AE9E71D8D2E5F57D20C /* Switcher */,
 				BEF84CFA11CD4ACC2C3ED3FD /* StartupLog.swift */,
+				9C6D116D2C946F895A3D1027 /* AppUpdate.swift */,
+				4B557E994B389F049BD8C0DB /* PageCheck.swift */,
+				9139334FFE0443E6F4A415D8 /* StartupWatchdog.swift */,
 			);
 			path = Shell;
 			sourceTree = "<group>";
@@ -421,6 +433,7 @@
 				4956F759627A845C53BACF3C /* URLSessionTransport.swift */,
 				5B1C87E0290667E14A41FCAB /* BundleCache.swift */,
 				2538D2293E3C9833B322E9CC /* NetworkChange.swift */,
+				9C86240E76ECD65D05420E6E /* StartupWatchdog+Relay.swift */,
 			);
 			path = Relay;
 			sourceTree = "<group>";
@@ -439,6 +452,7 @@
 				EBF25645568FEB142B42D58F /* ConnectionBanner.swift */,
 				686B260970B42E5227F07CE0 /* ConnectionBannerText.swift */,
 				6A16163992B340A08C8CF8C9 /* DeviceSheetController.swift */,
+				AF301530785A217FACD5C7CE /* LaunchCover.swift */,
 			);
 			path = UI;
 			sourceTree = "<group>";
@@ -453,6 +467,7 @@
 				82AB1FD74D5CC322812C7D20 /* DeviceBookKeychain.swift */,
 				4A3F72AABAE006BD697A11F4 /* DeviceIdentity.swift */,
 				1131421F12FEA5067FEF625D /* CezarList.swift */,
+				4849D2ABBE19E843768C20F1 /* BadgeRefresh.swift */,
 			);
 			path = Switcher;
 			sourceTree = "<group>";
@@ -648,7 +663,6 @@
 				081B05DA8DFEE2EE6987CBE3 /* ConnectionBanner.swift in Sources */,
 				34E897AE43ED53D9A45A6715 /* ConnectionBannerText.swift in Sources */,
 				2E5F55148ABD5CFE6B72E2A1 /* RequestGate.swift in Sources */,
-				4072261A72294ADC2A2B29D7 /* FirstPaint.swift in Sources */,
 				454CB0ECEB65006ABF9405B3 /* BundleCache.swift in Sources */,
 				4E2C2410C74FC6E2911C96E9 /* LaunchHold.swift in Sources */,
 				CBD1846CA1BD62F78E8F3E00 /* AccountClient.swift in Sources */,
@@ -664,6 +678,12 @@
 				9577AC492E3EEB5D8D58DDD0 /* NetworkChange.swift in Sources */,
 				A6686A55E8AB397B6B0C43DB /* StartupLog.swift in Sources */,
 				61B693B35D540287B21185A1 /* CezarList.swift in Sources */,
+				0C0C1822AC83F12863689DED /* AppUpdate.swift in Sources */,
+				EBA620D61920CFD8AFD58B70 /* PageCheck.swift in Sources */,
+				0E303DF92B4EE0FA0E475756 /* StartupWatchdog+Relay.swift in Sources */,
+				9ED0A7E559D66D83674C1E75 /* StartupWatchdog.swift in Sources */,
+				ACE532EFD7B448ABEF639A65 /* LaunchCover.swift in Sources */,
+				9EDAA682235FC0F792BD9FAA /* BadgeRefresh.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

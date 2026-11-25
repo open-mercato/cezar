@@ -14,6 +14,7 @@ import { AppearanceProvider } from './components/appearance-provider'
 import { ListViewProvider } from './components/list-view'
 import { ThemeProvider } from './components/theme-provider'
 import { LAST_LOCATION_STORAGE_KEY } from './lib/last-location'
+import { NOW_SCOPE_KEY } from './routes/now/now-attention-model'
 import { AppRoutes, pageTitleContext, preloadManagerRoutes } from './routes'
 import { resetDraft } from './routes/new-task-draft'
 
@@ -111,7 +112,7 @@ function ProjectNavigationProbe() {
  *  replacing the shared harness. The remembered location is NOT seeded here — it is per-browser
  *  now, so `rememberLocation` writes it to localStorage instead. */
 function renderAt(
-  entry: string,
+  entry: string | { pathname: string; state: unknown },
   {
     seed = true,
     health = HEALTH,
@@ -755,6 +756,20 @@ describe('legacy flat URLs redirect to the boot project', () => {
     renderAt('/definitely-not-a-route')
     expect(routeName()).toBe('not-found')
     expect(currentPathname()).toBe(`/p/${BOOT}/definitely-not-a-route`)
+  })
+
+  it('carries navigation state through the hop into the boot project (the bottom bar\'s Now scope)', async () => {
+    renderAt({ pathname: '/', state: { nowScope: 'all' } })
+    expect(currentPathname()).toBe(`/p/${BOOT}/`)
+    await waitFor(() => expect(localStorage.getItem(NOW_SCOPE_KEY)).toBe('all'))
+  })
+
+  it('a Now scope handoff to / opens Now, not the remembered last page', async () => {
+    rememberLocation({ projectId: 'other', pathname: '/p/other/tasks/run-1/changes' })
+    renderAt({ pathname: '/', state: { nowScope: 'all' } })
+    await waitFor(() => expect(routeName()).toBe('now'))
+    expect(currentPathname()).toMatch(/^\/p\/[^/]+\/$/)
+    await waitFor(() => expect(localStorage.getItem(NOW_SCOPE_KEY)).toBe('all'))
   })
 
   it('a bare /p names no project and lands on the boot project home', () => {

@@ -15,7 +15,8 @@ import type { ManagerListResponse, ManagerMessage, ManagerSummary } from '@open-
 
 import { QuestionsCrossLink } from '@/routes/questions/questions-route'
 
-import { isFinished, LINGER_MS, lingerFading, useLingerClock, useStableOrder } from './approvals-linger'
+import { isFinished, useLinger, useStableOrder, type LeaveMode } from './approvals-linger'
+import { LingerCollapse } from './linger-collapse'
 import { ActionCard, useDismissStaleMerges, type DecideAction } from './manager-approval'
 import { ManagerAvatar } from './manager-avatar'
 import { ManagerProjectsContext } from './manager-reference'
@@ -25,12 +26,13 @@ type Action = Extract<ManagerMessage, { kind: 'action' }>
 type DecisionResult = { managerId: string; message: Action; readError?: string; finishedAt?: number }
 type SaveResult = (managerId: string, actionId: string, message?: Action, readError?: string) => void
 
-function ManagerApprovals({ manager, heading, results, saveResult, now }: {
+function ManagerApprovals({ manager, heading, results, saveResult, leaving }: {
   manager: ManagerSummary
   heading: RefObject<HTMLHeadingElement | null>
   results: DecisionResult[]
   saveResult: SaveResult
-  now: number
+  /** Lingering cards collapsing now (useLinger), keyed `manager/action`. */
+  leaving: ReadonlyMap<string, LeaveMode>
 }) {
   const client = useQueryClient()
   // The chat's connected projects, so an action reason's references paint as chips here too.
@@ -107,61 +109,69 @@ function ManagerApprovals({ manager, heading, results, saveResult, now }: {
   useDismissStaleMerges(manager.pendingActions > 0 ? pending.data ?? [] : [], onDecide)
   if (manager.pendingActions === 0 && results.length === 0) return null
   const inactive = manager.inactive !== undefined
+  // The last card of a manager with nothing pending takes its heading along as it collapses.
+  const sectionLeaving = manager.pendingActions === 0 && results.length > 0 && results.every((row) => leaving.has(lingerKey(row))) ? leaving.get(lingerKey(results[0]!)) : undefined
   return (
     <ManagerProjectsContext.Provider value={connected}>
-      <section aria-label={manager.name} className="flex flex-col gap-3">
-        <div className="flex items-center gap-2.5">
-          <ManagerAvatar avatar={manager.avatar} mascot={manager.mascot} inactive={inactive} className="size-8" />
-          <div className="min-w-0 flex-1">
-            <h2 className={cn('truncate font-semibold', inactive && 'text-muted-foreground')}>{manager.name}</h2>
-            {inactive ? <p className="truncate text-meta text-muted-foreground">Manager · inactive</p> : null}
-          </div>
-          <Button asChild variant="outline" className="shrink-0 max-md:min-h-11">
-            <Link to={`/manager/${encodeURIComponent(manager.id)}#needs-you`} aria-label={`Open chat with ${manager.name}`}>Open chat</Link>
-          </Button>
-        </div>
-        {inactive && manager.pendingActions > 0 ? (
-          <p data-slot="approval-inactive-flag" className="inline-flex items-center gap-1.5 self-start rounded-full bg-muted px-2 py-0.5 text-micro text-muted-foreground">
-            <PauseIcon aria-hidden="true" className="size-3.5 shrink-0" />
-            Manager inactive — it hears your decision when reactivated
-          </p>
-        ) : null}
-        {manager.pendingActions > 0 ? <CacheStatusChip queryKey={managerKeys.approvals(manager.id)} isFetching={pending.isFetching} isError={pending.isError} className="self-start" /> : null}
-        {manager.pendingActions > 0 && pending.isPending ? <LoadingState label={`Loading approvals from ${manager.name}…`} /> : null}
-        {manager.pendingActions > 0 && pending.isError ? (
-          <div role="alert" className="flex flex-wrap items-center gap-2 text-sm text-danger">
-            <p>Couldn’t load approvals from {manager.name}.</p>
-            <Button variant="outline" onClick={() => void pending.refetch()}>Retry</Button>
-          </div>
-        ) : null}
-        {messages.map((message) => {
-          if (message.kind !== 'action') return null
-          const row = results.find((entry) => entry.message.id === message.id)
-          const error = row?.readError
-          // One wrapper for every card, so a card moving between pending and decided keeps its state.
-          return (
-            <div
-              key={message.id}
-              data-slot="approval-slot"
-              data-approval-id={message.id}
-              data-lingering={row?.finishedAt === undefined ? undefined : lingerFading(row.finishedAt, now) ? 'leaving' : 'shown'}
-              className={cn('motion-safe:transition-opacity motion-safe:duration-300', row && lingerFading(row.finishedAt, now) && 'motion-safe:opacity-0')}
-            >
-              {error ? (
-                <div data-result-id={message.id} role="alert" className="flex flex-col gap-2 rounded-xl border border-danger/45 bg-card p-3.5 text-sm">
-                  <p>Couldn’t load the result for {actionTitle(message.action)}. Your decision may have completed.</p>
-                  <p>{error}</p>
-                  <Button variant="outline" className="self-start max-md:min-h-11" onClick={() => void readResult(message)}>Retry result</Button>
-                </div>
-              ) : <ActionCard origin={{ id: manager.id, name: manager.name }} message={message} onDecide={onDecide} />}
+      <LingerCollapse leaving={sectionLeaving}>
+        <section aria-label={manager.name} data-slot="approval-group" className="flex flex-col gap-3">
+          <div className="flex items-center gap-2.5">
+            <ManagerAvatar avatar={manager.avatar} mascot={manager.mascot} inactive={inactive} className="size-8" />
+            <div className="min-w-0 flex-1">
+              <h2 className={cn('truncate font-semibold', inactive && 'text-muted-foreground')}>{manager.name}</h2>
+              {inactive ? <p className="truncate text-meta text-muted-foreground">Manager · inactive</p> : null}
             </div>
-          )
-        })}
-        {pending.data?.length === 0 && results.length === 0 && !pending.isError ? <p className="text-sm text-muted-foreground">No pending approvals from this manager.</p> : null}
-      </section>
+            <Button asChild variant="outline" className="shrink-0 max-md:min-h-11">
+              <Link to={`/manager/${encodeURIComponent(manager.id)}#needs-you`} aria-label={`Open chat with ${manager.name}`}>Open chat</Link>
+            </Button>
+          </div>
+          {inactive && manager.pendingActions > 0 ? (
+            <p data-slot="approval-inactive-flag" className="inline-flex items-center gap-1.5 self-start rounded-full bg-muted px-2 py-0.5 text-micro text-muted-foreground">
+              <PauseIcon aria-hidden="true" className="size-3.5 shrink-0" />
+              Manager inactive — it hears your decision when reactivated
+            </p>
+          ) : null}
+          {manager.pendingActions > 0 ? <CacheStatusChip queryKey={managerKeys.approvals(manager.id)} isFetching={pending.isFetching} isError={pending.isError} className="self-start" /> : null}
+          {manager.pendingActions > 0 && pending.isPending ? <LoadingState label={`Loading approvals from ${manager.name}…`} /> : null}
+          {manager.pendingActions > 0 && pending.isError ? (
+            <div role="alert" className="flex flex-wrap items-center gap-2 text-sm text-danger">
+              <p>Couldn’t load approvals from {manager.name}.</p>
+              <Button variant="outline" onClick={() => void pending.refetch()}>Retry</Button>
+            </div>
+          ) : null}
+          {messages.map((message) => {
+            if (message.kind !== 'action') return null
+            const row = results.find((entry) => entry.message.id === message.id)
+            const error = row?.readError
+            const key = `${manager.id}/${message.id}`
+            // One wrapper for every card, so a card moving between pending and decided keeps its state.
+            return (
+              <LingerCollapse
+                key={message.id}
+                lingerKey={key}
+                leaving={leaving.get(key)}
+                data-slot="approval-slot"
+                data-approval-id={message.id}
+                data-lingering={row?.finishedAt === undefined ? undefined : leaving.has(key) ? 'leaving' : 'shown'}
+              >
+                {error ? (
+                  <div data-result-id={message.id} role="alert" className="flex flex-col gap-2 rounded-xl border border-danger/45 bg-card p-3.5 text-sm">
+                    <p>Couldn’t load the result for {actionTitle(message.action)}. Your decision may have completed.</p>
+                    <p>{error}</p>
+                    <Button variant="outline" className="self-start max-md:min-h-11" onClick={() => void readResult(message)}>Retry result</Button>
+                  </div>
+                ) : <ActionCard origin={{ id: manager.id, name: manager.name }} message={message} onDecide={onDecide} />}
+              </LingerCollapse>
+            )
+          })}
+          {pending.data?.length === 0 && results.length === 0 && !pending.isError ? <p className="text-sm text-muted-foreground">No pending approvals from this manager.</p> : null}
+        </section>
+      </LingerCollapse>
     </ManagerProjectsContext.Provider>
   )
 }
+
+const lingerKey = (row: DecisionResult) => `${row.managerId}/${row.message.id}`
 
 /** Global pending action cards, independent of any chat's loaded history or unread state. */
 export function ManagerApprovalsRoute() {
@@ -179,19 +189,14 @@ export function ManagerApprovalsRoute() {
       return [...others, { managerId, message, ...(readError ? { readError } : {}), ...(finishedAt === undefined ? {} : { finishedAt }) }]
     })
   }, [])
-  const prune = useCallback((at: number) => {
-    setResults((rows) => {
-      const kept = rows.filter((row) => row.finishedAt === undefined || row.finishedAt + LINGER_MS > at)
-      if (kept.length === rows.length) return rows
-      // The decided card holds focus (ActionCard's focusCard): don't drop it to <body> with the card.
-      const holder = document.activeElement?.closest('[data-slot="approval-slot"]')?.getAttribute('data-approval-id')
-      if (holder && rows.some((row) => !kept.includes(row) && row.message.id === holder)) {
-        heading.current?.focus({ preventScroll: true })
-      }
-      return kept
-    })
+  const remove = useCallback((keys: ReadonlySet<string>) => {
+    // The decided card holds focus (ActionCard's focusCard): don't drop it to <body> with the card.
+    const holder = document.activeElement?.closest('[data-linger-key]')?.getAttribute('data-linger-key')
+    if (holder && keys.has(holder)) heading.current?.focus({ preventScroll: true })
+    setResults((rows) => rows.filter((row) => !keys.has(lingerKey(row))))
   }, [])
-  const now = useLingerClock(results, prune)
+  const list = useRef<HTMLDivElement>(null)
+  const leaving = useLinger(results.map((row) => ({ key: lingerKey(row), ...(row.finishedAt === undefined ? {} : { finishedAt: row.finishedAt }) })), remove, list)
   const ordered = useStableOrder(orderManagers(managers.data?.managers ?? []))
   const visibleResults = results.filter((row) => ordered.some((manager) => manager.id === row.managerId))
   const count = ordered.reduce((sum, manager) => sum + manager.pendingActions, 0)
@@ -222,7 +227,10 @@ export function ManagerApprovalsRoute() {
       {managers.data && count === 0 && visibleResults.length === 0 ? (
         <CenteredState heading="h2" icon={<CheckCheckIcon aria-hidden="true" />} title="No pending approvals" subtitle="Approval requests from all your managers appear here. Questions have their own page." />
       ) : null}
-      {ordered.map((manager) => <ManagerApprovals key={manager.id} manager={manager} heading={heading} results={results.filter((row) => row.managerId === manager.id)} saveResult={saveResult} now={now} />)}
+      {/* The cards region: the pointer or focus in here holds a lingering card back (useLinger). */}
+      <div ref={list} data-slot="approvals-list" className="contents">
+        {ordered.map((manager) => <ManagerApprovals key={manager.id} manager={manager} heading={heading} results={results.filter((row) => row.managerId === manager.id)} saveResult={saveResult} leaving={leaving} />)}
+      </div>
     </div>
   )
 }

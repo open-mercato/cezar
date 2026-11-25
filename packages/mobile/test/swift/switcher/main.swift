@@ -397,5 +397,90 @@ do {
     expect(done == 3 && cezars.rows([directServer], now: noon)[0].status == .offline, "a reading still checking at the bound reads offline")
 }
 
+// CezarProbe: a joiner listing a cezar the round does not cover runs again; a held round keeps the warm links
+do {
+    final class Memory: DeviceBookStorage {
+        var data: Data?
+        func read() -> Data? { data }
+        func write(_ data: Data) { self.data = data }
+    }
+    var reports: [String: (DeviceSwitch.Reading) -> Void] = [:]
+    var released: [String] = []
+    var made = 0
+    var held = true
+    let cezars = CezarProbe(make: { onChange in
+        made += 1
+        return DeviceProbes(relay: { server, report in reports[server.id] = report }, direct: { server, report in reports[server.id] = report },
+                            release: { released.append($0.id) }, schedule: { _, _ in }, onChange: onChange)
+    }, book: DeviceBookStore(storage: Memory()), clock: { noon }, schedule: { _, _ in }, keepLinks: { held })
+    var done: [String] = []
+    cezars.probe([relayServer], currentId: nil) { done.append("first") }
+    cezars.probe([relayServer], currentId: nil) { done.append("joined") }
+    cezars.probe([relayServer, directServer], currentId: nil) { done.append("with d") }
+    expect(made == 1, "one round runs")
+    reports["r"]!(.init(.online, attention: .init(waiting: 0, failed: 0)))
+    expect(done == ["first", "joined"] && made == 2, "the round answers what it covers, then runs again for the new cezar")
+    expect(released.isEmpty, "held by the sheet: the round leaves the warm links")
+    held = false
+    reports["r"]!(.init(.online, attention: .init(waiting: 0, failed: 0)))
+    reports["d"]!(.init(.online, attention: .init(waiting: 0, failed: 0)))
+    expect(done == ["first", "joined", "with d"] && released == ["r", "d"], "the follow-up reads it, and lets go once the sheet is closed")
+}
+
+// BadgeRefresh (spec 2026-11-20-phone-notifications-inbox, B1): a round on resume, and a minute's tick while a page is open
+do {
+    let manual = Manual()
+    var now: Int64 = noon
+    var rounds: [String?] = []
+    var finish: [() -> Void] = []
+    var applied = 0
+    let badges = BadgeRefresh(round: { current, done in rounds.append(current); finish.append(done) },
+                              schedule: manual.schedule, clock: { now }, apply: { applied += 1 })
+    badges.resumed()
+    expect(rounds == [nil] && applied == 0, "resume runs a round over every cezar")
+    badges.resumed()
+    expect(rounds.count == 1, "a resume while one runs joins it")
+    finish.removeFirst()()
+    expect(applied == 1, "the round ends in apply: the badge is set and 0 clears")
+    now += 1000
+    badges.resumed()
+    expect(rounds.count == 1, "a resume right after reuses it")
+    now += BadgeRefresh.minGapMs
+    badges.resumed()
+    finish.removeFirst()()
+    expect(rounds.count == 2 && applied == 2, "a later resume reads again")
+    badges.pageStarted("r")
+    expect(rounds.count == 2 && manual.delays == [BadgeRefresh.pageEveryMs], "a page opened: the tick is armed")
+    manual.fire()
+    expect(rounds.count == 3 && rounds.last == "r", "the tick reads every cezar, the page's over its own link")
+    finish.removeFirst()()
+    expect(applied == 3 && manual.pending.count == 1, "and arms the next one")
+    badges.pageStopped("r")
+    manual.fire()
+    expect(rounds.count == 3 && manual.pending.isEmpty, "the page left: the tick stops")
+    badges.hold(true)
+    now += BadgeRefresh.minGapMs
+    badges.resumed()
+    expect(rounds.count == 3, "no round while the device sheet holds its warm links")
+    badges.hold(false)
+    badges.resumed()
+    expect(rounds.count == 4, "the sheet closed: rounds run again")
+}
+
+// DeviceBook: a computer at 0 loses its delivered notifications (B3)
+do {
+    var book = DeviceBook()
+    book.sync([relayServer, directServer])
+    expect(book.settled.isEmpty, "unknown counts clear nothing")
+    book.noted("r", online: true, waiting: 0, failed: 1, at: noon)
+    book.noted("d", online: true, waiting: 0, failed: 0, at: noon)
+    let cezar = relayServer.relay!.cezarId
+    expect(book.settled == [cezar] && book.badge == 0, "a relay computer at 0 is settled; a direct one has no notifications")
+    let delivered: [(id: String, cezarId: String?)] = [(cezar, nil), ("apns-1", cezar), ("other", "c-other"), ("lone", nil)]
+    expect(DeviceBook.toRemove(delivered, settled: book.settled) == [cezar, "apns-1"], "its local and relay notifications go, others stay")
+    book.noted("r", online: true, waiting: 2, failed: 0, at: noon)
+    expect(book.settled.isEmpty && book.badge == 2, "a count above 0 keeps them")
+}
+
 print("\(checks) checks, \(failures) failed")
 exit(failures == 0 ? 0 : 1)

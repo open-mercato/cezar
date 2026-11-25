@@ -43,6 +43,7 @@ import type { TrackerKind } from '@open-mercato/cezar-api-client'
 import { FOLD_ARIA_KEYS, SidebarDrawer, SidebarFoldButton, SidebarFrame, useDesktopShell, useSidebarFolded, useSidebarWidth, type SidebarResize } from '@/components/sidebar-frame'
 import { cn } from '@/lib/utils'
 import { exitSidebarRail, useSidebarRail } from '@/lib/sidebar-rail'
+import { MANAGER_NOW_PATH } from '@/routes/manager/manager-now-model'
 import { useCompactNavigation } from '@/lib/use-compact-navigation'
 
 export type RepoChip = {
@@ -476,7 +477,7 @@ export const AppShell = React.memo(function AppShell({
           <Sheet open={menuOpen} onOpenChange={setMenuOpen}>
             {threadBar ? null : (
               <MobileTopBar
-                title={managerMode ? 'Manager' : globalTasks ? 'All tasks' : (current?.label ?? brandName)}
+                title={managerMode ? (pathname === MANAGER_NOW_PATH ? 'Now' : 'Manager') : globalTasks ? 'All tasks' : (current?.label ?? brandName)}
                 attention={managersAvailable && !managerMode ? managerAttention : null}
                 // The compact navigation keeps this bar at every width; the sidebar replaces it otherwise.
                 everyWidth={phoneNav}
@@ -525,6 +526,7 @@ export const AppShell = React.memo(function AppShell({
               onMore={openMenu}
               manager={managerMode}
               attention={managerAttention}
+              nowCount={nowCount}
               managerTo={managerTo}
               managerTasks={managerMode ? managerTasks : null}
               everyWidth={phoneNav}
@@ -1080,7 +1082,7 @@ function areaCountTitle(item: NavItem, count: number | null): string | undefined
   if (!count) return undefined
   const one = count === 1
   if (item.badge === 'tasks-unread') return `${count} unread finished ${one ? 'task' : 'tasks'}`
-  if (item.badge === 'needs-you') return `${count} ${one ? 'task needs' : 'tasks need'} you`
+  if (item.badge === 'needs-you') return `${count} ${one ? 'thing needs' : 'things need'} you`
   return undefined
 }
 
@@ -1089,7 +1091,7 @@ function areaCountTitle(item: NavItem, count: number | null): string | undefined
 export const NAV_ROW_CLASS =
   'flex h-11 w-full items-center gap-2.5 rounded-md px-2.5 text-ui font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground md:h-[34px]'
 export const NAV_ROW_ACTIVE_CLASS = 'bg-muted font-semibold text-foreground'
-const NAV_BADGE_CLASS = 'ml-auto rounded-full bg-violet px-1.5 py-px text-micro font-semibold text-violet-foreground tabular-nums'
+export const NAV_BADGE_CLASS ='ml-auto rounded-full bg-violet px-1.5 py-px text-micro font-semibold text-violet-foreground tabular-nums'
 
 /**
  * One nav row. A plain Link, not NavLink: NavLink derives `aria-current` from its own prefix

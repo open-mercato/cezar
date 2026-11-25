@@ -1040,8 +1040,8 @@ export function Composer({
           <CommandList
             data-slot="composer-menu"
             data-trigger={trigger?.trigger}
-            // Clamped to the popper's reported space so the open keyboard (collisionPadding
-            // via the shared PopoverContent) shrinks the menu instead of hiding its tail.
+            // Clamped to --radix-popover-content-available-height, the room Radix measures
+            // inside the visual viewport, so the open keyboard shrinks the menu.
             className="max-h-[min(16rem,var(--radix-popover-content-available-height))] p-1"
           >
             {candidates.length === 0 ? (

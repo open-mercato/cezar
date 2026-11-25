@@ -225,7 +225,7 @@ export const managerSchema = z.object({
   confirm: managerOwnConfirmSchema.optional(),
   /** Absent or empty: no chip row at all. */
   quickPrompts: z.array(managerQuickPromptSchema).max(MANAGER_QUICK_PROMPTS_MAX).optional(),
-  /** `task cancel` may stop tasks it did not start, in its connected write projects. Absent = own only. */
+  /** `task cancel` and `task switch` may act on other tasks in connected write projects. Absent = own only. */
   cancelAnyTask: z.boolean().optional(),
   /** Read-only `gh` patterns the user allowed beyond the built-in policy. Absent = none. */
   bashAllow: z.array(managerBashPatternSchema).max(MANAGER_BASH_ALLOW_MAX).optional(),
@@ -260,6 +260,9 @@ export const managerSummarySchema = managerSchema.extend({
   pendingActions: z.number().int().min(0),
   /** Question cards still waiting for an answer. */
   pendingQuestions: z.number().int().min(0),
+  /** `GET /workspace/managers` only: its approvals and questions Now still lists, after dismissals, snoozes
+   *  and Probably done; Notify off keeps them (spec 2026-11-23-needs-you-triage). The notch reads this. */
+  needsYou: z.object({ approvals: z.number().int().min(0), questions: z.number().int().min(0) }).optional(),
   lastCheckAt: z.string().optional(),
   /** Absent when `cronMinutes` is 0. */
   nextCheckAt: z.string().optional(),
@@ -646,6 +649,7 @@ export const managerSnapshotTaskSchema = z.object({
   /** Why it was cancelled, and by whom, when `task cancel` said so. */
   cancelReason: z.string().optional(),
   cancelledBy: z.string().optional(),
+  agentSwitch: z.string().optional(),
 });
 export type ManagerSnapshotTask = z.infer<typeof managerSnapshotTaskSchema>;
 
@@ -671,10 +675,25 @@ export const managerSnapshotProjectSchema = z.object({
 });
 export type ManagerSnapshotProject = z.infer<typeof managerSnapshotProjectSchema>;
 
+/** An agent account this manager may start tasks on, with its usage-limit state. */
+export const managerAccountStateSchema = z.object({
+  runner: z.string(),
+  /** Absent: the project's automatic account. */
+  agentProfile: z.string().optional(),
+  /** The resolved account id the limit is keyed on. */
+  account: z.string(),
+  label: z.string(),
+  /** Set while the account waits out a usage limit, until this instant. */
+  outOfLimitsUntil: z.string().optional(),
+});
+export type ManagerAccountState = z.infer<typeof managerAccountStateSchema>;
+
 export const managerSnapshotSchema = z.object({
   generatedAt: z.string(),
   projects: z.array(managerSnapshotProjectSchema),
   attention: z.array(managerAttentionItemSchema),
+  /** The accounts new tasks may use and whether each has capacity now. */
+  accounts: z.array(managerAccountStateSchema).optional(),
 });
 export type ManagerSnapshot = z.infer<typeof managerSnapshotSchema>;
 
@@ -727,6 +746,20 @@ export const managerCreateTaskResponseSchema = z.object({
   projectId: z.string(),
   runId: z.string(),
   forwarded: managerForwardedSchema.optional(),
+  /** A flag the project's own settings overrode, said in one line (e.g. `--dispatch` in a trunk-based project). */
+  notice: z.string().optional(),
+  /** The agent the task runs on and why it was picked. */
+  agent: z.object({
+    runner: z.string(),
+    agentProfile: z.string().optional(),
+    account: z.string(),
+    label: z.string(),
+    reason: z.string(),
+    /** Every allowed account is out of limits: the task waits in the queue until this instant. */
+    queuedUntil: z.string().optional(),
+  }).optional(),
+  /** An explicit account that is out of limits, naming an allowed one with capacity. */
+  warning: z.string().optional(),
 });
 export type ManagerCreateTaskResponse = z.infer<typeof managerCreateTaskResponseSchema>;
 
@@ -777,9 +810,21 @@ export const managerCancelTaskResponseSchema = z.object({
 });
 export type ManagerCancelTaskResponse = z.infer<typeof managerCancelTaskResponseSchema>;
 
-/** `cez manager task retry`: a new task with a failed one's objective, workflow, runner, model and effort. */
-export const managerRetryTaskInputSchema = z.object({ projectId: boundedId, runId: boundedId });
+export const managerRetryTaskInputSchema = z.object({
+  projectId: boundedId,
+  runId: boundedId,
+  runner: runnerInput.optional(),
+  agentProfile: z.string().min(1).max(64).optional(),
+  model: modelInput.optional(),
+  effort: managerTaskEffortSchema.optional(),
+});
 export type ManagerRetryTaskInput = z.infer<typeof managerRetryTaskInputSchema>;
+
+export const managerSwitchTaskInputSchema = managerRetryTaskInputSchema.refine(
+  (input) => Boolean(input.runner || input.agentProfile || input.model || input.effort),
+  { message: 'choose a runner, account, model or effort' },
+);
+export type ManagerSwitchTaskInput = z.infer<typeof managerSwitchTaskInputSchema>;
 
 export const managerProposeActionInputSchema = z.object({
   action: managerActionRequestSchema,
@@ -835,3 +880,37 @@ export const managerDeltaEventSchema = z.object({
   commands: z.array(managerCommandSchema).optional(),
 });
 export type ManagerDeltaEvent = z.infer<typeof managerDeltaEventSchema>;
+
+// ---- memory (spec 2026-11-21-manager-short-sessions-and-memory § 2.1) ----------------------
+
+/** What every new manager session starts from: small on purpose, so a size budget, not a log. */
+export const MANAGER_MEMORY_LIMITS = { entries: 40, bytes: 6144, text: 280, why: 200 } as const;
+export const managerMemoryKindSchema = z.enum(['preference', 'feedback', 'decision', 'pointer']);
+export type ManagerMemoryKind = z.infer<typeof managerMemoryKindSchema>;
+export const managerMemoryKeySchema = z.string().regex(/^[a-z0-9][a-z0-9-]{0,63}$/, 'a key is 1–64 lowercase letters, digits or dashes');
+export const managerMemoryEntrySchema = z.object({
+  key: managerMemoryKeySchema,
+  kind: managerMemoryKindSchema,
+  text: z.string().trim().min(1).max(MANAGER_MEMORY_LIMITS.text),
+  why: z.string().trim().min(1).max(MANAGER_MEMORY_LIMITS.why).optional(),
+  updatedAt: z.string(),
+  source: z.enum(['user', 'manager', 'import']),
+});
+export type ManagerMemoryEntry = z.infer<typeof managerMemoryEntrySchema>;
+export const managerMemoryResponseSchema = z.object({
+  entries: z.array(managerMemoryEntrySchema),
+  limits: z.object({ entries: z.number().int(), bytes: z.number().int() }),
+  /** Size of the block every new session's system prompt carries. */
+  usedBytes: z.number().int().nonnegative(),
+});
+export type ManagerMemoryResponse = z.infer<typeof managerMemoryResponseSchema>;
+export const managerMemoryParamSchema = z.object({ id: managerIdSchema, key: managerMemoryKeySchema });
+export const putManagerMemoryInputSchema = z.object({
+  kind: managerMemoryKindSchema,
+  text: z.string().trim().min(1).max(MANAGER_MEMORY_LIMITS.text),
+  why: z.string().trim().max(MANAGER_MEMORY_LIMITS.why).optional(),
+  /** Who wrote it: the cockpit sends `user`, `cez-manager memory set` sends `manager`. Required,
+   *  so a write is never credited to the user by default. */
+  source: z.enum(['user', 'manager']),
+});
+export type PutManagerMemoryInput = z.infer<typeof putManagerMemoryInputSchema>;

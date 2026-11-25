@@ -31,6 +31,8 @@ use std::sync::atomic::{AtomicBool, AtomicU16, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+#[cfg(unix)]
+mod cli_command;
 mod disclaim;
 mod node_runtime;
 #[cfg(target_os = "macos")]
@@ -43,7 +45,7 @@ mod telemetry;
 pub use disclaim::disclaim_exec_if_asked;
 
 use telemetry::Failure;
-use tauri::menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu};
+use tauri::menu::{CheckMenuItem, IsMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::{AppHandle, Manager, RunEvent, WebviewUrl, WebviewWindow, WebviewWindowBuilder, WindowEvent};
 use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
 
@@ -55,8 +57,21 @@ const LOG_TAIL: usize = 60;
 /// beside the app whenever it can; a busy one falls through to the next few, then to any.
 const PREFERRED_PORTS: std::ops::Range<u16> = 4321..4331;
 const PACKAGE: &str = "@open-mercato/cezar";
-/// System-wide: bring the cockpit forward on its new-task composer from any app.
-const NEW_TASK_SHORTCUT: &str = "CmdOrCtrl+Alt+N";
+/// System-wide: bring the cockpit forward on its new-task composer from any app. Never Ctrl+Alt+key
+/// off macOS: there Ctrl+Alt is AltGr, and a global hotkey on it steals typed characters (Alt+N is
+/// "ń" on a Polish layout) from every app (#2409). Win/Super+Shift+N is unused by the OSes.
+#[cfg(target_os = "macos")]
+const NEW_TASK_SHORTCUT: &str = "Cmd+Alt+N";
+#[cfg(not(target_os = "macos"))]
+const NEW_TASK_SHORTCUT: &str = "Super+Shift+N";
+
+/// True when a chord pairs Ctrl and Alt (AltGr on Windows/Linux) with a key.
+#[cfg(test)]
+fn is_altgr_chord(chord: &str) -> bool {
+    let parts: Vec<String> = chord.split('+').map(|p| p.trim().to_ascii_lowercase()).collect();
+    let has = |names: &[&str]| parts.iter().any(|p| names.contains(&p.as_str()));
+    has(&["ctrl", "control", "cmdorctrl", "commandorcontrol"]) && has(&["alt", "option"])
+}
 
 /// Everything the supervisor thread and the menu handler share.
 struct Shell {
@@ -380,23 +395,21 @@ fn build_menu(app: &AppHandle, shell: &Shell) -> tauri::Result<()> {
     let versions_menu = Submenu::with_id(app, "versions", "Versions", true)?;
     *shell.versions_menu.lock().unwrap() = Some(versions_menu.clone());
     refresh_versions_menu(app, shell);
-    let app_menu = Submenu::with_items(
-        app,
-        "Cezar",
-        true,
-        &[
-            &PredefinedMenuItem::about(app, None, None)?,
-            &PredefinedMenuItem::separator(app)?,
-            &update_item,
-            &versions_menu,
-            &open_item,
-            &PredefinedMenuItem::separator(app)?,
-            &PredefinedMenuItem::hide(app, None)?,
-            &PredefinedMenuItem::hide_others(app, None)?,
-            &PredefinedMenuItem::separator(app)?,
-            &PredefinedMenuItem::quit(app, None)?,
-        ],
-    )?;
+    let about = PredefinedMenuItem::about(app, None, None)?;
+    let separators = [PredefinedMenuItem::separator(app)?, PredefinedMenuItem::separator(app)?, PredefinedMenuItem::separator(app)?];
+    let (hide, hide_others, quit) = (PredefinedMenuItem::hide(app, None)?, PredefinedMenuItem::hide_others(app, None)?, PredefinedMenuItem::quit(app, None)?);
+    let mut items: Vec<&dyn IsMenuItem<tauri::Wry>> = vec![&about, &separators[0], &update_item, &versions_menu, &open_item];
+    // The terminal command (`cli_command.rs`): the bundle's shim linked onto the PATH, like VS Code's `code`.
+    #[cfg(target_os = "macos")]
+    let cli_items = (
+        PredefinedMenuItem::separator(app)?,
+        MenuItem::with_id(app, "install-cli", "Install 'cez' command in PATH…", true, None::<&str>)?,
+        MenuItem::with_id(app, "uninstall-cli", "Uninstall 'cez' command", true, None::<&str>)?,
+    );
+    #[cfg(target_os = "macos")]
+    items.extend([&cli_items.0 as &dyn IsMenuItem<tauri::Wry>, &cli_items.1, &cli_items.2]);
+    items.extend([&separators[1] as &dyn IsMenuItem<tauri::Wry>, &hide, &hide_others, &separators[2], &quit]);
+    let app_menu = Submenu::with_items(app, "Cezar", true, &items)?;
     // Without an Edit menu the webview has no Cmd+C / Cmd+V on macOS.
     let edit_menu = Submenu::with_items(
         app,
@@ -792,6 +805,14 @@ pub fn run() {
                         refresh_versions_menu(&app, &shell);
                     }
                 });
+            }
+            #[cfg(target_os = "macos")]
+            id @ ("install-cli" | "uninstall-cli") => {
+                let Ok(resources) = app.path().resource_dir() else { return };
+                let shim_dir = resources.join("bin");
+                let install = id == "install-cli";
+                // osascript dialogs block until answered: never on the main thread.
+                std::thread::spawn(move || if install { cli_command::install(shim_dir) } else { cli_command::uninstall(shim_dir) });
             }
             "update-cezar" => {
                 let app = app.clone();
@@ -2397,6 +2418,17 @@ mod tests {
             "window.dispatchEvent(new CustomEvent('cezar:switch-task', { detail: \"next\" }))"
         );
         assert_eq!(TASK_SWITCH_SHORTCUTS.map(|(_, direction)| direction), ["previous", "next"]);
+    }
+
+    /// #2409: Ctrl+Alt is AltGr off macOS, so the new-task chord must never be one.
+    #[test]
+    fn the_new_task_chord_is_not_altgr() {
+        assert!(!is_altgr_chord(NEW_TASK_SHORTCUT));
+        assert!(is_altgr_chord("CmdOrCtrl+Alt+N"));
+        assert!(is_altgr_chord("Ctrl+Alt+N"));
+        assert!(!is_altgr_chord("Cmd+Alt+N"));
+        assert!(!is_altgr_chord("Super+Shift+N"));
+        assert!(NEW_TASK_SHORTCUT.parse::<Shortcut>().is_ok());
     }
 
     #[test]

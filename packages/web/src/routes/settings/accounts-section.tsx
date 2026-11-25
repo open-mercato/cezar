@@ -55,7 +55,7 @@ import { DropdownMenuItem } from '@/components/ui/dropdown-menu'
 import { DefaultAgentPicker, agentPickerRows } from '@/components/default-agent-picker'
 import { LoadingState, SettingsSkeleton } from '@/components/loading-state'
 import { modelCatalogStatus, modelsForRunner, RUNNERS } from '@/routes/new-task-form'
-import { AddAccountDialog } from './add-account-dialog'
+import { useAddAccount } from '@/components/add-account/add-account-host'
 import { CursorConnection } from './cursor-connection'
 import { CardNote, FormRow, SavedIndicator, SettingsCard, useSavedFlash } from './form-row'
 import { AccountPlanUsage } from './account-plan-usage'
@@ -171,7 +171,9 @@ export function splitInstalled(
 
 function AccountsPane({ data }: { data: AgentProfilesResponse }) {
   const health = useHealth()
-  const [adding, setAdding] = useState<ProviderId | null>(null)
+  const addAccount = useAddAccount()
+  // A paired phone gets no host paths (spec 2026-11-24-add-account-in-cockpit).
+  const hostPaths = data.hostPaths !== false
   const [confirming, setConfirming] = useState<AgentProfile | null>(null)
   const remove = useRemoveAgentProfile()
 
@@ -279,7 +281,8 @@ function AccountsPane({ data }: { data: AgentProfilesResponse }) {
               size="sm"
               data-action="accounts-add"
               data-provider={capable[0]}
-              onClick={() => setAdding(capable[0] ?? null)}
+              disabled={!addAccount}
+              onClick={() => addAccount?.open({ provider: capable[0] })}
             >
               Add account
             </Button>
@@ -287,7 +290,7 @@ function AccountsPane({ data }: { data: AgentProfilesResponse }) {
         }
       >
         {accounts.map((account) => (
-          <AccountRow key={`${account.provider}:${account.id}`} account={account} onRemove={() => setConfirming(account)} />
+          <AccountRow key={`${account.provider}:${account.id}`} account={account} hostPaths={hostPaths} onRemove={() => setConfirming(account)} />
         ))}
         <CardNote>
           {capable.length > 0
@@ -303,28 +306,25 @@ function AccountsPane({ data }: { data: AgentProfilesResponse }) {
         </CardNote>
       </SettingsCard>
 
-      {/* Keyed by provider so reopening under a different agent starts from a clean form rather
-          than the previous agent's half-typed folder. */}
-      {adding !== null ? (
-        <AddAccountDialog
-          key={adding}
-          open
-          onOpenChange={(open) => !open && setAdding(null)}
-          providers={capable}
-          initialProvider={adding}
-        />
-      ) : null}
-
       <AlertDialog open={confirming !== null} onOpenChange={(open) => !open && setConfirming(null)}>
         <AlertDialogContent data-slot="accounts-remove-confirm">
           <AlertDialogHeader>
             <AlertDialogTitle>Remove “{confirming?.label}”?</AlertDialogTitle>
+            {confirming?.managed ? (
+              <AlertDialogDescription data-slot="accounts-remove-managed">
+                cezar signs this account out and deletes the folder it made for it
+                {hostPaths && confirming.path ? <> ({confirming.path})</> : null}, with its settings and
+                sessions. Projects using it fall back to the default account, and tasks that ran under
+                it can no longer be resumed from here.
+              </AlertDialogDescription>
+            ) : (
             <AlertDialogDescription>
               This removes the account from cezar's list — it cannot be undone from here; add the
               folder again to bring it back. Nothing in {confirming?.configDir} is deleted — not
               your login, not your sessions. Projects using it fall back to the default account,
               and tasks that ran under it can no longer be resumed from here.
             </AlertDialogDescription>
+            )}
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
@@ -545,7 +545,8 @@ function DefaultsForNewProjects({ profiles }: { profiles: AgentProfilesResponse 
   )
 }
 
-function AccountRow({ account, onRemove }: { account: AgentProfile; onRemove: () => void }) {
+function AccountRow({ account, hostPaths, onRemove }: { account: AgentProfile; hostPaths: boolean; onRemove: () => void }) {
+  const addAccount = useAddAccount()
   const [showDetails, setShowDetails] = useState(false)
   const routeId = agentAccountRouteId(account)
   const connect = useConnectAgentAccount()
@@ -573,13 +574,20 @@ function AccountRow({ account, onRemove }: { account: AgentProfile; onRemove: ()
                 discovered
               </Badge>
             ) : null}
+            {account.pending ? (
+              <Badge variant="ghost" data-slot="account-pending" className="shrink-0 text-micro text-pending-strong">
+                not signed in yet
+              </Badge>
+            ) : null}
           </div>
           {/* Stored spelling in the text, the expanded absolute path in the tooltip. */}
-          <IconTooltip label={account.path}>
-            <p data-slot="account-path" className="mt-0.5 w-fit max-w-full truncate font-mono text-meta text-soft-foreground">
-              {account.configDir}
-            </p>
-          </IconTooltip>
+          {hostPaths ? (
+            <IconTooltip label={account.path}>
+              <p data-slot="account-path" className="mt-0.5 w-fit max-w-full truncate font-mono text-meta text-soft-foreground">
+                {account.configDir}
+              </p>
+            </IconTooltip>
+          ) : null}
           <div className="mt-1 flex flex-wrap items-center gap-2 text-label text-muted-foreground">
             {/* "Checking…" is a real, distinct state from any probe RESULT: the answer is not in
                 yet. Showing `unknown` here would claim a verification that never ran. */}
@@ -605,7 +613,11 @@ function AccountRow({ account, onRemove }: { account: AgentProfile; onRemove: ()
         <div className="flex shrink-0 items-center gap-2">
           {/* No Connect for a CLI that is not installed: the login it opens cannot run, and the
               server only answers its install hint (telemetry 23976d8d) — the row shows that. */}
-          {account.provider !== 'cursor' && status?.status !== 'connected' && status?.status !== 'not-installed' ? (
+          {account.pending && addAccount ? (
+            <Button type="button" size="sm" data-action="account-finish-sign-in" onClick={() => addAccount.open({ resume: account })}>
+              Finish signing in
+            </Button>
+          ) : hostPaths && account.provider !== 'cursor' && status?.status !== 'connected' && status?.status !== 'not-installed' ? (
             <Button
               type="button"
               size="sm"
@@ -667,7 +679,7 @@ function AccountRow({ account, onRemove }: { account: AgentProfile; onRemove: ()
       {account.provider === 'cursor' ? <CursorConnection status={status} installCommand={PROVIDER_INSTALL.cursor} /> : null}
 
       {showDetails ? (
-        <AccountDetails account={account} routeId={routeId} onRemove={onRemove} />
+        <AccountDetails account={account} routeId={routeId} hostPaths={hostPaths} onRemove={onRemove} />
       ) : null}
     </div>
   )
@@ -677,10 +689,12 @@ function AccountRow({ account, onRemove }: { account: AgentProfile; onRemove: ()
 function AccountDetails({
   account,
   routeId,
+  hostPaths,
   onRemove,
 }: {
   account: AgentProfile
   routeId: string
+  hostPaths: boolean
   onRemove: () => void
 }) {
   const health = useHealth()
@@ -787,7 +801,8 @@ function AccountDetails({
 
       {/* The discovered account carries no Rename/Remove at all — it is what cezar found, so either
           would imply a setting that does not exist. */}
-      {account.isDefault ? null : (
+      {/* A phone may only remove an account cezar made; renaming stays on the computer. */}
+      {account.isDefault || (!hostPaths && !account.managed) ? null : (
         <div
           data-slot="account-manage"
           className="mt-3 flex flex-wrap items-center gap-2 border-t border-border/60 pt-2.5"
@@ -835,15 +850,17 @@ function AccountDetails({
             </>
           ) : (
             <>
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                data-action="account-rename"
-                onClick={() => setRenaming(true)}
-              >
-                Rename
-              </Button>
+              {hostPaths ? (
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  data-action="account-rename"
+                  onClick={() => setRenaming(true)}
+                >
+                  Rename
+                </Button>
+              ) : null}
               <Button
                 type="button"
                 variant="danger-ghost"
@@ -854,7 +871,7 @@ function AccountDetails({
                 Remove
               </Button>
               {/* The label is cezar's own; the folder is the account. */}
-              <span className="text-label text-muted-foreground">
+              <span hidden={!hostPaths} className="text-label text-muted-foreground">
                 Renaming changes what cezar calls this account, not its folder.
               </span>
             </>

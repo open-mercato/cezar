@@ -155,14 +155,34 @@ Notable fields (full doc-comments in the source):
   an ask card in an attended run (`canAskPermission`, #2042) and refused in an
   autonomous, headless or one-shot run, except this run's own files. Configurable restrictive modes are
   specified by `2026-07-17-permission-modes` (#475).
+- `brokeredShell?` — Codex only: a manager's Bash. The restricted session's broker passes each
+  command to `verify` (the manager policy, `managerShellPlan`) and spawns the returned argv
+  pipeline itself, with a heredoc body as stdin and no shell, in `env`. Claude enforces the same
+  policy through `bashHookCommand`; any other backend ignores the field. The commands run directly
+  on the host with the engine's environment: a Claude manager's `gh` stays inside the user's Claude
+  Bash sandbox, a Codex manager's does not, so a sandbox network allowlist does not cover it. Under
+  `CEZ_CODEX_NETWORK=0` only `offlinePrograms` run (a manager's: `cez-manager` and its pipe filters).
+  Every program, there and in the read broker, is resolved from absolute `PATH` entries only, never
+  the working directory. Restricted Codex refuses Windows today. The dormant Windows path uses
+  `taskkill /T` to walk a live stage's tree. Async teardown can race with pid reuse. Synchronous
+  teardown at server exit keeps the stage's handle open. If a reader quits, the writer is killed
+  by handle and its descendants survive. A child that holds stdout open after its stage exits
+  keeps the call to its timeout and survives.
 - `sessionId?` / `resume?` — stable session id for interactive takeover and for
   `--resume` ("Continue" after a run ends).
 
 **Restricted Codex execution** — `codex-restricted-policy.ts` snapshots the grant. The runner
-accepts only the verified 0.169.0 protocol on macOS/Linux, validates the isolated config and its
-layers, requires no managed requirements/hooks/MCP, and verifies thread sandbox/approval settings
-before the first model turn. Unknown versions, active system policy, unavailable controls and
-ambiguous legacy graph policies fail closed.
+accepts Codex 0.169.0 or newer on macOS/Linux, validates the isolated config and its layers,
+requires no hooks/MCP and no managed requirements beyond ones that only narrow (a workspace's
+login methods and features forced off; its model-only `enterpriseManaged` layer is accepted), and
+verifies thread sandbox/approval settings before the first model turn. A 0.169.0 prerelease is
+refused; only the exact 0.169.0 build relies on the static list. Any other version (newer, or a
+`+build`) also reads every page of `experimentalFeature/list`, disables every enabled, non-`removed` feature for the thread (a newer
+Codex may add a native tool the static list does not know) and re-reads the thread's list; only
+`unified_exec`, which 0.170.0 keeps on and which has no shell or environment to run in, may stay
+on. Only flagged features can be disabled: a tool a future Codex adds without a feature flag is
+invisible to this check. Older versions, active system policy, unavailable controls and ambiguous legacy graph policies
+fail closed.
 
 Restricted steps use a separate account-and-cwd state directory under `cezarHomeDir()/codex-restricted/`.
 Only supported model/provider settings and the selected account's file-backed authentication
@@ -242,7 +262,10 @@ type AgentEvent =
 usage windows (`limits`: `window`, `utilization` 0..1, ISO `resetsAt`) for the run header. The
 run manager merges it onto `RunRecord.liveUsage` and never writes it to the NDJSON transcript.
 Claude emits it from the main agent's message usage, `result.modelUsage[model].contextWindow`
-and `rate_limit_event.unifiedWindows`; a runner without those signals never emits it.
+and `rate_limit_event.unifiedWindows`; a runner without those signals never emits it. Claude also
+adds two optional token splits that only a manager's turn stats read, and that the run record drops:
+`cacheWriteTokens` on a message's reading (what that request wrote to the prompt cache), and
+`turnTokens` (`cacheReadTokens`, `cacheWriteTokens`, `outputTokens`) from the result's own usage.
 
 `mcp-servers` is Claude's `system/init` `mcp_servers` and `tools`, emitted once per process. Only
 a manager reads it (connectors, spec `2026-11-12-manager-connectors`); the run manager drops it, and

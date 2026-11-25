@@ -87,7 +87,7 @@ describe('verified project webhook ownership', () => {
   it('fails closed for foreign hosts and malformed ownership metadata', async () => {
     const dir = directory(); const initial = await ownership.acquireOwnership(dir);
     const record = JSON.parse(readFileSync(join(dir, 'owner.lock'), 'utf8')); await initial!.release();
-    writeFileSync(join(dir, 'owner.lock'), JSON.stringify({ ...record, host: 'another-machine' }));
+    writeFileSync(join(dir, 'owner.lock'), JSON.stringify({ ...record, host: 'another-machine', boot: '0a1b2c3d-4e5f-4061-8728-394a5b6c7d8e' }));
     await expect(ownership.acquireOwnership(dir)).rejects.toThrow('identity');
     writeFileSync(join(dir, 'owner.lock'), '{}');
     await expect(ownership.acquireOwnership(dir)).rejects.toThrow('owner');

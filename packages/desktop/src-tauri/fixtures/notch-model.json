@@ -122,6 +122,44 @@
           { "id": "f", "name": "F", "avatar": 5, "face": "working", "text": "f" }
         ]
       }
+    },
+    {
+      "name": "the cockpit mascot rides along; a legacy manager or an unknown mascot keeps the avatar face",
+      "errorSince": "2026-11-01T11:30:00.000Z",
+      "managers": [
+        { "id": "a", "name": "A", "avatar": 3, "mascot": "builder", "status": "working", "pendingActions": 0, "pendingQuestions": 0, "preview": "a", "createdAt": "2026-10-01T00:00:01.000Z" },
+        { "id": "b", "name": "B", "avatar": 2, "status": "working", "pendingActions": 0, "pendingQuestions": 0, "preview": "b", "createdAt": "2026-10-01T00:00:02.000Z" },
+        { "id": "c", "name": "C", "avatar": 1, "mascot": "from-a-newer-cockpit", "status": "working", "pendingActions": 0, "pendingQuestions": 0, "preview": "c", "createdAt": "2026-10-01T00:00:03.000Z" }
+      ],
+      "expected": {
+        "primary": { "id": "a", "name": "A", "avatar": 3, "mascot": "builder", "face": "working", "text": "a" },
+        "minis": [
+          { "id": "b", "name": "B", "avatar": 2, "face": "working" },
+          { "id": "c", "name": "C", "avatar": 1, "face": "working" }
+        ],
+        "overflow": 0,
+        "active": [
+          { "id": "a", "name": "A", "avatar": 3, "mascot": "builder", "face": "working", "text": "a" },
+          { "id": "b", "name": "B", "avatar": 2, "face": "working", "text": "b" },
+          { "id": "c", "name": "C", "avatar": 1, "face": "working", "text": "c" }
+        ]
+      }
+    },
+    {
+      "name": "needsYou wins over the pending counts: a dismissed approval leaves the notch",
+      "errorSince": "2026-11-01T11:30:00.000Z",
+      "managers": [
+        { "id": "a", "name": "A", "avatar": 7, "status": "idle", "pendingActions": 1, "pendingQuestions": 0, "needsYou": { "approvals": 0, "questions": 0 }, "preview": "Merge #12?", "createdAt": "2026-10-01T00:00:00.000Z" },
+        { "id": "b", "name": "B", "avatar": 3, "status": "idle", "pendingActions": 0, "pendingQuestions": 2, "needsYou": { "approvals": 0, "questions": 1 }, "preview": "Which API?", "createdAt": "2026-10-02T00:00:00.000Z" }
+      ],
+      "expected": {
+        "primary": { "id": "b", "name": "B", "avatar": 3, "face": "needs-you", "text": "Which API?", "badge": "1 question" },
+        "minis": [],
+        "overflow": 0,
+        "active": [
+          { "id": "b", "name": "B", "avatar": 3, "face": "needs-you", "text": "Which API?", "badge": "1 question" }
+        ]
+      }
     }
   ]
 }

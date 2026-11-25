@@ -71,13 +71,14 @@ afterEach(() => {
 })
 
 describe('PhoneBottomBar', () => {
-  it('leads Now and Tasks into the last project, then Manager, in a phone PWA', () => {
+  it('in Manager mode leads Now to the managers\' Now and Tasks into the last project, then Manager', () => {
     device()
     localStorage.setItem(LAST_LOCATION_STORAGE_KEY, JSON.stringify({ projectId: 'other', pathname: '/p/other/git' }))
     renderShell('/manager/m-1')
     const links = within(bar()!)
     expect(links.getAllByRole('link').map((a) => a.getAttribute('aria-label') ?? a.textContent)).toEqual(['Now', 'Tasks', 'Manager'])
-    expect(links.getByRole('link', { name: 'Now' }).getAttribute('href')).toBe('/p/other/')
+    // Manager mode's own Now (spec 2026-11-23-needs-you-triage), never a project's.
+    expect(links.getByRole('link', { name: 'Now' }).getAttribute('href')).toBe('/manager/now')
     expect(links.getByRole('link', { name: 'Tasks' }).getAttribute('href')).toBe('/p/other/tasks')
     expect(links.queryByRole('link', { name: 'New task' })).toBeNull()
     // Inside Manager the tab is current and leads back to the list, like a tab bar.
@@ -85,6 +86,20 @@ describe('PhoneBottomBar', () => {
     expect(manager.getAttribute('aria-current')).toBe('page')
     expect(manager.getAttribute('href')).toBe('/manager?all=1')
     expect(links.queryByRole('link', { name: 'Git' })).toBeNull()
+  })
+
+  it('on Manager mode\'s Now, Now is the current tab, not Manager', () => {
+    device()
+    renderShell('/manager/now')
+    const links = within(bar()!)
+    expect(links.getByRole('link', { name: 'Now' }).getAttribute('aria-current')).toBe('page')
+    expect(links.getByRole('link', { name: 'Manager' }).getAttribute('aria-current')).toBeNull()
+  })
+
+  it('in a project, Now stays the project\'s Now', () => {
+    device()
+    renderShell('/p/boot/')
+    expect(within(bar()!).getByRole('link', { name: 'Now' }).getAttribute('href')).toBe('/p/boot/')
   })
 
   it('leads Manager to the remembered chat from a project, with its attention dot', () => {
@@ -113,6 +128,17 @@ describe('PhoneBottomBar', () => {
     cleanup()
     renderShell('/p/boot/tasks')
     expect(within(bar()!).getByRole('link', { name: 'Tasks' }).getAttribute('aria-current')).toBe('page')
+  })
+
+  // Spec 2026-11-20-phone-notifications-inbox: Now is the one list, and its tab carries the count.
+  it('badges Now with what needs you on this computer, and names it for screen readers', () => {
+    device()
+    renderShell('/p/boot/tasks', { nowCount: 3 })
+    const now = within(bar()!).getByRole('link', { name: 'Now, 3 things need you' })
+    expect(now.querySelector('[data-slot="bottom-bar-now-count"]')?.textContent).toBe('3')
+    cleanup()
+    renderShell('/p/boot/tasks', { nowCount: 0 })
+    expect(within(bar()!).getByRole('link', { name: 'Now' }).querySelector('[data-slot="bottom-bar-now-count"]')).toBeNull()
   })
 
   it('has four destinations without manual task creation', () => {

@@ -56,8 +56,10 @@ nothing), and:
    change when a version ships. `desktop-latest` is a ROLLING release the publish job refreshes;
    GitHub's own `releases/latest/download/…` cannot be used, because the repo's "latest" release
    is cezar's `v*` release, which carries no installers.
-3. **publish** — renames tauri-action's `latest.json` to **`desktop-latest.json`** (the name
-   the shells poll; namespaced so a future cezar manifest on the same page cannot collide),
+3. **publish** — writes **`desktop-latest.json`** (the name the shells poll; namespaced so a
+   future cezar manifest on the same page cannot collide) from the release's `.sig` assets
+   (`scripts/build-updater-manifest.mjs`). The build legs upload no `latest.json`: tauri-action
+   read-merge-replaces it from every leg in parallel, and desktop-v0.1.12 lost that race),
    flips the draft to published with `--latest=false` (cezar's `v*` releases stay the repo's
    "latest"), copies the stable-named installers and `desktop-latest.json` onto the rolling
    `desktop-latest` release (its assets and title change; its tag stays where the first
@@ -173,11 +175,43 @@ The mark lives in three places, on two cadences:
 | Where | Ships with | Command |
 | --- | --- | --- |
 | Cockpit brand tile + favicon (`packages/web/public/icon.svg`) | cezar (npm) — every channel update | replace the SVG |
-| App icon set (`packages/desktop/src-tauri/icons/*`: `.icns`, `.ico`, PNGs) and the splash logo (`packages/desktop/ui/icon.svg`) | the shell — one shell release | `cd packages/desktop && npm run icon [-- path/to/new.svg]` |
+| App icon set (`packages/desktop/src-tauri/icons/*`: `.ico`, PNGs, `icon.icns` with its `macos-legacy.svg` source, the `cezar.icon` document and its compiled `Assets.car` + `Assets.car.json`) and the splash logo (`packages/desktop/ui/icon.svg`) | the shell — one shell release | `cd packages/desktop && npm run icon [-- path/to/new.svg]` |
 
-`npm run icon` wraps the SVG full-bleed (macOS masks its own squircle; a transparent corner or
-margin gets a white plate in the Dock) — filled with `--bg` when given, the mark's gradient when
-it has one, else the brand tile's black — renders it and runs `tauri icon`. It bumps nothing: bump
+`npm run icon` writes three outputs from the one SVG, because the platforms draw an app icon
+differently (shell 0.1.15; before it, one full-bleed set showed a hard-edged black square in the
+Dock on macOS 15 and older):
+
+- **Windows `.ico` and Linux PNGs**: the mark full-bleed on the 1024px canvas, filled with `--bg`
+  when given, the mark's gradient when it has one, else the brand tile's black, via `tauri icon`.
+- **`cezar.icon` + `Assets.car`** (`CFBundleIconName`): an Icon Composer document (the tile
+  colour as the fill, the glyph as one glass layer). macOS 26 masks, lights and recolours it itself
+  for the default, dark, tinted and clear appearances. It is compiled with
+  `--minimum-deployment-target 12.0`, the shell's floor, so actool also flattens it into
+  renditions that macOS 12–15 draw: every supported macOS prefers the catalog to the `.icns`.
+  `Assets.car` is committed precompiled, listed only in `tauri.macos.conf.json`: tauri can compile
+  the `.icon` at bundle time, but that needs Xcode 26's `actool` on every build machine and has
+  crashed there (tauri-apps/tauri#15315, #16538). `scripts/icon-car.mjs` holds the actool
+  arguments `npm run icon` and CI share. It records in `Assets.car.json` the sha256 of the `.icon`
+  it compiled (`icon.json` and its layer images, LF line endings; `.gitattributes` keeps them
+  `-text`) and of `Assets.car` itself, so the unit suite fails on a stale catalog and on a stamp
+  committed without its catalog.
+  Without Xcode 26, `npm run icon` writes the `.icon` and says `Assets.car` is stale.
+- **`icon.icns`** (`CFBundleIconFile`): the fallback wherever the catalog is not read (`tauri dev`,
+  tools that read only `CFBundleIconFile`; macOS 26 also draws it on its own squircle without a
+  catalog). macOS before 26 draws an `.icns` as-is and masks nothing, so the rounded tile is baked
+  in, inside Apple's icon grid: an 824px tile with the 185.4px corner centred on the 1024px canvas,
+  a transparent margin and a soft shadow (`icons/macos-legacy.svg`).
+
+The **Desktop icon** workflow compiles the `.icon` with Xcode 26 (artifact `assets-car`: commit
+it when you have no Xcode 26), fails when the committed `Assets.car` is stale (source hash, then
+its renditions against the fresh compile; the flattened bitmaps' pixel digests are left out,
+as actool re-renders them differently on every compile), and has macOS 26, 15 and 15 Intel runners draw the pair
+through NSWorkspace (`scripts/render-app-icon.swift`). The release checks the icon inputs before
+tauri-action builds and uploads, checks the bundle carries both icons after, and takes a macOS leg's assets
+back off the release when the leg failed after tauri-action ran and the release is still a draft
+(a manual run can reuse a published release; that one is never touched).
+
+Rendering needs `rsvg-convert` (`brew install librsvg`): the tile needs real alpha. It bumps nothing: bump
 the shell version, tag `desktop-v…`, and every installed app shows the new icon after its next
 launch (the shell auto-update). Nobody is stuck on an old icon: it is a bundle resource, not
 something installed once.
@@ -240,7 +274,10 @@ admits the splash and the cockpit **on the port this shell spawned** and nothing
 1. **Landing page "Download"** — a static page (Cloudflare/GitHub Pages) with OS detection and
    the stable asset links; optionally reads the release JSON for the version. No backend.
 2. **Homebrew cask** in an `open-mercato/homebrew-tap`: `brew install --cask open-mercato/tap/cezar`,
-   `url` = the stable dmg link, `sha256` from the `.sha256` asset, `livecheck` on GitHub Releases.
+   `url` = the VERSIONED `desktop-v#{version}` dmg (never the rolling `desktop-latest`, whose bytes
+   change under a fixed `sha256`), `sha256` from the `.sha256` asset, `livecheck` on `desktop-v*`
+   releases. The cask lives in `packages/desktop/homebrew/`; the `homebrew-tap` job of
+   desktop-release.yml bumps it in the tap on every real release.
 3. **winget** manifest (community repo), automatable from the publish job.
 4. **Flathub** later; the AppImage covers Linux until then.
 

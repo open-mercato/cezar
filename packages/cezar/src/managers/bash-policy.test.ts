@@ -11,6 +11,7 @@ import {
   managerBashPatternIssue,
   managerBashPromptSection,
   managerBashSuggestion,
+  managerShellPlan,
 } from './bash-policy.ts';
 
 const ALLOWED = [
@@ -360,5 +361,27 @@ describe('the hook entrypoint', () => {
 
   it.skipIf(!command)('blocks (exit 2) on input it cannot parse', () => {
     expect(run('not json').status).toBe(2);
+  });
+});
+
+describe('managerShellPlan (the Codex manager fence)', () => {
+  it('returns the argv pipeline the policy read', () => {
+    expect(managerShellPlan('gh pr view 12 --json title | jq -r .title')).toEqual({ ok: true, pipeline: [['gh', 'pr', 'view', '12', '--json', 'title'], ['jq', '-r', '.title']] });
+    expect(managerShellPlan('cez-manager task create --project p1 "Fix the login"')).toEqual({ ok: true, pipeline: [['cez-manager', 'task', 'create', '--project', 'p1', 'Fix the login']] });
+  });
+  it('passes a heredoc body as stdin, never to a shell', () => {
+    expect(managerShellPlan("cez-manager task create --project p1 --stdin <<'EOF'\nline one $HOME\n`two`\nEOF")).toEqual({
+      ok: true, pipeline: [['cez-manager', 'task', 'create', '--project', 'p1', '--stdin']], stdin: 'line one $HOME\n`two`\n',
+    });
+  });
+  it.each(['gh pr merge 12', 'git push', 'cez-manager tasks; rm -rf /', 'gh pr view 12 > out', 'gh pr view $(id)', 'rm -rf /', 'gh pr view 12 | sh', 'gh api repos/o/r -X POST'])('refuses %s', (command) => {
+    expect(managerShellPlan(command)).toMatchObject({ ok: false });
+  });
+  it('agrees with isManagerBashAllowed on every allowed command', () => {
+    for (const command of ALLOWED) expect(managerShellPlan(command).ok).toBe(isManagerBashAllowed(command).ok);
+  });
+  it('honours the user-allowed patterns', () => {
+    expect(managerShellPlan('gh label list').ok).toBe(false);
+    expect(managerShellPlan('gh label list', ['gh label list'])).toMatchObject({ ok: true, pipeline: [['gh', 'label', 'list']] });
   });
 });

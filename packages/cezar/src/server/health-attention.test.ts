@@ -53,12 +53,14 @@ describe('health attention counts', () => {
   it('counts only the failed runs the cockpit still flags, in a relay scope', async () => {
     const app = build();
     const body = await runInRelayScope({ deviceId: 'phone' }, () => read(app));
-    expect(body.attention).toEqual({ waiting: 0, failed: 2 });
+    // `waiting` is the attention list: the run awaiting an answer is a task that needs you
+    // (spec 2026-11-20-phone-notifications-inbox).
+    expect(body.attention).toEqual({ waiting: 1, failed: 2 });
   });
 
   it('is present on a hosted cockpit', async () => {
     process.env.CEZ_REMOTE = '1';
-    expect((await read(build())).attention).toEqual({ waiting: 0, failed: 2 });
+    expect((await read(build())).attention).toEqual({ waiting: 1, failed: 2 });
   });
 
   it('never rides the shared health topic, even on a hosted cockpit', async () => {

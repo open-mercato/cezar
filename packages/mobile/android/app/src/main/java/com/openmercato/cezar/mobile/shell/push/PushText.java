@@ -1,6 +1,9 @@
 package com.openmercato.cezar.mobile.shell.push;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
+import java.util.function.Function;
 
 /**
  * What a push says, decided on the phone (switcher spec, "Push"): the relay's payload stays generic,
@@ -23,6 +26,20 @@ public final class PushText {
         String raw = data == null ? null : data.get(DATA_COUNT);
         if (raw != null && raw.matches("[0-9]{1,9}")) return Integer.parseInt(raw);
         return notificationCount != null && notificationCount >= 0 ? notificationCount : null;
+    }
+
+    /**
+     * The cezar ids, a notification's tag, of the relay computers whose waiting count is known to be 0: their
+     * notifications go, and the launcher badge with them (spec 2026-11-20-phone-notifications-inbox, B3).
+     */
+    public static <S> List<String> settled(List<S> servers, Function<S, String> cezarId, Function<S, Integer> waiting) {
+        List<String> out = new ArrayList<>();
+        for (S server : servers) {
+            String id = cezarId.apply(server);
+            Integer count = waiting.apply(server);
+            if (id != null && !id.isEmpty() && count != null && count == 0) out.add(id);
+        }
+        return out;
     }
 
     /**

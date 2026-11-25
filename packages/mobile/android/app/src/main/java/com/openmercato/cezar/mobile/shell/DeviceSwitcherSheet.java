@@ -24,6 +24,7 @@ import android.widget.ProgressBar;
 import android.widget.ScrollView;
 import android.widget.TextView;
 import com.openmercato.cezar.mobile.R;
+import com.openmercato.cezar.mobile.shell.push.BadgeRefresh;
 import com.openmercato.cezar.mobile.shell.relay.RelayConnections;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -72,6 +73,8 @@ final class DeviceSwitcherSheet {
     private DeviceProbes probing;
     private String switching;
     private boolean closed;
+    /** Holds the badge rounds off this sheet's warm links until it closes. */
+    private boolean held;
 
     private final class Row {
         final ServerRecord server;
@@ -146,6 +149,9 @@ final class DeviceSwitcherSheet {
     private void close() {
         if (closed) return;
         closed = true;
+        BadgeRefresh badges = ShellServices.badges();
+        if (held && badges != null) badges.hold(false);
+        held = false;
         probes.shutdownNow();
         // Never the current server's link: cool() only stops what warm() started.
         if (probing != null) probing.stop(switching);
@@ -153,6 +159,11 @@ final class DeviceSwitcherSheet {
     }
 
     private void probe() {
+        BadgeRefresh badges = ShellServices.badges();
+        if (badges != null && !held) {
+            held = true;
+            badges.hold(true);
+        }
         for (Row row : rows.values()) if (!row.current()) set(row, DeviceSwitch.State.CHECKING);
         probing = new DeviceProbes(DeviceProbes.relayProbe(relay, probes), DeviceProbes.directProbe(connector, DeviceSwitcherSheet::cookies, probes),
                 keep -> {
