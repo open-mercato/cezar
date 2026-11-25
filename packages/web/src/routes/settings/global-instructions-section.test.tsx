@@ -34,7 +34,7 @@ afterEach(() => {
 })
 
 describe('Settings → Agents → Global instructions', () => {
-  it('says an edit reaches new runs only — a running task keeps the prompt it started with', () => {
+  it('says an edit reaches running tasks and managers from their next session', () => {
     vi.stubGlobal('fetch', vi.fn(() => new Promise<never>(() => {})))
     const client = createQueryClient()
     client.setQueryData(workspaceQueryKeys.config, CONFIG)
@@ -43,6 +43,7 @@ describe('Settings → Agents → Global instructions', () => {
         <GlobalInstructionsCard />
       </QueryClientProvider>,
     )
-    expect(screen.getByText(/Applied to new runs only\./)).toBeTruthy()
+    expect(screen.getByText(/every task in every project, and by every manager/)).toBeTruthy()
+    expect(screen.getByText(/reaches running tasks and managers from their next session\./)).toBeTruthy()
   })
 })

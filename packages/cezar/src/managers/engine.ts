@@ -35,6 +35,7 @@ import {
   supersededAskIds,
 } from '@open-mercato/cezar-contract';
 import type { AutomationDefinition, AutomationReportMode } from '@open-mercato/cezar-contract';
+import { loadWorkspaceConfig } from '../workspace/config.ts';
 import { agentModelsLocked } from '../core/agent-model-policy.ts';
 import { parseAskMarker, stripAskMarker } from '../core/ask.ts';
 import { isRunnerId, type AgentEvent, type AgentRunner, type AgentRunSpec, type AgentSession, type ContentBlock, type RunnerId } from '../core/agent-runner.ts';
@@ -1520,11 +1521,14 @@ export class ManagerEngine {
     // Read per turn, so a revoke applies from the next one; a watch reads untrusted text and gets none.
     const connectorTurn = runner === 'claude' && turn.kind !== 'watch';
     const connectorRules = connectorTurn ? connectorAllowRules(manager.connectors, state.connectors) : [];
+    // Read per turn, so an edit in Settings reaches a resumed session too.
+    const globalInstructions = (await loadWorkspaceConfig().catch(() => null))?.systemPrompt;
     const base: AgentRunSpec = {
       systemPrompt: managerSystemPrompt(
         manager,
         sources.map((source) => ({ id: source.id, name: source.name, access: managerAccessOf(manager, source.id) })),
         connectorTurn ? connectorPromptSection(manager.connectors, state.connectors) : '',
+        { globalInstructions },
       ),
       userPrompt: prompt,
       cwd: store.workdir(id),

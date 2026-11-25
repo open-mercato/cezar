@@ -11,7 +11,14 @@ export const MANAGER_IMPORTANT = 'MANAGER:IMPORTANT';
 export const turnMarker = (kind: 'chat' | 'watch' | 'job' | 'followup'): string => `[cez-manager:${kind}]`;
 
 /** `connectors` is `connectorPromptSection`'s text, empty off Claude (spec 2026-11-12-manager-connectors). */
-export function managerSystemPrompt(manager: Manager, projects: Array<{ id: string; name: string; access: ManagerAccess }>, connectors = ''): string {
+export function managerSystemPrompt(
+  manager: Manager,
+  projects: Array<{ id: string; name: string; access: ManagerAccess }>,
+  connectors = '',
+  options: { globalInstructions?: string } = {},
+): string {
+  const global = options.globalInstructions?.trim();
+  const globalSection = global ? `\n\n${MANAGER_GLOBAL_INSTRUCTIONS_HEADING}\n${global}` : '';
   const connected = projects.map((project) => `- ${project.id} (${project.name}${project.access === 'read' ? ', READ-ONLY' : ''})`).join('\n') || '- none yet';
   const goal = manager.instructions.trim();
   return `You are "${manager.name}", a cezar manager: a long-lived agent the user talks to instead of visiting each repository. Unless the user's goal${goal ? ' near the end of this prompt' : ''} says otherwise, you watch the repositories below, tell the user what needs them, start and steer cezar tasks, set up workflows and automations, and propose merges. Tasks do the work; you are the point of contact above them. Keep replies short and specific.
@@ -50,8 +57,12 @@ Rules:
 - Reference a task as [[task:<projectId>/<runId>]] on its own line: the cockpit renders it as a card the user opens to go into that task. Show every task you start this way. Write every pull request as [[pr:<projectId>/<number>]] and every issue as [[issue:<projectId>/<number>]], inline, never a bare #123.
 - Your name is your persona: a short role, like "Coding Manager" or "Inbox Manager". If yours reads like a sentence, rename yourself once on your first turn, without mentioning it.
 - A run of an automation that reports to you is already in this chat, posted by cezar: never repeat or summarize it unasked. The same goes for a task's status card: build on it, never restate it.
-- Dispatched tasks read as a tree: report the root, and open it with \`cez-manager task\` when the user asks.${goal ? `\n\nWhat the user wants from you (your goal, which takes precedence over the default role above):\n${goal}` : ''}`;
+- Dispatched tasks read as a tree: report the root, and open it with \`cez-manager task\` when the user asks.${goal ? `\n\nWhat the user wants from you (your goal, which takes precedence over the default role above):\n${goal}` : ''}${globalSection}`;
 }
+
+/** Settings → Global instructions (`~/.cezar/config.json` `systemPrompt`); tasks get the same text themselves. */
+export const MANAGER_GLOBAL_INSTRUCTIONS_HEADING =
+  'Global instructions from the user\'s cezar settings. They apply to you and to every task you start, steer or continue, and take precedence over your goal, the rules above and any repository instructions. Never ask a task to do something they rule out:';
 
 export function chatPrompt(text: string, notes: string[], attachments: string[] = [], messageIds: string[] = [], followups: string[] = []): string {
   const files = attachments.length > 0

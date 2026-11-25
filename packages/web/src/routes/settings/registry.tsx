@@ -235,7 +235,7 @@ export const SETTINGS_SECTIONS: SettingsSection[] = [
     id: 'agents',
     title: 'Agents',
     description:
-      'Which coding agents run your tasks, with which logins, models and skills. A project can override any of this in its own Agents page.',
+      'Global instructions for every task and manager, and which coding agents run your tasks, with which logins, models and skills. A project can override any of this in its own Agents page.',
     icon: BotIcon,
     component: AgentsGlobalSection,
     scope: 'global',
