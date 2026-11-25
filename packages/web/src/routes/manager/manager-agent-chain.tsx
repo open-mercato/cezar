@@ -115,8 +115,7 @@ function NoConnectorsInfo() {
   const holdsFocus = (node: EventTarget | null) =>
     node instanceof Node && (contentRef.current?.contains(node) || triggerRef.current?.contains(node))
   const scheduleClose = () => {
-    const active = document.activeElement
-    if ((keyboardFocused.current && active === triggerRef.current) || (active && contentRef.current?.contains(active))) return
+    if (keyboardFocused.current && document.activeElement === triggerRef.current) return
     clearTimer()
     closeTimer.current = setTimeout(() => setOpen(false), 100)
   }
@@ -139,8 +138,12 @@ function NoConnectorsInfo() {
             pointerFocus.current = true
             keyboardFocused.current = false
           }}
+          onPointerCancel={() => {
+            pointerFocus.current = false
+          }}
           onClick={(event) => {
             event.preventDefault()
+            pointerFocus.current = false
             clearTimer()
             setOpen(true)
           }}
@@ -179,6 +182,7 @@ function NoConnectorsInfo() {
         className="w-64 max-w-[calc(100vw-2rem)] p-3 text-xs text-popover-foreground"
         onOpenAutoFocus={(event) => event.preventDefault()}
         onCloseAutoFocus={(event) => event.preventDefault()}
+        onPointerDown={() => { keyboardFocused.current = false }}
         onPointerEnter={clearTimer}
         onPointerLeave={(event: PointerEvent) => {
           if (event.pointerType !== 'touch') scheduleClose()

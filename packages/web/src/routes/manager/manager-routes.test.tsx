@@ -1991,10 +1991,26 @@ describe('/manager/:id', () => {
         await waitFor(() => expect(popover()).toBeNull())
         info.blur()
 
+        // Clicking text inside PopoverContent (tabIndex=-1) does not block hover-close when the pointer leaves.
+        fireEvent(info, new TestPointerEvent('pointerover', { bubbles: true, pointerType: 'mouse' }))
+        const content = await waitFor(() => popover()!)
+        fireEvent(content, new TestPointerEvent('pointerdown', { bubbles: true, pointerType: 'mouse' }))
+        content.focus()
+        fireEvent(content, new TestPointerEvent('pointerout', { bubbles: true, pointerType: 'mouse' }))
+        await waitFor(() => expect(popover()).toBeNull())
+
+        // Safari / Firefox on macOS: pointerdown + click without focus must not poison a subsequent keyboard focus.
+        fireEvent(info, new TestPointerEvent('pointerdown', { bubbles: true, pointerType: 'mouse' }))
+        fireEvent.click(info)
+        await waitFor(() => expect(popover()).not.toBeNull())
+        fireEvent.keyDown(info, { key: 'Escape' })
+        await waitFor(() => expect(popover()).toBeNull())
+
         // Keyboard focus opens it, pointerleave while focused does not close it, activating the button keeps it open (browsers synthesize click on Enter/Space), and blur closes it.
         info.focus()
         fireEvent.focus(info)
         await waitFor(() => expect(popover()).not.toBeNull())
+        fireEvent(info, new TestPointerEvent('pointerover', { bubbles: true, pointerType: 'mouse' }))
         fireEvent(info, new TestPointerEvent('pointerout', { bubbles: true, pointerType: 'mouse' }))
         await new Promise((resolve) => setTimeout(resolve, 130))
         expect(popover()).not.toBeNull()
