@@ -38,7 +38,8 @@ import { parseReviewMessage } from './diff-comments'
 import { Markdown } from './markdown'
 import { ReviewCommentsBlock } from './review-comments-block'
 import { useDraft } from './thread-draft'
-import { splitToolTitle, streakLabel, type ContextGroupBlock } from './thread-groups'
+import { splitToolTitle, type ActivityGroupBlock, type NoteGroupBlock } from './thread-groups'
+import { shortenWorktreePaths } from './thread-paths'
 import { useThreadCardCache } from './thread-open-cards'
 import { isNearBottom } from './thread-scroll'
 import { MessageTime, clockLabel, elapsedSince, exactLabel, useNow } from './thread-time'
@@ -636,23 +637,22 @@ export function WorkingIndicator({ since, lastActivityAt }: { since?: string; la
   return (
     <div
       data-slot="working-indicator"
-      // Wraps rather than overflows: with both stamps the line outgrows a 320px phone column.
-      className="flex flex-wrap items-center gap-x-2 gap-y-0.5 py-1 text-ui text-soft-foreground"
+      // Wraps rather than overflows on a 320px phone column.
+      className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5 py-0.5 text-label text-soft-foreground"
     >
-      <LoaderCircleIcon role="status" aria-label="Working" className="size-3.5 shrink-0 animate-spin" />
+      <LoaderCircleIcon role="status" aria-label="Working" className="size-3 shrink-0 animate-spin" />
       <span className="shimmer font-medium">Working…</span>
       {elapsed !== undefined ? (
         <IconTooltip label={`Started ${exactLabel(since)}`}>
-          <span data-slot="working-elapsed" className="font-mono text-label tabular-nums">
+          <span data-slot="working-elapsed" className="font-mono tabular-nums">
             {elapsed}
           </span>
         </IconTooltip>
       ) : null}
       {quiet !== undefined && lastClock !== undefined ? (
-        <IconTooltip label={exactLabel(lastActivityAt) ?? ''}>
-          <span data-slot="working-last-activity" className="text-label">
-            · last activity {lastClock} ({quiet} ago)
-          </span>
+        // The wall clock lives in the tooltip; the row keeps only the age.
+        <IconTooltip label={`Last activity ${exactLabel(lastActivityAt) ?? lastClock}`}>
+          <span data-slot="working-last-activity">· last activity {quiet} ago</span>
         </IconTooltip>
       ) : null}
     </div>
@@ -950,7 +950,11 @@ export function ToolCard({
             {expandedCommand}
           </code>
         ) : detail !== undefined ? (
-          <code className="min-w-0 truncate font-mono text-xs text-muted-foreground">{detail}</code>
+          // Display-only: the worktree prefix is dropped here, the full text is on hover and in
+          // the expanded header (`thread-paths.ts`).
+          <code title={command ?? detail} className="min-w-0 truncate font-mono text-xs text-muted-foreground">
+            {shortTitleParts(item).detail}
+          </code>
         ) : null}
         <span className="ml-auto flex shrink-0 items-center gap-2 pl-2">
           {busy ? (
@@ -997,43 +1001,137 @@ export function ToolCard({
   )
 }
 
-/** "Explored N files · M searches" — consecutive finished read/search tools, one row,
- *  expandable to the individual cards (mockup `.ctx-group`). */
-export function ContextGroup({ group, scope }: { group: ContextGroupBlock; scope?: string }) {
+/** Open state for a group row, remembered per run like a tool card's (`thread-open-cards`). */
+function useCachedOpen(cacheKey: string | undefined): [boolean, (open: boolean) => void] {
+  const cache = useThreadCardCache()
+  const [open, setOpenState] = useState<boolean>(() => (cacheKey !== undefined ? cache?.get(cacheKey) : undefined) ?? false)
+  return [
+    open,
+    (next) => {
+      if (cacheKey !== undefined) cache?.set(cacheKey, next)
+      setOpenState(next)
+    },
+  ]
+}
+
+/** "Ran npm test" with the worktree prefix (and its leading `cd`) dropped from the detail. */
+function shortTitle(item: UiToolItem): string {
+  const { verb, detail } = shortTitleParts(item)
+  return detail !== undefined ? `${verb} ${detail}` : verb
+}
+
+/** Prefers the raw command over the title's detail: the title is capped server-side BEFORE the
+ *  worktree prefix is dropped, so shortening it would cut the command short. */
+function shortTitleParts(item: UiToolItem): { verb: string; detail?: string } {
+  const { verb, detail } = splitToolTitle(item.title)
+  const raw = toolCommand(item)
+  // A multi-line script keeps the title's one-line rendering.
+  const source = raw !== undefined && !raw.includes('\n') ? raw : detail
+  return source !== undefined ? { verb, detail: shortenWorktreePaths(source) } : { verb }
+}
+
+/** The running call, as one compact line: icon, verb, shortened detail, spinner. */
+function CurrentToolLine({ item }: { item: UiToolItem }) {
+  const Icon = TOOL_ICONS[item.toolKind] ?? WrenchIcon
+  const { verb, detail } = shortTitleParts(item)
   return (
-    <Collapsible data-slot="ctx-group" className="min-w-0">
-      <CollapsibleTrigger className="group flex h-[34px] w-full items-center gap-2 rounded-md px-2 -mx-2 text-left text-ui font-medium text-muted-foreground hover:bg-muted hover:text-foreground">
+    <span data-slot="activity-current" className="flex min-w-0 items-center gap-1.5">
+      <Icon aria-hidden className="size-3.5 shrink-0" />
+      <span className="shimmer shrink-0 font-semibold text-foreground">{verb}</span>
+      {detail !== undefined ? (
+        <code className="min-w-0 truncate font-mono text-xs">{detail}</code>
+      ) : null}
+      <LoaderCircleIcon aria-hidden className="size-3 shrink-0 animate-spin text-soft-foreground" />
+    </span>
+  )
+}
+
+/**
+ * Consecutive tool calls between two pieces of prose, as ONE row: the summary once they are done,
+ * the newest running call while one is (the prose stays the thread's content). Expanding shows
+ * every call as its own card, so no detail is lost. The caller renders the members as children.
+ */
+export function ActivityGroup({
+  group,
+  cacheKey,
+  children,
+}: {
+  group: ActivityGroupBlock
+  cacheKey?: string
+  children: ReactNode
+}) {
+  const [open, setOpen] = useCachedOpen(cacheKey)
+  const { current, failed } = group
+  const calls = group.tools.length
+  const label = [
+    current !== undefined ? `Running: ${shortTitle(current)}.` : undefined,
+    `${group.summary}.`,
+    failed > 0 ? `${failed} failed.` : undefined,
+  ].filter(Boolean).join(' ')
+  return (
+    <Collapsible
+      data-slot="activity-group"
+      data-running={current !== undefined ? 'true' : undefined}
+      aria-busy={current !== undefined ? true : undefined}
+      open={open}
+      onOpenChange={setOpen}
+      className="min-w-0"
+    >
+      <CollapsibleTrigger
+        aria-label={label}
+        title={current !== undefined ? group.summary : undefined}
+        className="group/activity -mx-1.5 flex min-h-[28px] w-[calc(100%+0.75rem)] min-w-0 items-center gap-1.5 rounded-md px-1.5 text-left text-ui text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none"
+      >
         <ChevronRightIcon
           aria-hidden
-          className="size-3.5 shrink-0 text-soft-foreground transition-transform group-data-[state=open]:rotate-90"
+          className="size-3.5 shrink-0 text-soft-foreground transition-transform group-data-[state=open]/activity:rotate-90"
         />
-        {group.label}
+        {current !== undefined && !open ? (
+          <CurrentToolLine item={current} />
+        ) : (
+          <span data-slot="activity-summary" className="min-w-0 truncate">{group.summary}</span>
+        )}
+        <span className="ml-auto flex shrink-0 items-center gap-2 pl-2 text-label">
+          {failed > 0 ? <span className="text-danger">{failed} failed</span> : null}
+          <span className="text-soft-foreground tabular-nums">{calls} calls</span>
+        </span>
       </CollapsibleTrigger>
       <CollapsibleContent>
-        <div className="flex flex-col gap-1.5 pt-1.5 pl-4">
-          {group.tools.map((tool) => (
-            <ToolCard key={tool.id} item={tool} cacheKey={scope !== undefined ? `${scope}:${tool.id}` : undefined} />
-          ))}
-        </div>
+        <div className="flex flex-col gap-1.5 pt-1.5 pl-4">{children}</div>
       </CollapsibleContent>
     </Collapsible>
   )
 }
 
-/** The legacy tool-streak fold, kept: older finished tool cards collapse under
- *  "▸ N earlier tool calls". The caller renders the folded blocks as children. */
-export function ToolStreak({ count, children }: { count: number; children: ReactNode }) {
+/**
+ * Consecutive lifecycle notes as one summary row ("Set up: worktree … · runner Claude"). Warnings
+ * stay on screen under it while collapsed, as the ordinary note line; expanded, every note shows
+ * in order.
+ */
+export function NoteGroup({ group, cacheKey }: { group: NoteGroupBlock; cacheKey?: string }) {
+  const [open, setOpen] = useCachedOpen(cacheKey)
   return (
-    <Collapsible data-slot="tool-streak" className="min-w-0">
-      <CollapsibleTrigger className="group flex items-center gap-1.5 rounded-md p-0.5 text-left text-label text-muted-foreground hover:text-foreground">
+    <Collapsible data-slot="note-group" open={open} onOpenChange={setOpen} className="min-w-0">
+      <CollapsibleTrigger
+        title={group.summary}
+        className="group/notes flex max-w-full min-w-0 items-center gap-1.5 rounded-md p-0.5 text-left text-label text-soft-foreground hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none"
+      >
         <ChevronRightIcon
           aria-hidden
-          className="size-3.5 shrink-0 transition-transform group-data-[state=open]:rotate-90"
+          className="size-3.5 shrink-0 transition-transform group-data-[state=open]/notes:rotate-90"
         />
-        {streakLabel(count)}
+        <span data-slot="note-group-summary" className="min-w-0 truncate">{group.summary}</span>
+        <span className="sr-only">{`, ${group.notes.length} notes`}</span>
       </CollapsibleTrigger>
+      {!open && group.warnings.length > 0 ? (
+        <div data-slot="note-group-warnings" className="flex flex-col gap-0.5 pl-5">
+          {group.warnings.map((note) => <NoteLine key={note.id} note={note} />)}
+        </div>
+      ) : null}
       <CollapsibleContent>
-        <div className="flex flex-col gap-2 pt-2">{children}</div>
+        <div className="flex flex-col gap-0.5 pt-0.5 pl-5">
+          {group.notes.map((note) => <NoteLine key={note.id} note={note} />)}
+        </div>
       </CollapsibleContent>
     </Collapsible>
   )
