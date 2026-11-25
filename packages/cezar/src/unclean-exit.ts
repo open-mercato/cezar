@@ -9,7 +9,7 @@
  * reports it — consent permitting — with what the marker and the desktop shell's
  * `~/.cezar/logs/cockpit.log` (#2489, when present) say about it: facts only, never output text.
  */
-import { closeSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { closeSync, fstatSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { uptime as hostUptime } from 'node:os';
 import { join } from 'node:path';
 import { assertCezarHomeWriteIsSandboxed, cezarHomeDir } from './paths.ts';
@@ -118,10 +118,10 @@ function pidAlive(pid: number): boolean {
 function readTail(path: string, bytes: number): string {
   let fd: number | undefined;
   try {
-    const size = statSync(path).size;
+    fd = openSync(path, 'r');
+    const size = fstatSync(fd).size;
     const length = Math.min(size, bytes);
     const buf = Buffer.alloc(length);
-    fd = openSync(path, 'r');
     readSync(fd, buf, 0, length, size - length);
     return buf.toString('utf8');
   } catch {

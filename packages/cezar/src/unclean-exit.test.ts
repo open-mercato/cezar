@@ -1,10 +1,10 @@
 import { spawn } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { collectUncleanExits, logFacts, startLiveMarker, uncleanShutdownError, type LiveMarker } from './unclean-exit.ts';
+import { cockpitLogPath, collectUncleanExits, logFacts, startLiveMarker, uncleanShutdownError, type LiveMarker } from './unclean-exit.ts';
 
 const NOW = Date.parse('2026-11-25T12:40:00Z');
 let dir: string;
@@ -65,6 +65,19 @@ describe('collectUncleanExits', () => {
     expect(exit!.context['unclean.cockpit_log']).toBe(false);
     expect(exit!.context).not.toHaveProperty('unclean.log_lifecycle');
     expect(exit!.context).not.toHaveProperty('unclean.runs_running');
+  });
+
+  it('reads the end of the real cockpit log when none is passed', () => {
+    const path = cockpitLogPath();
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(path, `${'x'.repeat(70_000)}\n${LOG}\n`);
+    try {
+      put(marker());
+      const [exit] = collectUncleanExits({ dir, now: NOW, hostUptimeS: 86_400, isAlive: dead });
+      expect(exit!.context['unclean.last_output_at']).toBe('2026-11-25T12:37:20.000Z');
+    } finally {
+      rmSync(path, { force: true });
+    }
   });
 
   it('leaves a live cockpit alone', () => {
