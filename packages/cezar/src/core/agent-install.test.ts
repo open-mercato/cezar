@@ -139,6 +139,7 @@ describe('installMethodFromPath', () => {
     ['/Users/me/.local/share/claude/versions/2.1.3', 'native'],
     ['/Users/me/.local/share/cursor-agent/versions/2026.10.22/cursor-agent', 'script'],
     ['C:\\Users\\me\\.local\\bin\\claude.exe', 'native'],
+    ['C:\\Users\\me\\AppData\\Roaming\\npm\\codex.cmd', 'npm'],
     ['/usr/bin/gemini', null],
   ])('%s → %s', (path, method) => {
     expect(installMethodFromPath(path)).toBe(method);
@@ -158,6 +159,38 @@ describe('locateInstalledCli', () => {
     symlinkSync(join(real, 'codex.js'), join(dir, 'bin', 'codex'));
     expect(locateInstalledCli('codex', 'linux', { PATH: join(dir, 'bin') })).toEqual({ executable: 'codex', path: join(dir, 'bin', 'codex'), method: 'npm' });
     expect(locateInstalledCli('missing', 'linux', { PATH: join(dir, 'bin') })).toEqual({ executable: 'missing', path: null, method: null });
+  });
+
+  it('recognizes Windows npm global cmd-shim wrappers in any prefix so planUpdate works', () => {
+    dir = mkdtempSync(join(tmpdir(), 'cez-win-npm-'));
+    const prefix = join(dir, 'custom-npm-prefix');
+    mkdirSync(join(prefix, 'node_modules', '@openai', 'codex', 'bin'), { recursive: true });
+    writeFileSync(
+      join(prefix, 'codex.cmd'),
+      '@ECHO off\r\n"%_prog%"  "%dp0%\\node_modules\\@openai\\codex\\bin\\codex.js" %*\r\n',
+    );
+    writeFileSync(
+      join(prefix, 'copilot.ps1'),
+      '#!/usr/bin/env pwsh\n& "$basedir/node$exe" "$basedir/node_modules/@github/copilot/bin/copilot.js" $args\n',
+    );
+    writeFileSync(
+      join(prefix, 'gemini'),
+      '#!/bin/sh\nexec node "$basedir/node_modules/@google/gemini-cli/dist/index.js" "$@"\n',
+    );
+    writeFileSync(join(prefix, 'plain.cmd'), '@ECHO off\r\necho not an npm shim\r\n');
+
+    const winEnv: InstallEnv = { platform: 'win32', npm: true, npmGlobalWritable: true, curl: true, sudo: false, brew: false };
+    const codex = locateInstalledCli('codex', 'win32', { PATH: prefix });
+    expect(codex).toEqual({ executable: 'codex', path: join(prefix, 'codex.cmd'), method: 'npm' });
+    expect(planUpdate('codex', codex, winEnv)).toEqual({
+      command: 'npm install -g @openai/codex@latest',
+      runnable: true,
+      method: 'npm',
+      sudo: false,
+    });
+    expect(locateInstalledCli('copilot', 'win32', { PATH: prefix, PATHEXT: '.PS1' }).method).toBe('npm');
+    expect(locateInstalledCli('gemini', 'win32', { PATH: prefix }).method).toBe('npm');
+    expect(locateInstalledCli('plain', 'win32', { PATH: prefix }).method).toBeNull();
   });
 });
 

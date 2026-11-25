@@ -1,9 +1,10 @@
+import { useQueryClient } from '@tanstack/react-query'
 import { CheckIcon, ExternalLinkIcon } from 'lucide-react'
 import * as React from 'react'
 
 import type { AgentSetupEntry, AgentSetupProvider, AgentSetupSession } from '@open-mercato/cezar-api-client'
 
-import { useAgentSetup, useInvalidateHealth, useProviderStatus, useRefreshProviderStatus, useStartAgentSetup } from '@/api/queries'
+import { useAgentSetup, useInvalidateHealth, useProviderStatus, useRefreshProviderStatus, useStartAgentSetup, workspaceQueryKeys } from '@/api/queries'
 import { SetupTerminal } from '@/components/agent-setup'
 import { ReconnectCard } from '@/components/reconnect/reconnect-card'
 import { TERMINAL_ONLY } from '@/components/reconnect/copy'
@@ -69,6 +70,7 @@ export function AgentSetupSheet({
 }
 
 export function AgentSetupFlow({ provider, action, onClose }: { provider: AgentSetupProvider; action: AgentSetupSheetAction; onClose: () => void }) {
+  const queryClient = useQueryClient()
   const setup = useAgentSetup()
   const status = useProviderStatus()
   const refresh = useRefreshProviderStatus()
@@ -170,9 +172,11 @@ export function AgentSetupFlow({ provider, action, onClose }: { provider: AgentS
       })
       return
     }
-    void refetchSetup()
     void refreshAsync().then(
       (next) => {
+        // Refresh setup (including Settings' `latest` listing) after provider status is fresh so
+        // it never caches a stale `installed: false` / `method: null` / `latestVersion: null`.
+        void queryClient.invalidateQueries({ queryKey: workspaceQueryKeys.agentSetup })
         const now = next.providers.find((candidate) => candidate.provider === provider)
         if (now?.status === 'connected') return setPhase('done')
         if (now && now.status !== 'not-installed') return setPhase('sign-in')
@@ -180,11 +184,12 @@ export function AgentSetupFlow({ provider, action, onClose }: { provider: AgentS
         setPhase('failed')
       },
       () => {
+        void queryClient.invalidateQueries({ queryKey: workspaceQueryKeys.agentSetup })
         setFailure('cezar could not check the agent. Try again.')
         setPhase('failed')
       },
     )
-  }, [invalidateHealth, label, provider, refetchSetup, refreshAsync, shown])
+  }, [invalidateHealth, label, provider, queryClient, refetchSetup, refreshAsync, shown])
 
   // Nothing tells the page a sign-in landed: ask until it does.
   React.useEffect(() => {

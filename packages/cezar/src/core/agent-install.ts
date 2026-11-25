@@ -1,5 +1,5 @@
-import { existsSync, realpathSync, statSync } from 'node:fs';
-import { delimiter, isAbsolute, join } from 'node:path';
+import { existsSync, readFileSync, realpathSync, statSync } from 'node:fs';
+import { delimiter, dirname, isAbsolute, join } from 'node:path';
 
 import { compareVersions, parseVersion } from '../self-update/semver.ts';
 import type { RunnerId } from './agent-runner.ts';
@@ -307,16 +307,32 @@ export interface InstalledCli {
 
 /**
  * Which installer put this binary here, read from where it really lives. Homebrew keeps installs
- * under `Cellar`/`Caskroom`, npm under `node_modules`, and the Claude and Cursor installers in a
- * versioned folder under `~/.local/share`.
+ * under `Cellar`/`Caskroom`, npm under `node_modules` (or Windows' `AppData/Roaming/npm` prefix),
+ * and the Claude and Cursor installers in a versioned folder under `~/.local/share`.
  */
 export function installMethodFromPath(path: string): InstallMethodId | null {
   const normalized = path.replaceAll('\\', '/');
   if (/\/(Cellar|Caskroom)\//.test(normalized)) return 'brew';
-  if (/\/node_modules\//.test(normalized)) return 'npm';
+  if (/\/node_modules\//.test(normalized) || /\/AppData\/Roaming\/npm\/[^/]+$/i.test(normalized)) return 'npm';
   if (/\/\.local\/share\/claude\//.test(normalized) || /\/\.local\/bin\/claude(\.exe)?$/i.test(normalized)) return 'native';
   if (/\/\.local\/share\/cursor-agent\//.test(normalized)) return 'script';
   return null;
+}
+
+/**
+ * On Windows, `npm install -g` writes `cmd-shim` wrapper files (`<bin>`, `<bin>.cmd`, `<bin>.ps1`)
+ * directly into the global prefix alongside `node_modules/`, rather than symlinking into it.
+ */
+function isWindowsNpmShim(filePath: string): boolean {
+  try {
+    const stat = statSync(filePath);
+    if (!stat.isFile() || stat.size === 0 || stat.size > 4096) return false;
+    if (!existsSync(join(dirname(filePath), 'node_modules'))) return false;
+    const text = readFileSync(filePath, 'utf8');
+    return /(?:%dp0%|%~dp0|\$basedir)[\\/]+node_modules[\\/]/i.test(text);
+  } catch {
+    return false;
+  }
 }
 
 export function brewKindFromPath(path: string): 'cask' | 'formula' | undefined {
@@ -327,9 +343,22 @@ export function brewKindFromPath(path: string): 'cask' | 'formula' | undefined {
 }
 
 function onPath(executable: string, platform: NodeJS.Platform, env: NodeJS.ProcessEnv): string | null {
-  if (isAbsolute(executable)) return existsSync(executable) ? executable : null;
-  const exts = platform === 'win32' ? ['', ...(env.PATHEXT ?? '.EXE;.CMD').split(';').map((ext) => ext.toLowerCase())] : [''];
-  for (const dir of (env.PATH ?? '').split(delimiter).filter(Boolean)) {
+  const exts = platform === 'win32'
+    ? (/\.[a-z0-9]+$/i.test(executable) ? [''] : ['', ...(env.PATHEXT ?? '.EXE;.CMD;.BAT;.PS1').split(';').filter(Boolean).map((ext) => ext.toLowerCase())])
+    : [''];
+  if (isAbsolute(executable)) {
+    for (const ext of exts) {
+      const candidate = executable + ext;
+      try {
+        if (statSync(candidate).isFile()) return candidate;
+      } catch {
+        // not here
+      }
+    }
+    return null;
+  }
+  const sep = platform === 'win32' ? ';' : platform === process.platform ? delimiter : ':';
+  for (const dir of (env.PATH ?? env.Path ?? '').split(sep).filter(Boolean)) {
     for (const ext of exts) {
       const candidate = join(dir, executable + ext);
       try {
@@ -356,7 +385,9 @@ export function locateInstalledCli(
   } catch {
     // a dangling link still names its folder
   }
-  const method = installMethodFromPath(real) ?? installMethodFromPath(found);
+  const method = installMethodFromPath(real)
+    ?? installMethodFromPath(found)
+    ?? (platform === 'win32' && isWindowsNpmShim(real) ? 'npm' : null);
   const kind = method === 'brew' ? brewKindFromPath(real) ?? brewKindFromPath(found) : undefined;
   return { executable, path: found, method, ...(kind ? { brewKind: kind } : {}) };
 }

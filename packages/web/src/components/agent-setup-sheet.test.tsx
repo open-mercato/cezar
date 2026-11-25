@@ -32,6 +32,10 @@ let refusedWith: string | null = null
 let statuses: Record<string, string> = {}
 let session: Record<string, unknown> | null = null
 let posted: Array<Record<string, unknown>> = []
+/** When set, POST /providers/setup/sessions refuses with 409 `{ error }`. */
+let startError: string | null = null
+/** Optional hook fired when `GET /api/v1/providers/status?refresh=1` runs. */
+let onStatusRefresh: (() => void | Promise<void>) | null = null
 /** How long a start takes to answer: long enough, and the sheet re-renders while it is in flight. */
 let postDelayMs = 0
 
@@ -58,6 +62,7 @@ beforeEach(() => {
     const url = new URL(String(input), 'http://localhost')
     const method = init?.method ?? 'GET'
     if (url.pathname === '/api/v1/providers/status') {
+      if (url.searchParams.get('refresh') === '1' && onStatusRefresh) await onStatusRefresh()
       return json({ providers: Object.entries(statuses).map(([provider, status]) => ({ provider, status, enabled: true })) })
     }
     if (url.pathname === '/api/v1/providers/setup') return json({ available: refusedWith === null, reason: refusedWith, interactive, session, agents })
@@ -66,6 +71,7 @@ beforeEach(() => {
       // `force` rides a header (the typed API is at its size limit): record it with the body.
       posted.push(new Headers(init?.headers).get('x-cezar-force') === '1' ? { ...body, force: true } : body)
       if (postDelayMs) await new Promise((resolve) => setTimeout(resolve, postDelayMs))
+      if (startError) return json({ error: startError }, 409)
       session = {
         id: `s${posted.length}`, runId: 'agent-setup', cwd: '/home/me', shell: '/bin/sh', cols: 80, rows: 24, startedAt: 'now', exitCode: null,
         label: 'x', busy: false, topic: 't', provider: body.provider, action: body.action, command: `run ${String(body.action)}`,
@@ -84,6 +90,8 @@ afterEach(() => {
   statuses = {}
   session = null
   posted = []
+  startError = null
+  onStatusRefresh = null
   postDelayMs = 0
   cleanup()
   fetchMock.mockReset()
@@ -237,6 +245,135 @@ describe('AgentSetupFlow: review follow-ups (#2474)', () => {
     view.unmount()
     expect(toast).toHaveBeenCalledWith(expect.stringContaining('was not updated'))
     expect(posted).toEqual([])
+  })
+
+  it('on a hosted cockpit, labels step 2 "Install yourself" instead of "Install"', async () => {
+    refusedWith = 'Set up agents on the machine hosting cezar.'
+    statuses = { codex: 'not-installed' }
+    agents = [entry('codex', { install: { command: 'npm install -g @openai/codex', runnable: false, sudo: false } })]
+    renderFlow('codex', 'install')
+    expect(await screen.findByText('Install yourself')).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Install' })).toBeNull()
+  })
+
+  it('invalidates Settings’ latest listing after post-install status refresh so installed/method/latest update', async () => {
+    statuses = { codex: 'not-installed' }
+    agents = [entry('codex', { install: { command: 'npm install -g @openai/codex', runnable: true, sudo: false } })]
+    onStatusRefresh = () => {
+      statuses = { codex: 'disconnected' }
+      agents = [entry('codex', {
+        installed: true,
+        method: 'npm',
+        version: '0.170.0',
+        latestVersion: '0.180.0',
+        install: { command: 'npm install -g @openai/codex', runnable: true, sudo: false },
+        update: { command: 'npm install -g @openai/codex@latest', runnable: true, sudo: false },
+      })]
+    }
+    function SettingsSnapshot() {
+      const codex = useAgentSetup({ latest: true }).data?.agents.find((agent) => agent.provider === 'codex')
+      return <span data-testid="settings-codex">{codex ? `${codex.installed}:${codex.method}:${codex.latestVersion}` : ''}</span>
+    }
+    render(
+      <QueryClientProvider client={createQueryClient()}>
+        <SettingsSnapshot />
+        <AgentSetupFlow provider="codex" action="install" onClose={() => {}} />
+      </QueryClientProvider>,
+    )
+    await waitFor(() => expect(screen.getByTestId('settings-codex').textContent).toBe('false:null:null'))
+    fireEvent.click(await screen.findByRole('button', { name: 'Install' }))
+    await waitFor(() => expect(phase()).toBe('running'))
+    session = { ...session, exitCode: 0 }
+    await waitFor(() => expect(phase()).toBe('sign-in'), WAIT)
+    await waitFor(() => expect(screen.getByTestId('settings-codex').textContent).toBe('true:npm:0.180.0'), WAIT)
+  })
+
+  it('shows failure on non-zero install exit and resets to confirm on Try again', async () => {
+    statuses = { codex: 'not-installed' }
+    agents = [entry('codex', { install: { command: 'npm install -g @openai/codex', runnable: true, sudo: false } })]
+    renderFlow('codex', 'install')
+    fireEvent.click(await screen.findByRole('button', { name: 'Install' }))
+    await waitFor(() => expect(phase()).toBe('running'))
+    session = { ...session, exitCode: 1 }
+    await waitFor(() => expect(phase()).toBe('failed'), WAIT)
+    expect(screen.getByRole('alert').textContent).toContain('Codex did not install. The terminal says why.')
+    fireEvent.click(screen.getByRole('button', { name: 'Try again' }))
+    await waitFor(() => expect(phase()).toBe('confirm'))
+  })
+
+  it('shows failure on non-zero update exit', async () => {
+    statuses = { claude: 'connected' }
+    agents = [entry('claude', { installed: true, version: '2.0.14', method: 'native', update: { command: "'claude' update", runnable: true, sudo: false } })]
+    renderFlow('claude', 'update')
+    fireEvent.click(await screen.findByRole('button', { name: 'Update' }))
+    await waitFor(() => expect(phase()).toBe('running'))
+    session = { ...session, exitCode: 2 }
+    await waitFor(() => expect(phase()).toBe('failed'), WAIT)
+    expect(screen.getByRole('alert').textContent).toContain('Claude Code did not update. The terminal says why.')
+  })
+
+  it('moves to failed when POST /providers/setup/sessions refuses with 409, and recovers on Try again', async () => {
+    startError = 'Another agent is being set up. Finish or cancel it first.'
+    statuses = { codex: 'not-installed' }
+    agents = [entry('codex', { install: { command: 'npm install -g @openai/codex', runnable: true, sudo: false } })]
+    renderFlow('codex', 'install')
+    fireEvent.click(await screen.findByRole('button', { name: 'Install' }))
+    await waitFor(() => expect(phase()).toBe('failed'))
+    expect(screen.getByRole('alert').textContent).toContain('Another agent is being set up.')
+    fireEvent.click(screen.getByRole('button', { name: 'Try again' }))
+    await waitFor(() => expect(phase()).toBe('confirm'))
+  })
+
+  it('reports "cannot find it" when install exits 0 but status remains not-installed', async () => {
+    statuses = { codex: 'not-installed' }
+    agents = [entry('codex', { install: { command: 'npm install -g @openai/codex', runnable: true, sudo: false } })]
+    renderFlow('codex', 'install')
+    fireEvent.click(await screen.findByRole('button', { name: 'Install' }))
+    await waitFor(() => expect(phase()).toBe('running'))
+    session = { ...session, exitCode: 0 }
+    await waitFor(() => expect(phase()).toBe('failed'), WAIT)
+    expect(screen.getByRole('alert').textContent).toContain('Codex installed, but cezar cannot find it.')
+  })
+
+  it('skips sign-in and goes straight to done when install exits 0 and agent is already connected', async () => {
+    statuses = { codex: 'not-installed' }
+    agents = [entry('codex', { install: { command: 'npm install -g @openai/codex', runnable: true, sudo: false } })]
+    renderFlow('codex', 'install')
+    fireEvent.click(await screen.findByRole('button', { name: 'Install' }))
+    await waitFor(() => expect(phase()).toBe('running'))
+    statuses = { codex: 'connected' }
+    session = { ...session, exitCode: 0 }
+    await waitFor(() => expect(phase()).toBe('done'), WAIT)
+    expect(screen.getByText('Codex is ready.')).toBeTruthy()
+  })
+
+  it('rejoins an already-running setup session on mount without starting another', async () => {
+    statuses = { codex: 'not-installed' }
+    agents = [entry('codex', { install: { command: 'npm install -g @openai/codex', runnable: true, sudo: false } })]
+    session = {
+      id: 'existing-1', runId: 'agent-setup', cwd: '/home/me', shell: '/bin/sh', cols: 80, rows: 24, startedAt: 'now', exitCode: null,
+      label: 'codex install', busy: false, topic: 't', provider: 'codex', action: 'install', command: 'npm install -g @openai/codex',
+    }
+    renderFlow('codex', 'install')
+    await waitFor(() => expect(phase()).toBe('running'))
+    expect(screen.getByTestId('terminal').getAttribute('data-session')).toBe('existing-1')
+    expect(posted).toEqual([])
+  })
+
+  it('advances sign-in polling to done once the provider reports connected', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    try {
+      statuses = { codex: 'disconnected' }
+      agents = [entry('codex', { installed: true })]
+      renderFlow('codex', 'sign-in')
+      await waitFor(() => expect(phase()).toBe('sign-in'))
+      statuses = { codex: 'connected' }
+      await act(async () => { await vi.advanceTimersByTimeAsync(3_100) })
+      await waitFor(() => expect(phase()).toBe('done'), WAIT)
+      expect(screen.getByText('Codex is ready.')).toBeTruthy()
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })
 

@@ -2702,7 +2702,7 @@ export function createApp(deps: ServerDeps) {
         if (!runnable || !capabilities().localHandoff) {
           trackUpdateOpened(provider, runnable ? 'hosted' : 'unsupported', sid);
           const error = runnable ? 'Run this command on the machine hosting cezar.' : 'cezar does not run this update itself. Run it in a terminal.';
-          const shown = inRelayScope() ? withoutHostPaths(command) : command;
+          const shown = !capabilities().localHandoff ? withoutHostPaths(command) : command;
           return c.json({ error, command: shown }, 409);
         }
         let opened = false;

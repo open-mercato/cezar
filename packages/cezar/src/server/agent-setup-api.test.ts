@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { RunStore } from '../runs/store.ts';
+import { runInRelayScope } from '../relay/scope.ts';
 import type { RunManager } from '../workflows/run.ts';
 import { RUNNER_IDS } from '../core/agent-runner.ts';
 import { LatestVersions } from '../core/agent-cli-versions.ts';
@@ -206,12 +207,75 @@ describe('/api/v1/providers/setup', () => {
     const state = await (await apiRequest(app, '/api/v1/providers/setup')).json() as { available: boolean; reason: string };
     expect(state.available).toBe(false);
     expect(state.reason).toBeTruthy();
-    // The commands to copy stay, but nothing that names the host's binary path.
-    const agents = (state as unknown as { agents: Array<{ provider: string; loginCommand: string | null; install: { command: string | null } }> }).agents;
-    expect(agents.find((agent) => agent.provider === 'codex')?.install.command).toBe('npm install -g @openai/codex');
+    // The commands to copy stay, but nothing is runnable here and nothing names a host binary path.
+    const agents = (state as unknown as { agents: Array<{ provider: string; loginCommand: string | null; install: { command: string | null; runnable: boolean } }> }).agents;
+    expect(agents.find((agent) => agent.provider === 'codex')?.install).toMatchObject({ command: 'npm install -g @openai/codex', runnable: false });
+    expect(agents.every((agent) => agent.install.runnable === false)).toBe(true);
     expect(agents.every((agent) => agent.loginCommand === null)).toBe(true);
     expect((await post(app, { provider: 'codex', action: 'install' })).status).toBe(409);
     expect(spawns).toHaveLength(0);
+  });
+
+  describe('createApp relay scope and activeRuns wiring (#2474)', () => {
+    it('lets a paired phone list and start a password-free install on a local host, read-only and redacted', async () => {
+      const app = build();
+      const listed = await runInRelayScope({ deviceId: 'phone-1' }, () => apiRequest(app, '/api/v1/providers/setup'));
+      expect(listed.status).toBe(200);
+      const state = await listed.json() as { available: boolean; interactive: boolean; agents: Array<{ provider: string; install: { runnable: boolean } }> };
+      expect(state).toMatchObject({ available: true, interactive: false });
+      expect(state.agents.find((agent) => agent.provider === 'codex')?.install.runnable).toBe(true);
+
+      const started = await runInRelayScope({ deviceId: 'phone-1' }, () => post(app, { provider: 'codex', action: 'install' }));
+      expect(started.status).toBe(201);
+      const session = await started.json() as { id: string; cwd: string; shell: string; command: string };
+      expect(session.cwd).toBe('~');
+      expect(session.shell).not.toMatch(/[\\/]/);
+      expect(JSON.stringify(session)).not.toContain(homedir());
+
+      const typed = await runInRelayScope({ deviceId: 'phone-1' }, () =>
+        apiRequest(app, `/api/v1/providers/setup/sessions/${session.id}/input`, { method: 'POST', body: JSON.stringify({ data: 'y\n' }), headers: { 'content-type': 'application/json' } }),
+      );
+      expect(typed.status).toBe(409);
+      const resized = await runInRelayScope({ deviceId: 'phone-1' }, () =>
+        apiRequest(app, `/api/v1/providers/setup/sessions/${session.id}/resize`, { method: 'POST', body: JSON.stringify({ cols: 40, rows: 10 }), headers: { 'content-type': 'application/json' } }),
+      );
+      expect(resized.status).toBe(409);
+    });
+
+    it.each([
+      ['hosted (CEZ_REMOTE=1)', { CEZ_REMOTE: '1' }, {}],
+      ['non-loopback bindHost', {}, { bindHost: '0.0.0.0' }],
+      ['terminal off (CEZ_TERMINAL=0)', { CEZ_TERMINAL: '0' }, {}],
+      ['single project (CEZ_SINGLE_PROJECT=1)', { CEZ_SINGLE_PROJECT: '1' }, {}],
+    ] as const)('still refuses a paired phone when %s', async (_name, env, overrides) => {
+      Object.assign(process.env, env);
+      const app = build(overrides);
+      const state = await (await runInRelayScope({ deviceId: 'phone-1' }, () => apiRequest(app, '/api/v1/providers/setup'))).json() as {
+        available: boolean;
+        reason: string | null;
+        interactive: boolean;
+        agents: Array<{ install: { runnable: boolean } }>;
+      };
+      expect(state.available).toBe(false);
+      expect(state.interactive).toBe(false);
+      expect(state.reason).toBeTruthy();
+      expect(state.agents.every((agent) => agent.install.runnable === false)).toBe(true);
+      const started = await runInRelayScope({ deviceId: 'phone-1' }, () => post(app, { provider: 'codex', action: 'install' }));
+      expect(started.status).toBe(409);
+    });
+
+    it('wires activeRuns through createApp from the project store', async () => {
+      const active = store.createRun({ title: 'active', workflow: 'quick-task', task: 'x', steps: [], runner: 'codex' });
+      store.updateRun(active.id, { status: 'running' });
+      const done = store.createRun({ title: 'done', workflow: 'quick-task', task: 'y', steps: [], runner: 'claude' });
+      store.updateRun(done.id, { status: 'done' });
+
+      const state = await (await apiRequest(build(), '/api/v1/providers/setup')).json() as {
+        agents: Array<{ provider: string; activeRuns: number }>;
+      };
+      expect(state.agents.find((agent) => agent.provider === 'codex')?.activeRuns).toBe(1);
+      expect(state.agents.find((agent) => agent.provider === 'claude')?.activeRuns).toBe(0);
+    });
   });
 
   it('is unavailable without a PTY', async () => {
@@ -424,29 +488,86 @@ describe('/api/v1/providers/setup', () => {
       });
       const fresh = await start(routes, { provider: 'claude', action: 'update' });
       expect(fresh.status).toBe(201);
-      expect(await fresh.json()).toMatchObject({ command: "'claude' update" });
+      const freshBody = await fresh.json() as { command: string; cwd: string; shell: string };
+      expect(freshBody).toMatchObject({ command: "'claude' update", cwd: '~' });
+      expect(freshBody.shell).not.toMatch(/[\\/]/);
+      expect(JSON.stringify(freshBody)).not.toContain(homedir());
+      expect(JSON.stringify(freshBody)).not.toContain('/Users/someone');
+
       const joined = await start(routes, { provider: 'claude', action: 'update' });
       expect(joined.status).toBe(201);
-      expect(await joined.json()).toMatchObject({ command: "'claude' update" });
-      const listed = await (await routes.request('/providers/setup')).json() as { session: { command: string } | null };
-      expect(listed.session?.command).toBe("'claude' update");
+      const joinedBody = await joined.json() as { command: string; cwd: string; shell: string };
+      expect(joinedBody).toMatchObject({ command: "'claude' update", cwd: '~' });
+      expect(joinedBody.shell).not.toMatch(/[\\/]/);
+      expect(JSON.stringify(joinedBody)).not.toContain(homedir());
+      expect(JSON.stringify(joinedBody)).not.toContain('/Users/someone');
+
+      const listed = await (await routes.request('/providers/setup')).json() as { session: { command: string; cwd: string; shell: string } | null };
+      expect(listed.session).toMatchObject({ command: "'claude' update", cwd: '~' });
+      expect(listed.session?.shell).not.toMatch(/[\\/]/);
+      expect(JSON.stringify(listed)).not.toContain(homedir());
+      expect(JSON.stringify(listed)).not.toContain('/Users/someone');
       // The host still runs the real binary.
       expect(spawns).toHaveLength(1);
       expect(spawns[0]!.args.at(-1)).toContain('/Users/someone/.local/bin/claude');
     });
 
-    it('a refused listing blanks the update line, which names the host binary', async () => {
+    it('a refused listing blanks the update line and marks installs non-runnable', async () => {
       const routes = routesWith({
         refusal: () => 'Set up agents on the machine hosting cezar.',
         executable: () => '/Users/someone/.local/bin/claude',
         locate: (executable) => ({ executable, path: executable, method: 'native' }),
       });
-      const body = await (await routes.request('/providers/setup')).json() as { available: boolean; agents: Array<{ provider: string; installed: boolean; update: { command: string | null; runnable: boolean } | null }> };
+      const body = await (await routes.request('/providers/setup')).json() as {
+        available: boolean;
+        agents: Array<{ provider: string; installed: boolean; install: { command: string | null; runnable: boolean }; update: { command: string | null; runnable: boolean } | null }>;
+      };
       expect(body.available).toBe(false);
       const claude = body.agents.find((agent) => agent.provider === 'claude')!;
       expect(claude.installed).toBe(true);
       expect(claude.update).toMatchObject({ command: null, runnable: false });
+      expect(body.agents.every((agent) => agent.install.runnable === false)).toBe(true);
+      expect(body.agents.find((agent) => agent.provider === 'codex')?.install.command).toBe('npm install -g @openai/codex');
       expect(JSON.stringify(body)).not.toContain('/Users/someone');
+    });
+
+    it('after an install exits, awaits a fresh provider status instead of serving a stale not-installed cache', async () => {
+      let cached: { providers: Array<{ provider: 'codex'; status: 'not-installed' | 'disconnected' }> } = {
+        providers: [{ provider: 'codex', status: 'not-installed' }],
+      };
+      let resolveRefresh!: () => void;
+      const refreshGate = new Promise<void>((resolve) => { resolveRefresh = resolve; });
+      let installedOnDisk = false;
+      const routes = routesWith({
+        currentStatus: async () => cached,
+        status: async () => {
+          if (!installedOnDisk) return cached;
+          await refreshGate;
+          cached = { providers: [{ provider: 'codex' as const, status: 'disconnected' as const }] };
+          return cached;
+        },
+        checks: async () => (installedOnDisk ? [{ name: 'codex', available: true, version: '0.170.0' }] : []),
+        locate: (executable) => ({ executable, path: '/usr/local/lib/node_modules/@openai/codex/bin/codex.js', method: 'npm' }),
+        latest: new LatestVersions({
+          fetch: async () => ({ ok: true, json: async () => ({ version: '0.180.0' }) }),
+        }),
+      });
+      expect((await start(routes, { provider: 'codex', action: 'install' })).status).toBe(201);
+      installedOnDisk = true;
+      ptys[0]!.finish(0);
+
+      // A listing arriving while the refresh is still in flight awaits it rather than reading stale cache.
+      const pendingListing = routes.request('/providers/setup', { headers: { 'x-cezar-latest': '1' } });
+      resolveRefresh();
+      const body = await (await pendingListing).json() as {
+        agents: Array<{ provider: string; installed: boolean; method: string | null; update: { command: string | null; runnable: boolean } | null; latestVersion: string | null }>;
+      };
+      expect(body.agents.find((agent) => agent.provider === 'codex')).toMatchObject({
+        installed: true,
+        method: 'npm',
+        update: { command: 'npm install -g @openai/codex@latest', runnable: true },
+        latestVersion: '0.180.0',
+      });
     });
 
     it('probes the versions again once an update ends, not while it runs', async () => {
@@ -488,7 +609,12 @@ describe('/api/v1/providers/setup', () => {
   describe('withoutHostPaths', () => {
     it('cuts quoted and bare absolute paths to the program name, and leaves URLs and names alone', () => {
       expect(withoutHostPaths("'/Users/me/.local/bin/claude' update")).toBe("'claude' update");
+      expect(withoutHostPaths("'/Users/o'\\''neil/.local/bin/claude' update")).toBe("'claude' update");
       expect(withoutHostPaths('"C:\\Users\\me\\AppData\\agy.exe" update')).toBe('"agy.exe" update');
+      expect(withoutHostPaths('"C:/Users/alice/claude.exe" update')).toBe('"claude.exe" update');
+      expect(withoutHostPaths('"\\\\server\\share\\claude.exe" update')).toBe('"claude.exe" update');
+      expect(withoutHostPaths('"//server/share/bin/claude.exe" update')).toBe('"claude.exe" update');
+      expect(withoutHostPaths('C:/Users/alice/npm.cmd install -g @openai/codex@latest')).toBe('npm.cmd install -g @openai/codex@latest');
       expect(withoutHostPaths('sudo /usr/local/bin/npm install -g @openai/codex@latest')).toBe('sudo npm install -g @openai/codex@latest');
       expect(withoutHostPaths('curl -fsSL https://antigravity.google/cli/install.sh | bash')).toBe('curl -fsSL https://antigravity.google/cli/install.sh | bash');
       expect(withoutHostPaths("'opencode' upgrade")).toBe("'opencode' upgrade");

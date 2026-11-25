@@ -1,4 +1,5 @@
 import { homedir } from 'node:os';
+import { basename } from 'node:path';
 
 import {
   AGENT_SETUP_FORCE_HEADER,
@@ -78,8 +79,16 @@ export function withoutHostPaths(command: string | null): string | null;
 export function withoutHostPaths(command: string | null): string | null {
   if (command === null) return null;
   return command
-    .replace(/'(?:\/[^'\/]*)*\/([^'\/]+)'/g, "'$1'")
-    .replace(/"[A-Za-z]:\\(?:[^"\\]*\\)*([^"\\]+)"/g, '"$1"')
+    // Single-quoted POSIX absolute paths, including shell-escaped apostrophes (`'\''`).
+    .replace(/'(\/(?:[^']|'\\'')*)'/g, (match, inner: string) => {
+      const base = inner.slice(inner.lastIndexOf('/') + 1);
+      return base ? `'${base}'` : match;
+    })
+    // Double-quoted Windows drive paths (backslash or forward-slash) and UNC paths.
+    .replace(/"(?:[A-Za-z]:[\\/]|(?:\\\\|\/\/)[^"\\/]+[\\/][^"\\/]+[\\/])(?:[^"\\/]*[\\/])*([^"\\/]+)"/g, '"$1"')
+    // Bare Windows drive or UNC paths.
+    .replace(/(^|\s)(?:[A-Za-z]:[\\/]|(?:\\\\|\/\/)[^\s'"\\/]+[\\/][^\s'"\\/]+[\\/])(?:[^\s'"\\/]*[\\/])*([^\s'"\\/]+)/g, '$1$2')
+    // Bare POSIX absolute paths.
     .replace(/(^|\s)(?:\/[^\s'"\/]+)+\/([^\s'"\/]+)/g, '$1$2');
 }
 
@@ -138,7 +147,7 @@ export function agentSetupRoutes(deps: AgentSetupDeps) {
     return Promise.all(AGENT_SETUP_PROVIDERS.map(async (provider): Promise<AgentSetupEntry> => {
       const row = status.providers.find((candidate) => candidate.provider === provider);
       const check = found.find((candidate) => candidate.name === provider);
-      const installed = row ? row.status !== 'not-installed' : check?.available === true;
+      const installed = check?.available === true || (row ? row.status !== 'not-installed' : false);
       const recipe = recipeFor(provider);
       const installPlan = planInstall(provider, env);
       const where = installed ? locate(provider) : null;
@@ -173,12 +182,20 @@ export function agentSetupRoutes(deps: AgentSetupDeps) {
   const actions = new Map<string, AgentSetupAction>();
   /** The install or update whose end already cleared the version cache. */
   let refreshedAfter: string | null = null;
-  // An install or update changes `--version`: the listing after it ends must probe again.
+  /** Fresh provider-status probe kicked off when an install/update exits so concurrent setup polls
+   *  do not read a stale `not-installed` cache while the refresh is in flight. */
+  let statusRefresh: Promise<ProviderStatusResponse> | null = null;
+  // An install or update changes `--version` and provider availability: re-probe both on exit.
   const afterEnd = (id: string, action: AgentSetupAction) => {
     if (action === 'login' || refreshedAfter === id) return;
     refreshedAfter = id;
     checksCache = null;
     located = null;
+    const refresh = deps.status().finally(() => {
+      if (statusRefresh === refresh) statusRefresh = null;
+    });
+    void refresh.catch(() => {});
+    statusRefresh = refresh;
   };
   const currentInfo = (): TerminalSessionInfo | null => {
     const info = current ? deps.sessions.get(current.id) : null;
@@ -194,7 +211,14 @@ export function agentSetupRoutes(deps: AgentSetupDeps) {
   };
   /** Every session body a phone receives goes through here: no host path reaches it. */
   const shown = (session: AgentSetupSession): AgentSetupSession =>
-    phone() ? { ...session, command: withoutHostPaths(session.command) } : session;
+    phone()
+      ? {
+          ...session,
+          command: withoutHostPaths(session.command),
+          cwd: '~',
+          shell: basename(session.shell.replaceAll('\\', '/')) || session.shell,
+        }
+      : session;
   const unavailable = async (): Promise<string | null> => {
     const policy = deps.refusal();
     if (policy) return policy;
@@ -209,15 +233,16 @@ export function agentSetupRoutes(deps: AgentSetupDeps) {
       c.header('Cache-Control', 'no-store');
       // First: a session that just ended clears the version cache before the listing reads it.
       const info = currentInfo();
-      const status = await (deps.currentStatus ?? deps.status)().catch((): ProviderStatusResponse => ({ providers: [] }));
+      const status = await (statusRefresh ?? (deps.currentStatus ?? deps.status)()).catch((): ProviderStatusResponse => ({ providers: [] }));
       const agents = await entries(c.req.header(AGENT_SETUP_LATEST_HEADER) === '1', status);
       const reason = await unavailable();
-      // Refused (hosted, terminal off): the install lines and docs still help, but a sign-in or
-      // update line names the host's binary path, which a hosted reader must not learn.
+      // Refused (hosted, terminal off): the install lines and docs still help, but nothing is
+      // runnable here and a sign-in or update line names the host's binary path.
       if (reason) {
         const safe = agents.map((agent) => ({
           ...agent,
           loginCommand: null,
+          install: { ...agent.install, runnable: false },
           update: agent.update ? { ...agent.update, command: null, runnable: false } : null,
         }));
         const refused: AgentSetupState = agentSetupStateSchema.parse({ available: false, reason, interactive: false, agents: safe, session: null });

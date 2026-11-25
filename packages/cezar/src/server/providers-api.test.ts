@@ -889,6 +889,27 @@ describe('workspace provider API', () => {
       expect(openTerminal).not.toHaveBeenCalled();
     });
 
+    it('strips host binary paths from the 409 command for hosted clients as well as paired phones', async () => {
+      const prev = process.env.CEZ_CLAUDE_BIN;
+      process.env.CEZ_CLAUDE_BIN = '/Users/someone/.local/bin/claude';
+      try {
+        const openTerminal = vi.fn(async () => true);
+        const found = (executable: string): InstalledCli => ({ executable, path: executable, method: 'native' });
+        const hosted = app({ openTerminal, bindHost: '0.0.0.0', providerAuth: service({}, undefined, undefined, found) });
+        const response = await update(hosted, 'claude');
+
+        expect(response.status).toBe(409);
+        expect(await response.json()).toEqual({
+          error: 'Run this command on the machine hosting cezar.',
+          command: "'claude' update",
+        });
+        expect(openTerminal).not.toHaveBeenCalled();
+      } finally {
+        if (prev === undefined) delete process.env.CEZ_CLAUDE_BIN;
+        else process.env.CEZ_CLAUDE_BIN = prev;
+      }
+    });
+
     it('strips host binary paths from the 409 command for a paired phone', async () => {
       const prev = process.env.CEZ_CLAUDE_BIN;
       process.env.CEZ_CLAUDE_BIN = '/Users/someone/.local/bin/claude';
