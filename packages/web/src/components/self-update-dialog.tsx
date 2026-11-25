@@ -25,7 +25,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { cn } from '@/lib/utils'
 
 import { DevelopmentPanel, pullOfVersion } from './self-update-development'
-import { offerWhenIdle, targetName, WhenIdleButton } from './self-update-when-idle'
+import { describeRestartBlockers, offerWhenIdle, targetName, WhenIdleButton } from './self-update-when-idle'
 
 /**
  * The dialog behind the footer's version chip (self-update PoC): which channel cezar follows,
@@ -67,7 +67,7 @@ export function SelfUpdateDialog({
     // Decided once, on the first status: tasks that finish while the dialog is open must not
     // start an install the user has not asked for a second time.
     autoApplied.current = true
-    if (data.activeRuns > 0) return
+    if (data.restartBlockers.length > 0) return
     apply.mutate(autoApply)
   }, [autoApply, data, apply])
 
@@ -151,21 +151,37 @@ export function SelfUpdateDialog({
               >
                 <p className="min-w-0">
                   {brandName} switches to <span className="font-semibold">{targetName(data.scheduled.target)}</span> as soon
-                  as no task is running. You can close this window and keep working.
+                  as nothing is working.
+                  {data.restartBlockers.length > 0 ? (
+                    <> Waiting for {describeRestartBlockers(data.restartBlockers)}; new tasks wait until then.</>
+                  ) : null}
+                  {' '}You can close this window and keep working.
                 </p>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => cancelScheduled.mutate()}
-                  disabled={cancelScheduled.isPending}
-                >
-                  Cancel
-                </Button>
+                <div className="flex shrink-0 gap-1">
+                  {data.restartBlockers.length > 0 && data.job?.status !== 'running' ? (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => apply.mutate(data.scheduled!.target)}
+                      disabled={apply.isPending}
+                    >
+                      Restart now
+                    </Button>
+                  ) : null}
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => cancelScheduled.mutate()}
+                    disabled={cancelScheduled.isPending}
+                  >
+                    Cancel
+                  </Button>
+                </div>
               </div>
-            ) : data.activeRuns > 0 && data.canSelfUpdate ? (
+            ) : data.restartBlockers.length > 0 && data.canSelfUpdate ? (
               <p className="rounded-md border border-pending/50 bg-pending/10 px-3 py-2 text-label text-foreground">
-                {data.activeRuns} task{data.activeRuns === 1 ? ' is' : 's are'} running. A restart interrupts
-                them; {brandName} re-queues or resumes them on the way back up.
+                {describeRestartBlockers(data.restartBlockers)} {data.restartBlockers.length === 1 && data.restartBlockers[0]!.count === 1 ? 'is' : 'are'} working.
+                A restart interrupts them; {brandName} re-queues or resumes tasks on the way back up.
                 {' '}The &ldquo;when idle&rdquo; buttons wait for them to finish instead.
               </p>
             ) : null}
