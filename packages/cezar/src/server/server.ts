@@ -173,6 +173,7 @@ import {
 import { dispatchInputSchema, dispatchReportSchema } from '@open-mercato/cezar-contract';
 import { phoneDeviceParamSchema, phonePairingParamSchema, renamePhoneInputSchema, setComputerNameInputSchema, setPhonePushGrantInputSchema, setRelayAccountInputSchema, setRelayAddressInputSchema, setRelayKeepAwakeInputSchema, testRelayAddressInputSchema, type PhonePairingEvent, type PhonePushState, type PhoneSignalEvent, type RelayAccountError } from '@open-mercato/cezar-contract';
 import { detectEnvironment } from '../core/backend-detect.ts';
+import { LatestVersions } from '../core/agent-cli-versions.ts';
 import { resolveCursorAgentBin } from '../core/cursor-bin.ts';
 import { resolveAntigravityBin } from '../core/antigravity-runner.ts';
 import { hostUsageSampler, type HostSampler } from '../core/host-usage.ts';
@@ -439,7 +440,7 @@ import { fetchGithub, fetchGithubChecks, fetchGithubComments, fetchGithubPrDiff,
 import { ensureLaunchKey } from './launch-key.ts';
 import { openInTerminal } from './open-in-terminal.ts';
 import { agentSetupRoutes } from './agent-setup-routes.ts';
-import type { InstallEnv } from './agent-setup.ts';
+import { probeInstallEnv, type InstallEnv } from './agent-setup.ts';
 import {
   agentCliRunner,
   detectOpenTargets,
@@ -625,6 +626,8 @@ export interface ServerDeps {
   loginSessions?: LoginSessionManager;
   /** What the first-run page's install commands are chosen from. Injectable so a route test probes nothing. */
   agentSetupProbeEnv?: () => Promise<InstallEnv>;
+  /** The npm lookup behind the setup sheet's "update available"; tests inject one that fetches nothing. */
+  latestAgentVersions?: LatestVersions;
   /** The host-telemetry sampler behind the `host` topic and the `/workspace/host-usage` route.
    *  Defaults to the process-wide singleton; injectable so tests can drive a frame shape (a
    *  container object, for instance) that CI machines do not have. */
@@ -2648,10 +2651,16 @@ export function createApp(deps: ServerDeps) {
       async (c) => {
         const provider = c.req.valid('param').provider as ProviderId;
         const sid = deviceSid(c.req.header('x-cezar-sid'));
-        const command = providerAuth.updateCommand(provider);
+        const plan = providerAuth.updatePlan(provider, await (deps.agentSetupProbeEnv ?? probeInstallEnv)());
+        const command = plan?.command ?? null;
         if (command === null) {
           trackUpdateOpened(provider, 'unsupported', sid);
           return c.json({ error: 'This agent has no update command of its own. Update it the way you installed it.' }, 409);
+        }
+        // A command cezar does not vouch for is shown, never run (`core/agent-install.ts`).
+        if (!plan?.runnable) {
+          trackUpdateOpened(provider, 'unsupported', sid);
+          return c.json({ error: 'cezar does not run this update itself. Run it in a terminal.', command }, 409);
         }
         if (!capabilities().localHandoff) {
           trackUpdateOpened(provider, 'hosted', sid);
@@ -8843,16 +8852,29 @@ export function createApp(deps: ServerDeps) {
 
   // Installing an agent changes the host and signing in changes its credentials, so setup follows
   // the provider login and the GitHub sign-in: never hosted, never in a single-project workspace.
+  const latestAgentVersions = deps.latestAgentVersions ?? new LatestVersions();
   const agentSetupFamily = agentSetupRoutes({
     sessions: terminalSessions,
     loadPty,
     refusal: () => {
-      const caps = capabilities();
+      // A paired phone reads the HOST's capabilities: it may start a fixed, password-free install or
+      // update there (spec 2026-11-25-agent-cli-install-and-update), and the routes keep it read-only.
+      const caps = inRelayScope() ? outsideRelayScope(() => capabilities()) : capabilities();
       if (caps.singleProject) return 'This workspace runs one fixed project, so agents are set up on the host.';
       if (!caps.localHandoff) return 'Set up agents on the machine hosting cezar.';
       return terminalPolicyRefusal(caps);
     },
+    phone: () => inRelayScope(),
     status: () => providerAuth.status({ refresh: true }),
+    currentStatus: () => providerAuth.status(),
+    executable: (provider) => providerAuth.executable(provider),
+    activeRuns: (provider) => {
+      const stores = new Set([bootContext.store, ...contexts.ids().flatMap((id) => contexts.peek(id)?.store ?? [])]);
+      let count = 0;
+      for (const store of stores) for (const run of store.listRuns()) if (run.status === 'running' && (run.runner ?? 'claude') === provider) count += 1;
+      return count;
+    },
+    latest: latestAgentVersions,
     loginCommand: (provider) => providerAuth.loginCommand(provider),
     installHint: (provider) => providerAuth.installHint(provider),
     registerTopic: registerTerminalTopic,

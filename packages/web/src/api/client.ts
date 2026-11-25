@@ -673,12 +673,18 @@ export async function cancelGithubLogin(): Promise<GithubLoginState> {
 }
 
 /** Installing and signing in to an agent on the first-run page: the state, and one setup terminal. */
-export async function getAgentSetup(opts?: ReadOptions): Promise<AgentSetupState> {
-  return unwrap(await cez.api.v1.providers.setup.$get({}, init(opts)), '/providers/setup')
+export async function getAgentSetup(opts?: ReadOptions & { latest?: boolean }): Promise<AgentSetupState> {
+  return unwrap(
+    await cez.api.v1.providers.setup.$get({ query: opts?.latest ? { latest: '1' } : {} }, init(opts)),
+    '/providers/setup',
+  )
 }
 
-export async function startAgentSetup(provider: AgentSetupProvider, action: AgentSetupAction): Promise<AgentSetupSession> {
-  return unwrap(await cez.api.v1.providers.setup.sessions.$post({ json: { provider, action } }), '/providers/setup/sessions')
+export async function startAgentSetup(provider: AgentSetupProvider, action: AgentSetupAction, force?: boolean): Promise<AgentSetupSession> {
+  return unwrap(
+    await cez.api.v1.providers.setup.sessions.$post({ json: { provider, action, ...(force ? { force } : {}) } }),
+    '/providers/setup/sessions',
+  )
 }
 
 export async function readAgentSetup(sessionId: string, cursor: number): Promise<TerminalOutput> {

@@ -1,6 +1,7 @@
 import { homedir } from 'node:os';
 
 import {
+  agentSetupQuerySchema,
   agentSetupSessionParamsSchema,
   agentSetupSessionSchema,
   agentSetupStartSchema,
@@ -10,12 +11,17 @@ import {
   terminalOutputSchema,
   terminalResizeSchema,
   type AgentSetupAction,
+  type AgentSetupEntry,
   type AgentSetupProvider,
   type ProviderStatusResponse,
 } from '@open-mercato/cezar-contract';
 import { Hono } from 'hono';
 
-import { AGENT_SETUP_PROVIDERS, installCommand, probeInstallEnv, shellLine, type InstallEnv } from './agent-setup.ts';
+import { minimumVersion, type LatestVersions } from '../core/agent-cli-versions.ts';
+import { locateInstalledCli, planInstall, planUpdate, recipeFor, versionState, type CommandPlan, type InstalledCli } from '../core/agent-install.ts';
+import { detectEnvironment, type BackendCheck } from '../core/backend-detect.ts';
+import { cliVersionFrom } from '../core/provider-auth.ts';
+import { AGENT_SETUP_PROVIDERS, probeInstallEnv, shellLine, type InstallEnv } from './agent-setup.ts';
 import type { PtyBinding } from './terminal/pty-module.ts';
 import type { TerminalSessionInfo, TerminalSessions } from './terminal/sessions.ts';
 import { jsonZodValidator, paramZodValidator, queryZodValidator } from './validators.ts';
@@ -23,6 +29,8 @@ import { jsonZodValidator, paramZodValidator, queryZodValidator } from './valida
 /** The owner key of setup sessions. Never a run id, so no task's terminal routes reach one by accident. */
 export const AGENT_SETUP_OWNER = 'agent-setup';
 const INSTALL_ENV_TTL_MS = 30_000;
+/** `--version` of eleven CLIs is ~1 s: a page polling the state must not pay it every second. */
+const CHECKS_TTL_MS = 15_000;
 /** Dry-run mocks the agents: nothing is installed and nobody signs in. */
 const DRY_RUN_COMMAND = 'echo dry run: nothing was installed or signed in';
 
@@ -41,7 +49,24 @@ export interface AgentSetupDeps {
   onLoginOpened: (provider: AgentSetupProvider, status: 'disconnected' | 'unknown', sid: string | undefined) => void;
   deviceSid: (header: string | undefined) => string | undefined;
   probeEnv?: () => Promise<InstallEnv>;
+  /** The provider status as cached, for the listing; `status` refreshes and decides a start. */
+  currentStatus?: () => Promise<ProviderStatusResponse>;
+  /** Each CLI's `--version` (the health probe). */
+  checks?: () => Promise<BackendCheck[]>;
+  /** What cezar spawns for this agent, so its binary and install method can be found. */
+  executable?: (provider: AgentSetupProvider) => string;
+  /** Where the binary was found and how it was installed; a seam for tests. */
+  locate?: (executable: string) => InstalledCli;
+  /** Tasks running on this agent now. */
+  activeRuns?: (provider: AgentSetupProvider) => number;
+  /** The newest release, read only for `?latest=1`. */
+  latest?: LatestVersions;
+  /** The request came through a paired phone: no typing, and nothing that needs a password. */
+  phone?: () => boolean;
 }
+
+const plan = (value: CommandPlan): AgentSetupEntry['install'] =>
+  ({ command: value.command, runnable: value.runnable, method: value.method, sudo: value.sudo });
 
 /**
  * `/api/v1/providers/setup` (spec 2026-10-26-first-run-onboarding, "Set up an agent here"): one
@@ -55,6 +80,53 @@ export function agentSetupRoutes(deps: AgentSetupDeps) {
   const installEnv = (): Promise<InstallEnv> => {
     if (!envCache || Date.now() - envCache.at > INSTALL_ENV_TTL_MS) envCache = { at: Date.now(), env: probe() };
     return envCache.env;
+  };
+
+  let checksCache: { at: number; checks: Promise<BackendCheck[]> } | null = null;
+  const checks = (): Promise<BackendCheck[]> => {
+    if (!checksCache || Date.now() - checksCache.at > CHECKS_TTL_MS) checksCache = { at: Date.now(), checks: (deps.checks ?? detectEnvironment)() };
+    return checksCache.checks;
+  };
+  const phone = () => deps.phone?.() ?? false;
+  const locate = (provider: AgentSetupProvider): InstalledCli => {
+    const executable = deps.executable?.(provider) ?? provider;
+    return (deps.locate ?? locateInstalledCli)(executable);
+  };
+  const updatePlan = (provider: AgentSetupProvider, env: InstallEnv): CommandPlan | null => planUpdate(provider, locate(provider), env);
+
+  /** Everything the sheet shows for one agent: the commands, the versions, and what blocks an update. */
+  const entries = async (withLatest: boolean, status: ProviderStatusResponse): Promise<AgentSetupEntry[]> => {
+    const [env, found] = await Promise.all([installEnv(), checks().catch(() => [] as BackendCheck[])]);
+    return Promise.all(AGENT_SETUP_PROVIDERS.map(async (provider): Promise<AgentSetupEntry> => {
+      const row = status.providers.find((candidate) => candidate.provider === provider);
+      const check = found.find((candidate) => candidate.name === provider);
+      const installed = row ? row.status !== 'not-installed' : check?.available === true;
+      const recipe = recipeFor(provider);
+      const installPlan = planInstall(provider, env);
+      const where = installed ? locate(provider) : null;
+      const update = installed && where ? planUpdate(provider, where, env) : null;
+      const version = check?.version ? cliVersionFrom(check.version) : null;
+      const minVersion = minimumVersion(provider);
+      const latestVersion = installed && withLatest && deps.latest ? await deps.latest.latest(provider) : null;
+      return {
+        provider,
+        installCommand: installPlan.runnable ? installPlan.command : null,
+        installHint: deps.installHint(provider),
+        loginCommand: deps.loginCommand(provider),
+        install: plan(installPlan),
+        update: update ? plan(update) : null,
+        docsUrl: recipe.docsUrl,
+        copyOnlyReason: recipe.copyOnly ?? null,
+        installed,
+        version,
+        method: where?.method ?? null,
+        minVersion,
+        latestVersion,
+        versionState: installed ? versionState(version, minVersion, latestVersion) : 'unknown',
+        autoUpdates: recipe.autoUpdates,
+        activeRuns: deps.activeRuns?.(provider) ?? 0,
+      };
+    }));
   };
 
   let current: { id: string; provider: AgentSetupProvider; action: AgentSetupAction; command: string } | null = null;
@@ -81,27 +153,35 @@ export function agentSetupRoutes(deps: AgentSetupDeps) {
   };
 
   return new Hono()
-    .get('/providers/setup', async (c) => {
+    .get('/providers/setup', queryZodValidator(agentSetupQuerySchema), async (c) => {
       c.header('Cache-Control', 'no-store');
+      const status = await (deps.currentStatus ?? deps.status)().catch((): ProviderStatusResponse => ({ providers: [] }));
+      const agents = await entries(c.req.valid('query').latest === '1', status);
       const reason = await refusal();
-      if (reason) return c.json(agentSetupStateSchema.parse({ available: false, reason }));
-      const env = await installEnv();
+      // Refused (hosted, terminal off): the install lines and docs still help, but a sign-in or
+      // update line names the host's binary path, which a hosted reader must not learn.
+      if (reason) {
+        const safe = agents.map((agent) => ({
+          ...agent,
+          loginCommand: null,
+          update: agent.update ? { ...agent.update, command: null, runnable: false } : null,
+        }));
+        return c.json(agentSetupStateSchema.parse({ available: false, reason, agents: safe }));
+      }
       const info = currentInfo();
       return c.json(agentSetupStateSchema.parse({
         available: true,
-        agents: AGENT_SETUP_PROVIDERS.map((provider) => ({
-          provider,
-          installCommand: installCommand(provider, env),
-          installHint: deps.installHint(provider),
-          loginCommand: deps.loginCommand(provider),
-        })),
+        agents,
+        interactive: !phone(),
         session: info ? describe(info) : null,
       }));
     })
     .post('/providers/setup/sessions', jsonZodValidator(agentSetupStartSchema), async (c) => {
       const reason = await refusal();
       if (reason) return c.json({ error: reason }, 409);
-      const { provider, action, cols, rows } = c.req.valid('json');
+      const { provider, action, cols, rows, force } = c.req.valid('json');
+      // A phone may start only what needs nobody at the computer: a sign-in has the card for that.
+      if (phone() && action === 'login') return c.json({ error: 'Sign in from the sign-in card, or finish on your computer.' }, 409);
       const live = currentInfo();
       if (live?.exitCode === null) {
         // A double click or a second tab joins the session already running.
@@ -116,10 +196,27 @@ export function agentSetupRoutes(deps: AgentSetupDeps) {
         if (!dryRun && !row) return c.json({ error: 'The agent could not be checked. Try again.' }, 500);
         // The status decides, so a stale page can neither reinstall an agent nor sign in to a missing one.
         if (action === 'install' && row && row.status !== 'not-installed') return c.json({ error: 'This agent is already installed.' }, 409);
-        if (action === 'login' && row?.status === 'not-installed') return c.json({ error: 'Install this agent first.' }, 409);
+        if (action !== 'install' && row?.status === 'not-installed') return c.json({ error: 'Install this agent first.' }, 409);
         if (action === 'login' && row?.status === 'connected') return c.json({ error: 'This agent is already signed in.' }, 409);
-        const command = action === 'install' ? installCommand(provider, await installEnv()) : deps.loginCommand(provider);
-        if (command === null) return c.json({ error: deps.installHint(provider) }, 409);
+        let command: string | null;
+        if (action === 'login') {
+          command = deps.loginCommand(provider);
+          if (command === null) return c.json({ error: deps.installHint(provider) }, 409);
+        } else {
+          const env = await installEnv();
+          const chosen = action === 'install' ? planInstall(provider, env) : updatePlan(provider, env);
+          if (!chosen?.runnable || !chosen.command) {
+            const copyOnly = recipeFor(provider).copyOnly;
+            const error = copyOnly ?? (action === 'install' ? deps.installHint(provider) : 'cezar does not run this update itself. Run it in a terminal.');
+            return c.json({ error, ...(chosen?.command ? { command: chosen.command } : {}) }, 409);
+          }
+          if (phone() && chosen.sudo) return c.json({ error: 'This needs your computer password. Finish it on your computer.', command: chosen.command }, 409);
+          const running = deps.activeRuns?.(provider) ?? 0;
+          if (action === 'update' && running > 0 && !force) {
+            return c.json({ error: `${running} task${running === 1 ? ' is' : 's are'} running on this agent. Update when they finish, or update now.` }, 409);
+          }
+          command = chosen.command;
+        }
         if (live && current) deps.sessions.kill(current.id);
         const created = await deps.sessions.create({
           runId: AGENT_SETUP_OWNER,
@@ -131,6 +228,8 @@ export function agentSetupRoutes(deps: AgentSetupDeps) {
         });
         if (!created.ok) return c.json({ error: created.reason }, 409);
         current = { id: created.session.id, provider, action, command };
+        // The next listing must read the versions this session changes.
+        if (action !== 'login') checksCache = null;
         deps.registerTopic(created.session.id);
         if (action === 'login' && row) {
           deps.onLoginOpened(provider, row.status === 'unknown' ? 'unknown' : 'disconnected', deps.deviceSid(c.req.header('x-cezar-sid')));
@@ -164,6 +263,8 @@ export function agentSetupRoutes(deps: AgentSetupDeps) {
         if (!info) return c.json({ error: 'setup session not found' }, 404);
         const reason = deps.refusal();
         if (reason) return c.json({ error: reason }, 409);
+        // Read-only on a phone: a password or an answer goes in at the computer.
+        if (phone()) return c.json({ error: 'The terminal is read-only on your phone.' }, 409);
         return c.json({ delivered: deps.sessions.write(info.id, c.req.valid('json').data) });
       },
     )

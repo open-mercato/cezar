@@ -5,6 +5,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { RunStore } from '../runs/store.ts';
 import type { RunManager } from '../workflows/run.ts';
+import { RUNNER_IDS } from '../core/agent-runner.ts';
+import { LatestVersions } from '../core/agent-cli-versions.ts';
 import { agentSetupRoutes } from './agent-setup-routes.ts';
 import { apiRequest } from './loopback-request.testkit.ts';
 import { createApp, type ServerDeps } from './server.ts';
@@ -42,7 +44,8 @@ describe('/api/v1/providers/setup', () => {
     manager: {} as RunManager,
     version: '0.0.0-test',
     terminalSessions: sessions,
-    agentSetupProbeEnv: async () => ({ platform: 'linux', npm: true, npmGlobalWritable: true, curl: true, sudo: false }),
+    agentSetupProbeEnv: async () => ({ platform: 'linux', npm: true, npmGlobalWritable: true, curl: true, sudo: false, brew: false }),
+    latestAgentVersions: new LatestVersions({ fetch: async () => { throw new Error('no network in tests'); } }),
     ...overrides,
   });
   const post = (app: ReturnType<typeof build>, body: unknown) =>
@@ -88,7 +91,7 @@ describe('/api/v1/providers/setup', () => {
     const body = await response.json() as { available: boolean; session: unknown; agents: Array<{ provider: string; installCommand: string | null }> };
     expect(body.available).toBe(true);
     expect(body.session).toBeNull();
-    expect(body.agents.map((agent) => agent.provider)).toEqual(['claude', 'codex', 'opencode', 'cursor', 'copilot']);
+    expect(body.agents.map((agent) => agent.provider)).toEqual([...RUNNER_IDS]);
     expect(body.agents.find((agent) => agent.provider === 'codex')?.installCommand).toBe('npm install -g @openai/codex');
   });
 
@@ -107,9 +110,19 @@ describe('/api/v1/providers/setup', () => {
     expect(spawns[0]!.args.join(' ')).not.toContain('rm -rf');
   });
 
-  it('refuses a provider outside the catalog and an unknown action', async () => {
-    expect((await post(build(), { provider: 'junie', action: 'install' })).status).toBe(400);
+  it('refuses an unknown provider and an unknown action', async () => {
+    expect((await post(build(), { provider: 'nope', action: 'install' })).status).toBe(400);
     expect((await post(build(), { provider: 'codex', action: 'exec' })).status).toBe(400);
+    expect(spawns).toHaveLength(0);
+  });
+
+  it('answers a copy-only agent with its command instead of running it', async () => {
+    const junie = await post(build(), { provider: 'junie', action: 'install' });
+    expect(junie.status).toBe(409);
+    expect(await junie.json()).toMatchObject({ command: 'npm install -g @jetbrains/junie' });
+    const omp = await post(build(), { provider: 'omp', action: 'install' });
+    expect(omp.status).toBe(409);
+    expect((await omp.json() as { error: string }).error).toContain('third-party');
     expect(spawns).toHaveLength(0);
   });
 
@@ -179,6 +192,10 @@ describe('/api/v1/providers/setup', () => {
     const state = await (await apiRequest(app, '/api/v1/providers/setup')).json() as { available: boolean; reason: string };
     expect(state.available).toBe(false);
     expect(state.reason).toBeTruthy();
+    // The commands to copy stay, but nothing that names the host's binary path.
+    const agents = (state as unknown as { agents: Array<{ provider: string; loginCommand: string | null; install: { command: string | null } }> }).agents;
+    expect(agents.find((agent) => agent.provider === 'codex')?.install.command).toBe('npm install -g @openai/codex');
+    expect(agents.every((agent) => agent.loginCommand === null)).toBe(true);
     expect((await post(app, { provider: 'codex', action: 'install' })).status).toBe(409);
     expect(spawns).toHaveLength(0);
   });
@@ -196,7 +213,7 @@ describe('/api/v1/providers/setup', () => {
       onLoginOpened: () => {},
       deviceSid: () => undefined,
     });
-    expect(await (await routes.request('/providers/setup')).json()).toEqual({ available: false, reason: 'no pty here' });
+    expect(await (await routes.request('/providers/setup')).json()).toMatchObject({ available: false, reason: 'no pty here' });
     const started = await routes.request('/providers/setup/sessions', { method: 'POST', body: JSON.stringify({ provider: 'codex', action: 'install' }), headers: { 'content-type': 'application/json' } });
     expect(started.status).toBe(409);
     expect(spawns).toHaveLength(0);
@@ -209,5 +226,92 @@ describe('/api/v1/providers/setup', () => {
     expect((await response.json() as { command: string }).command).toContain('auth login');
     expect(spawns[0]!.args.join(' ')).toContain('dry run');
     expect(spawns[0]!.args.join(' ')).not.toContain('auth login');
+  });
+
+  describe('update, phone and versions (spec 2026-11-25-agent-cli-install-and-update)', () => {
+    const installedClaude = { providers: [{ provider: 'claude' as const, status: 'connected' as const }] };
+    const routesWith = (over: Partial<Parameters<typeof agentSetupRoutes>[0]> = {}) => agentSetupRoutes({
+      sessions,
+      loadPty: async () => ({ available: true, module: { spawn: () => { throw new Error('unused'); } } }) as unknown as PtyBinding,
+      refusal: () => null,
+      status: async () => installedClaude,
+      loginCommand: (provider) => `${provider} login`,
+      installHint: () => 'install it',
+      registerTopic: () => {},
+      topic: (id) => id,
+      onLoginOpened: () => {},
+      deviceSid: () => undefined,
+      probeEnv: async () => ({ platform: 'linux', npm: true, npmGlobalWritable: true, curl: true, sudo: true, brew: true }),
+      checks: async () => [{ name: 'claude', available: true, version: '2.0.14 (Claude Code)' }],
+      locate: (executable) => ({ executable, path: '/opt/homebrew/bin/claude', method: 'brew' }),
+      ...over,
+    });
+    const start = (routes: ReturnType<typeof routesWith>, body: unknown) =>
+      routes.request('/providers/setup/sessions', { method: 'POST', body: JSON.stringify(body), headers: { 'content-type': 'application/json' } });
+
+    it('updates the copy that is installed, the way it was installed', async () => {
+      const response = await start(routesWith(), { provider: 'claude', action: 'update' });
+      expect(response.status).toBe(201);
+      expect(await response.json()).toMatchObject({ action: 'update', command: 'brew upgrade claude-code' });
+    });
+
+    it('waits for running tasks unless told to update now', async () => {
+      const routes = routesWith({ activeRuns: () => 2 });
+      const waiting = await start(routes, { provider: 'claude', action: 'update' });
+      expect(waiting.status).toBe(409);
+      expect((await waiting.json() as { error: string }).error).toContain('2 tasks are running');
+      expect((await start(routes, { provider: 'claude', action: 'update', force: true })).status).toBe(201);
+    });
+
+    it('lists the installed version, its method and the newest release only when asked', async () => {
+      const fetches: string[] = [];
+      const latest = new LatestVersions({ env: {}, fetch: async (url) => { fetches.push(url); return { ok: true, json: async () => ({ version: '2.1.3' }) }; } });
+      const routes = routesWith({ latest });
+      const plain = await (await routes.request('/providers/setup')).json() as { agents: Array<{ provider: string; latestVersion: string | null }> };
+      expect(plain.agents.find((agent) => agent.provider === 'claude')?.latestVersion).toBeNull();
+      expect(fetches).toEqual([]);
+      const body = await (await routes.request('/providers/setup?latest=1')).json() as { interactive: boolean; agents: Array<Record<string, unknown>> };
+      expect(body.interactive).toBe(true);
+      expect(body.agents.find((agent) => agent.provider === 'claude')).toMatchObject({
+        installed: true,
+        version: '2.0.14',
+        method: 'brew',
+        latestVersion: '2.1.3',
+        versionState: 'update-available',
+        update: { command: 'brew upgrade claude-code', runnable: true },
+      });
+      expect(fetches).toEqual(['https://registry.npmjs.org/@anthropic-ai/claude-code/latest']);
+    });
+
+    it('on a phone: read-only, no sign-in terminal, nothing that needs a password', async () => {
+      const routes = routesWith({
+        phone: () => true,
+        status: async () => ({ providers: [{ provider: 'codex', status: 'not-installed' }, { provider: 'claude', status: 'connected' }] }),
+        locate: (executable) => ({ executable, path: '/usr/lib/node_modules/@anthropic-ai/claude-code/cli.js', method: 'npm' }),
+        probeEnv: async () => ({ platform: 'linux', npm: true, npmGlobalWritable: false, curl: false, sudo: true, brew: false }),
+      });
+      const state = await (await routes.request('/providers/setup')).json() as { interactive: boolean };
+      expect(state.interactive).toBe(false);
+      expect((await start(routes, { provider: 'claude', action: 'login' })).status).toBe(409);
+      // codex would need `sudo npm` here: its password goes in at the computer.
+      const sudo = await start(routes, { provider: 'codex', action: 'install' });
+      expect(sudo.status).toBe(409);
+      expect(await sudo.json()).toMatchObject({ command: 'sudo npm install -g @openai/codex' });
+      expect(spawns).toHaveLength(0);
+    });
+
+    it('on a phone: starts a password-free install, and refuses keystrokes', async () => {
+      const routes = routesWith({
+        phone: () => true,
+        status: async () => ({ providers: [{ provider: 'codex', status: 'not-installed' }] }),
+        probeEnv: async () => ({ platform: 'linux', npm: true, npmGlobalWritable: true, curl: true, sudo: false, brew: false }),
+      });
+      const created = await start(routes, { provider: 'codex', action: 'install' });
+      expect(created.status).toBe(201);
+      const { id } = await created.json() as { id: string };
+      const typed = await routes.request(`/providers/setup/sessions/${id}/input`, { method: 'POST', body: JSON.stringify({ data: 'y\n' }), headers: { 'content-type': 'application/json' } });
+      expect(typed.status).toBe(409);
+      expect(ptys[0]!.written).toEqual([]);
+    });
   });
 });

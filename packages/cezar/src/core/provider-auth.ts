@@ -12,6 +12,7 @@ import { isForeignCursorAgent, resolveCursorAgentBin } from './cursor-bin.ts';
 import { quoteExecutable, withEnvPrefix } from './shell-env.ts';
 import { probeJunieAuthentication } from './junie-auth-probe.ts';
 import { agentHomePaths } from '../paths.ts';
+import { installHintCommand, locateInstalledCli, planUpdate, type CommandPlan, type InstallEnv } from './agent-install.ts';
 import { resolveKimiExecutable } from './kimi-runner.ts';
 import { spawnableCommand } from './windows-shim.ts';
 import { geminiHasCredentials } from './gemini-credentials.ts';
@@ -104,8 +105,6 @@ interface ProviderDescriptor {
   executable: () => string;
   statusArgs: readonly string[];
   loginArgs: readonly string[];
-  /** The CLI's own self-update, where it has one; others update the way they were installed. */
-  updateArgs?: readonly string[];
   installHint: string;
   parse: (result: ProviderCommandResult, context: ProviderParseContext) => ProviderConnectionState | null;
   /** See {@link RunProviderCommand}'s `stdin`. */
@@ -507,7 +506,8 @@ function parseGeminiStatus(result: ProviderCommandResult): ProviderConnectionSta
 function copilotUnrecognizedHint(result: ProviderCommandResult): string | undefined {
   if (/"jsonrpc"\s*:/.test(`${result.stdout}\n${result.stderr}`)) return undefined;
   return 'The `copilot` command did not start GitHub Copilot CLI\'s ACP server. Update it with '
-    + '`npm i -g @github/copilot`, or point CEZ_COPILOT_BIN at the GitHub Copilot CLI if another '
+    + `\`${installHintCommand('copilot')}\``
+    + ', or point CEZ_COPILOT_BIN at the GitHub Copilot CLI if another '
     + 'program named `copilot` comes first on PATH.';
 }
 
@@ -528,8 +528,7 @@ const DESCRIPTORS: readonly ProviderDescriptor[] = [
     executable: () => resolveClaudeBin(),
     statusArgs: ['auth', 'status', '--json'],
     loginArgs: ['auth', 'login'],
-    updateArgs: ['update'],
-    installHint: 'Install Claude Code, then run `claude auth login`.',
+    installHint: `Install Claude Code (${installHintCommand('claude')}), then run \`claude auth login\`.`,
     parse: parseClaudeStatus,
   },
   {
@@ -538,7 +537,7 @@ const DESCRIPTORS: readonly ProviderDescriptor[] = [
     executable: () => process.env.CEZ_CODEX_BIN ?? 'codex',
     statusArgs: ['login', 'status'],
     loginArgs: ['login'],
-    installHint: 'Install the Codex CLI, then run `codex login`.',
+    installHint: `Install the Codex CLI (${installHintCommand('codex')}), then run \`codex login\`.`,
     parse: parseCodexStatus,
   },
   {
@@ -548,8 +547,7 @@ const DESCRIPTORS: readonly ProviderDescriptor[] = [
     statusArgs: ['auth', 'list'],
     fallbackArgs: openCodeFallbackArgs,
     loginArgs: ['auth', 'login'],
-    updateArgs: ['upgrade'],
-    installHint: 'Install OpenCode, then run `opencode auth login`.',
+    installHint: `Install OpenCode (${installHintCommand('opencode')}), then run \`opencode auth login\`.`,
     parse: parseOpenCodeStatus,
   },
   {
@@ -564,9 +562,8 @@ const DESCRIPTORS: readonly ProviderDescriptor[] = [
       version.exitCode === 0 ? cliVersionFrom(version.stdout) : null,
     ),
     loginArgs: ['login'],
-    updateArgs: ['update'],
     installHint:
-      'Install the Cursor CLI (`curl https://cursor.com/install -fsS | bash`), then run `agent login` (or set CURSOR_API_KEY).',
+      `Install the Cursor CLI (\`${installHintCommand('cursor')}\`), then run \`agent login\` (or set CURSOR_API_KEY).`,
     parse: parseCursorStatus,
     // `agent status` doesn't itself know about CURSOR_API_KEY — see the `precheck` field's doc.
     precheck: () => (process.env.CURSOR_API_KEY?.trim() ? 'connected' : undefined),
@@ -577,7 +574,7 @@ const DESCRIPTORS: readonly ProviderDescriptor[] = [
     executable: () => process.env.CEZ_PI_BIN ?? 'pi',
     statusArgs: ['--list-models'],
     loginArgs: ['/login'],
-    installHint: 'Install pi, then run `pi /login`.',
+    installHint: `Install pi (${installHintCommand('pi')}), then run \`pi /login\`.`,
     parse: parsePiStatus,
     // Real pi answers `--version` with exit 0, like detection requires; a `pi` that can't is a shim
     // or another tool whose wording no pattern list keeps up with (telemetry f67df9d2, after #1504).
@@ -589,7 +586,7 @@ const DESCRIPTORS: readonly ProviderDescriptor[] = [
     executable: () => process.env.CEZ_JUNIE_BIN ?? 'junie',
     statusArgs: [],
     loginArgs: [],
-    installHint: 'Install Junie (https://junie.jetbrains.com/cli), then run `junie` once and log in.',
+    installHint: `Install Junie (${installHintCommand('junie')}), then run \`junie\` once and log in.`,
     parse: parseJunieStatus,
   },
   {
@@ -600,7 +597,7 @@ const DESCRIPTORS: readonly ProviderDescriptor[] = [
     // cached newer package than the one a run will launch (telemetry 298c2e1f).
     statusArgs: ['--acp', '--no-auto-update'],
     loginArgs: ['login'],
-    installHint: 'Install GitHub Copilot CLI (`npm i -g @github/copilot`), then run `copilot login`.',
+    installHint: `Install GitHub Copilot CLI (\`${installHintCommand('copilot')}\`), then run \`copilot login\`.`,
     parse: parseCopilotStatus,
     stdin: copilotAcpProbeStdin,
     // The version of the binary the probe ran, not a cached newer package.
@@ -619,7 +616,7 @@ const DESCRIPTORS: readonly ProviderDescriptor[] = [
     statusArgs: ['--version'],
     // No login subcommand: the interactive CLI's own auth flow (agent.db / keychain) is the entry.
     loginArgs: [],
-    installHint: `Install OMP (brew install can1357/tap/omp). ${OMP_AUTH_HINT}`,
+    installHint: `Install OMP (${installHintCommand('omp')}). ${OMP_AUTH_HINT}`,
     parse: parseOmpStatus,
     unknownHint: OMP_AUTH_HINT,
   },
@@ -632,8 +629,7 @@ const DESCRIPTORS: readonly ProviderDescriptor[] = [
     statusArgs: ['models'],
     // agy has no login subcommand; the first interactive `agy` launch runs the Google sign-in.
     loginArgs: [],
-    updateArgs: ['update'],
-    installHint: 'Install the Antigravity CLI (https://antigravity.google/docs/cli), then run `agy` once and sign in with Google.',
+    installHint: `Install the Antigravity CLI (${installHintCommand('antigravity')}), then run \`agy\` once and sign in with Google.`,
     parse: parseAntigravityStatus,
   },
   {
@@ -643,7 +639,7 @@ const DESCRIPTORS: readonly ProviderDescriptor[] = [
     statusArgs: ['--version'],
     // No login subcommand: the interactive CLI's `/auth` is where a key is entered.
     loginArgs: [],
-    installHint: `Install Gemini CLI (npm i -g @google/gemini-cli). ${GEMINI_AUTH_HINT}`,
+    installHint: `Install Gemini CLI (${installHintCommand('gemini')}). ${GEMINI_AUTH_HINT}`,
     parse: parseGeminiStatus,
     unknownHint: GEMINI_AUTH_HINT,
   },
@@ -653,7 +649,7 @@ const DESCRIPTORS: readonly ProviderDescriptor[] = [
     executable: () => resolveKimiExecutable(),
     statusArgs: ['provider', 'list'],
     loginArgs: ['login'],
-    installHint: 'Install Kimi Code, then run `kimi login`.',
+    installHint: `Install Kimi Code (${installHintCommand('kimi')}), then run \`kimi login\`.`,
     parse: parseKimiStatus,
   },
 ];
@@ -1232,11 +1228,15 @@ export class ProviderAuthService {
     return withEnvPrefix(command, env, this.platform);
   }
 
-  /** The agent CLI's self-update command (`opencode upgrade`), or null when it has none. */
-  updateCommand(provider: ProviderId): string | null {
-    const descriptor = descriptorFor(provider);
-    if (!descriptor.updateArgs) return null;
-    return [quoteExecutable(descriptor.executable(), this.platform), ...descriptor.updateArgs].join(' ');
+  /** What cezar spawns for this agent: an override, a resolved path, or the bare name. */
+  executable(provider: ProviderId): string {
+    return descriptorFor(provider).executable();
+  }
+
+  /** The update for the copy of the CLI that is installed (`core/agent-install.ts`), or null when
+   *  none is known. A plan that is not `runnable` is a command to copy, never one to run. */
+  updatePlan(provider: ProviderId, env: Omit<InstallEnv, 'platform'>): CommandPlan | null {
+    return planUpdate(provider, locateInstalledCli(this.executable(provider), this.platform), { ...env, platform: this.platform });
   }
 
   installHint(provider: ProviderId): string {

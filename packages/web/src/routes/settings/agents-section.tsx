@@ -6,6 +6,7 @@ import { useRef, useState, type ReactNode } from 'react'
 
 import {
   useAgentProfiles,
+  useAgentSetup,
   useAgentFallbackPolicy,
   useSaveAgentFallbackPolicy,
   useConfig,
@@ -18,6 +19,7 @@ import {
 import { useProjectScope } from '@/api/project-scope-context'
 import { ApiError } from '@/api/client'
 import type { AgentFallbackCandidate, AgentFallbackPolicy, ConfigResponse, Runner } from '@open-mercato/cezar-api-client'
+import { useAgentSetupSheet } from '@/components/agent-setup-sheet'
 import { CenteredState } from '@/components/centered-state'
 import { Button } from '@/components/ui/button'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
@@ -619,6 +621,9 @@ function DefaultAgentField({
   const scope = useProjectScope()
   const repo = useRepo()
   const select = useSelectAgentProfile()
+  // Settings → Agents is where the newest releases are worth a lookup (spec 2026-11-25).
+  const setup = useAgentSetup({ latest: true })
+  const sheet = useAgentSetupSheet()
 
   // `projectId: null` is the boot project, which every route addresses by the reserved `default`
   // alias. The repo ROOT is the key the account store uses, and `useRepo` is project-scoped so it
@@ -653,6 +658,8 @@ function DefaultAgentField({
           // The account half needs a project to write against; the runner half does not, so only an
           // account row waits on the registry.
           accountDisabled={select.isPending || projects.data === undefined}
+          setup={setup.data?.agents}
+          onAgentAction={sheet.open}
           onPick={(runner, account, hasAccountChoice) => {
             if (runner !== defaultRunner) onPick(runner)
             // Only when this agent HAS a choice of accounts: a single-login agent must not write a
@@ -678,6 +685,7 @@ function DefaultAgentField({
             that account’s folder.
           </p>
         ) : null}
+        {sheet.element}
       </FormRow>
     </SettingsCard>
   )

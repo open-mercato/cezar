@@ -259,7 +259,7 @@ function CommandLine({ command }: { command: string }) {
   )
 }
 
-function SetupTerminal({ session, running, installing }: { session: AgentSetupSession; running: boolean; installing: boolean }) {
+export function SetupTerminal({ session, running, installing }: { session: AgentSetupSession; running: boolean; installing: boolean }) {
   const [link, setLink] = React.useState<string | null>(null)
   const id = session.id
   const output = React.useRef('')
@@ -290,7 +290,11 @@ function SetupTerminal({ session, running, installing }: { session: AgentSetupSe
       {running ? (
         <p role="status" className="flex items-center gap-2 text-ui text-muted-foreground">
           <LoaderCircleIcon className="size-3.5 shrink-0 motion-safe:animate-spin" aria-hidden="true" />
-          {installing
+          {session.action === 'update'
+            ? session.command.startsWith('sudo ')
+              ? `Updating ${label}. Click the terminal and type your computer password if it asks.`
+              : `Updating ${label}…`
+            : installing
             ? session.command.startsWith('sudo ')
               ? `Installing ${label}. Click the terminal and type your computer password if it asks.`
               : `Installing ${label}…`

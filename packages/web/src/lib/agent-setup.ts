@@ -1,4 +1,4 @@
-import type { AgentSetupEntry, AgentSetupProvider, AgentSetupState, ProviderStatusResponse } from '@open-mercato/cezar-api-client'
+import type { AgentSetupEntry, AgentSetupProvider, AgentSetupState, ProviderStatus, ProviderStatusResponse } from '@open-mercato/cezar-api-client'
 
 import { PROVIDER_LABELS } from '@/lib/provider-auth-alert'
 
@@ -11,7 +11,8 @@ export interface AgentSetupListRow extends AgentSetupEntry {
   state: 'missing' | 'signed-out'
 }
 
-const DESCRIPTIONS: Record<AgentSetupProvider, string> = {
+/** The first-run page offers the agents it always has (spec 2026-10-26); Settings → Agents shows them all. */
+const DESCRIPTIONS: Partial<Record<AgentSetupProvider, string>> = {
   claude: 'Anthropic’s coding agent. Uses your Claude account.',
   codex: 'OpenAI’s coding agent. Uses your ChatGPT account.',
   opencode: 'Open-source agent. Works with many model providers.',
@@ -24,9 +25,10 @@ export function agentSetupListRows(setup: Extract<AgentSetupState, { available: 
   const byProvider = new Map((status?.providers ?? []).map((row) => [row.provider, row]))
   const rows = setup.agents.flatMap((agent): AgentSetupListRow[] => {
     const row = byProvider.get(agent.provider)
-    if (row?.status === 'connected' || row?.enabled === false) return []
+    const description = DESCRIPTIONS[agent.provider]
+    if (description === undefined || row?.status === 'connected' || row?.enabled === false) return []
     const state = row === undefined || row.status === 'not-installed' ? 'missing' : 'signed-out'
-    return [{ ...agent, label: PROVIDER_LABELS[agent.provider], description: DESCRIPTIONS[agent.provider], state }]
+    return [{ ...agent, label: PROVIDER_LABELS[agent.provider], description, state }]
   })
   return [...rows.filter((row) => row.state === 'signed-out'), ...rows.filter((row) => row.state === 'missing')]
 }
@@ -53,3 +55,41 @@ function safeUrl(text: string): URL | null {
     return null
   }
 }
+
+/** What an agent row offers (spec 2026-11-25-agent-cli-install-and-update): one button that opens
+ *  the setup sheet, or nothing when the agent is ready and current. */
+export type AgentRowAction = 'install' | 'how-to-install' | 'sign-in' | 'update'
+
+export function agentRowAction(entry: AgentSetupEntry | undefined, status: ProviderStatus | undefined): AgentRowAction | null {
+  if (status?.enabled === false) return null
+  const missing = status ? status.status === 'not-installed' : entry?.installed === false
+  if (missing) return entry?.install.runnable ? 'install' : 'how-to-install'
+  if (entry && (entry.versionState === 'update-required' || entry.versionState === 'update-available') && entry.update) return 'update'
+  if (status?.status === 'disconnected' || status?.status === 'unknown') return 'sign-in'
+  return null
+}
+
+export const AGENT_ROW_ACTION_LABEL: Record<AgentRowAction, string> = {
+  install: 'Install',
+  'how-to-install': 'How to install',
+  'sign-in': 'Sign in',
+  update: 'Update',
+}
+
+/** The version chip beside an installed agent; null when there is nothing worth saying. */
+export function agentVersionChip(entry: AgentSetupEntry | undefined): { label: string; tone: 'danger' | 'warn' | 'ok' } | null {
+  if (!entry?.installed) return null
+  if (entry.versionState === 'update-required') return { label: `${entry.minVersion} required`, tone: 'danger' }
+  if (entry.versionState === 'update-available') return { label: `${entry.latestVersion} available`, tone: 'warn' }
+  if (entry.versionState === 'current' && entry.latestVersion) return { label: 'up to date', tone: 'ok' }
+  return null
+}
+
+const METHOD_LABEL: Record<NonNullable<AgentSetupEntry['method']>, string> = {
+  native: 'the native installer',
+  npm: 'npm',
+  brew: 'Homebrew',
+  script: 'the vendor install script',
+}
+
+export const installMethodLabel = (method: AgentSetupEntry['method']): string | null => (method ? METHOD_LABEL[method] : null)

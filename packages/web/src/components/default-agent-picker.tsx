@@ -1,4 +1,5 @@
-import type { AgentProfile, ProviderStatusResponse, Runner } from '@open-mercato/cezar-api-client'
+import type { AgentProfile, AgentSetupEntry, ProviderStatusResponse, Runner } from '@open-mercato/cezar-api-client'
+import { AGENT_ROW_ACTION_LABEL, agentRowAction, agentVersionChip, type AgentRowAction } from '@/lib/agent-setup'
 import { cn } from '@/lib/utils'
 import { providerStatusFor } from '@/lib/provider-status'
 import { RUNNERS } from '@/routes/new-task-form'
@@ -61,6 +62,8 @@ export function DefaultAgentPicker({
   providerStatus,
   disabled = false,
   accountDisabled = false,
+  setup,
+  onAgentAction,
   onPick,
 }: {
   rows: readonly AgentPickerRow[]
@@ -75,6 +78,10 @@ export function DefaultAgentPicker({
   disabled?: boolean
   /** Account rows only: the write target is not known yet (e.g. the project registry is loading). */
   accountDisabled?: boolean
+  /** The setup catalog (spec 2026-11-25-agent-cli-install-and-update): with it, a row that is not
+   *  ready offers Install, Sign in or Update, and an installed one shows its version state. */
+  setup?: readonly AgentSetupEntry[]
+  onAgentAction?: (runner: Runner, action: AgentRowAction) => void
   onPick: (runner: Runner, account: string | null, hasAccountChoice: boolean) => void
 }) {
   const stacked = hasAgentAccounts(rows)
@@ -87,7 +94,7 @@ export function DefaultAgentPicker({
         'gap-0.5 rounded-md border border-border bg-card p-0.5',
         // Stacked once accounts are in play: `claude · Klaudiusz` beside its folder does not fit a
         // segmented strip, and the folder is the part that says WHICH login this is.
-        stacked ? 'flex max-w-md flex-col' : 'inline-flex w-fit',
+        stacked ? 'flex max-w-md flex-col' : 'inline-flex w-fit max-w-full flex-wrap',
       )}
     >
       {rows.map((row) => {
@@ -106,11 +113,16 @@ export function DefaultAgentPicker({
             : providerConnected
               ? undefined
               : 'Connect this provider before selecting it.'
+        const entry = setup?.find((candidate) => candidate.provider === row.runner.id)
+        // One action per agent: a second account row of the same agent would repeat it.
+        const firstOfAgent = rows.find((other) => other.runner.id === row.runner.id) === row
+        const action = onAgentAction && firstOfAgent && !providerStatus.isPending ? agentRowAction(entry, provider) : null
+        const chip = firstOfAgent ? agentVersionChip(entry) : null
         const hasAccountChoice = rows.filter((other) => other.runner.id === row.runner.id).length > 1
         const checked = row.runner.id === runner && row.account === accountFor(row.runner.id)
         return (
+          <span key={`${row.runner.id}:${row.account ?? ''}`} data-slot="agents-runner-row" className={cn('items-center gap-1', stacked ? 'flex' : 'inline-flex')}>
           <button
-            key={`${row.runner.id}:${row.account ?? ''}`}
             type="button"
             role="radio"
             aria-checked={checked}
@@ -137,6 +149,35 @@ export function DefaultAgentPicker({
               </span>
             ) : null}
           </button>
+          {chip ? (
+            <span
+              data-slot="agents-version-chip"
+              data-runner={row.runner.id}
+              data-tone={chip.tone}
+              className={cn(
+                'whitespace-nowrap rounded-full border px-1.5 text-meta',
+                chip.tone === 'danger' ? 'border-danger/40 text-danger' : chip.tone === 'warn' ? 'border-pending/50 text-pending-strong' : 'border-border text-muted-foreground',
+              )}
+            >
+              {chip.label}
+            </span>
+          ) : null}
+          {action ? (
+            <button
+              type="button"
+              data-slot="agents-runner-action"
+              data-runner={row.runner.id}
+              data-action={action}
+              onClick={() => onAgentAction?.(row.runner.id, action)}
+              className={cn(
+                'whitespace-nowrap rounded-sm px-2 py-1 text-meta font-medium transition-colors',
+                action === 'install' ? 'bg-primary text-primary-foreground hover:bg-primary/90' : 'border border-border text-foreground hover:bg-muted',
+              )}
+            >
+              {AGENT_ROW_ACTION_LABEL[action]}
+            </button>
+          ) : null}
+          </span>
         )
       })}
     </div>
