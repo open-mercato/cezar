@@ -630,7 +630,10 @@ describe('#897 a turn that outlives its prompt POST', () => {
   }, 30_000);
 
   // The random port is in the OS ephemeral range, so it can already be taken (release 0.16.1 CI).
-  it('respawns on a fresh port when the random one is already taken', async () => {
+  // Contract: the first spawn hits the taken port, later ones avoid it, and the attempts stay
+  // within SERVER_PORT_ATTEMPTS. The exact count is not guaranteed: the respawn's own random
+  // pick can collide too (#2454).
+  async function respawnsAroundTakenPort(collideAgain: boolean): Promise<void> {
     const blocker = createServer();
     let taken = 0;
     for (let p = 40000 + Math.floor(Math.random() * 19000); !taken; p += 1) {
@@ -640,7 +643,9 @@ describe('#897 a turn that outlives its prompt POST', () => {
       });
     }
     try {
-      vi.spyOn(Math, 'random').mockReturnValueOnce((taken - 40000 + 0.5) / 20000);
+      const pick = (taken - 40000 + 0.5) / 20000;
+      const random = vi.spyOn(Math, 'random').mockReturnValueOnce(pick);
+      if (collideAgain) random.mockReturnValueOnce(pick);
       const ports: string[] = [];
       spawnHook.override = (file, args, options) => {
         ports.push(String((args as string[]).at(-1)));
@@ -653,9 +658,11 @@ describe('#897 a turn that outlives its prompt POST', () => {
       });
       await session.result;
 
-      expect(ports).toHaveLength(2);
       expect(ports[0]).toBe(String(taken));
-      expect(ports[1]).not.toBe(String(taken));
+      if (collideAgain) expect(ports[1]).toBe(String(taken));
+      expect(ports.length).toBeGreaterThanOrEqual(2);
+      expect(ports.length).toBeLessThanOrEqual(SERVER_PORT_ATTEMPTS);
+      expect(ports.at(-1)).not.toBe(String(taken));
       expect(notes(events)).toEqual([]);
       expect(errors(events)).toEqual([]);
       expect(types(events)).toContain('turn-end');
@@ -663,7 +670,11 @@ describe('#897 a turn that outlives its prompt POST', () => {
       spawnHook.override = null;
       await new Promise((resolve) => blocker.close(resolve));
     }
-  }, 30_000);
+  }
+
+  it('respawns on a fresh port when the random one is already taken', () => respawnsAroundTakenPort(false), 30_000);
+
+  it('still recovers when the respawn picks the taken port too', () => respawnsAroundTakenPort(true), 30_000);
 
   /**
    * The transitions OUT of the state this fix introduces. `session.idle` is now
