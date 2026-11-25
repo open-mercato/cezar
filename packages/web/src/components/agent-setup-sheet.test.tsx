@@ -129,10 +129,10 @@ describe('AgentSetupFlow', () => {
     expect(screen.getByRole('link', { name: /Official docs/ }).getAttribute('href')).toBe('https://docs.example/omp')
   })
 
-  it('offers Antigravity’s docs when its installer is not known yet', async () => {
-    statuses = { antigravity: 'not-installed' }
-    agents = [entry('antigravity')]
-    renderFlow('antigravity', 'install')
+  it('offers the docs when an installer is not known yet (Kimi)', async () => {
+    statuses = { kimi: 'not-installed' }
+    agents = [entry('kimi')]
+    renderFlow('kimi', 'install')
     expect(await screen.findByText(/does not know this installer yet/)).toBeTruthy()
     expect(screen.queryByRole('button', { name: 'Install' })).toBeNull()
   })

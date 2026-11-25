@@ -20,7 +20,7 @@ describe('installCommand', () => {
   });
 
   it('never runs an installer that is not verified, nor the third-party OMP tap', () => {
-    for (const provider of ['gemini', 'pi', 'junie', 'kimi', 'antigravity', 'omp'] as const) {
+    for (const provider of ['gemini', 'pi', 'junie', 'kimi', 'omp'] as const) {
       expect(installCommand(provider, { ...linux, brew: true })).toBeNull();
     }
   });
@@ -51,6 +51,13 @@ describe('installCommand', () => {
 });
 
 describe('shellLine', () => {
+  it("installs Antigravity with Google's script, and its PowerShell line on Windows", () => {
+    expect(installCommand('antigravity', linux)).toBe('curl -fsSL https://antigravity.google/cli/install.sh | bash');
+    const windows: InstallEnv = { platform: 'win32', npm: false, npmGlobalWritable: false, curl: true, sudo: false, brew: false };
+    expect(installCommand('antigravity', windows)).toBe('irm https://antigravity.google/cli/install.ps1 | iex');
+    expect(shellLine('irm https://antigravity.google/cli/install.ps1 | iex', 'win32')).toMatch(/^powershell -NoProfile -EncodedCommand /);
+  });
+
   it('encodes a PowerShell one-liner on Windows, so no quote or pipe reaches cmd.exe', () => {
     const line = shellLine('irm https://claude.ai/install.ps1 | iex', 'win32');
     const encoded = line.split(' ').at(-1) ?? '';

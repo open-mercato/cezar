@@ -22,8 +22,6 @@ export type RecipeTrust = 'docs' | 'shipped' | 'unverified';
 interface PlatformCommand {
   unix?: string;
   windows?: string;
-  /** macOS only, ahead of `unix`: for a vendor whose docs name a command for the Mac alone. */
-  darwin?: string;
 }
 
 interface InstallMethod {
@@ -167,10 +165,14 @@ export const AGENT_RECIPES: Readonly<Record<RunnerId, AgentRecipe>> = {
     docsUrl: 'https://antigravity.google/docs/cli',
     selfUpdate: { command: '{bin} update', trust: 'shipped' },
     autoUpdates: null,
-    // Google's download page (antigravity.google/download, checked 2026-11-25) names this for macOS;
-    // Linux and Windows keep the docs link until their commands are checked too.
+    // Google's download page, Antigravity CLI section (macOS, Linux and Windows tabs, checked 2026-11-25).
     methods: [
-      { id: 'script', trust: 'docs', needs: 'curl', install: { darwin: 'curl -fsSL https://antigravity.google/cli/install.sh | bash' } },
+      {
+        id: 'script',
+        trust: 'docs',
+        needs: 'curl',
+        install: { unix: 'curl -fsSL https://antigravity.google/cli/install.sh | bash', windows: 'irm https://antigravity.google/cli/install.ps1 | iex' },
+      },
     ],
   },
   kimi: {
@@ -220,7 +222,7 @@ export interface CommandPlan {
 }
 
 const pick = (command: PlatformCommand | undefined, platform: NodeJS.Platform): string | undefined =>
-  platform === 'win32' ? command?.windows : platform === 'darwin' ? command?.darwin ?? command?.unix : command?.unix;
+  platform === 'win32' ? command?.windows : command?.unix;
 
 const runnableTrust = (recipe: AgentRecipe, trust: RecipeTrust): boolean => !recipe.copyOnly && trust !== 'unverified';
 

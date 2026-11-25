@@ -35,13 +35,14 @@ describe('planInstall', () => {
     expect(installHintCommand('kimi', 'linux')).toBe('https://moonshotai.github.io/kimi-code/');
   });
 
-  it("runs Antigravity's macOS installer from Google's download page, and only on macOS", () => {
-    expect(planInstall('antigravity', mac)).toEqual({ command: 'curl -fsSL https://antigravity.google/cli/install.sh | bash', runnable: true, method: 'script', sudo: false });
-    expect(planInstall('antigravity', { ...mac, curl: false })).toMatchObject({ runnable: false });
-    expect(planInstall('antigravity', { ...mac, platform: 'linux' })).toEqual({ command: null, runnable: false, method: null, sudo: false });
-    expect(planInstall('antigravity', { ...mac, platform: 'win32' })).toEqual({ command: null, runnable: false, method: null, sudo: false });
-    expect(installHintCommand('antigravity', 'linux')).toBe('https://antigravity.google/docs/cli');
-    expect(installHintCommand('antigravity', 'darwin')).toBe('curl -fsSL https://antigravity.google/cli/install.sh | bash');
+  it("runs Antigravity's installer from Google's download page on every platform", () => {
+    const unix = 'curl -fsSL https://antigravity.google/cli/install.sh | bash';
+    expect(planInstall('antigravity', mac)).toEqual({ command: unix, runnable: true, method: 'script', sudo: false });
+    expect(planInstall('antigravity', { ...mac, platform: 'linux' })).toEqual({ command: unix, runnable: true, method: 'script', sudo: false });
+    expect(planInstall('antigravity', { ...mac, platform: 'win32' })).toEqual({ command: 'irm https://antigravity.google/cli/install.ps1 | iex', runnable: true, method: 'script', sudo: false });
+    // Without curl it is the line to copy, not one to run.
+    expect(planInstall('antigravity', { ...mac, curl: false })).toEqual({ command: unix, runnable: false, method: 'script', sudo: false });
+    expect(installHintCommand('antigravity', 'linux')).toBe(unix);
   });
 
   it('never offers sudo npm for Claude Code', () => {
