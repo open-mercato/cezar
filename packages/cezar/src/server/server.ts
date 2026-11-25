@@ -440,6 +440,7 @@ import { fetchGithub, fetchGithubChecks, fetchGithubComments, fetchGithubPrDiff,
 import { ensureLaunchKey } from './launch-key.ts';
 import { openInTerminal } from './open-in-terminal.ts';
 import { agentSetupRoutes } from './agent-setup-routes.ts';
+import { countActiveRuns } from './agent-active-runs.ts';
 import { probeInstallEnv, type InstallEnv } from './agent-setup.ts';
 import {
   agentCliRunner,
@@ -8868,11 +8869,15 @@ export function createApp(deps: ServerDeps) {
     status: () => providerAuth.status({ refresh: true }),
     currentStatus: () => providerAuth.status(),
     executable: (provider) => providerAuth.executable(provider),
+    // Built contexts only: counting must never build one.
     activeRuns: (provider) => {
-      const stores = new Set([bootContext.store, ...contexts.ids().flatMap((id) => contexts.peek(id)?.store ?? [])]);
-      let count = 0;
-      for (const store of stores) for (const run of store.listRuns()) if (run.status === 'running' && (run.runner ?? 'claude') === provider) count += 1;
-      return count;
+      const built = [bootContext, ...contexts.ids().flatMap((id) => contexts.peek(id) ?? [])];
+      const unique = [...new Map(built.map((context) => [context.store, context])).values()];
+      return countActiveRuns(
+        unique.map((context) => ({ root: context.root, listRuns: () => context.store.listRuns() })),
+        provider,
+        async (root) => (await loadConfig(root)).defaultRunner,
+      );
     },
     latest: latestAgentVersions,
     loginCommand: (provider) => providerAuth.loginCommand(provider),

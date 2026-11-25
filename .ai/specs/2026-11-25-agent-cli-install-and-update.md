@@ -40,7 +40,8 @@ run failed with "X or newer is required". The install commands lived in three pl
   `~/.local/share/{claude,cursor-agent}` means native or script. The update is that method's own (brew upgrades a brew
   install), else the CLI's self-update. `POST /providers/:provider/update` uses the same plan and answers a copy-only
   plan with 409 plus the command.
-- **Versions.** The installed version comes from `--version` (health). `minVersion` is the recipe's, raised by any
+- **Versions.** The installed version comes from `--version` (health), cached 15 s and cleared when an install or
+  update session ends, so the sheet reads the new version before it says "updated". `minVersion` is the recipe's, raised by any
   "X or newer is required" an agent error states at runtime (`noteAgentErrorVersion`, in memory). The latest version
   comes from npm (`/<pkg>/latest`, or the newest stable within `npmMajor`), only on `GET /providers/setup?latest=1`,
   cached for 6 h (30 min after a failure). `CEZ_AGENT_VERSION_CHECK=0` turns it off. Chips: below the minimum is
@@ -70,14 +71,18 @@ Every greyed row in the default-agent pickers (repo and machine-wide) and in the
 
 The update-required card in a task thread opens the same sheet.
 
-**Running tasks.** An update with tasks running on that agent answers 409 unless `force` is set. The sheet offers
+**Running tasks.** A task counts against the agent `taskAgentSelection` resolves for it: a run with no `runner` takes its
+project's `defaultRunner`, and a workflow step on its own backend counts against that backend. An update with tasks
+running on that agent answers 409 unless `force` is set. The sheet offers
 **Update when they finish** (it polls `activeRuns` and starts at zero) or **Update now**, and warns that npm replaces
 files in place. New starts are not held during the swap; brew, native and script installs swap a versioned folder.
 
 ## Phone
 
 A relay request reads the host's capabilities for this family only. A phone may start an install or update whose plan is
-runnable and needs no sudo. It may not start a login, and input to a setup session answers 409 (read-only). Recorded
+runnable and needs no sudo. It may not start a login, and input to a setup session answers 409 (read-only). A sign-in
+session started at the computer is invisible to a phone: the listing omits it, and its output (the OAuth link, the
+device code) and resize answer 409. A phone reads install and update logs only. Recorded
 as pending owner ratification in AGENTS.md.
 
 ## Not here

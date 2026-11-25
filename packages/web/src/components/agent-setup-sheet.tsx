@@ -89,6 +89,7 @@ export function AgentSetupFlow({ provider, action, onClose }: { provider: AgentS
   const [phase, setPhase] = React.useState<Phase>(action === 'sign-in' ? 'sign-in' : 'confirm')
   const [failure, setFailure] = React.useState<string | null>(null)
   const [shown, setShown] = React.useState<AgentSetupSession | null>(null)
+  const [updatedTo, setUpdatedTo] = React.useState<string | null>(null)
   const refreshMutate = refresh.mutate
   const refreshAsync = refresh.mutateAsync
 
@@ -103,10 +104,12 @@ export function AgentSetupFlow({ provider, action, onClose }: { provider: AgentS
     if (session && shown && session.id === shown.id) setShown(session)
   }, [session, shown])
 
+  // `mutate` is stable; the mutation object is not, and depending on it re-fired the wait below.
+  const startMutate = start.mutate
   const run = React.useCallback(
     (kind: 'install' | 'update' | 'login', force?: boolean) => {
       setFailure(null)
-      start.mutate(
+      startMutate(
         { provider, action: kind, ...(force ? { force } : {}) },
         {
           onSuccess: (next) => {
@@ -120,14 +123,20 @@ export function AgentSetupFlow({ provider, action, onClose }: { provider: AgentS
         },
       )
     },
-    [provider, start],
+    [provider, startMutate],
   )
 
-  // "Update when they finish": ask until no task runs on this agent, then start.
+  // "Update when they finish": ask until no task runs on this agent, then start it exactly once.
   const refetchSetup = setup.refetch
+  const waitFired = React.useRef(false)
   React.useEffect(() => {
-    if (phase !== 'waiting') return
+    if (phase !== 'waiting') {
+      waitFired.current = false
+      return
+    }
     if (entry?.activeRuns === 0) {
+      if (waitFired.current) return
+      waitFired.current = true
       run('update')
       return
     }
@@ -141,16 +150,24 @@ export function AgentSetupFlow({ provider, action, onClose }: { provider: AgentS
     if (!shown || shown.action === 'login' || shown.exitCode === null || settled.current === shown.id) return
     settled.current = shown.id
     invalidateHealth()
-    void refetchSetup()
     if (shown.exitCode !== 0) {
+      void refetchSetup()
       setFailure(`${label} did not ${shown.action === 'install' ? 'install' : 'update'}. The terminal says why.`)
       setPhase('failed')
       return
     }
+    if (shown.action === 'update') {
+      // The version the agent reports now, read after the server re-probed it, not before.
+      void refetchSetup().then((next) => {
+        setUpdatedTo(next.data?.agents.find((agent) => agent.provider === provider)?.version ?? null)
+        setPhase('done')
+      })
+      return
+    }
+    void refetchSetup()
     void refreshAsync().then(
       (next) => {
         const now = next.providers.find((candidate) => candidate.provider === provider)
-        if (shown.action === 'update') return setPhase('done')
         if (now?.status === 'connected') return setPhase('done')
         if (now && now.status !== 'not-installed') return setPhase('sign-in')
         setFailure(`${label} installed, but cezar cannot find it. Restart cezar from a new terminal, or check that the install folder is on your PATH.`)
@@ -218,7 +235,9 @@ export function AgentSetupFlow({ provider, action, onClose }: { provider: AgentS
         <div role="status" className="flex items-center justify-between gap-3 rounded-md border border-success/30 bg-success/5 px-3 py-2.5">
           <p className="flex items-center gap-2 text-ui text-foreground">
             <CheckIcon aria-hidden="true" className="size-4 text-success-strong" />
-            {action === 'update' ? `${label} is updated.` : `${label} is ready.`}
+            {action === 'update'
+              ? updatedTo ? `${label} is updated. It reports ${updatedTo} now.` : `${label} is updated.`
+              : `${label} is ready.`}
           </p>
           <Button size="sm" className="font-normal" onClick={onClose}>Done</Button>
         </div>

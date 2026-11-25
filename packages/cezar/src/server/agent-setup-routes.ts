@@ -58,7 +58,7 @@ export interface AgentSetupDeps {
   /** Where the binary was found and how it was installed; a seam for tests. */
   locate?: (executable: string) => InstalledCli;
   /** Tasks running on this agent now. */
-  activeRuns?: (provider: AgentSetupProvider) => number;
+  activeRuns?: (provider: AgentSetupProvider) => number | Promise<number>;
   /** The newest release, read only for `?latest=1`. */
   latest?: LatestVersions;
   /** The request came through a paired phone: no typing, and nothing that needs a password. */
@@ -124,7 +124,7 @@ export function agentSetupRoutes(deps: AgentSetupDeps) {
         latestVersion,
         versionState: installed ? versionState(version, minVersion, latestVersion) : 'unknown',
         autoUpdates: recipe.autoUpdates,
-        activeRuns: deps.activeRuns?.(provider) ?? 0,
+        activeRuns: await (deps.activeRuns?.(provider) ?? 0),
       };
     }));
   };
@@ -136,11 +136,24 @@ export function agentSetupRoutes(deps: AgentSetupDeps) {
     current
       ? agentSetupSessionSchema.parse({ ...info, topic: deps.topic(info.id), provider: current.provider, action: current.action, command: current.command })
       : null;
+  /** What each setup session runs, by id: a phone may read install and update logs only. */
+  const actions = new Map<string, AgentSetupAction>();
+  /** The install or update whose end already cleared the version cache. */
+  let refreshedAfter: string | null = null;
+  // An install or update changes `--version`: the listing after it ends must probe again.
+  const afterEnd = (id: string, action: AgentSetupAction) => {
+    if (action === 'login' || refreshedAfter === id) return;
+    refreshedAfter = id;
+    checksCache = null;
+  };
   const currentInfo = (): TerminalSessionInfo | null => {
     const info = current ? deps.sessions.get(current.id) : null;
+    if (current && (!info || info.exitCode !== null)) afterEnd(current.id, current.action);
     if (!info) current = null;
     return info ?? null;
   };
+  /** A sign-in's screen carries its OAuth link and device code: never a phone's to read. */
+  const phoneMayRead = (sessionId: string) => !phone() || (actions.get(sessionId) ?? 'login') !== 'login';
   const owned = (sessionId: string): TerminalSessionInfo | null => {
     const info = deps.sessions.get(sessionId);
     return info && info.runId === AGENT_SETUP_OWNER ? info : null;
@@ -152,19 +165,13 @@ export function agentSetupRoutes(deps: AgentSetupDeps) {
     return binding.available ? null : binding.reason;
   };
 
-  // The checks read while an install or update ran describe the old binary: drop them once it exits.
-  let settledId: string | null = null;
-  const forgetChecksOnceSettled = () => {
-    const info = currentInfo();
-    if (!current || current.action === 'login' || info?.exitCode == null || settledId === current.id) return;
-    settledId = current.id;
-    checksCache = null;
-  };
+
 
   return new Hono()
     .get('/providers/setup', queryZodValidator(agentSetupQuerySchema), async (c) => {
       c.header('Cache-Control', 'no-store');
-      forgetChecksOnceSettled();
+      // First: a session that just ended clears the version cache before the listing reads it.
+      const info = currentInfo();
       const status = await (deps.currentStatus ?? deps.status)().catch((): ProviderStatusResponse => ({ providers: [] }));
       const agents = await entries(c.req.valid('query').latest === '1', status);
       const reason = await refusal();
@@ -178,12 +185,11 @@ export function agentSetupRoutes(deps: AgentSetupDeps) {
         }));
         return c.json(agentSetupStateSchema.parse({ available: false, reason, agents: safe }));
       }
-      const info = currentInfo();
       return c.json(agentSetupStateSchema.parse({
         available: true,
         agents,
         interactive: !phone(),
-        session: info ? describe(info) : null,
+        session: info && phoneMayRead(info.id) ? describe(info) : null,
       }));
     })
     .post('/providers/setup/sessions', jsonZodValidator(agentSetupStartSchema), async (c) => {
@@ -194,8 +200,8 @@ export function agentSetupRoutes(deps: AgentSetupDeps) {
       if (phone() && action === 'login') return c.json({ error: 'Sign in from the sign-in card, or finish on your computer.' }, 409);
       const live = currentInfo();
       if (live?.exitCode === null) {
-        // A double click or a second tab joins the session already running.
-        if (current?.provider === provider && current.action === action) return c.json(agentSetupSessionSchema.parse(describe(live)), 200);
+        // A double click or a second tab joins the session already running (a phone never a sign-in's).
+        if (current?.provider === provider && current.action === action && phoneMayRead(live.id)) return c.json(agentSetupSessionSchema.parse(describe(live)), 200);
         return c.json({ error: 'Another agent is being set up. Finish or cancel it first.' }, 409);
       }
       if (starting) return c.json({ error: 'Another agent is being set up. Finish or cancel it first.' }, 409);
@@ -221,7 +227,7 @@ export function agentSetupRoutes(deps: AgentSetupDeps) {
             return c.json({ error, ...(chosen?.command ? { command: chosen.command } : {}) }, 409);
           }
           if (phone() && chosen.sudo) return c.json({ error: 'This needs your computer password. Finish it on your computer.', command: chosen.command }, 409);
-          const running = deps.activeRuns?.(provider) ?? 0;
+          const running = await (deps.activeRuns?.(provider) ?? 0);
           if (action === 'update' && running > 0 && !force) {
             return c.json({ error: `${running} task${running === 1 ? ' is' : 's are'} running on this agent. Update when they finish, or update now.` }, 409);
           }
@@ -238,8 +244,7 @@ export function agentSetupRoutes(deps: AgentSetupDeps) {
         });
         if (!created.ok) return c.json({ error: created.reason }, 409);
         current = { id: created.session.id, provider, action, command };
-        // The next listing must read the versions this session changes.
-        if (action !== 'login') checksCache = null;
+        actions.set(created.session.id, action);
         deps.registerTopic(created.session.id);
         if (action === 'login' && row) {
           deps.onLoginOpened(provider, row.status === 'unknown' ? 'unknown' : 'disconnected', deps.deviceSid(c.req.header('x-cezar-sid')));
@@ -258,6 +263,7 @@ export function agentSetupRoutes(deps: AgentSetupDeps) {
         if (!info) return c.json({ error: 'setup session not found' }, 404);
         const reason = deps.refusal();
         if (reason) return c.json({ error: reason }, 409);
+        if (!phoneMayRead(info.id)) return c.json({ error: 'A sign-in is shown only on the computer.' }, 409);
         const read = deps.sessions.read(info.id, c.req.valid('query').cursor ?? 0);
         if (!read) return c.json({ error: 'setup session not found' }, 404);
         c.header('Cache-Control', 'no-store');
@@ -287,6 +293,7 @@ export function agentSetupRoutes(deps: AgentSetupDeps) {
         if (!info) return c.json({ error: 'setup session not found' }, 404);
         const reason = deps.refusal();
         if (reason) return c.json({ error: reason }, 409);
+        if (!phoneMayRead(info.id)) return c.json({ error: 'A sign-in is shown only on the computer.' }, 409);
         // The computer is the one typing: a phone viewer must not reflow its terminal.
         if (phone()) return c.json({ error: 'The terminal is read-only on your phone.' }, 409);
         const { cols, rows } = c.req.valid('json');

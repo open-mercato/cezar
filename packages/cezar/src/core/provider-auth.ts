@@ -12,7 +12,7 @@ import { isForeignCursorAgent, resolveCursorAgentBin } from './cursor-bin.ts';
 import { quoteExecutable, withEnvPrefix } from './shell-env.ts';
 import { probeJunieAuthentication } from './junie-auth-probe.ts';
 import { agentHomePaths } from '../paths.ts';
-import { installHintCommand, locateInstalledCli, planUpdate, type CommandPlan, type InstallEnv } from './agent-install.ts';
+import { installHintCommand, locateInstalledCli, planUpdate, type CommandPlan, type InstallEnv, type InstalledCli } from './agent-install.ts';
 import { resolveKimiExecutable } from './kimi-runner.ts';
 import { spawnableCommand } from './windows-shim.ts';
 import { geminiHasCredentials } from './gemini-credentials.ts';
@@ -993,6 +993,7 @@ export class ProviderAuthService {
   /** The last probe that answered connected, keyed by provider (default login) or `profileCacheKey`;
    *  only {@link bridgeTimeout} reads it. */
   private readonly lastConnected = new Map<string, { status: ProviderStatus; at: number; configDir: string | null }>();
+  private readonly locateCli: (executable: string, platform: NodeJS.Platform) => InstalledCli;
 
   constructor(options?: {
     runCommand?: RunProviderCommand;
@@ -1010,8 +1011,12 @@ export class ProviderAuthService {
     env?: NodeJS.ProcessEnv;
     /** Told when a CLI probe ends `unknown`, at most once per provider/reason/account kind. */
     onInconclusive?: (probe: InconclusiveProbe) => void;
+    /** Where an agent's binary is and how it was installed; injected so an update test does not
+     *  read the developer's own PATH. */
+    locateCli?: (executable: string, platform: NodeJS.Platform) => InstalledCli;
   }) {
     this.onInconclusive = options?.onInconclusive;
+    this.locateCli = options?.locateCli ?? ((executable, platform) => locateInstalledCli(executable, platform));
     this.runCommand = options?.runCommand ?? defaultRunProviderCommand;
     this.env = options?.env ?? process.env;
     this.now = options?.now ?? Date.now;
@@ -1236,7 +1241,7 @@ export class ProviderAuthService {
   /** The update for the copy of the CLI that is installed (`core/agent-install.ts`), or null when
    *  none is known. A plan that is not `runnable` is a command to copy, never one to run. */
   updatePlan(provider: ProviderId, env: Omit<InstallEnv, 'platform'>): CommandPlan | null {
-    return planUpdate(provider, locateInstalledCli(this.executable(provider), this.platform), { ...env, platform: this.platform });
+    return planUpdate(provider, this.locateCli(this.executable(provider), this.platform), { ...env, platform: this.platform });
   }
 
   installHint(provider: ProviderId): string {

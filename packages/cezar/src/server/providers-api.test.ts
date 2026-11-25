@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -9,6 +9,7 @@ import {
   type ProviderId,
   type RunProviderCommand,
 } from '../core/provider-auth.ts';
+import type { InstallEnv, InstalledCli } from '../core/agent-install.ts';
 import { RUNNER_IDS } from '../core/agent-runner.ts';
 import { RunStore } from '../runs/store.ts';
 import { defaultWorkspaceConfig, type WorkspaceConfig } from '../workspace/config.ts';
@@ -158,13 +159,17 @@ describe('workspace provider API', () => {
     else process.env.GEMINI_API_KEY = savedGeminiKey;
   });
 
+  /** No install found: an update test names its install method itself, never this machine's. */
+  const nowhere = (executable: string): InstalledCli => ({ executable, path: null, method: null });
   const service = (
     states: Partial<Record<ProviderId, ProviderConnectionState>> = {},
     onRun?: RunProviderCommand,
     createAuthFailureId?: () => string,
+    locateCli: (executable: string) => InstalledCli = nowhere,
   ) => new ProviderAuthService({
     platform: 'linux',
     createAuthFailureId,
+    locateCli,
     runCommand: onRun ?? (async (executable) => {
       const provider = providerForExecutable(executable);
       const state = states[provider] ?? 'connected';
@@ -190,6 +195,7 @@ describe('workspace provider API', () => {
     workspaceConfig?: ReturnType<typeof memoryWorkspaceConfig>;
     contexts?: ProjectContexts;
     loginWatchOffsetsMs?: readonly number[];
+    installEnv?: InstallEnv;
   } = {}) => createApp({
     repoRoot: root,
     store,
@@ -202,6 +208,8 @@ describe('workspace provider API', () => {
     workspaceConfig: options.workspaceConfig,
     contexts: options.contexts,
     loginWatchOffsetsMs: options.loginWatchOffsetsMs ?? [],
+    // A fixed machine: the developer's own npm prefix must not change an update's command.
+    agentSetupProbeEnv: async () => options.installEnv ?? { platform: 'linux', npm: true, npmGlobalWritable: true, curl: true, sudo: false, brew: true },
   });
 
   const connect = (server: ReturnType<typeof app>, provider: unknown) => apiRequest(
@@ -793,10 +801,8 @@ describe('workspace provider API', () => {
 
     it('answers 409 without a command for a CLI that cannot update itself', async () => {
       const openTerminal = vi.fn(async () => true);
-      // Hermetic: with no install found, Kimi has neither a method's update nor one of its own.
-      const path = process.env.PATH;
-      process.env.PATH = join(root, 'no-bin');
-      const response = await update(app({ openTerminal }), 'kimi').finally(() => { process.env.PATH = path; });
+      // With no install found, Kimi has neither a method's update nor one of its own.
+      const response = await update(app({ openTerminal }), 'kimi');
 
       expect(response.status).toBe(409);
       expect(await response.json()).toEqual({
@@ -808,21 +814,42 @@ describe('workspace provider API', () => {
     it('shows, and does not run, an update cezar has not verified (spec 2026-11-25)', async () => {
       const openTerminal = vi.fn(async () => true);
       // A Homebrew cask install of Codex: `brew upgrade --cask codex` is copy-only for now.
-      const cask = join(root, 'Caskroom', 'codex', '0.1.0');
-      mkdirSync(cask, { recursive: true });
-      writeFileSync(join(cask, 'codex'), '', { mode: 0o755 });
-      const bin = join(root, 'brew-bin');
-      mkdirSync(bin, { recursive: true });
-      symlinkSync(join(cask, 'codex'), join(bin, 'codex'));
-      const path = process.env.PATH;
-      process.env.PATH = bin;
-      const response = await update(app({ openTerminal }), 'codex').finally(() => { process.env.PATH = path; });
+      const brew = (executable: string): InstalledCli => ({ executable, path: '/opt/homebrew/bin/codex', method: 'brew' });
+      const response = await update(app({ openTerminal, providerAuth: service({}, undefined, undefined, brew) }), 'codex');
 
       expect(response.status).toBe(409);
       expect(await response.json()).toEqual({
         error: 'cezar does not run this update itself. Run it in a terminal.',
         command: 'brew upgrade --cask codex',
       });
+      expect(openTerminal).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ['native', "'claude' update"],
+      ['npm', 'npm install -g @anthropic-ai/claude-code@latest'],
+      ['brew', 'brew upgrade claude-code'],
+    ] as const)('updates a %s Claude Code install the way it was installed', async (method, command) => {
+      const openTerminal = vi.fn(async () => true);
+      const found = (executable: string): InstalledCli => ({ executable, path: '/x/claude', method });
+      const response = await update(app({ openTerminal, providerAuth: service({}, undefined, undefined, found) }), 'claude');
+
+      expect(response.status).toBe(200);
+      expect(await response.json()).toEqual({ opened: true, command });
+      expect(openTerminal).toHaveBeenCalledWith(root, command);
+    });
+
+    it('never runs sudo npm for Claude Code, even when npm needs root', async () => {
+      const openTerminal = vi.fn(async () => true);
+      const npm = (executable: string): InstalledCli => ({ executable, path: '/usr/lib/node_modules/@anthropic-ai/claude-code/cli.js', method: 'npm' });
+      const response = await update(app({
+        openTerminal,
+        providerAuth: service({}, undefined, undefined, npm),
+        installEnv: { platform: 'linux', npm: true, npmGlobalWritable: false, curl: true, sudo: true, brew: false },
+      }), 'claude');
+
+      expect(response.status).toBe(409);
+      expect(await response.json()).toMatchObject({ command: 'npm install -g @anthropic-ai/claude-code@latest' });
       expect(openTerminal).not.toHaveBeenCalled();
     });
 

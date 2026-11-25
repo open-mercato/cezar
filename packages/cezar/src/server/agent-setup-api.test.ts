@@ -300,18 +300,82 @@ describe('/api/v1/providers/setup', () => {
     it('on a phone: read-only, no sign-in terminal, nothing that needs a password', async () => {
       const routes = routesWith({
         phone: () => true,
-        status: async () => ({ providers: [{ provider: 'codex', status: 'not-installed' }, { provider: 'claude', status: 'connected' }] }),
+        // Signed out: a computer would be allowed this sign-in, so only the phone check can refuse it.
+        status: async () => ({ providers: [{ provider: 'codex', status: 'not-installed' }, { provider: 'claude', status: 'disconnected' }] }),
         locate: (executable) => ({ executable, path: '/usr/lib/node_modules/@anthropic-ai/claude-code/cli.js', method: 'npm' }),
         probeEnv: async () => ({ platform: 'linux', npm: true, npmGlobalWritable: false, curl: false, sudo: true, brew: false }),
       });
       const state = await (await routes.request('/providers/setup')).json() as { interactive: boolean };
       expect(state.interactive).toBe(false);
-      expect((await start(routes, { provider: 'claude', action: 'login' })).status).toBe(409);
+      const login = await start(routes, { provider: 'claude', action: 'login' });
+      expect(login.status).toBe(409);
+      expect((await login.json() as { error: string }).error).toContain('sign-in card');
       // codex would need `sudo npm` here: its password goes in at the computer.
       const sudo = await start(routes, { provider: 'codex', action: 'install' });
       expect(sudo.status).toBe(409);
       expect(await sudo.json()).toMatchObject({ command: 'sudo npm install -g @openai/codex' });
       expect(spawns).toHaveLength(0);
+    });
+
+    it("on a phone: cannot list, read or resize a sign-in started at the computer", async () => {
+      let onPhone = false;
+      const routes = routesWith({
+        phone: () => onPhone,
+        status: async () => ({ providers: [{ provider: 'claude', status: 'disconnected' }] }),
+      });
+      const created = await start(routes, { provider: 'claude', action: 'login' });
+      expect(created.status).toBe(201);
+      const { id } = await created.json() as { id: string };
+      ptys[0]!.emit('Open https://claude.ai/oauth?code=SECRET and paste the code');
+
+      onPhone = true;
+      const listed = await (await routes.request('/providers/setup')).json() as { session: unknown };
+      expect(listed.session).toBeNull();
+      expect((await routes.request(`/providers/setup/sessions/${id}/output`)).status).toBe(409);
+      const resized = await routes.request(`/providers/setup/sessions/${id}/resize`, { method: 'POST', body: JSON.stringify({ cols: 40, rows: 10 }), headers: { 'content-type': 'application/json' } });
+      expect(resized.status).toBe(409);
+      // A second start from the phone does not join it either.
+      expect((await start(routes, { provider: 'claude', action: 'login' })).status).toBe(409);
+
+      onPhone = false;
+      const output = await routes.request(`/providers/setup/sessions/${id}/output`);
+      expect(output.status).toBe(200);
+      expect((await output.json() as { data: string }).data).toContain('SECRET');
+    });
+
+    it('on a phone: reads an install log', async () => {
+      let onPhone = false;
+      const routes = routesWith({
+        phone: () => onPhone,
+        status: async () => ({ providers: [{ provider: 'codex', status: 'not-installed' }] }),
+        probeEnv: async () => ({ platform: 'linux', npm: true, npmGlobalWritable: true, curl: true, sudo: false, brew: false }),
+      });
+      const { id } = await (await start(routes, { provider: 'codex', action: 'install' })).json() as { id: string };
+      ptys[0]!.emit('added 1 package');
+      onPhone = true;
+      const listed = await (await routes.request('/providers/setup')).json() as { session: { id: string } | null };
+      expect(listed.session?.id).toBe(id);
+      const output = await routes.request(`/providers/setup/sessions/${id}/output`);
+      expect(await output.json()).toMatchObject({ data: 'added 1 package' });
+    });
+
+    it('probes the versions again once an update ends, not while it runs', async () => {
+      let probes = 0;
+      let version = '2.0.14 (Claude Code)';
+      const routes = routesWith({ checks: async () => { probes += 1; return [{ name: 'claude', available: true, version }]; } });
+      const read = async () => ((await (await routes.request('/providers/setup')).json()) as { agents: Array<{ provider: string; version: string | null }> })
+        .agents.find((agent) => agent.provider === 'claude')?.version;
+      expect(await read()).toBe('2.0.14');
+      await start(routes, { provider: 'claude', action: 'update' });
+      expect(await read()).toBe('2.0.14');
+      expect(probes).toBe(1);
+      version = '2.1.3 (Claude Code)';
+      ptys[0]!.finish(0);
+      expect(await read()).toBe('2.1.3');
+      expect(probes).toBe(2);
+      // Once per ended session: the next read is the cache again.
+      await read();
+      expect(probes).toBe(2);
     });
 
     it('on a phone: starts a password-free install, and refuses keystrokes and resizes', async () => {
