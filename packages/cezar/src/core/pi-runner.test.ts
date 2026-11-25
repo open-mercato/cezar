@@ -132,6 +132,13 @@ describe('pi RPC argv', () => {
       }),
     ).toEqual(['--mode', 'rpc', '--tools', 'read']);
   });
+
+  it('keeps bash under an allowlist only when CEZ_PI_SANDBOX_BASH is 1', () => {
+    const spec = { cwd: '/repo', userPrompt: 'task', allowedTools: ['Read', 'Bash'], bashAllowlist: ['npm test'] };
+    expect(buildPiArgs(spec, { CEZ_PI_SANDBOX_BASH: '1' })).toEqual(['--mode', 'rpc', '--tools', 'read,bash']);
+    expect(buildPiArgs(spec, { CEZ_PI_SANDBOX_BASH: '0' })).toEqual(['--mode', 'rpc', '--tools', 'read']);
+    expect(buildPiArgs(spec, {})).toEqual(['--mode', 'rpc', '--tools', 'read']);
+  });
 });
 
 describe('pi spawns under pi credentials, not another runner', () => {

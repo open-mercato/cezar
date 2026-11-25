@@ -284,12 +284,12 @@ export class PiRunner implements AgentRunner {
   }
 }
 
-export function buildPiArgs(spec: AgentRunSpec): string[] {
+export function buildPiArgs(spec: AgentRunSpec, env: NodeJS.ProcessEnv = process.env): string[] {
   const args = ['--mode', 'rpc'];
   if (spec.sessionId) args.push(spec.resume ? '--session' : '--session-id', spec.sessionId);
   if (spec.systemPrompt) args.push('--append-system-prompt', spec.systemPrompt);
   if (spec.model) args.push('--model', spec.model);
-  const tools = piTools(spec.allowedTools ?? [], spec.bashAllowlist);
+  const tools = piTools(spec.allowedTools ?? [], env.CEZ_PI_SANDBOX_BASH === '1' ? undefined : spec.bashAllowlist);
   if (tools.length > 0) args.push('--tools', tools.join(','));
   return args;
 }
