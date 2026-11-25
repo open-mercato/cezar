@@ -18,8 +18,11 @@ export const SECRET_VALUE_MAX_BYTES = 16 * 1024;
  * - `checks`: a workflow's check steps (`command:`), as environment variables.
  * - `cezar`: cezar's own features (an LLM key for cezar-level actions). Reserved for consumers
  *   that read through the store's `cezar` audience; nothing ships one yet.
+ * - `proxy`: host code that injects the value into outbound requests (`cezar secrets resolve`).
+ *   A proxy secret has no other audience and carries a destination binding, so it is never a
+ *   `checks` environment variable.
  */
-export const SECRET_AUDIENCES = ['checks', 'cezar'] as const;
+export const SECRET_AUDIENCES = ['checks', 'cezar', 'proxy'] as const;
 export const secretAudienceSchema = z.enum(SECRET_AUDIENCES);
 export type SecretAudience = z.infer<typeof secretAudienceSchema>;
 
@@ -60,6 +63,43 @@ export const secretNameSchema = z.string().superRefine((name, ctx) => {
   if (issue) ctx.addIssue({ code: 'custom', message: issue });
 });
 
+export const SECRET_BINDING_SCHEMES = ['bearer', 'basic', 'raw'] as const;
+export const secretBindingSchemeSchema = z.enum(SECRET_BINDING_SCHEMES);
+export type SecretBindingScheme = z.infer<typeof secretBindingSchemeSchema>;
+
+const HOST_LABEL = /^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/;
+const HEADER_TOKEN = /^[A-Za-z0-9-]{1,64}$/;
+const REFUSED_HEADERS: ReadonlySet<string> = new Set(['host', 'content-length', 'transfer-encoding', 'connection']);
+
+/** Why `host` is not an exact https hostname (no wildcard, IP literal or port), or `null`. */
+export function secretHostIssue(host: string): string | null {
+  const labels = host.split('.');
+  if (host.length > 253 || !labels.every((label) => HOST_LABEL.test(label))) {
+    return `${host} is not an exact lowercase hostname (no wildcard, port, path or IP literal)`;
+  }
+  if (/^[0-9]+$/.test(labels[labels.length - 1] ?? '')) return `${host} is an IP address, not a hostname`;
+  return null;
+}
+
+/**
+ * Where a `proxy` secret may be sent (spec: SecretStore proxy audience, fork issue #1): exact
+ * https hostnames, the header it goes in and how it is framed. `basic` and `bearer` frame the
+ * stored value; `raw` sends it as is. `sentinel` names the placeholder env var an agent sees.
+ */
+export const secretBindingSchema = z.object({
+  hosts: z.array(z.string().superRefine((host, ctx) => {
+    const issue = secretHostIssue(host);
+    if (issue) ctx.addIssue({ code: 'custom', message: issue });
+  })).min(1).max(32),
+  header: z.string().superRefine((header, ctx) => {
+    if (!HEADER_TOKEN.test(header)) ctx.addIssue({ code: 'custom', message: 'a header name is 1–64 letters, digits and hyphens' });
+    else if (REFUSED_HEADERS.has(header.toLowerCase())) ctx.addIssue({ code: 'custom', message: `${header} cannot carry a secret` });
+  }),
+  scheme: secretBindingSchemeSchema,
+  sentinel: secretNameSchema.optional(),
+}).strict();
+export type SecretBinding = z.infer<typeof secretBindingSchema>;
+
 export const secretParamsSchema = z.object({ name: secretNameSchema });
 export type SecretParams = z.infer<typeof secretParamsSchema>;
 
@@ -99,6 +139,10 @@ export const secretValueInputSchema = z.object({
     if (issue) ctx.addIssue({ code: 'custom', message: issue });
   }),
   audiences: z.array(secretAudienceSchema).min(1).optional(),
+}).superRefine((input, ctx) => {
+  if (input.audiences?.includes('proxy')) {
+    ctx.addIssue({ code: 'custom', path: ['audiences'], message: 'proxy secrets are set with `cezar secrets set`, not through this route' });
+  }
 });
 export type SecretValueInput = z.infer<typeof secretValueInputSchema>;
 
@@ -107,6 +151,7 @@ export const secretEntrySchema = z.object({
   name: z.string(),
   audiences: z.array(secretAudienceSchema),
   updatedAt: z.string(),
+  binding: secretBindingSchema.optional(),
 });
 export type SecretEntry = z.infer<typeof secretEntrySchema>;
 

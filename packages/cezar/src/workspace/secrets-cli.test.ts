@@ -71,3 +71,101 @@ describe('cezar secrets (spec 2026-10-10-project-secrets-vault-options)', () => 
     expect(errors.at(-1)).toContain('empty value');
   });
 });
+
+describe('cezar secrets proxy binding and resolve (fork #1)', () => {
+  let root: string;
+  let lines: string[];
+  let errors: string[];
+  let store: SecretStore;
+  let ring: Buffer | null;
+  const keychain = async () => ({ get: async () => ring, set: async (key: Buffer) => { ring = key; } });
+  beforeEach(async () => {
+    root = mkdtempSync(join(tmpdir(), 'cez-secrets-proxy-cli-'));
+    vi.stubEnv('CEZ_HOME', join(root, 'home'));
+    lines = [];
+    errors = [];
+    ring = null;
+    store = new SecretStore(process.env, { keychain: async () => null });
+    await registerProject(root);
+  });
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  const cli = (args: string[], value?: string, tty = false, using: SecretStore = store) =>
+    runSecretsCommand([...args, '--repo', root], {
+      log: (line) => lines.push(line),
+      error: (line) => errors.push(line),
+      stdoutIsTTY: tty,
+      ...(value === undefined ? {} : { readValue: async () => value }),
+    }, process.env, using);
+  const setProxy = (name = 'GH', using: SecretStore = store, extra: string[] = []) =>
+    cli(['set', name, '--audience', 'proxy', '--host', 'api.github.com', '--header', 'Authorization', '--scheme', 'bearer', ...extra], 'ghp-proxy-secret-value', false, using);
+
+  it('sets a bound proxy secret and lists its destination, never the value', async () => {
+    expect(await setProxy('GH', store, ['--sentinel', 'GH_TOKEN'])).toBe(0);
+    expect(await cli(['list'])).toBe(0);
+    expect(lines).toContain('GH\tproxy\tapi.github.com Authorization bearer');
+    expect([...lines, ...errors].join('\n')).not.toContain('ghp-proxy-secret-value');
+  });
+
+  it('refuses proxy without a complete binding, and binding flags without proxy', async () => {
+    for (const args of [
+      ['set', 'GH', '--audience', 'proxy'],
+      ['set', 'GH', '--audience', 'proxy', '--host', 'a.com', '--header', 'Authorization'],
+      ['set', 'GH', '--audience', 'proxy', '--host', '*.a.com', '--header', 'Authorization', '--scheme', 'bearer'],
+      ['set', 'GH', '--audience', 'proxy', '--host', 'a.com', '--header', 'Authorization', '--scheme', 'digest'],
+      ['set', 'GH', '--host', 'a.com'],
+    ]) {
+      expect(await cli(args, 'v')).toBe(1);
+      expect(errors.at(-1)).toContain('Usage');
+    }
+  });
+
+  it('resolve prints NAME value for named proxy secrets with a keychain key', async () => {
+    const keyed = new SecretStore(process.env, { keychain });
+    expect(await setProxy('GH', keyed)).toBe(0);
+    expect(await cli(['resolve', 'GH'], undefined, false, keyed)).toBe(0);
+    expect(lines.at(-1)).toBe('GH ghp-proxy-secret-value');
+  });
+
+  it('refuses proxy combined with another audience', async () => {
+    expect(await cli(['set', 'GH', '--audience', 'proxy,checks', '--host', 'a.com', '--header', 'Authorization', '--scheme', 'bearer'], 'v')).toBe(1);
+    expect(errors.at(-1)).toContain('no other audience');
+  });
+
+  it('resolve refuses a file-fallback key unless --allow-file-key', async () => {
+    await setProxy();
+    expect(await cli(['resolve', 'GH'])).toBe(1);
+    expect(errors.at(-1)).toContain('--allow-file-key');
+    expect(lines.filter((l) => l.includes('ghp-proxy'))).toEqual([]);
+    expect(await cli(['resolve', 'GH', '--allow-file-key'])).toBe(0);
+    expect(lines.at(-1)).toBe('GH ghp-proxy-secret-value');
+  });
+
+  it('resolve refuses a terminal', async () => {
+    await setProxy();
+    expect(await cli(['resolve', 'GH', '--allow-file-key'], undefined, true)).toBe(1);
+    expect(errors.at(-1)).toContain('terminal');
+    expect(lines.filter((l) => l.includes('ghp-proxy'))).toEqual([]);
+  });
+
+  it('resolve never prints a secret without a binding, and prints nothing when any name fails', async () => {
+    await setProxy();
+    await cli(['set', 'PLAIN'], 'plain-checks-value');
+    lines.length = 0;
+    expect(await cli(['resolve', 'PLAIN', '--allow-file-key'])).toBe(1);
+    expect(await cli(['resolve', 'GH', 'MISSING', '--allow-file-key'])).toBe(1);
+    expect(await cli(['resolve', 'GH', 'PLAIN', '--allow-file-key'])).toBe(1);
+    expect(lines).toEqual([]);
+    expect(errors.join('\n')).not.toMatch(/plain-checks-value|ghp-proxy/);
+  });
+
+  it('resolve takes names only: no value operand shape, no audience, no binding flag', async () => {
+    for (const args of [['resolve'], ['resolve', 'GH', '--audience', 'proxy'], ['resolve', 'GH', '--host', 'a.com'], ['list', '--allow-file-key']]) {
+      expect(await cli(args)).toBe(1);
+      expect(errors.at(-1)).toContain('Usage');
+    }
+  });
+});

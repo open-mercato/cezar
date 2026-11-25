@@ -1,10 +1,12 @@
 import { realpath } from 'node:fs/promises';
 import { resolve } from 'node:path';
-import { SECRET_AUDIENCES, secretNameIssue, type SecretAudience } from '@open-mercato/cezar-contract';
+import { SECRET_AUDIENCES, SECRET_BINDING_SCHEMES, secretBindingSchema, secretNameIssue, type SecretAudience, type SecretBinding } from '@open-mercato/cezar-contract';
 import { SecretStore, SecretsError, type SecretScopeRef } from './secrets.ts';
 import { loadWorkspaceConfig } from './config.ts';
 
-const USAGE = 'Usage: cezar secrets list | set <NAME> [--audience checks,cezar] | unset <NAME>   [--workspace] [--repo <dir>]\n' +
+const USAGE = 'Usage: cezar secrets list | set <NAME> [--audience checks,cezar] | unset <NAME> | resolve <NAME>...   [--workspace] [--repo <dir>]\n' +
+  '  set --audience proxy --host a.example,b.example --header Authorization --scheme bearer|basic|raw [--sentinel ENV_NAME]\n' +
+  '  resolve prints `NAME value` for named proxy secrets to a pipe, only with an OS-keychain key (or --allow-file-key).\n' +
   '  set reads the value from stdin (pipe it in, or type it at the hidden prompt) — never from argv.\n' +
   '  --workspace addresses the user\'s own secrets, shared by every project; the default is this project\'s.\n' +
   `  --audience names who may read the secret (${SECRET_AUDIENCES.join(', ')}); the default is checks.`;
@@ -14,6 +16,8 @@ export interface SecretsCliIo {
   error: (line: string) => void;
   /** Reads the value for `set`. Injected so tests never touch a real terminal. */
   readValue?: () => Promise<string>;
+  /** Whether stdout is a terminal; `resolve` refuses one. Default: `process.stdout.isTTY`. */
+  stdoutIsTTY?: boolean;
 }
 
 /**
@@ -33,8 +37,8 @@ export async function runSecretsCommand(
     io.error(USAGE);
     return 1;
   }
-  const { action, workspace, repo, audiences } = parsed;
-  if (action.kind !== 'list') {
+  const { action, workspace, repo, audiences, binding, allowFileKey } = parsed;
+  if (action.kind === 'set' || action.kind === 'unset') {
     const issue = secretNameIssue(action.name);
     if (issue) {
       io.error(`cezar secrets: ${action.name} — ${issue}`);
@@ -54,9 +58,13 @@ export async function runSecretsCommand(
     scope = { kind: 'project', projectId: project.id, root: project.root };
   }
   try {
+    if (action.kind === 'resolve') return await resolveProxy(action.names, scope, allowFileKey, io, store);
     if (action.kind === 'list') {
       const [listed, keyBackend] = await Promise.all([store.list(scope), store.keyBackend()]);
-      for (const secret of listed.secrets) io.log(`${secret.name}\t${secret.audiences.join(',')}`);
+      for (const secret of listed.secrets) {
+        const bound = secret.binding ? `\t${secret.binding.hosts.join(',')} ${secret.binding.header} ${secret.binding.scheme}` : '';
+        io.log(`${secret.name}\t${secret.audiences.join(',')}${bound}`);
+      }
       if (listed.skipped) io.error(`cezar secrets: store skipped — ${listed.skipped}`);
       io.error(keyBackend === 'keychain'
         ? '# encrypted with a data key in the OS keychain'
@@ -69,7 +77,7 @@ export async function runSecretsCommand(
         io.error('cezar secrets: empty value — nothing saved');
         return 1;
       }
-      await store.set(scope, action.name, value, audiences);
+      await store.set(scope, action.name, value, audiences, binding);
       io.log(action.name);
       return 0;
     }
@@ -91,13 +99,15 @@ export async function runSecretsCommand(
 
 /** `list` takes no operand; `set` and `unset` take exactly a name. Parsing it into this shape
  *  once is what lets the body above use `action.name` as a string without an assertion. */
-type SecretsAction = { kind: 'list' } | { kind: 'set' | 'unset'; name: string };
+type SecretsAction = { kind: 'list' } | { kind: 'set' | 'unset'; name: string } | { kind: 'resolve'; names: string[] };
 
 interface ParsedArgs {
   action: SecretsAction;
   workspace: boolean;
   repo?: string;
   audiences?: SecretAudience[];
+  binding?: SecretBinding;
+  allowFileKey: boolean;
 }
 
 function parseArgs(args: string[]): ParsedArgs | undefined {
@@ -105,11 +115,22 @@ function parseArgs(args: string[]): ParsedArgs | undefined {
   let workspace = false;
   let repo: string | undefined;
   let audiences: SecretAudience[] | undefined;
+  let allowFileKey = false;
+  const bind: { hosts?: string[]; header?: string; scheme?: string; sentinel?: string } = {};
   for (let i = 0; i < rest.length; ) {
     const flag = rest[i];
     if (flag === '--workspace') {
       workspace = true;
       rest.splice(i, 1);
+    } else if (flag === '--allow-file-key') {
+      allowFileKey = true;
+      rest.splice(i, 1);
+    } else if (flag === '--host' || flag === '--header' || flag === '--scheme' || flag === '--sentinel') {
+      const value = rest[i + 1];
+      if (!value) return undefined;
+      if (flag === '--host') bind.hosts = value.split(',').map((h) => h.trim()).filter(Boolean);
+      else bind[flag.slice(2) as 'header' | 'scheme' | 'sentinel'] = value;
+      rest.splice(i, 2);
     } else if (flag === '--repo' || flag === '--audience') {
       const value = rest[i + 1];
       if (!value) return undefined;
@@ -125,13 +146,63 @@ function parseArgs(args: string[]): ParsedArgs | undefined {
     }
   }
   const [command, ...operands] = rest;
-  if (command === 'list' && operands.length === 0) return { action: { kind: 'list' }, workspace, repo };
+  const bindFlags = Object.keys(bind).length > 0;
+  if (allowFileKey && command !== 'resolve') return undefined;
+  if (command === 'list' && operands.length === 0 && !bindFlags) return { action: { kind: 'list' }, workspace, repo, allowFileKey };
+  if (command === 'resolve' && operands.length > 0 && !audiences && !bindFlags) {
+    return { action: { kind: 'resolve', names: operands }, workspace, repo, allowFileKey };
+  }
   const [name] = operands;
   if ((command === 'set' || command === 'unset') && name !== undefined && operands.length === 1) {
-    if (command === 'unset' && audiences) return undefined;
-    return { action: { kind: command, name }, workspace, repo, audiences };
+    if (command === 'unset' && (audiences || bindFlags)) return undefined;
+    const proxy = audiences?.includes('proxy') ?? false;
+    if (bindFlags && !proxy) return undefined;
+    let binding: SecretBinding | undefined;
+    if (proxy) {
+      const parsedBinding = secretBindingSchema.safeParse({ ...bind, ...(bind.hosts ? { hosts: [...new Set(bind.hosts)].sort() } : {}) });
+      if (!parsedBinding.success || !(SECRET_BINDING_SCHEMES as readonly string[]).includes(bind.scheme ?? '')) return undefined;
+      binding = parsedBinding.data;
+    }
+    return { action: { kind: command, name }, workspace, repo, audiences, binding, allowFileKey };
   }
   return undefined;
+}
+
+/**
+ * `resolve` hands plaintext to host code, so it fails closed: not to a terminal, not under a
+ * key that is only a private file unless the caller opted in, and all or nothing — one bad name
+ * prints no value at all. Only names, never values, appear in any message.
+ */
+async function resolveProxy(
+  names: string[],
+  scope: SecretScopeRef,
+  allowFileKey: boolean,
+  io: SecretsCliIo,
+  store: SecretStore,
+): Promise<number> {
+  if (io.stdoutIsTTY ?? process.stdout.isTTY) {
+    io.error('cezar secrets: resolve prints secret values; pipe it to the consumer, not a terminal.');
+    return 1;
+  }
+  for (const name of names) {
+    const issue = secretNameIssue(name);
+    if (issue) {
+      io.error(`cezar secrets: ${name} — ${issue}`);
+      return 1;
+    }
+  }
+  if (!allowFileKey && (await store.keyBackend()) === 'file') {
+    io.error('cezar secrets: the data key is a private file, not the OS keychain — pass --allow-file-key to accept that for resolve.');
+    return 1;
+  }
+  const project = scope.kind === 'project' ? { projectId: scope.projectId, root: scope.root } : undefined;
+  const { secrets, problems } = await store.resolveProxy(project, names);
+  if (problems.length) {
+    for (const problem of problems) io.error(`cezar secrets: ${problem}`);
+    return 1;
+  }
+  for (const secret of secrets) io.log(`${secret.name} ${secret.value}`);
+  return 0;
 }
 
 async function registeredProject(repo: string): Promise<{ id: string; root: string } | undefined> {

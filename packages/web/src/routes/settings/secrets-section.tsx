@@ -18,7 +18,11 @@ import { CardNote, FormRow, SettingsCard } from './form-row'
 const AUDIENCE_LABELS: Record<SecretAudience, string> = {
   checks: 'Check steps (workflow commands)',
   cezar: 'cezar itself (its own features — not the agents)',
+  proxy: 'Outbound proxy (set with the CLI)',
 }
+
+/** Proxy secrets need a destination binding, which only `cezar secrets set` takes (fork #1). */
+const FORM_AUDIENCES = SECRET_AUDIENCES.filter((audience) => audience !== 'proxy')
 
 /** The short form for the table's "Visible to" column. */
 const audienceSummary = (audiences: readonly SecretAudience[]) =>
@@ -141,7 +145,7 @@ function SecretsSection({ scope, list, save, remove, invalidate }: SecretsSectio
             {nameIssue ? <p className="text-meta text-danger">{nameIssue}</p> : null}
             <fieldset className="flex flex-wrap items-center gap-x-4 gap-y-1">
               <legend className="mb-1 text-ui">Visible to</legend>
-              {SECRET_AUDIENCES.map((audience) => (
+              {FORM_AUDIENCES.map((audience) => (
                 <label key={audience} className="flex items-center gap-2 text-ui">
                   <input type="checkbox" aria-label={AUDIENCE_LABELS[audience]} checked={audiences.includes(audience)} onChange={() => toggleAudience(audience)} />
                   {AUDIENCE_LABELS[audience]}

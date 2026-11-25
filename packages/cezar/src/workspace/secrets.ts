@@ -6,9 +6,11 @@ import { z } from 'zod';
 import {
   SECRET_AUDIENCES,
   secretAudienceSchema,
+  secretBindingSchema,
   secretNameIssue,
   secretValueIssue,
   type SecretAudience,
+  type SecretBinding,
   type SecretEntry,
   type SecretKeyBackend,
   type StepSecretBinding,
@@ -55,11 +57,18 @@ export type SecretScopeRef = { kind: 'project'; projectId: string; root: string 
 
 const storedSecretSchema = z.object({
   audiences: z.array(secretAudienceSchema).min(1),
+  binding: secretBindingSchema.optional(),
   createdAt: z.string(),
   updatedAt: z.string(),
   iv: z.string(),
   data: z.string(),
   tag: z.string(),
+}).superRefine((stored, ctx) => {
+  const proxy = stored.audiences.includes('proxy');
+  if (proxy && (stored.audiences.length !== 1 || !stored.binding)) {
+    ctx.addIssue({ code: 'custom', message: 'a proxy secret has no other audience and carries a binding' });
+  }
+  if (!proxy && stored.binding) ctx.addIssue({ code: 'custom', message: 'only a proxy secret carries a binding' });
 });
 type StoredSecret = z.infer<typeof storedSecretSchema>;
 
@@ -79,8 +88,15 @@ type SecretFile = z.infer<typeof secretFileSchema>;
  * to inspect and compare. The caller turns this into one note on the run.
  */
 export interface SecretsRead {
-  values: Record<string, { value: string; audiences: SecretAudience[] }>;
+  values: Record<string, { value: string; audiences: SecretAudience[]; binding?: SecretBinding }>;
   skipped?: string;
+}
+
+/** One proxy secret as host code receives it: the value and where it may be sent. */
+export interface ResolvedProxySecret {
+  name: string;
+  value: string;
+  binding: SecretBinding;
 }
 
 /** What a consumer gets back: the variables it may see, and what it should tell the user. */
@@ -162,12 +178,12 @@ export class SecretStore {
     // Undecryptable entries still list by name, so they can be unset after a lost key.
     const entries = read.skipped ? await this.storedMetadata(scope) : read.values;
     const secrets = Object.entries(entries)
-      .map(([name, entry]) => ({ name, audiences: entry.audiences, updatedAt: entry.updatedAt }))
+      .map(([name, entry]) => ({ name, audiences: entry.audiences, updatedAt: entry.updatedAt, ...(entry.binding ? { binding: entry.binding } : {}) }))
       .sort((a, b) => a.name.localeCompare(b.name));
     return read.skipped ? { secrets, skipped: read.skipped } : { secrets };
   }
 
-  private async storedMetadata(scope: SecretScopeRef): Promise<Record<string, { audiences: SecretAudience[]; updatedAt: string }>> {
+  private async storedMetadata(scope: SecretScopeRef): Promise<Record<string, { audiences: SecretAudience[]; updatedAt: string; binding?: SecretBinding }>> {
     const id = fileId(scope);
     if (!id) return {};
     try {
@@ -182,7 +198,7 @@ export class SecretStore {
    * the next check rather than one already running. Every failure reads as empty: a check
    * without its credential fails on its own terms, and a corrupt store must not stop runs.
    */
-  async read(scope: SecretScopeRef): Promise<SecretsRead & { values: Record<string, { value: string; audiences: SecretAudience[]; updatedAt: string }> }> {
+  async read(scope: SecretScopeRef): Promise<SecretsRead & { values: Record<string, { value: string; audiences: SecretAudience[]; updatedAt: string; binding?: SecretBinding }> }> {
     const id = fileId(scope);
     if (!id) return { values: {} };
     let file: SecretFile;
@@ -216,31 +232,39 @@ export class SecretStore {
       return { values: {}, skipped: 'the data key metadata is unreadable or invalid — restore the keychain account marker and its private permissions' };
     }
     if (!dataKey) return { values: {}, skipped: await this.missingKeyReason() };
-    const values: Record<string, { value: string; audiences: SecretAudience[]; updatedAt: string }> = {};
+    const values: Record<string, { value: string; audiences: SecretAudience[]; updatedAt: string; binding?: SecretBinding }> = {};
     for (const [name, stored] of Object.entries(file.secrets)) {
       if (secretNameIssue(name)) continue;
-      const value = decrypt(dataKey.key, aad(id, name), stored);
+      const value = decrypt(dataKey.key, aad(id, name, stored.binding), stored);
       if (value === null) {
         return { values: {}, skipped: 'the data key does not decrypt this store — it was written under another key (a reset keychain, a replaced key file); store the secrets again' };
       }
-      values[name] = { value, audiences: stored.audiences, updatedAt: stored.updatedAt };
+      values[name] = { value, audiences: stored.audiences, updatedAt: stored.updatedAt, ...(stored.binding ? { binding: stored.binding } : {}) };
     }
     return { values };
   }
 
-  async set(scope: SecretScopeRef, name: string, value: string, audiences: readonly SecretAudience[] = DEFAULT_AUDIENCES): Promise<void> {
+  async set(
+    scope: SecretScopeRef,
+    name: string,
+    value: string,
+    audiences: readonly SecretAudience[] = DEFAULT_AUDIENCES,
+    binding?: SecretBinding,
+  ): Promise<void> {
     const issue = secretNameIssue(name) ?? secretValueIssue(value);
     if (issue) throw new SecretsError(issue);
     const admitted = [...new Set(audiences)].filter((a): a is SecretAudience => (SECRET_AUDIENCES as readonly string[]).includes(a));
     if (admitted.length === 0) throw new SecretsError(`a secret names at least one audience (${SECRET_AUDIENCES.join(', ')})`);
+    const bound = checkedBinding(admitted, binding);
     const dataKey = await this.loadOrCreateDataKey();
     await this.update(scope, (file, id) => {
       const now = new Date().toISOString();
       file.secrets[name] = {
         audiences: admitted,
+        ...(bound ? { binding: bound } : {}),
         createdAt: file.secrets[name]?.createdAt ?? now,
         updatedAt: now,
-        ...encrypt(dataKey.key, aad(id, name), value),
+        ...encrypt(dataKey.key, aad(id, name, bound), value),
       };
       return true;
     });
@@ -267,6 +291,7 @@ export class SecretStore {
     audience: SecretAudience,
     bindings?: readonly StepSecretBinding[],
   ): Promise<ResolvedSecrets> {
+    if (audience === 'proxy') throw new SecretsError('proxy secrets resolve through resolveProxy, which keeps their binding');
     const notes: string[] = [];
     const sources: Array<{ label: string; read: SecretsRead }> = [{ label: 'workspace', read: await this.read({ kind: 'workspace' }) }];
     if (project) sources.push({ label: 'project', read: await this.read({ kind: 'project', ...project }) });
@@ -304,6 +329,28 @@ export class SecretStore {
       values[as] = entry.value;
     }
     return { values, notes };
+  }
+
+  /**
+   * The named PROXY secrets, project winning over workspace on a shared name. All or nothing:
+   * a name that is not stored, or whose winning entry is not a bound proxy secret, fails the
+   * whole call, so a caller never injects a partial set. Nothing is ever returned unbound.
+   */
+  async resolveProxy(
+    project: { projectId: string; root: string } | undefined,
+    names: readonly string[],
+  ): Promise<{ secrets: ResolvedProxySecret[]; problems: string[] }> {
+    const reads: SecretsRead[] = [await this.read({ kind: 'workspace' })];
+    if (project) reads.push(await this.read({ kind: 'project', ...project }));
+    const problems = reads.flatMap((read) => (read.skipped ? [`secrets skipped — ${read.skipped}`] : []));
+    const secrets: ResolvedProxySecret[] = [];
+    for (const name of names) {
+      const entry = [...reads].reverse().map((read) => read.values[name]).find(Boolean);
+      if (!entry) problems.push(`secret ${name} is not stored`);
+      else if (!entry.audiences.includes('proxy') || !entry.binding) problems.push(`secret ${name} is not a proxy secret`);
+      else secrets.push({ name, value: entry.value, binding: entry.binding });
+    }
+    return problems.length ? { secrets: [], problems } : { secrets, problems };
   }
 
   private file(id: string): string {
@@ -542,8 +589,27 @@ function fileId(scope: SecretScopeRef): string | undefined {
 }
 
 /** Binds a ciphertext to its slot: a value moved between files or names does not decrypt. */
-function aad(fileId: string, name: string): Buffer {
-  return Buffer.from(`cezar-secret\0${fileId}\0${name}`, 'utf8');
+function aad(fileId: string, name: string, binding?: SecretBinding): Buffer {
+  const base = `cezar-secret\0${fileId}\0${name}`;
+  return Buffer.from(binding ? `${base}\0${canonicalBinding(binding)}` : base, 'utf8');
+}
+
+/** Fixed key order, so the same binding always authenticates the same way. */
+function canonicalBinding(binding: SecretBinding): string {
+  return JSON.stringify([binding.hosts, binding.header, binding.scheme, binding.sentinel ?? null]);
+}
+
+/** A proxy secret is only a proxy secret, and must say where it may go; nothing else may say so. */
+function checkedBinding(audiences: readonly SecretAudience[], binding: SecretBinding | undefined): SecretBinding | undefined {
+  if (!audiences.includes('proxy')) {
+    if (binding) throw new SecretsError('only a proxy secret carries a destination binding');
+    return undefined;
+  }
+  if (audiences.length !== 1) throw new SecretsError('a proxy secret has no other audience');
+  if (!binding) throw new SecretsError('a proxy secret needs a binding: hosts, header and scheme');
+  const parsed = secretBindingSchema.safeParse({ ...binding, hosts: [...new Set(binding.hosts)].sort() });
+  if (!parsed.success) throw new SecretsError(parsed.error.issues[0]?.message ?? 'invalid binding');
+  return parsed.data;
 }
 
 function encrypt(key: Buffer, associated: Buffer, value: string): Pick<StoredSecret, 'iv' | 'data' | 'tag'> {
