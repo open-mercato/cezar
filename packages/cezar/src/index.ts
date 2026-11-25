@@ -49,7 +49,8 @@ import { initServeWorkspace, initWorkspace } from './workspace/boot.ts';
 import { loadWorkspaceConfig } from './workspace/config.ts';
 import { runProjectsCommand } from './workspace/projects-cli.ts';
 import { WorkspaceSemaphore } from './workspace/semaphore.ts';
-import { flushTelemetry, initTelemetry, installCrashReporter, registerDailyInventory, registerTelemetryContext, startDailyPing, track } from './telemetry.ts';
+import { flushTelemetry, initTelemetry, installCrashReporter, registerDailyInventory, registerTelemetryContext, reportError, startDailyPing, telemetryRuntime, track } from './telemetry.ts';
+import { collectUncleanExits, startLiveMarker, supervisorGoneError, uncleanShutdownError } from './unclean-exit.ts';
 import { collectFeatureInventory } from './feature-telemetry.ts';
 import { runTaskCommand } from './dispatch/task-cli.ts';
 import { runAutomationCommand } from './automations/automation-cli.ts';
@@ -444,6 +445,8 @@ async function serveCommand(
   const shutdown = (reason: 'signal' | 'supervisor_gone') => {
     if (stopping) process.exit(0); // a second Ctrl-C never waits on scripts or telemetry
     stopping = true;
+    // A quitting shell stops its cockpit first (SIGTERM); a vanished one was killed or crashed.
+    if (reason === 'supervisor_gone') reportError(supervisorGoneError(), {}, { code: 'supervisor_gone' });
     store.flush({ pretty: true }); // before the drain too: a second Ctrl-C must not lose run state
     void (httpServer?.shutdownLifecycle() ?? manager.lifecycle.shutdown())
       .catch((error: unknown) => {
@@ -471,6 +474,13 @@ async function serveCommand(
   await initTelemetry({ version: readOwnVersion() });
   installCrashReporter();
   track('app_start');
+  // A previous cockpit that never shut down (SIGKILL, OOM) can only be reported by the next one.
+  for (const exit of collectUncleanExits()) reportError(uncleanShutdownError(), exit.context, { code: 'unclean_shutdown' });
+  startLiveMarker({
+    version: readOwnVersion(),
+    runtime: telemetryRuntime(),
+    runsRunning: () => store.listRuns().filter((r) => r.status === 'running').length,
+  });
   registerDailyInventory(collectFeatureInventory);
   startDailyPing();
 

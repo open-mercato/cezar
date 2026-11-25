@@ -133,6 +133,21 @@ location or `PATH`, and its extension) and the CLI's `--version`. Never its outp
 
 `cezar telemetry inspect` prints the envelope an event would carry, without sending it.
 
+### Unclean shutdowns
+
+A process killed outright (SIGKILL, an out-of-memory kill) runs no handler and cannot report
+itself. So a running cockpit keeps a small marker, `~/.cezar/telemetry/live/<pid>.json`, with its
+version, start time, memory and number of running tasks, refreshed every minute and deleted on
+every exit Node sees. When the next cockpit starts and finds a marker whose process is gone, it
+reports an `UncleanShutdown` (code `unclean_shutdown`) carrying those numbers, plus what the
+desktop app's `~/.cezar/logs/cockpit.log` says about that process when the file exists: the time of
+its last output line and the app's own `---` start/stop lines (paths masked). It never sends
+what the cockpit printed. It sends nothing when the machine restarted since the
+marker's last update, and nothing when the desktop app already saw the process end and reported it.
+Under the desktop app, a cockpit whose shell disappeared without stopping it first (a quit
+always stops it) reports `SupervisorGone` (code `supervisor_gone`) before shutting down. Without
+a yes, the marker is still kept and cleaned up, and nothing is sent.
+
 ### The desktop shell
 
 The desktop app's native shell reports its own failures — Node.js could not be downloaded,
