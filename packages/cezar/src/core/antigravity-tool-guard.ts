@@ -11,6 +11,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { AgentRunSpec } from './agent-runner.ts';
+import { shellQuote } from './shell-env.ts';
 import { DEFAULT_ALLOWED_TOOLS } from '../workflows/types.ts';
 
 export interface AntigravityToolPolicy {
@@ -181,9 +182,10 @@ try {
 `;
 }
 
-function shellQuote(value: string): string {
-  if (process.platform === 'win32') return `"${value.replace(/"/g, '\\"')}"`;
-  return `'${value.replace(/'/g, `'\\''`)}'`;
+/** Quote a hook command argument safely for `sh -c` (POSIX) or `cmd /c` (win32). */
+export function quoteHookArg(value: string, platform: NodeJS.Platform = process.platform): string {
+  if (platform === 'win32') return JSON.stringify(value);
+  return shellQuote(value);
 }
 
 /** Creates the temp `.agents/hooks.json` directory and native `--settings` JSON for a restricted run. */
@@ -201,7 +203,7 @@ export function createAntigravityToolGuard(
     bashAllowlist: spec.bashAllowlist,
     enforceReadOnly: spec.enforceReadOnly,
   }), { mode: 0o600 });
-  const command = `${shellQuote(process.execPath)} ${shellQuote(scriptPath)}`;
+  const command = `${quoteHookArg(process.execPath)} ${quoteHookArg(scriptPath)}`;
   writeFileSync(join(agentsDir, 'hooks.json'), JSON.stringify({
     'cezar-tool-guard': {
       enabled: true,

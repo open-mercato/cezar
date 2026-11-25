@@ -10,6 +10,7 @@ import {
   createAntigravityToolGuard,
   evaluateAntigravityToolCall,
   needsAntigravityToolGuard,
+  quoteHookArg,
 } from './antigravity-tool-guard.ts';
 import { existsSync, readFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
@@ -131,6 +132,12 @@ describe('Antigravity runner', () => {
 
     guard.cleanup();
     expect(existsSync(guard.hookDir!)).toBe(false);
+  });
+
+  it('escapes backslashes and quotes safely in hook command arguments', () => {
+    expect(quoteHookArg('C:\\Users\\a"b\\node.exe', 'win32')).toBe('"C:\\\\Users\\\\a\\"b\\\\node.exe"');
+    expect(quoteHookArg('C:\\trailing\\', 'win32')).toBe('"C:\\\\trailing\\\\"');
+    expect(quoteHookArg("/tmp/a\\b'c/hook.mjs", 'darwin')).toBe("'/tmp/a\\b'\\''c/hook.mjs'");
   });
 
   it('frames a stdin turn the way agy 1.4.0 reads it', () => {
