@@ -19,7 +19,7 @@ import {
 } from './agent-runner.ts';
 import { buildChildEnv } from './agent-env.ts';
 import { resolveOpencodeExecutable } from './opencode-model-catalog.ts';
-import { agentTmpDir } from '../runs/agent-tmpdir.ts';
+import { isAgentTmpDirOf } from '../runs/agent-tmpdir.ts';
 import { provisionedLinkTargets } from '../skills-provision.ts';
 import { disclaimedCommand } from './disclaim-spawn.ts';
 import { signalServer, trackServer } from './opencode-server-registry.ts';
@@ -1221,10 +1221,11 @@ export function opencodePermissionReply(
   if (target === handoff) return 'once';
   const runsDir = dirname(handoff);
   if (dirname(target) === join(runsDir, `${taskId}-images`)) return 'once';
-  // Resolved through the same helper that placed it — #999 moved it out of `<dataDir>/tmp`.
-  const tmp = canonicalPath(agentTmpDir(dirname(runsDir), taskId));
-  if (env.TMPDIR && canonicalPath(env.TMPDIR) === tmp && (target === tmp || target.startsWith(tmp + sep))) {
-    return 'once';
+  // Any root `agentTmpEnv` may have placed it under (#999, #1936), not just the preferred one.
+  if (env.TMPDIR) {
+    const tmp = canonicalPath(env.TMPDIR);
+    const placed = [env.TMPDIR, tmp].some((p) => isAgentTmpDirOf(dirname(runsDir), taskId, p));
+    if (placed && (target === tmp || target.startsWith(tmp + sep))) return 'once';
   }
   return 'reject';
 }

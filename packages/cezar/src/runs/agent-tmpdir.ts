@@ -202,6 +202,13 @@ export function agentTmpRoots(dataDir: string, env: NodeJS.ProcessEnv = process.
   return agentTmpBases(dataDir, effectiveEnv(env)).map((base) => join(base, projectTmpNamespace(dataDir)));
 }
 
+/** Whether `path` is this run's scratch directory under ANY candidate root — `agentTmpEnv`
+ *  may have fallen past the preferred root (#1936), so `agentTmpDir` alone can disagree with it. */
+export function isAgentTmpDirOf(dataDir: string, runId: string, path: string, env: NodeJS.ProcessEnv = process.env): boolean {
+  if (!safeRunId(runId)) return false;
+  return agentTmpRoots(dataDir, env).some((root) => path === join(root, runLeaf(runId)));
+}
+
 /** `errno` → the phrasing a human recognises from their shell. */
 const REASONS: Readonly<Record<string, string>> = {
   EDQUOT: 'Disk quota exceeded',
