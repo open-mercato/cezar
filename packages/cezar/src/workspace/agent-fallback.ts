@@ -16,6 +16,8 @@ import { atomicWriteJsonSync } from './config.ts';
 import { PROVIDER_IDS, type ProviderId } from '../core/provider-auth.ts';
 import { DEFAULT_AGENT_ACCOUNT_ID, loadAgentAccounts, type AgentAccountStore } from './agent-accounts.ts';
 import { resolveAccountId } from './agent-profiles.ts';
+import { readOnlyWorkflowRefusal } from '../workflows/capabilities.ts';
+import type { WorkflowDef } from '../workflows/types.ts';
 
 export type AgentFallbackCandidate = { provider: ProviderId; profileId: string; model?: string };
 export type AgentFallbackPolicy = {
@@ -328,6 +330,8 @@ export function eligibleFallbackCandidates(
   fromRunner?: string,
   /** Running tasks per `provider:profileId`, to order Main accounts by load. */
   load?: ReadonlyMap<string, number>,
+  /** The run's workflow, when tool-limit enforcement applies (skips incompatible runners). */
+  workflowDef?: WorkflowDef,
 ): { eligible: AgentFallbackCandidate[]; skipped: FallbackSkip[] } {
   const eligible: AgentFallbackCandidate[] = [];
   const skipped: FallbackSkip[] = [];
@@ -345,6 +349,8 @@ export function eligibleFallbackCandidates(
     if (routing?.limitSwitch === 'same-agent' && fromRunner !== undefined && candidate.provider !== fromRunner) {
       skipped.push({ candidate, reason: 'another agent (setting: finish on the same agent only)' }); continue;
     }
+    const refusal = readOnlyWorkflowRefusal(workflowDef, candidate.provider);
+    if (refusal) { skipped.push({ candidate, reason: refusal }); continue; }
     if (heldAccounts.has(key)) { skipped.push({ candidate, reason: 'waiting out its own usage limit' }); continue; }
     if (candidate.profileId !== DEFAULT_AGENT_ACCOUNT_ID) {
       // Fail closed: an account we cannot confirm is never swapped for the default login.

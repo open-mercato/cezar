@@ -3383,11 +3383,85 @@ describe('ManagerEngine', () => {
           return { account, label: `${account} login`, ...(until !== undefined ? { until } : {}) };
         },
       });
-      const managerWith = async (engine: ReturnType<typeof makeEngine>, taskAgents: Array<{ runner: 'claude' | 'codex'; agentProfile: string; role?: 'main' | 'backup' }> = twoClaudes) => {
+      const managerWith = async (engine: ReturnType<typeof makeEngine>, taskAgents: Array<{ runner: 'claude' | 'codex' | 'antigravity' | 'opencode'; agentProfile?: string; role?: 'main' | 'backup' }> = twoClaudes) => {
         const created = await engine.create({ instructions: '', projects: 'all', runner: 'claude', taskAgents, cronMinutes: 0 });
         if ('error' in created) throw created;
         return created.id;
       };
+
+      describe('read-only workflow compatibility', () => {
+        const mixedRoles = [
+          { runner: 'claude' as const, agentProfile: 'first', role: 'main' as const },
+          { runner: 'claude' as const, agentProfile: 'second', role: 'main' as const },
+          { runner: 'antigravity' as const, agentProfile: 'default', role: 'main' as const },
+        ];
+
+        it('skips incompatible runners for review-pr and queues on the earliest-reset compatible account when all compatible accounts are out of limits', async () => {
+          const engine = makeEngine({
+            accountLimit: async (runner, agentProfile) => {
+              const account = agentProfile ?? 'default';
+              const held: Record<string, number> = {
+                'claude:first': RESET + 60_000,
+                'claude:second': RESET,
+              };
+              const until = held[`${runner}:${account}`];
+              return { account, label: `${account} login`, ...(until !== undefined ? { until } : {}) };
+            },
+            accountLoad: () => new Map([['antigravity:default', 0]]),
+          });
+          const id = await managerWith(engine, mixedRoles);
+          const created = await engine.createTask(id, { projectId: 'alpha', task: 'Review PR #1', workflow: 'review-pr' });
+          expect(created).not.toHaveProperty('status');
+          expect(created).toMatchObject({
+            agent: {
+              runner: 'claude',
+              agentProfile: 'second',
+              queuedUntil: '2099-01-01T05:00:00.000Z',
+            },
+          });
+          const body = requests.at(-1)?.body as { runner: string; agentProfile: string; managerAgent: { fallback: Array<{ provider: string }> } };
+          expect(body).toMatchObject({ runner: 'claude', agentProfile: 'second' });
+          expect(body.managerAgent.fallback.map((c) => c.provider)).toEqual(['claude', 'claude']);
+
+          // Guard: a non-read-only workflow still picks the open antigravity account.
+          const writeTask = await engine.createTask(id, { projectId: 'alpha', task: 'Fix bug', workflow: 'quick-task' });
+          expect(writeTask).toMatchObject({ agent: { runner: 'antigravity' } });
+        });
+
+        it('refuses up front without calling POST /runs when no allowed account supports a read-only workflow', async () => {
+          const engine = limited({});
+          const id = await managerWith(engine, [
+            { runner: 'antigravity', agentProfile: 'default', role: 'main' },
+            { runner: 'opencode', agentProfile: 'default', role: 'backup' },
+          ]);
+          const result = await engine.createTask(id, { projectId: 'alpha', task: 'Review PR #1', workflow: 'review-pr' });
+          expect(result).toMatchObject({
+            status: 400,
+            error: expect.stringContaining('review-pr'),
+          });
+          expect((result as { error: string }).error).toContain('Claude Code, Codex or Pi');
+          expect(requests.filter((r) => r.path.endsWith('/runs'))).toEqual([]);
+        });
+
+        it('refuses an explicit incompatible --runner up front without calling POST /runs', async () => {
+          const engine = limited({});
+          const id = await managerWith(engine, mixedRoles);
+          const fromList = await engine.createTask(id, { projectId: 'alpha', task: 'Review PR #1', workflow: 'review-pr', runner: 'antigravity' });
+          expect(fromList).toMatchObject({
+            status: 400,
+            error: expect.stringContaining('antigravity does not enforce'),
+          });
+
+          // Also when taskAgents is unset (automatic selection) and --runner or taskRunner is incompatible.
+          const autoId = await create(engine, 0);
+          const fromAuto = await engine.createTask(autoId, { projectId: 'alpha', task: 'Review PR #1', workflow: 'review-pr', runner: 'antigravity' });
+          expect(fromAuto).toMatchObject({
+            status: 400,
+            error: expect.stringContaining('antigravity does not enforce'),
+          });
+          expect(requests.filter((r) => r.path.endsWith('/runs'))).toEqual([]);
+        });
+      });
 
       describe('with roles (spec 2026-11-25-manager-task-routing)', () => {
         const routed = (load: Record<string, number>, held: Record<string, number> = {}) => makeEngine({

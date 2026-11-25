@@ -224,7 +224,7 @@ import {
   sweepPendingAccounts,
 } from '../workspace/managed-accounts.ts';
 import { WORKFLOWS_DIR, loadWorkflows } from '../workflows/load.ts';
-import { workflowCapabilities } from '../workflows/capabilities.ts';
+import { readOnlyWorkflowRefusal, workflowCapabilities } from '../workflows/capabilities.ts';
 import {
   NODE_CATALOG,
   graphIssues,
@@ -5591,6 +5591,7 @@ export function createApp(deps: ServerDeps) {
         return c.json({ error: AGENT_MODELS_LOCKED_ERROR }, 409);
       }
       let workflow: WorkflowDef | undefined;
+      let workflowCatalog: WorkflowDef[] = [];
       if (parsed.data.steps) {
         // Inline chain (spec 008): an approved plan runs as an ad-hoc workflow.
         const issue = stepsIssue(parsed.data.steps);
@@ -5602,11 +5603,22 @@ export function createApp(deps: ServerDeps) {
         };
       } else {
         const { workflows } = await loadWorkflows(repoRoot);
+        workflowCatalog = workflows;
         workflow = workflows.find((w) => w.name === parsed.data.workflow);
         if (!workflow) return c.json({ error: `unknown workflow: ${parsed.data.workflow}` }, 404);
       }
       const fallback = parsed.data.runner ?? (await loadConfig(repoRoot)).defaultRunner;
-      const blocked = await providerActionError(providersRequiredByWorkflow(workflow, fallback), {
+      const requiredProviders = providersRequiredByWorkflow(workflow, fallback);
+      if (!parsed.data.enforceReadOnly) {
+        const checked = workflow.graph?.nodes.some((n) => n.type === 'workflow')
+          ? [...new Set([...requiredProviders, fallback])]
+          : requiredProviders;
+        for (const provider of checked) {
+          const refusal = readOnlyWorkflowRefusal(workflow, provider, workflowCatalog);
+          if (refusal) return c.json({ error: refusal }, 400);
+        }
+      }
+      const blocked = await providerActionError(requiredProviders, {
         repoRoot,
         profileFor: (provider) => (provider === fallback ? parsed.data.agentProfile : undefined),
       });

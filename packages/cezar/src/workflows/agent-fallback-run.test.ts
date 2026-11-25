@@ -10,6 +10,7 @@ import { managerFallbackPolicy, putAgentFallbackPolicy, setManagerTaskAccountsLo
 import { WorkspaceSemaphore } from '../workspace/semaphore.ts';
 import { RunManager, setFallbackProviderCheck } from './run.ts';
 import { managerAccountLimit } from '../managers/account-limit.ts';
+import { REVIEW_PR } from './templates.ts';
 import type { WorkflowDef } from './types.ts';
 
 const run = promisify(execFile);
@@ -909,6 +910,85 @@ describe('automatic agent fallback', () => {
       await until(() => store.getRun(plain.id)?.status !== 'queued', 'the task to start');
       expect(store.getRun(plain.id)?.agentProfile).toBe('default');
       expect(messages(plain.id).some((m) => m.startsWith('Routed to'))).toBe(false);
+    }, 40_000);
+
+    it('never re-routes a queued read-only workflow onto an incompatible runner when its own account is held', async () => {
+      setManagerTaskAccountsLookup(() => ({
+        agents: [
+          { runner: 'claude', agentProfile: 'default', role: 'main' },
+          { runner: 'antigravity', agentProfile: 'default', role: 'main' },
+        ],
+      }));
+      manager = new RunManager(store, repoRoot);
+      // Hold claude:default on a usage limit.
+      const held = manager.startRun(workflow, { task: 'mock:limit', worktree: false, agentProfile: 'default' });
+      await until(() => store.getRun(held.id)?.autoResumeAt !== undefined, 'claude:default held');
+      const queued = manager.startRun(REVIEW_PR, {
+        task: 'Review PR #1',
+        worktree: false,
+        runner: 'claude',
+        agentProfile: 'default',
+        startedByManager,
+        managerAgent: { note: 'chosen', fallback: [{ provider: 'claude', profileId: 'default' }], routed: true },
+      });
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      const record = store.getRun(queued.id);
+      expect(record?.status).toBe('queued');
+      expect(record?.runner).toBe('claude');
+      expect(record?.queueWaitReason?.kind).toBe('usage-reset');
+    }, 40_000);
+  });
+
+  describe('read-only workflow mid-run fallback', () => {
+    const startedByManager = { id: 'm1', name: 'Coding Manager' };
+    const readOnlyWorkflow: WorkflowDef = {
+      name: 'custom-review',
+      source: 'file',
+      steps: [{ id: 'review', name: 'Review', prompt: '{{task}}', allowedTools: ['Read', 'Grep', 'Glob', 'Bash'], bashAllowlist: ['gh pr diff'] }],
+    };
+
+    it('skips incompatible runners in mid-run fallback and continues on the next compatible account', async () => {
+      registerAccounts(['second']);
+      manager = new RunManager(store, repoRoot);
+      const started = manager.startRun(readOnlyWorkflow, {
+        task: 'review PR mock:limit',
+        worktree: false,
+        runner: 'claude',
+        agentProfile: 'default',
+        startedByManager,
+        managerAgent: {
+          note: 'chosen',
+          fallback: [
+            { provider: 'antigravity', profileId: 'default' },
+            { provider: 'claude', profileId: 'second' },
+          ],
+        },
+      });
+      await until(() => store.getRun(started.id)?.fallbackEpisode?.current !== undefined, 'fallback to reserve compatible successor');
+      const record = store.getRun(started.id);
+      expect(record?.runner).toBe('claude');
+      expect(record?.agentProfile).toBe('second');
+      expect(messages(started.id).some((m) => m.includes('fallback skipped antigravity') && m.includes('does not enforce'))).toBe(true);
+    }, 40_000);
+
+    it('keeps reset-time auto-resume when only incompatible runners remain in a manager fallback list', async () => {
+      manager = new RunManager(store, repoRoot);
+      const started = manager.startRun(readOnlyWorkflow, {
+        task: 'review PR mock:limit',
+        worktree: false,
+        runner: 'claude',
+        agentProfile: 'default',
+        startedByManager,
+        managerAgent: {
+          note: 'chosen',
+          fallback: [{ provider: 'antigravity', profileId: 'default' }],
+        },
+      });
+      await until(() => store.getRun(started.id)?.autoResumeAt !== undefined, 'reset-time auto-resume armed');
+      const record = store.getRun(started.id);
+      expect(record?.runner).toBe('claude');
+      expect(record?.fallbackEpisode).toBeUndefined();
+      expect(record?.steps.some((step) => step.id.startsWith('continue-'))).toBe(false);
     }, 40_000);
   });
 });

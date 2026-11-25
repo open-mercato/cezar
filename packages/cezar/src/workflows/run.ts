@@ -105,7 +105,7 @@ import {
 import { commentOnIssue, commentOnPr, fetchPrHeadChecks, fetchPrWatchFingerprint, findBranchPr, resolvePrTarget, updatePr } from '../server/forge/github.ts';
 import { createDraftPr } from '../server/pr.ts';
 import { baseDivergence, createOrSwitchBranch } from '../server/git-changes.ts';
-import { isReadOnlyWorkflow, readOnlyWorkflowRefusal } from './capabilities.ts';
+import { isReadOnlyWorkflow, readOnlyWorkflowRefusal, workflowSupportsBackend } from './capabilities.ts';
 import { getHeadCommit, getRepoInfo } from '../server/git.ts';
 import { loadWorkflows, newerCatalogWorkflow } from './load.ts';
 import type { QueuedMessage, RunRecord, RunStore, StepState } from '../runs/store.ts';
@@ -4268,7 +4268,8 @@ export class RunManager {
       ...defaultAgentAccountStore(),
       accounts: policy.candidates.map((c) => ({ id: c.profileId, provider: c.provider, configDir: '', label: '', addedAt: '' })),
     } as AgentAccountStore;
-    return eligibleFallbackCandidates(policy, attempted, held, accounts, this.repoRoot, failed.backend ?? run.runner ?? 'claude').eligible.length > 0;
+    const workflowDef = run.enforceReadOnly ? undefined : run.workflowDef;
+    return eligibleFallbackCandidates(policy, attempted, held, accounts, this.repoRoot, failed.backend ?? run.runner ?? 'claude', undefined, workflowDef).eligible.length > 0;
   }
 
   private finishFallbackAdmission(runId: string, message: string): void {
@@ -4324,7 +4325,8 @@ export class RunManager {
     if (startFailure === undefined && snapshot.source !== 'manager' && snapshot.candidates.some((candidate) => candidateKey(candidate) === fromKey)) {
       this.store.appendEvent(runId, { type: 'note', message: `fallback skipped ${label(fromKey)} — it is the agent that just reached its limit` });
     }
-    const { eligible, skipped } = eligibleFallbackCandidates(snapshot, attempted, this.semaphore.accountHolds().deadline, accounts, this.repoRoot, fromKey.split(':')[0], this.semaphore.accountLoad());
+    const workflowDef = run.enforceReadOnly ? undefined : run.workflowDef;
+    const { eligible, skipped } = eligibleFallbackCandidates(snapshot, attempted, this.semaphore.accountHolds().deadline, accounts, this.repoRoot, fromKey.split(':')[0], this.semaphore.accountLoad(), workflowDef);
     for (const skip of skipped) {
       attempted.add(candidateKey(skip.candidate));
       this.store.appendEvent(runId, { type: 'note', message: `fallback skipped ${label(candidateKey(skip.candidate))} — ${skip.reason}` });
@@ -4819,8 +4821,10 @@ export class RunManager {
     if (open(own)) return { kind: 'stay', key: own };
     // A pinned model or effort belongs to its runner: such a task moves only between its accounts.
     const pinned = run.model !== undefined || run.reasoningEffort !== undefined;
+    const compatible = (runner: RunnerId) => run.enforceReadOnly || workflowSupportsBackend(run.workflowDef, runner);
     const entries = routing.agents
-      .filter((agent): agent is typeof agent & { runner: RunnerId } => isRunnerId(agent.runner) && (!pinned || agent.runner === ownRunner))
+      .filter((agent): agent is typeof agent & { runner: RunnerId } =>
+        isRunnerId(agent.runner) && (!pinned || agent.runner === ownRunner) && compatible(agent.runner))
       .map((agent, index) => ({ ...agent, index, key: keyOf(agent.runner, agent.agentProfile) }));
     const main = entries.filter((entry) => entry.role !== 'backup' && open(entry.key))
       .sort((a, b) => (load.get(a.key) ?? 0) - (load.get(b.key) ?? 0) || a.index - b.index)[0];
