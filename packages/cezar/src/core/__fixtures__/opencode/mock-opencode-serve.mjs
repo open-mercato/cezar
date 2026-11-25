@@ -89,6 +89,7 @@ const info = (extra) => ({
 
 const server = createServer((req, res) => {
   const url = req.url ?? '';
+  if (process.env.MOCK_REQUESTS_FILE) appendFileSync(process.env.MOCK_REQUESTS_FILE, `${req.method} ${url}\n`);
   if (req.method === 'GET' && url === '/path') {
     res.writeHead(200, { 'content-type': 'application/json' });
     res.end(JSON.stringify({ directory: process.env.MOCK_PATH_DIR ?? process.cwd() }));

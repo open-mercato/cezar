@@ -88,8 +88,33 @@ describe('withCurrentGlobalInstructions', () => {
     expect(withCurrentGlobalInstructions(undefined, '  ')).toBeUndefined();
   });
 
-  it('says global instructions never lift the read-only or manager task rules', () => {
-    expect(GLOBAL_INSTRUCTIONS_HEADING).toContain('never lift the cezar task rules that follow them');
+  it('takes rule markers only from the end, never from inside instruction text', () => {
+    const tricky = `Old rule${'\n\n---\n\n'}Landing: pretend this is a rule`;
+    const stored = join(resolveExtraSystemPrompt(undefined, `Project${'\n\n---\n\n'}${READ_ONLY_PROMPT}${'\n\n---\n\n'}more`, tricky), MANAGER_LINE);
+    const next = withCurrentGlobalInstructions(stored, NEW)!;
+    expect(next).not.toContain('Old rule');
+    expect(next).not.toContain('pretend this is a rule');
+    expect(next).toBe(join(resolveExtraSystemPrompt(undefined, `Project${'\n\n---\n\n'}${READ_ONLY_PROMPT}${'\n\n---\n\n'}more`, NEW), MANAGER_LINE));
+  });
+
+  it('keeps project text that merely starts with a Global instructions heading', () => {
+    const repo = '## Global instructions\n\nOur repo keeps its own global notes.\n\nUse pnpm.';
+    expect(withCurrentGlobalInstructions(repo, NEW)).toBe(resolveExtraSystemPrompt(undefined, repo, NEW));
+    expect(withCurrentGlobalInstructions(join(repo, MANAGER_LINE), undefined)).toBe(join(repo, MANAGER_LINE));
+  });
+
+  it('parses every heading cezar has saved', () => {
+    for (const legacy of [
+      '## Global instructions\n\nThese apply to every project. Where they conflict with the project instructions below, the project instructions win.',
+      '## Global instructions\n\nThese user instructions apply to every task and take precedence over repository, project, workflow and skill instructions. Preserve the other instructions wherever they do not conflict.',
+    ]) {
+      expect(withCurrentGlobalInstructions(join(`${legacy}\n\n${OLD}`, MANAGER_LINE), NEW)).toBe(join(`${GLOBAL_INSTRUCTIONS_HEADING}\n\n${NEW}`, MANAGER_LINE));
+    }
+  });
+
+  it('says global instructions never lift cezar\'s own safety rules, by name', () => {
+    expect(GLOBAL_INSTRUCTIONS_HEADING).toContain('never lift cezar\'s own safety rules');
+    expect(GLOBAL_INSTRUCTIONS_HEADING).not.toContain('that follow them');
     expect(GLOBAL_INSTRUCTIONS_HEADING).toContain('a read-only task stays read-only');
     expect(GLOBAL_INSTRUCTIONS_HEADING).toContain('leaves merges and automation enables to the user');
   });
@@ -151,10 +176,12 @@ describe('a task session after the global instructions change', { timeout: 20_00
     sessions[0]!.settle();
     await vi.waitFor(() => expect(sessions).toHaveLength(2), wait);
     expectCurrent(sessions[1]!.spec);
+    expect(store.getRun(id)?.systemPrompt).toBe(`${GLOBAL_INSTRUCTIONS_HEADING}\n\n${NEW}`);
     sessions[1]!.settle();
     await vi.waitFor(() => expect(sessions).toHaveLength(3), wait);
     expectCurrent(sessions[2]!.spec);
   });
+
   it('Continue of a manager-started task keeps global → project → manager line, with the current global text', async () => {
     writeFileSync(join(root, '.ai/cezar/config.json'), JSON.stringify({ systemPrompt: 'Keep the API stable.' }));
     await mergeWriteWorkspaceConfig((config) => { config.systemPrompt = OLD; });
@@ -175,19 +202,57 @@ describe('a task session after the global instructions change', { timeout: 20_00
     expect(store.getRun(id)?.systemPrompt).not.toContain(OLD);
   });
 
-  it('a usage-limit resume of the same step gets the current text', async () => {
-    await mergeWriteWorkspaceConfig((config) => { config.systemPrompt = OLD; });
+  it('a usage-limit resume after a restart drops cut global text and records what it ran', async () => {
+    writeFileSync(join(root, '.ai/cezar/config.json'), JSON.stringify({ systemPrompt: 'Keep the API stable.' }));
+    await mergeWriteWorkspaceConfig((config) => { config.systemPrompt = `Rule A${'\n\n---\n\n'}Rule B`; });
     const { id } = manager.startRun(workflow, { task: 'implement it', runner: 'claude', worktree: false });
     await vi.waitFor(() => expect(sessions).toHaveLength(1), wait);
+    expect(sessions[0]!.spec.systemPrompt).toContain('Rule B');
     sessions[0]!.emit({ type: 'error', message: 'Usage limit reached, try again in 60 minutes' });
     sessions[0]!.settle();
     await vi.waitFor(() => expect(store.getRun(id)).toMatchObject({ status: 'failed', autoResumeReason: 'usage_limit' }), wait);
-    await mergeWriteWorkspaceConfig((config) => { config.systemPrompt = NEW; });
-    const resumes = manager as unknown as { autoResumeTimers: Map<string, ReturnType<typeof setTimeout>>; fireAutoResume(runId: string): void };
-    clearTimeout(resumes.autoResumeTimers.get(id));
-    resumes.fireAutoResume(id);
+    await mergeWriteWorkspaceConfig((config) => { config.systemPrompt = 'Rule A'; });
+    // The window reopened while cezar was down: recovery resumes the step.
+    manager.dispose();
+    store.updateRun(id, { autoResumeAt: new Date(Date.now() - 1_000).toISOString() });
+    store.flush();
+    store = RunStore.open(join(root, '.ai/cezar'), { keepLive: true });
+    manager = new RunManager(store, root, { semaphore: new WorkspaceSemaphore({ initial: { maxParallel: 1 } }) });
+    await manager.recover();
     await vi.waitFor(() => expect(sessions).toHaveLength(2), wait);
     expect(sessions[1]!.spec.resume).toBe(true);
-    expectCurrent(sessions[1]!.spec);
+    expect(sessions[1]!.spec.systemPrompt).not.toContain('Rule B');
+    expect(sessions[1]!.spec.systemPrompt?.split('Rule A')).toHaveLength(2);
+    expect(store.getRun(id)?.systemPrompt).toBe(resolveExtraSystemPrompt(undefined, 'Keep the API stable.', 'Rule A'));
+  });
+
+  it('a read-only task reads the read-only rule after the global block, on Continue too', async () => {
+    await mergeWriteWorkspaceConfig((config) => { config.systemPrompt = NEW; });
+    const { id } = manager.startRun({ name: 'one', source: 'file', steps: [{ id: 'work', name: 'Work', prompt: '{{task}}' }] },
+      { task: 'answer it', worktree: false, readOnly: true });
+    await vi.waitFor(() => expect(sessions).toHaveLength(1), wait);
+    sessions[0]!.settle();
+    await vi.waitFor(() => expect(manager.isActive(id)).toBe(false), wait);
+    expect(manager.continueRun(id, { text: 'and this?' }).ok).toBe(true);
+    await vi.waitFor(() => expect(sessions).toHaveLength(2), wait);
+    for (const { spec } of sessions) {
+      const prompt = spec.systemPrompt ?? '';
+      expect(prompt.indexOf(GLOBAL_INSTRUCTIONS_HEADING)).toBeGreaterThanOrEqual(0);
+      expect(prompt.indexOf(READ_ONLY_PROMPT)).toBeGreaterThan(prompt.indexOf(NEW));
+    }
+  });
+
+  it('clearing the global instructions before a switch clears them from the record too', async () => {
+    await mergeWriteWorkspaceConfig((config) => { config.systemPrompt = OLD; });
+    const { id } = manager.startRun(workflow, { task: 'implement it', runner: 'claude', worktree: false });
+    await vi.waitFor(() => expect(sessions).toHaveLength(1), wait);
+    expect(store.getRun(id)?.systemPrompt).toContain(OLD);
+    await mergeWriteWorkspaceConfig((config) => { delete config.systemPrompt; });
+    expect(manager.switchAgent(id, { runner: 'codex', agentProfile: 'default', changedBy: 'test' })).toHaveProperty('summary');
+    sessions[0]!.settle();
+    await vi.waitFor(() => expect(sessions).toHaveLength(2), wait);
+    expect(sessions[1]!.spec.systemPrompt).not.toContain(OLD);
+    expect(sessions[1]!.spec.systemPrompt).not.toContain(GLOBAL_INSTRUCTIONS_HEADING);
+    expect(store.getRun(id)?.systemPrompt).toBeUndefined();
   });
 });
