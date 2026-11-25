@@ -82,11 +82,19 @@ describe('a reclaimed review run', () => {
     const commit = await apiRequest(app, `/api/v1/runs/${id}/commit/${commits.commits[0]!.sha}`);
     expect(commit.status).toBe(200);
     const changes = await apiRequest(app, `/api/v1/runs/${id}/changes`);
-    expect(changes.status).toBe(409);
-    const error = ((await changes.json()) as { error: string }).error;
-    expect(error).toContain('was reclaimed');
-    expect(error).toContain('Continue restores it');
-    expect(error).not.toContain('could not be restored');
+    expect(changes.status).toBe(200);
+    const payload = (await changes.json()) as {
+      files: Array<{ path: string; status: string; patch: string }>;
+      stat: { adds: number; files: number };
+      fromBranch?: { branch: string; headSha?: string };
+      baseSha?: string;
+    };
+    expect(payload.files.map((f) => [f.path, f.status])).toEqual([['feature.txt', 'added']]);
+    expect(payload.files[0]!.patch).toContain('+the work');
+    expect(payload.stat).toMatchObject({ adds: 1, files: 1 });
+    expect(payload.fromBranch?.branch).toBe(store.getRun(id)!.branch);
+    expect(payload.fromBranch?.headSha).toBe(commits.commits[0]!.sha);
+    expect(payload.baseSha).toMatch(/^[0-9a-f]{40}$/);
     expect(existsSync(store.getRun(id)!.worktreePath!)).toBe(false);
     expect(store.getRun(id)?.worktreeReclaimedAt).toBeDefined();
   });
@@ -99,6 +107,30 @@ describe('a reclaimed review run', () => {
     expect(createDraftPr).not.toHaveBeenCalled();
     expect(existsSync(store.getRun(id)!.worktreePath!)).toBe(false);
     expect(await (await apiRequest(app, `/api/v1/runs/${id}/diff`)).text()).toContain('reclaimed');
+  });
+
+  it('answers a reclaimed task whose branch is gone with a clear 409, not an empty diff', async () => {
+    const id = await reclaimedReview();
+    await exec('git', ['branch', '-D', store.getRun(id)!.branch!], { cwd: repo });
+    const changes = await apiRequest(app, `/api/v1/runs/${id}/changes`);
+    expect(changes.status).toBe(409);
+    expect(((await changes.json()) as { error: string }).error).toContain('branch no longer exists');
+  });
+
+  it('serves an image of the kept branch by sha, with no tree on disk', async () => {
+    const run = store.createRun({ title: 'img', workflow: 'w', task: 't', steps: [] });
+    const wt = await createWorktree(repo, run.id, 'main');
+    writeFileSync(join(wt.path, 'pic.png'), Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
+    await exec('git', ['add', '-A'], { cwd: wt.path });
+    await exec('git', [...GIT_ID, 'commit', '-q', '-m', 'img'], { cwd: wt.path });
+    await removeWorktree(repo, wt.path);
+    store.updateRun(run.id, { status: 'done', worktreePath: wt.path, branch: wt.branch, baseBranch: 'main', worktreeReclaimedAt: new Date().toISOString() });
+    const payload = (await (await apiRequest(app, `/api/v1/runs/${run.id}/changes`)).json()) as { fromBranch: { headSha: string } };
+    const res = await apiRequest(app, `/api/v1/runs/${run.id}/files?path=pic.png&raw=1&rev=${payload.fromBranch.headSha}`);
+    expect(res.status).toBe(200);
+    expect(res.headers.get('content-type')).toBe('image/png');
+    // Without a sha there is still no tree to browse.
+    expect((await apiRequest(app, `/api/v1/runs/${run.id}/files?path=pic.png`)).status).toBe(409);
   });
 
   it('still opens its pull request, restoring the tree from the kept branch', async () => {

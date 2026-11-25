@@ -28,6 +28,7 @@ import { TreePaneResizeHandle, treePaneWidthProps, useTreePaneWidth } from './tr
 import { buildFileTree } from './file-tree'
 import { GitTabLoadError, GitTabLoading } from './git-tab-loading'
 import { GitToolbar } from './git-toolbar'
+import { ReclaimedWorktreeNotice } from './reclaimed-worktree-notice'
 import type { DiffNewLineComment } from '@/components/diff/types'
 import { trackDiffCommentAdded } from '@/lib/telemetry'
 
@@ -150,6 +151,10 @@ export function ChangesView({
 
   const files = changes.data?.files ?? NO_FILES
   const baseSha = changes.data?.baseSha
+  // A reclaimed task: the kept branch's committed diff, read without a checkout. Nothing on disk
+  // backs it, so file context, the new side of an image (but by sha) and "open in app" go.
+  const fromBranch = changes.data?.fromBranch
+  const branchGone = changesRefused && !!run.worktreeReclaimedAt
   // The toolbar, totals and tree are cheap and paint at once; the diff renders in the background
   // as a deferred value, which React interrupts for anything urgent — a click on Chat never waits
   // for a big diff to finish rendering. Until its first pass lands the pane says so.
@@ -243,6 +248,8 @@ export function ChangesView({
         onPreviewChange={hasMarkdown ? setPreview : undefined}
       />
 
+      {fromBranch ? <ReclaimedWorktreeNotice run={run} /> : null}
+
       {changes.data?.repointedHead ? (
         <p data-slot="repointed-head-note" className="border-b px-4 py-2 text-label text-muted-foreground md:px-6">
           HEAD is on <code>{changes.data.repointedHead.headBranch}</code>, not this task&apos;s branch{' '}
@@ -254,6 +261,14 @@ export function ChangesView({
         <p data-slot="changes-loading" className="px-4 py-6 text-center text-label text-soft-foreground md:px-6">
           Loading changes…
         </p>
+      ) : branchGone ? (
+        <CenteredState
+          icon={<FileDiffIcon />}
+          tone="neutral"
+          heading="h2"
+          title="This task's branch is gone"
+          subtitle="Its worktree was reclaimed to free disk and its branch has since been deleted, so there are no changes left to show or restore."
+        />
       ) : changes.isError ? (
         <CenteredState
           icon={changesRefused ? <FileDiffIcon /> : <GitCommitHorizontalIcon />}
@@ -268,7 +283,11 @@ export function ChangesView({
           tone="neutral"
           heading="h2"
           title="No changes yet"
-          subtitle="The worktree matches its base branch. Changes appear here as the agent works."
+          subtitle={
+            fromBranch
+              ? 'The branch has no commits past its base.'
+              : 'The worktree matches its base branch. Changes appear here as the agent works.'
+          }
         />
       ) : (
         // The dock floats over the bottom of this body (see `dockHeight`). The body itself must
@@ -324,11 +343,17 @@ export function ChangesView({
                 mode={effectiveMode}
                 wrap={effectiveWrap}
                 preview={desktop && hasMarkdown && preview}
-                loadFileText={(path) => loadWorktreeText(run.id, path)}
-                imageSrc={(path) => runFileRawUrl(run.id, path)}
+                loadFileText={fromBranch ? undefined : (path) => loadWorktreeText(run.id, path)}
+                imageSrc={
+                  !fromBranch
+                    ? (path) => runFileRawUrl(run.id, path)
+                    : fromBranch.headSha
+                      ? (path) => runFileRawUrl(run.id, path, fromBranch.headSha)
+                      : undefined
+                }
                 oldImageSrc={baseSha ? (path) => runFileRawUrl(run.id, path, baseSha) : undefined}
                 onOpenInApp={
-                  health.data?.capabilities.localHandoff ? (path) => openImage.mutate(path) : undefined
+                  health.data?.capabilities.localHandoff && !fromBranch ? (path) => openImage.mutate(path) : undefined
                 }
                 comments={diffComments.comments}
                 // Not until the stored comments have loaded — see `DiffComments.ready`.

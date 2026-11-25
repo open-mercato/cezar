@@ -74,6 +74,7 @@ import type {
   ConfigResponse,
   ReclaimWorktreesResponse,
   RemoveWorktreeResponse,
+  RestoreWorktreeResponse,
   WorktreesResponse,
   ContinueResponse,
   CreatePrResponse,
@@ -3096,6 +3097,18 @@ export async function removeRunWorktree(id: string): Promise<RemoveWorktreeRespo
       param: { projectId: queryScope(), id: encodeURIComponent(id) },
     }),
     runPath(id, '/remove-worktree'),
+  )
+}
+
+/** The Changes tab's "Restore worktree": bring a reclaimed task's tree back from its kept branch.
+ *  `present` when it was already there; 409 (with the reason) while the run is active or when the
+ *  branch is gone, the path is occupied or the disk is full. */
+export async function restoreRunWorktree(id: string): Promise<RestoreWorktreeResponse> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].runs[':id']['restore-worktree'].$post({
+      param: { projectId: queryScope(), id: encodeURIComponent(id) },
+    }),
+    runPath(id, '/restore-worktree'),
   )
 }
 

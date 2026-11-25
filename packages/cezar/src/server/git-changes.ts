@@ -349,6 +349,42 @@ export async function collectChanges(
   }
 }
 
+/**
+ * `collectChanges` for a task whose worktree was reclaimed (spec 2026-11-19-worktree-disk-usage):
+ * the kept branch against its merge-base with the base, read from the repo without a checkout —
+ * the anchor `branchDiff` (the header counts) and `collectRunCommits` (the Commits tab) use.
+ */
+export async function collectBranchChanges(
+  repoRoot: string,
+  baseBranch: string,
+  branch: string,
+  patchCap = PATCH_CAP,
+): Promise<ChangesResult & { headSha?: string }> {
+  if (!isSafeGitRef(baseBranch) || !isSafeGitRef(branch)) return { ok: false, error: 'refusing option-like ref' };
+  const mergeBase = await git(repoRoot, ['merge-base', baseBranch, branch]);
+  const base = mergeBase.ok && mergeBase.stdout.trim() ? mergeBase.stdout.trim() : baseBranch;
+  const [nameStatus, numstat, patchOut, baseRev, headRev] = await Promise.all([
+    git(repoRoot, ['diff', '--name-status', '-z', '-M', base, branch]),
+    git(repoRoot, ['diff', '--numstat', '-z', '-M', base, branch]),
+    git(repoRoot, ['diff', '--patch', '-M', '--no-color', base, branch]),
+    git(repoRoot, ['rev-parse', '--verify', '--quiet', `${base}^{commit}`]),
+    git(repoRoot, ['rev-parse', '--verify', '--quiet', `${branch}^{commit}`]),
+  ]);
+  for (const listing of [nameStatus, numstat, patchOut]) {
+    if (!listing.ok) return { ok: false, error: gitReason(listing, 'git diff failed') };
+  }
+  const baseSha = baseRev.ok ? baseRev.stdout.trim() : '';
+  const headSha = headRev.ok ? headRev.stdout.trim() : '';
+  return {
+    ok: true,
+    changes: {
+      ...assemblePayload(nameStatus.stdout, numstat.stdout, patchOut.stdout, patchCap),
+      ...(isCommitSha(baseSha) ? { baseSha } : {}),
+    },
+    ...(isCommitSha(headSha) ? { headSha } : {}),
+  };
+}
+
 /** Monotonic suffix for scratch index files, so concurrent /api/repo/changes calls never share
  *  one (each is cleaned up in the finally above). */
 let scratchSeq = 0;

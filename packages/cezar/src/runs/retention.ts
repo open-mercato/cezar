@@ -95,6 +95,7 @@ export async function rematerializeReclaimedWorktree(
   repoRoot: string,
   store: RematerializeStore,
   runId: string,
+  opts: { onError?: (error: unknown) => void } = {},
 ): Promise<boolean> {
   resumeClaims.set(runId, Date.now());
   await reclaimsInFlight.get(runId)?.catch(() => undefined);
@@ -107,7 +108,9 @@ export async function rematerializeReclaimedWorktree(
     await createWorktree(repoRoot, runId, run.baseBranch ?? 'HEAD', { branch: run.branch });
     store.updateRun(runId, { worktreeReclaimedAt: undefined });
     return true;
-  } catch {
+  } catch (error) {
+    // The cockpit's Restore worktree shows why (path conflict, disk); every other caller ignores it.
+    opts.onError?.(error);
     return false;
   }
 }
@@ -116,10 +119,15 @@ export async function rematerializeReclaimedWorktree(
  * Restore a reclaimed tree for publishing (the PR path), only onto its surviving branch: a branch
  * deleted since (merged and cleaned up) must not come back as a fresh tree off the base.
  */
-export async function restoreReclaimedForPublish(repoRoot: string, store: RematerializeStore, runId: string): Promise<boolean> {
+export async function restoreReclaimedForPublish(
+  repoRoot: string,
+  store: RematerializeStore,
+  runId: string,
+  opts: { onError?: (error: unknown) => void } = {},
+): Promise<boolean> {
   const run = store.getRun(runId);
   if (!run?.worktreeReclaimedAt || !await localBranchExists(repoRoot, run.branch ?? branchFor(runId))) return false;
-  return rematerializeReclaimedWorktree(repoRoot, store, runId);
+  return rematerializeReclaimedWorktree(repoRoot, store, runId, opts);
 }
 
 /**

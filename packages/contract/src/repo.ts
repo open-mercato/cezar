@@ -144,6 +144,10 @@ export const changesPayloadSchema = z.object({
   repointedHead: z.object({ headBranch: z.string(), taskBranch: z.string() }).optional(),
   /** The diff's anchor commit as a full sha — the `rev` an image's old side is fetched at. */
   baseSha: z.string().optional(),
+  /** Present only when the task's worktree was reclaimed: the diff is the kept branch's committed
+   *  work against its base, read without a checkout. `headSha` is the branch tip — the `rev` an
+   *  image's new side is fetched at. Absent on every live-worktree answer. */
+  fromBranch: z.object({ branch: z.string(), headSha: z.string().optional() }).optional(),
 });
 export type ChangesPayload = z.infer<typeof changesPayloadSchema>;
 

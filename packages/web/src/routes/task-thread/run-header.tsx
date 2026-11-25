@@ -636,7 +636,7 @@ function OpenInMenuForRun({
         ) : null
       }
       trailing={
-        run.worktreePath ? (
+        run.worktreePath && !run.worktreeReclaimedAt ? (
           <>
             <DropdownMenuSeparator />
             <DropdownMenuItem onSelect={copyPath}>

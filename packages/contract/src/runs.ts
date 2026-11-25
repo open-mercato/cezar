@@ -900,6 +900,11 @@ export type OpenInCliResponse = z.infer<typeof openInCliResponseSchema>;
 export const removeWorktreeResponseSchema = z.object({ removed: z.literal(true) });
 export type RemoveWorktreeResponse = z.infer<typeof removeWorktreeResponseSchema>;
 
+/** `POST /runs/:id/restore-worktree` — bring a reclaimed task's worktree back from its kept branch.
+ *  `present` when it was already on disk (idempotent); 409 `{error}` when it cannot be restored. */
+export const restoreWorktreeResponseSchema = z.object({ status: z.enum(['restored', 'present']) });
+export type RestoreWorktreeResponse = z.infer<typeof restoreWorktreeResponseSchema>;
+
 /** `POST /runs/:id/git/commit` — `git add -A && git commit` in the run's worktree. */
 export const gitCommitResponseSchema = z.object({
   committed: z.literal(true),
