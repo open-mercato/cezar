@@ -78,17 +78,39 @@ export async function checkoutPr(input: PrCheckoutInput): Promise<PrCheckoutResu
   const { cwd, pr } = input;
   const git = (args: string[], timeoutMs = 30_000) => run('git', args, { cwd, timeoutMs });
   const problems: string[] = [];
-  const firstLine = (s: string) => s.trim().split('\n').pop()?.slice(0, 300) ?? '';
+  const lastLine = (s: string) => s.trim().split('\n').pop()?.slice(0, 300) ?? '';
   let head = '';
   let checkedOut = false;
+
+  let meta: Record<string, unknown> = { number: pr.number, url: pr.url, repository: `${pr.owner}/${pr.repo}` };
+  let diff: string | undefined;
+  if (!input.offline) {
+    const repo = pr.host === 'github.com' ? `${pr.owner}/${pr.repo}` : `${pr.host}/${pr.owner}/${pr.repo}`;
+    const gh = (args: string[]) => run('gh', args, { cwd, timeoutMs: 60_000, env: ghEnv() });
+    const view = await gh(['pr', 'view', String(pr.number), '--repo', repo, '--json',
+      'number,title,body,author,state,isDraft,baseRefName,headRefName,headRefOid,url,labels,files,commits']);
+    if (view.ok) {
+      try { meta = { ...meta, ...(JSON.parse(view.stdout) as Record<string, unknown>) }; } catch { problems.push('gh pr view returned unreadable JSON'); }
+    } else problems.push(`gh pr view failed — ${lastLine(view.stderr)}`);
+    const d = await gh(['pr', 'diff', String(pr.number), '--repo', repo]);
+    if (d.ok) diff = d.stdout;
+    else problems.push(`gh pr diff failed — ${lastLine(d.stderr)}`);
+  }
+  const ghHead = typeof meta.headRefOid === 'string' ? meta.headRefOid : '';
 
   const remote = await prRemote(cwd, pr, run);
   if (!remote) problems.push('this repository has no git remote to fetch the PR from');
   else {
     const fetched = await git(['fetch', '--no-tags', '--quiet', remote, `+refs/pull/${pr.number}/head`], 120_000);
-    if (!fetched.ok) problems.push(`git fetch ${remote} pull/${pr.number}/head failed — ${firstLine(fetched.stderr)}`);
+    if (!fetched.ok) problems.push(`git fetch ${remote} pull/${pr.number}/head failed — ${lastLine(fetched.stderr)}`);
     else head = (await git(['rev-parse', '--verify', 'FETCH_HEAD^{commit}'])).stdout.trim();
   }
+  // The fallback remote may hold a different repository's PR with the same number.
+  if (head && ghHead && head !== ghHead) {
+    problems.push(`${remote} pull/${pr.number}/head is ${head.slice(0, 12)}, not the PR's head ${ghHead.slice(0, 12)}; nothing was checked out`);
+    head = '';
+  }
+  if (head) meta.headRefOid = head;
 
   if (head && !input.ownWorktree) problems.push('the task runs in the repository working tree, which is never reset; the PR head was fetched but not checked out');
   else if (head) {
@@ -98,24 +120,10 @@ export async function checkoutPr(input: PrCheckoutInput): Promise<PrCheckoutResu
       // The task branch moves to the PR head, so the Changes tab and the reviewers see the PR itself.
       const reset = await git(['reset', '--hard', '--quiet', head]);
       if (reset.ok) checkedOut = true;
-      else problems.push(`could not check out ${head.slice(0, 12)} — ${firstLine(reset.stderr)}`);
+      else problems.push(`could not check out ${head.slice(0, 12)} — ${lastLine(reset.stderr)}`);
     }
   }
 
-  let meta: Record<string, unknown> = { number: pr.number, url: pr.url, repository: `${pr.owner}/${pr.repo}`, ...(head ? { headRefOid: head } : {}) };
-  let diff: string | undefined;
-  if (!input.offline) {
-    const repo = pr.host === 'github.com' ? `${pr.owner}/${pr.repo}` : `${pr.host}/${pr.owner}/${pr.repo}`;
-    const gh = (args: string[]) => run('gh', args, { cwd, timeoutMs: 60_000, env: ghEnv() });
-    const view = await gh(['pr', 'view', String(pr.number), '--repo', repo, '--json',
-      'number,title,body,author,state,isDraft,baseRefName,headRefName,headRefOid,url,labels,files,commits']);
-    if (view.ok) {
-      try { meta = { ...meta, ...(JSON.parse(view.stdout) as Record<string, unknown>) }; } catch { problems.push('gh pr view returned unreadable JSON'); }
-    } else problems.push(`gh pr view failed — ${firstLine(view.stderr)}`);
-    const d = await gh(['pr', 'diff', String(pr.number), '--repo', repo]);
-    if (d.ok) diff = d.stdout;
-    else problems.push(`gh pr diff failed — ${firstLine(d.stderr)}`);
-  }
   if (diff === undefined && head) {
     // gh is unavailable: the PR's own commits against the base branch, from git alone.
     const baseName = typeof meta.baseRefName === 'string' ? meta.baseRefName : input.baseBranch;

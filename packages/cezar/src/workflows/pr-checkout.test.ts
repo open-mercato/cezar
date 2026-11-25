@@ -76,6 +76,32 @@ describe('checkoutPr', { timeout: 30_000 }, () => {
     expect(readFileSync(res.diffPath, 'utf8')).toContain('+two from the PR');
   });
 
+  // Real git, a scripted `gh` that reports `ghHead` as the PR's head.
+  const withGh = (ghHead: string) => async (file: string, args: string[], opts: { cwd: string }) => {
+    if (file === 'gh') {
+      return args[1] === 'view'
+        ? { ok: true, stdout: JSON.stringify({ number: 7, headRefOid: ghHead, baseRefName: 'main' }), stderr: '' }
+        : { ok: true, stdout: 'diff from gh\n', stderr: '' };
+    }
+    try { return { ok: true, stdout: git(opts.cwd, ...args), stderr: '' }; } catch (e) { return { ok: false, stdout: '', stderr: String(e) }; }
+  };
+
+  it('checks out the fetched head when it matches the head gh reports', async () => {
+    const res = await checkoutPr({ cwd: work, artifactsDir: artifacts, pr: PR, ownWorktree: true, baseBranch: 'main', exec: withGh(prSha) });
+    expect(res.problems).toEqual([]);
+    expect(res.checkedOut).toBe(true);
+    expect(readFileSync(res.diffPath, 'utf8')).toBe('diff from gh\n');
+  });
+
+  it("refuses a fetched head that is not the PR's head (another repository's PR with that number)", async () => {
+    const res = await checkoutPr({ cwd: work, artifactsDir: artifacts, pr: PR, ownWorktree: true, baseBranch: 'main', exec: withGh(baseSha) });
+    expect(res.checkedOut).toBe(false);
+    expect(res.head).toBe('');
+    expect(res.problems.join('\n')).toContain("not the PR's head");
+    expect(git(work, 'rev-parse', 'HEAD')).toBe(baseSha);
+    expect(JSON.parse(readFileSync(res.metaPath, 'utf8'))).toMatchObject({ headRefOid: baseSha, checkedOut: false });
+  });
+
   it('keeps uncommitted work', async () => {
     writeFileSync(join(work, 'a.txt'), 'local edit\n');
     const res = await checkoutPr({ cwd: work, artifactsDir: artifacts, pr: PR, ownWorktree: true, baseBranch: 'main', offline: true });
