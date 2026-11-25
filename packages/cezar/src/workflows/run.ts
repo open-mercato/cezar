@@ -12,7 +12,7 @@ import { probeCodexIdentity, probeCodexUsageWindows } from '../core/codex-usage-
 import { TrackerAgentBindingError } from '../server/tracker/agent-credentials.ts';
 import { trackerBindingComplete, trackerContextPath, trackerPrompt, trackerTaskContext } from '../server/tracker/task-access.ts';
 import { createHash, randomUUID } from 'node:crypto';
-import { spawn } from 'node:child_process';
+import { signalCheck, spawnCheck } from './check-process.ts';
 import { existsSync, renameSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { mkdir, realpath, access, writeFile } from 'node:fs/promises';
 import { assertCezarHomeWriteIsSandboxed, cezarHomeDir, cezBinPath } from '../paths.ts';
@@ -1230,6 +1230,27 @@ export const PROJECT_INSTRUCTIONS_HEADING =
   '## Project instructions\n\nThese apply to this project unless they conflict with the global instructions above.';
 
 const MANAGER_TASK_SYSTEM_PROMPT = 'A cezar manager started this task. Do not merge pull requests or enable automations: leave that to the user.';
+
+/**
+ * A run's recorded extra prompt with its global-instructions block swapped for the CURRENT one.
+ * The record snapshots them at start, so a Continue, resume or agent switch would otherwise keep
+ * the text from before the user edited Settings, or none when they were set later.
+ */
+export function withCurrentGlobalInstructions(stored: string | undefined, current: string | undefined): string | undefined {
+  const global = current?.trim();
+  const block = global ? `${GLOBAL_INSTRUCTIONS_HEADING}\n\n${global}` : undefined;
+  const text = stored?.trim();
+  if (block && text?.startsWith(block) && (text.length === block.length || text.startsWith('\n\n---\n\n', block.length))) return text;
+  let rest = text;
+  if (text?.startsWith(GLOBAL_INSTRUCTIONS_HEADING)) {
+    // The block ends where the next part `resolveExtraSystemPrompt`/execute composes after it begins.
+    const ends = [`${PROJECT_INSTRUCTIONS_HEADING}`, MANAGER_TASK_SYSTEM_PROMPT, 'Landing: ', READ_ONLY_PROMPT]
+      .map((next) => text.indexOf(`\n\n---\n\n${next}`))
+      .filter((index) => index >= 0);
+    rest = ends.length ? text.slice(Math.min(...ends) + '\n\n---\n\n'.length) : undefined;
+  }
+  return composeSystemPrompt(block, rest) || undefined;
+}
 
 /**
  * Joins the parts of one agent step's system prompt in fixed order — skill
@@ -6945,6 +6966,7 @@ export class RunManager {
       ? `${context}\n\n---\n\n## New user instruction\n${openingPrompt}`
       : openingPrompt;
     state.grantedAttachmentLibrary = this.prepareAttachmentLibrary();
+    const recordedPrompt = withCurrentGlobalInstructions(record?.systemPrompt, (await loadWorkspaceConfig().catch(() => null))?.systemPrompt);
     const planUsage = this.planUsageTracker(runId, continueProfile.planUsageAccount);
     const launch = (launchSessionId: string, resume: boolean, context: string | undefined): AgentSession => {
       const contextualOpeningPrompt = withContext(context);
@@ -6955,9 +6977,9 @@ export class RunManager {
           // echoed on the record) rides along with the handoff contract, and a
           // dispatch prompt rides along with both (spec 2026-09-10-dispatch).
           systemPrompt: composeSystemPrompt(
-            dispatchPromptPart(state.dispatchPrompt, record?.systemPrompt),
+            dispatchPromptPart(state.dispatchPrompt, recordedPrompt),
             state.automationsPrompt,
-            record?.systemPrompt,
+            recordedPrompt,
             artifactsPromptPart(artifactsDir(this.dataDir, runId)),
             generateFollowups ? HANDOFF_INSTRUCTIONS : HANDOFF_ONLY_INSTRUCTIONS,
           ),
@@ -9525,6 +9547,7 @@ export class RunManager {
     const stepPrivateMcp = !stepDef || !isReadOnlyWorkflow(stepDef);
     const runner = createRunner(stepBackend);
     const stepMcp = stepPrivateMcp ? await this.privateMcpForLaunch(stepBackend, onEvent) : [];
+    const stepExtraPrompt = withCurrentGlobalInstructions(extraSystemPrompt, (await loadWorkspaceConfig().catch(() => null))?.systemPrompt);
     let session: AgentSession;
     state.currentStepId = step.id;
     this.beginUsageInvocation(runId, state, step.id);
@@ -9540,9 +9563,9 @@ export class RunManager {
           // handoff/todos contract — every agent step.
           systemPrompt: composeSystemPrompt(
             systemPrompt,
-            dispatchPromptPart(state.dispatchPrompt, extraSystemPrompt),
+            dispatchPromptPart(state.dispatchPrompt, stepExtraPrompt),
             state.automationsPrompt,
-            extraSystemPrompt,
+            stepExtraPrompt,
             artifactsPromptPart(artifactsDir(this.dataDir, runId)),
             followupsEnabled() && input.generateFollowups !== false
               ? HANDOFF_INSTRUCTIONS
@@ -11318,8 +11341,8 @@ export class RunManager {
     if (state.cancelled) return { ok: false, output: 'cancelled', exitCode: -1 };
     return new Promise((resolve) => {
       // Check steps run in the same cwd as the agent steps — the worktree.
-      const child = spawn('bash', ['-lc', command], { cwd: state.cwd, env });
-      state.interrupt = () => child.kill('SIGTERM');
+      const child = spawnCheck(command, state.cwd, env);
+      state.interrupt = () => signalCheck(child, 'SIGTERM');
 
       let output = '';
       const collect = (chunk: Buffer) => {

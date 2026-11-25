@@ -1413,6 +1413,7 @@ const uiStateBody = uiStateSchema.superRefine(capUiStateKeys);
 const queryValue = z.union([z.string(), z.array(z.string()).transform((v) => v[0] as string)]).optional();
 
 const refreshQuery = z.object({ refresh: queryValue });
+const modelsRefreshQuery = queryValue.refine((v) => v === undefined || v === '1' || v === 'true');
 const waitQuery = z.object({ wait: queryValue });
 
 /**
@@ -2351,10 +2352,25 @@ export function createApp(deps: ServerDeps) {
     // `modelDiscoveryRunnerSchema` is the contract's own list of the runners with an
     // authoritative host-local catalog (#794, #784), so the client compiles against exactly what
     // this validates. A runner absent from it has no discovery path and this 400s.
-    .get('/models', queryZodValidator(z.object({ runner: z.union([z.string(), z.array(z.string()).transform((v) => v[0] as string)]).pipe(modelDiscoveryRunnerSchema) }), { message: 'runner must be claude, codex, opencode, cursor, junie, antigravity, or kimi' }), async (c) => {
-      const query = { data: c.req.valid('query') };
-      return c.json(await modelCatalog.get(query.data.runner));
-    });
+    .get(
+      '/models',
+      // Two validators so each keeps its own message; the second one's output is what `valid` reads.
+      queryZodValidator(z.object({ refresh: modelsRefreshQuery }), { message: 'refresh must be 1 or true' }),
+      queryZodValidator(
+        z.object({
+          runner: z.union([z.string(), z.array(z.string()).transform((v) => v[0] as string)]).pipe(modelDiscoveryRunnerSchema),
+          refresh: modelsRefreshQuery,
+        }),
+        { message: 'runner must be claude, codex, opencode, cursor, junie, antigravity, or kimi' },
+      ),
+      async (c) => {
+        const query = { data: c.req.valid('query') };
+        if (query.data.refresh === '1' || query.data.refresh === 'true') {
+          return c.json(await modelCatalog.reprobe(query.data.runner));
+        }
+        return c.json(await modelCatalog.get(query.data.runner));
+      },
+    );
 
   /**
    * Resolve `profileId` (absent = the discovered default) into a concrete account for `provider`.

@@ -16,6 +16,36 @@ describe('RunnerModelCatalog', () => {
     expect(discover).toHaveBeenCalledTimes(3);
   });
 
+  it('reprobe re-discovers now but keeps the last good list when the probe fails', async () => {
+    const discover = vi.fn().mockResolvedValueOnce(models).mockRejectedValueOnce(new Error('offline'))
+      .mockResolvedValueOnce([{ id: 'composer', label: 'Composer', description: '' }]);
+    const catalog = new RunnerModelCatalog({ adapters: { cursor: { discover } } });
+    await expect(catalog.get('cursor')).resolves.toMatchObject({ source: 'live', models });
+    await expect(catalog.reprobe('cursor')).resolves.toMatchObject({ source: 'cache', stale: true, models });
+    await expect(catalog.get('cursor')).resolves.toMatchObject({ models });
+    await expect(catalog.reprobe('cursor')).resolves.toMatchObject({ source: 'live', models: [{ id: 'composer' }] });
+    expect(discover).toHaveBeenCalledTimes(3);
+  });
+
+  it('reprobe after an unavailable discovery stays unavailable when it fails again', async () => {
+    const discover = vi.fn().mockRejectedValue(new Error('offline'));
+    const catalog = new RunnerModelCatalog({ adapters: { cursor: { discover } } });
+    await expect(catalog.get('cursor')).resolves.toMatchObject({ source: 'unavailable' });
+    await expect(catalog.reprobe('cursor')).resolves.toMatchObject({ source: 'unavailable', stale: false, models: [] });
+  });
+
+  it('coalesces a reprobe into a discovery already in flight', async () => {
+    let finish!: (value: ModelOption[]) => void;
+    const discover = vi.fn().mockImplementationOnce(() => new Promise<ModelOption[]>((resolve) => { finish = resolve; }));
+    const catalog = new RunnerModelCatalog({ adapters: { cursor: { discover } } });
+    const first = catalog.reprobe('cursor');
+    const second = catalog.reprobe('cursor');
+    finish(models);
+    await expect(first).resolves.toMatchObject({ models });
+    await expect(second).resolves.toMatchObject({ models });
+    expect(discover).toHaveBeenCalledTimes(1);
+  });
+
   it('waits out a pre-login discovery before refreshing the signed-in account', async () => {
     let finish!: (value: ModelOption[]) => void;
     const discover = vi.fn().mockImplementationOnce(() => new Promise<ModelOption[]>((resolve) => { finish = resolve; }))

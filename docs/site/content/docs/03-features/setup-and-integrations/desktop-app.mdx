@@ -56,3 +56,7 @@ Cezar app → version / update menu
 3. Use the version menu to select an installed release.
 
 > **Good to know**: The desktop app and Cezar itself have separate version numbers. Installer availability depends on the operating system and published installation files.
+
+## When the cockpit stops
+
+If the cockpit process exits or is killed, the window shows a **cezar stopped** page with the reason (an exit status or a signal such as `SIGKILL`) and the last lines of output. The app also keeps the cockpit's whole output in `~/.cezar/logs/cockpit.log`, so it is still there after the page is gone. Past 5 MB the file moves to `cockpit.log.1` and a new one starts.
