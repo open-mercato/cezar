@@ -108,12 +108,14 @@ function NoConnectorsInfo() {
   const triggerRef = useRef<HTMLButtonElement | null>(null)
   const contentRef = useRef<HTMLDivElement | null>(null)
   const closeTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
+  const pointerFocus = useRef(false)
+  const keyboardFocused = useRef(false)
 
   const clearTimer = () => clearTimeout(closeTimer.current)
   const holdsFocus = (node: EventTarget | null) =>
     node instanceof Node && (contentRef.current?.contains(node) || triggerRef.current?.contains(node))
   const scheduleClose = () => {
-    if (holdsFocus(document.activeElement)) return
+    if (keyboardFocused.current && document.activeElement === triggerRef.current) return
     clearTimer()
     closeTimer.current = setTimeout(() => setOpen(false), 100)
   }
@@ -132,8 +134,16 @@ function NoConnectorsInfo() {
           // Open-only click: hovering or focusing already opens the popover, so letting Radix's
           // default toggle run would immediately close it on click, tap, or Enter/Space.
           // Outside-tap and Escape still close it via onOpenChange.
+          onPointerDown={() => {
+            pointerFocus.current = true
+            keyboardFocused.current = false
+          }}
+          onPointerCancel={() => {
+            pointerFocus.current = false
+          }}
           onClick={(event) => {
             event.preventDefault()
+            pointerFocus.current = false
             clearTimer()
             setOpen(true)
           }}
@@ -146,10 +156,14 @@ function NoConnectorsInfo() {
             if (event.pointerType !== 'touch') scheduleClose()
           }}
           onFocus={() => {
+            keyboardFocused.current = !pointerFocus.current
+            pointerFocus.current = false
             clearTimer()
             setOpen(true)
           }}
           onBlur={(event: FocusEvent) => {
+            pointerFocus.current = false
+            keyboardFocused.current = false
             if (!holdsFocus(event.relatedTarget)) {
               clearTimer()
               setOpen(false)
@@ -168,6 +182,7 @@ function NoConnectorsInfo() {
         className="w-64 max-w-[calc(100vw-2rem)] p-3 text-xs text-popover-foreground"
         onOpenAutoFocus={(event) => event.preventDefault()}
         onCloseAutoFocus={(event) => event.preventDefault()}
+        onPointerDown={() => { keyboardFocused.current = false }}
         onPointerEnter={clearTimer}
         onPointerLeave={(event: PointerEvent) => {
           if (event.pointerType !== 'touch') scheduleClose()
