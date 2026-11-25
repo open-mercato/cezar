@@ -166,8 +166,9 @@ describe('workspace provider API', () => {
     onRun?: RunProviderCommand,
     createAuthFailureId?: () => string,
     locateCli: (executable: string) => InstalledCli = nowhere,
+    platform: NodeJS.Platform = 'linux',
   ) => new ProviderAuthService({
-    platform: 'linux',
+    platform,
     createAuthFailureId,
     locateCli,
     runCommand: onRun ?? (async (executable) => {
@@ -825,24 +826,36 @@ describe('workspace provider API', () => {
       expect(openTerminal).not.toHaveBeenCalled();
     });
 
-    it('updates a Homebrew Codex with brew', async () => {
+    it('updates a Homebrew cask Codex with brew on a Mac', async () => {
       const openTerminal = vi.fn(async () => true);
-      const brew = (executable: string): InstalledCli => ({ executable, path: '/opt/homebrew/bin/codex', method: 'brew' });
-      const response = await update(app({ openTerminal, providerAuth: service({}, undefined, undefined, brew) }), 'codex');
+      const brew = (executable: string): InstalledCli => ({ executable, path: '/opt/homebrew/bin/codex', method: 'brew', brewKind: 'cask' });
+      const response = await update(app({ openTerminal, providerAuth: service({}, undefined, undefined, brew, 'darwin') }), 'codex');
 
       expect(response.status).toBe(200);
       expect(await response.json()).toEqual({ opened: true, command: 'brew upgrade --cask codex' });
       expect(openTerminal).toHaveBeenCalledWith(root, 'brew upgrade --cask codex');
     });
 
-    it.each([
-      ['native', "'claude' update"],
-      ['npm', 'npm install -g @anthropic-ai/claude-code@latest'],
-      ['brew', 'brew upgrade claude-code'],
-    ] as const)('updates a %s Claude Code install the way it was installed', async (method, command) => {
+    it('shows a Linuxbrew formula Codex its upgrade to copy, never the macOS-only cask', async () => {
       const openTerminal = vi.fn(async () => true);
-      const found = (executable: string): InstalledCli => ({ executable, path: '/x/claude', method });
-      const response = await update(app({ openTerminal, providerAuth: service({}, undefined, undefined, found) }), 'claude');
+      const formula = (executable: string): InstalledCli => ({ executable, path: '/home/linuxbrew/.linuxbrew/bin/codex', method: 'brew', brewKind: 'formula' });
+      const response = await update(app({ openTerminal, providerAuth: service({}, undefined, undefined, formula) }), 'codex');
+
+      expect(response.status).toBe(409);
+      expect(await response.json()).toMatchObject({ command: 'brew upgrade codex' });
+      expect(openTerminal).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ['native', 'linux', "'claude' update"],
+      ['npm', 'linux', 'npm install -g @anthropic-ai/claude-code@latest'],
+      ['brew', 'darwin', 'brew upgrade claude-code'],
+      // No cask on Linux: a Linuxbrew Claude Code updates itself.
+      ['brew', 'linux', "'claude' update"],
+    ] as const)('updates a %s Claude Code install on %s the way it was installed', async (method, platform, command) => {
+      const openTerminal = vi.fn(async () => true);
+      const found = (executable: string): InstalledCli => ({ executable, path: '/x/claude', method, ...(method === 'brew' ? { brewKind: platform === 'darwin' ? 'cask' as const : 'formula' as const } : {}) });
+      const response = await update(app({ openTerminal, providerAuth: service({}, undefined, undefined, found, platform) }), 'claude');
 
       expect(response.status).toBe(200);
       expect(await response.json()).toEqual({ opened: true, command });

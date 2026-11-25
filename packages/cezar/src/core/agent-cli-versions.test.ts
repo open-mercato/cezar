@@ -74,10 +74,21 @@ describe('minimums an agent states at runtime', () => {
     expect(minimumVersion('codex')).toBeNull();
   });
 
-  it('does not take a runtime’s requirement for the CLI’s own', () => {
+  it('learns only a minimum the sentence says is the agent’s own (an allowlist)', () => {
+    // Someone else's minimum: a runtime, git, the OS. Update could never clear these.
     noteAgentErrorVersion('claude', 'Node.js 20.0.0 or newer is required');
-    noteAgentErrorVersion('gemini', 'gemini requires node v20.0 or newer');
+    noteAgentErrorVersion('claude', 'Node.js requires version 22.0 or newer');
+    noteAgentErrorVersion('codex', 'git 2.38 or newer is required');
+    noteAgentErrorVersion('gemini', 'macOS 13.0 or later is required');
+    noteAgentErrorVersion('kimi', 'Something 3.0.0 or newer is required');
     expect(minimumVersion('claude')).toBeNull();
+    expect(minimumVersion('codex')).toBeNull();
     expect(minimumVersion('gemini')).toBeNull();
+    expect(minimumVersion('kimi')).toBeNull();
+    // The agent's own: its name, or "version", right before the number.
+    noteAgentErrorVersion('claude', 'Claude Code version 2.1 or later is required for this model');
+    noteAgentErrorVersion('copilot', 'This feature requires v1.0.90 or newer');
+    expect(minimumVersion('claude')).toBe('2.1.0');
+    expect(minimumVersion('copilot')).toBe('1.0.90');
   });
 });

@@ -7,7 +7,7 @@ import { RunStore } from '../runs/store.ts';
 import type { RunManager } from '../workflows/run.ts';
 import { RUNNER_IDS } from '../core/agent-runner.ts';
 import { LatestVersions } from '../core/agent-cli-versions.ts';
-import { agentSetupRoutes } from './agent-setup-routes.ts';
+import { agentSetupRoutes, withoutHostPaths } from './agent-setup-routes.ts';
 import { apiRequest } from './loopback-request.testkit.ts';
 import { createApp, type ServerDeps } from './server.ts';
 import type { PtyBinding, PtyProcess, PtySpawnOptions } from './terminal/pty-module.ts';
@@ -241,9 +241,10 @@ describe('/api/v1/providers/setup', () => {
       topic: (id) => id,
       onLoginOpened: () => {},
       deviceSid: () => undefined,
-      probeEnv: async () => ({ platform: 'linux', npm: true, npmGlobalWritable: true, curl: true, sudo: true, brew: true }),
+      // A Mac with Claude Code from its Homebrew cask, the one place that cask exists.
+      probeEnv: async () => ({ platform: 'darwin', npm: true, npmGlobalWritable: true, curl: true, sudo: true, brew: true }),
       checks: async () => [{ name: 'claude', available: true, version: '2.0.14 (Claude Code)' }],
-      locate: (executable) => ({ executable, path: '/opt/homebrew/bin/claude', method: 'brew' }),
+      locate: (executable) => ({ executable, path: '/opt/homebrew/bin/claude', method: 'brew', brewKind: 'cask' }),
       ...over,
     });
     const start = (routes: ReturnType<typeof routesWith>, body: unknown) =>
@@ -267,6 +268,16 @@ describe('/api/v1/providers/setup', () => {
       version = '2.1.3 (Claude Code)';
       ptys[0]!.finish(0);
       expect(await listed()).toBe('2.1.3');
+    });
+
+    it("on Linux, a Homebrew Claude Code updates itself: the cask's upgrade is macOS-only", async () => {
+      const routes = routesWith({
+        probeEnv: async () => ({ platform: 'linux', npm: true, npmGlobalWritable: true, curl: true, sudo: true, brew: true }),
+        locate: (executable) => ({ executable, path: '/home/linuxbrew/.linuxbrew/bin/claude', method: 'brew', brewKind: 'formula' }),
+      });
+      const response = await start(routes, { provider: 'claude', action: 'update' });
+      expect(response.status).toBe(201);
+      expect(await response.json()).toMatchObject({ action: 'update', command: "'claude' update" });
     });
 
     it('waits for running tasks unless told to update now', async () => {
@@ -359,6 +370,38 @@ describe('/api/v1/providers/setup', () => {
       expect(await output.json()).toMatchObject({ data: 'added 1 package' });
     });
 
+    it('clears the versions at the exit itself, even when no listing sees the session end', async () => {
+      let probes = 0;
+      let version = '2.0.14 (Claude Code)';
+      const routes = routesWith({
+        status: async () => ({ providers: [{ provider: 'claude', status: 'connected' }, { provider: 'codex', status: 'not-installed' }] }),
+        checks: async () => { probes += 1; return [{ name: 'claude', available: true, version }]; },
+      });
+      const read = async () => ((await (await routes.request('/providers/setup')).json()) as { agents: Array<{ provider: string; version: string | null }> })
+        .agents.find((agent) => agent.provider === 'claude')?.version;
+      expect(await read()).toBe('2.0.14');
+      await start(routes, { provider: 'claude', action: 'update' });
+      version = '2.1.3 (Claude Code)';
+      ptys[0]!.finish(0);
+      // Another session starts before any listing: the update's end is never seen by a GET.
+      expect((await start(routes, { provider: 'codex', action: 'install' })).status).toBe(201);
+      expect(await read()).toBe('2.1.3');
+      expect(probes).toBe(2);
+    });
+
+    it('sends a phone no host paths: program names only, and no sign-in line', async () => {
+      const routes = routesWith({
+        phone: () => true,
+        executable: () => '/Users/someone/.local/bin/claude',
+        locate: (executable) => ({ executable, path: executable, method: 'native' }),
+      });
+      const body = await (await routes.request('/providers/setup')).json() as { agents: Array<{ provider: string; loginCommand: string | null; update: { command: string | null } | null }> };
+      const claude = body.agents.find((agent) => agent.provider === 'claude')!;
+      expect(claude.update?.command).toBe("'claude' update");
+      expect(JSON.stringify(body)).not.toContain('/Users/someone');
+      expect(body.agents.every((agent) => agent.loginCommand === null)).toBe(true);
+    });
+
     it('probes the versions again once an update ends, not while it runs', async () => {
       let probes = 0;
       let version = '2.0.14 (Claude Code)';
@@ -392,6 +435,17 @@ describe('/api/v1/providers/setup', () => {
       expect(ptys[0]!.written).toEqual([]);
       const resized = await routes.request(`/providers/setup/sessions/${id}/resize`, { method: 'POST', body: JSON.stringify({ cols: 40, rows: 10 }), headers: { 'content-type': 'application/json' } });
       expect(resized.status).toBe(409);
+    });
+  });
+
+  describe('withoutHostPaths', () => {
+    it('cuts quoted and bare absolute paths to the program name, and leaves URLs and names alone', () => {
+      expect(withoutHostPaths("'/Users/me/.local/bin/claude' update")).toBe("'claude' update");
+      expect(withoutHostPaths('"C:\\Users\\me\\AppData\\agy.exe" update')).toBe('"agy.exe" update');
+      expect(withoutHostPaths('sudo /usr/local/bin/npm install -g @openai/codex@latest')).toBe('sudo npm install -g @openai/codex@latest');
+      expect(withoutHostPaths('curl -fsSL https://antigravity.google/cli/install.sh | bash')).toBe('curl -fsSL https://antigravity.google/cli/install.sh | bash');
+      expect(withoutHostPaths("'opencode' upgrade")).toBe("'opencode' upgrade");
+      expect(withoutHostPaths(null)).toBeNull();
     });
   });
 });

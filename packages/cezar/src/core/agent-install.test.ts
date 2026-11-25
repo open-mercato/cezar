@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { RUNNER_IDS } from './agent-runner.ts';
 import {
   AGENT_RECIPES,
+  brewKindFromPath,
   installHintCommand,
   installMethodFromPath,
   locateInstalledCli,
@@ -62,6 +63,34 @@ describe('planInstall', () => {
   });
 });
 
+describe('Homebrew casks (macOS only)', () => {
+  const linux: InstallEnv = { ...mac, platform: 'linux' };
+
+  it('never offers a cask on Linux: an apt Node with Linuxbrew falls back to sudo npm', () => {
+    const rootNpm = { ...linux, npmGlobalWritable: false };
+    expect(planInstall('codex', rootNpm)).toEqual({ command: 'sudo npm install -g @openai/codex', runnable: true, method: 'npm', sudo: true });
+    expect(planInstall('claude', { ...linux, curl: false })).toMatchObject({ command: 'npm install -g @anthropic-ai/claude-code', method: 'npm' });
+    expect(planInstall('codex', { ...mac, npmGlobalWritable: false })).toMatchObject({ command: 'brew install --cask codex', method: 'brew' });
+  });
+
+  it('upgrades a cask with --cask, and a formula copy without it', () => {
+    const cask = { executable: 'codex', path: '/opt/homebrew/bin/codex', method: 'brew' as const, brewKind: 'cask' as const };
+    const formula = { ...cask, brewKind: 'formula' as const };
+    expect(planUpdate('codex', cask, mac)).toMatchObject({ command: 'brew upgrade --cask codex', runnable: true });
+    // No verified formula upgrade, and Codex has no updater of its own: a line to copy.
+    expect(planUpdate('codex', formula, mac)).toEqual({ command: 'brew upgrade codex', runnable: false, method: 'brew', sudo: false });
+    expect(planUpdate('codex', formula, linux)).toEqual({ command: 'brew upgrade codex', runnable: false, method: 'brew', sudo: false });
+    // Claude Code has its own updater for a formula copy.
+    expect(planUpdate('claude', { ...formula, executable: 'claude' }, linux)).toMatchObject({ command: "'claude' update", runnable: true });
+  });
+
+  it('tells a cask from a formula by where the binary lives', () => {
+    expect(brewKindFromPath('/opt/homebrew/Caskroom/codex/0.170.0/codex')).toBe('cask');
+    expect(brewKindFromPath('/home/linuxbrew/.linuxbrew/Cellar/codex/0.170.0/bin/codex')).toBe('formula');
+    expect(brewKindFromPath('/usr/local/bin/codex')).toBeUndefined();
+  });
+});
+
 describe('planUpdate', () => {
   const at = (method: 'native' | 'npm' | 'brew' | 'script' | null) => ({ executable: 'claude', path: '/x/claude', method });
 
@@ -82,12 +111,17 @@ describe('planUpdate', () => {
   });
 
   it('updates a Homebrew Codex with brew, which the owner verified', () => {
-    expect(planUpdate('codex', { executable: 'codex', path: '/x/codex', method: 'brew' }, mac)).toMatchObject({ command: 'brew upgrade --cask codex', runnable: true });
+    expect(planUpdate('codex', { executable: 'codex', path: '/x/codex', method: 'brew', brewKind: 'cask' }, mac)).toMatchObject({ command: 'brew upgrade --cask codex', runnable: true });
   });
 
   it('shows an unverified update instead of running it', () => {
     expect(planUpdate('gemini', { executable: 'gemini', path: '/x/gemini', method: 'npm' }, mac)).toMatchObject({ command: 'npm install -g @google/gemini-cli@latest', runnable: false });
     expect(planUpdate('kimi', { executable: 'kimi', path: '/x/kimi', method: null }, mac)).toBeNull();
+  });
+
+  it('only shows an npm update when npm is not on this machine', () => {
+    const noNpm = { ...mac, npm: false, npmGlobalWritable: false, sudo: true };
+    expect(planUpdate('codex', { executable: 'codex', path: '/x', method: 'npm' }, noNpm)).toEqual({ command: 'npm install -g @openai/codex@latest', runnable: false, method: 'npm', sudo: false });
   });
 
   it('asks for sudo when npm needs root, but never for Claude Code', () => {

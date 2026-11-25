@@ -65,6 +65,27 @@ export interface AgentSetupDeps {
   phone?: () => boolean;
 }
 
+/**
+ * A command as a paired phone may see it: an absolute binary path (it names the user's home) cut to
+ * the program's name, the way `/workspace/agent-profiles` withholds host paths from phones.
+ */
+export function withoutHostPaths(command: string): string;
+export function withoutHostPaths(command: string | null): string | null;
+export function withoutHostPaths(command: string | null): string | null {
+  if (command === null) return null;
+  return command
+    .replace(/'(?:\/[^'\/]*)*\/([^'\/]+)'/g, "'$1'")
+    .replace(/"[A-Za-z]:\\(?:[^"\\]*\\)*([^"\\]+)"/g, '"$1"')
+    .replace(/(^|\s)(?:\/[^\s'"\/]+)+\/([^\s'"\/]+)/g, '$1$2');
+}
+
+/** What a phone gets per agent: no sign-in line (it may carry an account's folder), and no paths. */
+const forPhone = (agent: AgentSetupEntry): AgentSetupEntry => ({
+  ...agent,
+  loginCommand: null,
+  update: agent.update ? { ...agent.update, command: withoutHostPaths(agent.update.command) } : null,
+});
+
 const plan = (value: CommandPlan): AgentSetupEntry['install'] =>
   ({ command: value.command, runnable: value.runnable, method: value.method, sudo: value.sudo });
 
@@ -88,9 +109,17 @@ export function agentSetupRoutes(deps: AgentSetupDeps) {
     return checksCache.checks;
   };
   const phone = () => deps.phone?.() ?? false;
+  // Walking PATH for every agent on each poll is wasted while nothing changes: cached like the
+  // checks, and dropped with them when an install or update ends.
+  let located: { at: number; byProvider: Map<AgentSetupProvider, InstalledCli> } | null = null;
   const locate = (provider: AgentSetupProvider): InstalledCli => {
+    if (!located || Date.now() - located.at > CHECKS_TTL_MS) located = { at: Date.now(), byProvider: new Map() };
+    const known = located.byProvider.get(provider);
+    if (known) return known;
     const executable = deps.executable?.(provider) ?? provider;
-    return (deps.locate ?? locateInstalledCli)(executable);
+    const found = (deps.locate ?? locateInstalledCli)(executable);
+    located.byProvider.set(provider, found);
+    return found;
   };
   const updatePlan = (provider: AgentSetupProvider, env: InstallEnv): CommandPlan | null => planUpdate(provider, locate(provider), env);
 
@@ -145,6 +174,7 @@ export function agentSetupRoutes(deps: AgentSetupDeps) {
     if (action === 'login' || refreshedAfter === id) return;
     refreshedAfter = id;
     checksCache = null;
+    located = null;
   };
   const currentInfo = (): TerminalSessionInfo | null => {
     const info = current ? deps.sessions.get(current.id) : null;
@@ -185,11 +215,12 @@ export function agentSetupRoutes(deps: AgentSetupDeps) {
         }));
         return c.json(agentSetupStateSchema.parse({ available: false, reason, agents: safe }));
       }
+      const session = info && phoneMayRead(info.id) ? describe(info) : null;
       return c.json(agentSetupStateSchema.parse({
         available: true,
-        agents,
+        agents: phone() ? agents.map(forPhone) : agents,
         interactive: !phone(),
-        session: info && phoneMayRead(info.id) ? describe(info) : null,
+        session: session && phone() ? { ...session, command: withoutHostPaths(session.command) } : session,
       }));
     })
     .post('/providers/setup/sessions', jsonZodValidator(agentSetupStartSchema), async (c) => {
@@ -244,12 +275,22 @@ export function agentSetupRoutes(deps: AgentSetupDeps) {
         });
         if (!created.ok) return c.json({ error: created.reason }, 409);
         current = { id: created.session.id, provider, action, command };
+        for (const id of actions.keys()) if (!deps.sessions.get(id)) actions.delete(id);
         actions.set(created.session.id, action);
+        // The exit itself clears the version cache: no later GET is needed for it.
+        const sessionId = created.session.id;
+        const release = deps.sessions.subscribe(sessionId, () => {
+          const ended = deps.sessions.get(sessionId);
+          if (ended && ended.exitCode === null) return;
+          afterEnd(sessionId, action);
+          release();
+        });
         deps.registerTopic(created.session.id);
         if (action === 'login' && row) {
           deps.onLoginOpened(provider, row.status === 'unknown' ? 'unknown' : 'disconnected', deps.deviceSid(c.req.header('x-cezar-sid')));
         }
-        return c.json(agentSetupSessionSchema.parse(describe(created.session)), 201);
+        const started = agentSetupSessionSchema.parse(describe(created.session));
+        return c.json(phone() ? { ...started, command: withoutHostPaths(started.command) } : started, 201);
       } finally {
         starting = false;
       }

@@ -2478,6 +2478,14 @@ export function createApp(deps: ServerDeps) {
     || (await workspaceProjectSources({ salvageColdRuns: true })).some((project) => project.available
       && project.runs().some((run) => authParkForAccount(run, provider, profileId)));
 
+  // `npm prefix -g` and the PATH probes cost a process each: one answer serves for 30 s (#2474 review).
+  let updateEnvCache: { at: number; env: Promise<InstallEnv> } | null = null;
+  const updateInstallEnv = (): Promise<InstallEnv> => {
+    if (!updateEnvCache || Date.now() - updateEnvCache.at > 30_000) {
+      updateEnvCache = { at: Date.now(), env: (deps.agentSetupProbeEnv ?? probeInstallEnv)() };
+    }
+    return updateEnvCache.env;
+  };
   const providersRoutes = new Hono<ProjectApiEnv>()
     .get(
       '/providers/status',
@@ -2652,7 +2660,7 @@ export function createApp(deps: ServerDeps) {
       async (c) => {
         const provider = c.req.valid('param').provider as ProviderId;
         const sid = deviceSid(c.req.header('x-cezar-sid'));
-        const plan = providerAuth.updatePlan(provider, await (deps.agentSetupProbeEnv ?? probeInstallEnv)());
+        const plan = providerAuth.updatePlan(provider, await updateInstallEnv());
         const command = plan?.command ?? null;
         if (command === null) {
           trackUpdateOpened(provider, 'unsupported', sid);
@@ -8854,6 +8862,16 @@ export function createApp(deps: ServerDeps) {
   // Installing an agent changes the host and signing in changes its credentials, so setup follows
   // the provider login and the GitHub sign-in: never hosted, never in a single-project workspace.
   const latestAgentVersions = deps.latestAgentVersions ?? new LatestVersions();
+  // The setup listing is polled every second while a session runs: read each project's default
+  // runner at most every 15 s, not once per provider per poll.
+  const defaultRunnerCache = new Map<string, { at: number; runner: Promise<RunnerId> }>();
+  const setupDefaultRunner = (root: string): Promise<RunnerId> => {
+    const cached = defaultRunnerCache.get(root);
+    if (cached && Date.now() - cached.at < 15_000) return cached.runner;
+    const runner = loadConfig(root).then((config) => config.defaultRunner);
+    defaultRunnerCache.set(root, { at: Date.now(), runner });
+    return runner;
+  };
   const agentSetupFamily = agentSetupRoutes({
     sessions: terminalSessions,
     loadPty,
@@ -8876,7 +8894,7 @@ export function createApp(deps: ServerDeps) {
       return countActiveRuns(
         unique.map((context) => ({ root: context.root, listRuns: () => context.store.listRuns() })),
         provider,
-        async (root) => (await loadConfig(root)).defaultRunner,
+        setupDefaultRunner,
       );
     },
     latest: latestAgentVersions,

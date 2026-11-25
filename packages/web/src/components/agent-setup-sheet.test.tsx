@@ -7,6 +7,7 @@ import type { AgentSetupEntry, AgentSetupProvider } from '@open-mercato/cezar-ap
 import { createQueryClient } from '@/api/query-client'
 import { useAgentSetup } from '@/api/queries'
 import { AgentSetupFlow } from '@/components/agent-setup-sheet'
+import { toast } from '@/components/ui/toaster'
 import { DefaultAgentPicker, agentPickerRows } from '@/components/default-agent-picker'
 
 /**
@@ -201,6 +202,32 @@ describe('AgentSetupFlow', () => {
     session = { ...session, exitCode: 0 }
     await waitFor(() => expect(phase()).toBe('done'), WAIT)
     await waitFor(() => expect(screen.getByTestId('settings-version').textContent).toBe('2.1.3'), WAIT)
+  })
+})
+
+describe('AgentSetupFlow: review follow-ups (#2474)', () => {
+  it('words an update with no known command as an update, not an install', async () => {
+    statuses = { codex: 'connected' }
+    agents = [entry('codex', { installed: true, version: '0.170.0', method: null, update: null })]
+    renderFlow('codex', 'update')
+    expect(await screen.findByText(/cannot tell how this copy of Codex was installed/)).toBeTruthy()
+    expect(screen.getByText(/Update Codex on the computer running cezar/)).toBeTruthy()
+    expect(screen.queryByText(/does not know this installer/)).toBeNull()
+  })
+
+  it('says to keep the sheet open while it waits, and that closing it cancels the update', async () => {
+    statuses = { claude: 'connected' }
+    agents = [entry('claude', {
+      installed: true, version: '2.0.14', versionState: 'update-available', method: 'native', activeRuns: 1,
+      update: { command: "'claude' update", runnable: true, method: 'native', sudo: false },
+    })]
+    const view = renderFlow('claude', 'update')
+    fireEvent.click(await screen.findByRole('button', { name: 'Update when they finish' }))
+    expect(await screen.findByText(/Keep this open/)).toBeTruthy()
+    vi.mocked(toast).mockClear()
+    view.unmount()
+    expect(toast).toHaveBeenCalledWith(expect.stringContaining('was not updated'))
+    expect(posted).toEqual([])
   })
 })
 

@@ -22,6 +22,8 @@ export type RecipeTrust = 'docs' | 'shipped' | 'unverified';
 interface PlatformCommand {
   unix?: string;
   windows?: string;
+  /** macOS only, ahead of `unix`: a Homebrew cask, which Homebrew installs on the Mac alone. */
+  macos?: string;
 }
 
 interface InstallMethod {
@@ -32,6 +34,9 @@ interface InstallMethod {
   install?: PlatformCommand;
   /** `{bin}` is the resolved executable, quoted for this platform. */
   update?: { command: PlatformCommand; trust: RecipeTrust };
+  /** A Homebrew cask: its update fits only a `Caskroom` install. A `Cellar` (formula) copy falls
+   *  back to the CLI's self-update, else `brew upgrade <formula>` to copy. */
+  cask?: { formula?: string };
 }
 
 export interface AgentRecipe {
@@ -89,8 +94,9 @@ export const AGENT_RECIPES: Readonly<Record<RunnerId, AgentRecipe>> = {
         id: 'brew',
         trust: 'docs',
         needs: 'brew',
-        install: { unix: 'brew install --cask claude-code' },
-        update: { command: { unix: 'brew upgrade claude-code' }, trust: 'docs' },
+        install: { macos: 'brew install --cask claude-code' },
+        update: { command: { macos: 'brew upgrade claude-code' }, trust: 'docs' },
+        cask: {},
       },
     ],
   },
@@ -107,8 +113,9 @@ export const AGENT_RECIPES: Readonly<Record<RunnerId, AgentRecipe>> = {
         id: 'brew',
         trust: 'docs',
         needs: 'brew',
-        install: { unix: 'brew install --cask codex' },
-        update: { command: { unix: 'brew upgrade --cask codex' }, trust: 'docs' },
+        install: { macos: 'brew install --cask codex' },
+        update: { command: { macos: 'brew upgrade --cask codex' }, trust: 'docs' },
+        cask: { formula: 'codex' },
       },
     ],
   },
@@ -223,7 +230,7 @@ export interface CommandPlan {
 }
 
 const pick = (command: PlatformCommand | undefined, platform: NodeJS.Platform): string | undefined =>
-  platform === 'win32' ? command?.windows : command?.unix;
+  platform === 'win32' ? command?.windows : platform === 'darwin' ? command?.macos ?? command?.unix : command?.unix;
 
 const runnableTrust = (recipe: AgentRecipe, trust: RecipeTrust): boolean => !recipe.copyOnly && trust !== 'unverified';
 
@@ -268,13 +275,19 @@ export function planInstall(provider: RunnerId, env: InstallEnv): CommandPlan {
 export function planUpdate(provider: RunnerId, installed: InstalledCli, env: InstallEnv): CommandPlan | null {
   const recipe = recipeFor(provider);
   const method = installed.method ? recipe.methods.find((candidate) => candidate.id === installed.method) : undefined;
-  const own = method?.update && pick(method.update.command, env.platform);
+  // A cask's upgrade does not fit a formula (`Cellar`) install of the same name.
+  const formulaCopy = method?.cask && installed.brewKind === 'formula';
+  const own = !formulaCopy && method?.update ? pick(method.update.command, env.platform) : undefined;
   const template = own ?? recipe.selfUpdate?.command;
-  if (!template) return null;
+  if (!template) {
+    const formula = formulaCopy ? method!.cask!.formula : undefined;
+    return formula ? { command: `brew upgrade ${formula}`, runnable: false, method: 'brew', sudo: false } : null;
+  }
   const trust = own ? method!.update!.trust : recipe.selfUpdate!.trust;
   const command = template.replaceAll('{bin}', quoteExecutable(installed.executable, env.platform));
   if (own && method!.id === 'npm' && !env.npmGlobalWritable && env.platform !== 'win32') {
-    if (recipe.noSudoNpm || !env.sudo) return { command, runnable: false, method: 'npm', sudo: false };
+    // No npm here, no sudo, or a vendor that warns against it: the line is only to copy.
+    if (recipe.noSudoNpm || !env.sudo || !env.npm) return { command, runnable: false, method: 'npm', sudo: false };
     return { command: `sudo ${command}`, runnable: runnableTrust(recipe, trust), method: 'npm', sudo: true };
   }
   // brew and npm upgrade through themselves: without the tool here, the line is only to copy.
@@ -288,6 +301,8 @@ export interface InstalledCli {
   /** The binary found for it, symlinks resolved; null when nothing was found. */
   path: string | null;
   method: InstallMethodId | null;
+  /** For a Homebrew install: a cask (`Caskroom`) or a formula (`Cellar`). */
+  brewKind?: 'cask' | 'formula';
 }
 
 /**
@@ -302,6 +317,13 @@ export function installMethodFromPath(path: string): InstallMethodId | null {
   if (/\/\.local\/share\/claude\//.test(normalized) || /\/\.local\/bin\/claude(\.exe)?$/i.test(normalized)) return 'native';
   if (/\/\.local\/share\/cursor-agent\//.test(normalized)) return 'script';
   return null;
+}
+
+export function brewKindFromPath(path: string): 'cask' | 'formula' | undefined {
+  const normalized = path.replaceAll('\\', '/');
+  if (/\/Caskroom\//.test(normalized)) return 'cask';
+  if (/\/Cellar\//.test(normalized)) return 'formula';
+  return undefined;
 }
 
 function onPath(executable: string, platform: NodeJS.Platform, env: NodeJS.ProcessEnv): string | null {
@@ -334,7 +356,9 @@ export function locateInstalledCli(
   } catch {
     // a dangling link still names its folder
   }
-  return { executable, path: found, method: installMethodFromPath(real) ?? installMethodFromPath(found) };
+  const method = installMethodFromPath(real) ?? installMethodFromPath(found);
+  const kind = method === 'brew' ? brewKindFromPath(real) ?? brewKindFromPath(found) : undefined;
+  return { executable, path: found, method, ...(kind ? { brewKind: kind } : {}) };
 }
 
 export type VersionState = 'current' | 'update-available' | 'update-required' | 'unknown';

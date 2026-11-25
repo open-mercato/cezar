@@ -87,6 +87,12 @@ export function AgentSetupFlow({ provider, action, onClose }: { provider: AgentS
   const row = providerStatusFor(status.data, provider)
 
   const [phase, setPhase] = React.useState<Phase>(action === 'sign-in' ? 'sign-in' : 'confirm')
+  // The wait lives in this sheet: closing it mid-wait must say the update did not start (#2474 review).
+  const phaseNow = React.useRef(phase)
+  phaseNow.current = phase
+  React.useEffect(() => () => {
+    if (phaseNow.current === 'waiting') toast(`${PROVIDER_LABELS[provider]} was not updated: the sheet closed while it waited for tasks.`)
+  }, [provider])
   const [failure, setFailure] = React.useState<string | null>(null)
   const [shown, setShown] = React.useState<AgentSetupSession | null>(null)
   const [updatedTo, setUpdatedTo] = React.useState<string | null>(null)
@@ -297,10 +303,13 @@ function Confirm({
   const phoneBlocked = !interactive && plan?.sudo === true
   const canRun = available && plan?.runnable === true && command !== null && !phoneBlocked
   const method = installMethodLabel(action === 'update' ? entry.method : plan?.method ?? null)
+  const label = PROVIDER_LABELS[entry.provider]
   const why = !plan?.runnable
     ? entry.copyOnlyReason ?? (command
       ? 'cezar has not verified this command against the vendor’s docs yet, so it shows it for you to run.'
-      : 'cezar does not know this installer yet. The vendor’s page shows how to install it.')
+      : action === 'update'
+        ? `cezar cannot tell how this copy of ${label} was installed, so it has no update to run. Update it the way you installed it; the vendor’s page shows how.`
+        : 'cezar does not know this installer yet. The vendor’s page shows how to install it.')
     : !available
       ? reason
       : phoneBlocked
@@ -315,7 +324,9 @@ function Confirm({
             : 'This runs on your computer, with your user account.'
           : command
             ? 'Run this in a terminal on the computer running cezar.'
-            : 'Install it on the computer running cezar, following the vendor’s steps.'}
+            : action === 'update'
+              ? `Update ${label} on the computer running cezar, the way it was installed.`
+              : 'Install it on the computer running cezar, following the vendor’s steps.'}
       </p>
       {command ? <CommandBox command={command} /> : null}
       <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-meta">
@@ -328,11 +339,16 @@ function Confirm({
       {canRun && plan?.sudo ? <p className="text-ui text-soft-foreground">It asks for your computer password in the terminal below.</p> : null}
       {action === 'update' && entry.activeRuns > 0 && canRun ? (
         <p data-slot="agent-setup-active-runs" className="rounded-md border border-pending/40 bg-pending/5 px-3 py-2 text-ui text-foreground">
-          {entry.activeRuns} task{entry.activeRuns === 1 ? ' is' : 's are'} running on {PROVIDER_LABELS[entry.provider]}. Updating now can interrupt
+          {entry.activeRuns} task{entry.activeRuns === 1 ? ' is' : 's are'} running on {label}. Updating now can interrupt
           {entry.method === 'npm' ? ' them, because npm replaces the files in place.' : ' a task that starts the CLI again.'}
         </p>
       ) : null}
-      {action === 'update' && entry.autoUpdates ? <p className="text-meta text-soft-foreground">{PROVIDER_LABELS[entry.provider]} also updates itself; this does it sooner.</p> : null}
+      {action === 'update' && entry.autoUpdates ? <p className="text-meta text-soft-foreground">{label} also updates itself; this does it sooner.</p> : null}
+      {waiting ? (
+        <p data-slot="agent-setup-waiting" role="status" className="text-ui text-soft-foreground">
+          Keep this open: the update starts here once the tasks finish. Closing it cancels the wait.
+        </p>
+      ) : null}
       <div className="flex flex-wrap items-center justify-between gap-2">
         <a href={entry.docsUrl} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 text-meta text-foreground underline underline-offset-2">
           Official docs <ExternalLinkIcon aria-hidden="true" className="size-3" />

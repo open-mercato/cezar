@@ -22,8 +22,8 @@ run failed with "X or newer is required". The install commands lived in three pl
 
   | Agent | cezar runs | Shown to copy |
   | --- | --- | --- |
-  | Claude Code | native script, npm, brew cask (docs); `claude update` | — |
-  | Codex | npm install and `@latest` upgrade (shipped); `brew install --cask codex`, `brew upgrade --cask codex` (owner-verified 2026-11-25) | — |
+  | Claude Code | native script, npm, brew cask on macOS (docs); `claude update` | — |
+  | Codex | npm install and `@latest` upgrade (shipped); on macOS `brew install --cask codex`, `brew upgrade --cask codex` (owner-verified 2026-11-25) | a Linuxbrew/formula copy: `brew upgrade codex` |
   | OpenCode | `npm i -g opencode-ai@1`, `opencode upgrade` (shipped) | brew |
   | Cursor | install script, `agent update` (shipped) | — |
   | Copilot | npm install and `@latest` upgrade (shipped) | — |
@@ -40,9 +40,17 @@ run failed with "X or newer is required". The install commands lived in three pl
   `~/.local/share/{claude,cursor-agent}` means native or script. The update is that method's own (brew upgrades a brew
   install), else the CLI's self-update. `POST /providers/:provider/update` uses the same plan and answers a copy-only
   plan with 409 plus the command.
-- **Versions.** The installed version comes from `--version` (health), cached 15 s and cleared when an install or
-  update session ends, so the sheet reads the new version before it says "updated". `minVersion` is the recipe's, raised by any
-  "X or newer is required" an agent error states at runtime (`noteAgentErrorVersion`, in memory). The latest version
+- **Casks are macOS-only.** A recipe command may name a `macos` slot ahead of `unix`; the Claude Code and Codex casks
+  live there, so Linux (Linuxbrew) never gets `brew install --cask` and falls back to npm (`sudo npm` when its global
+  folder needs root). A Homebrew binary under `Caskroom` is a cask, under `Cellar` a formula: a formula copy never gets
+  the cask's `--cask` upgrade, but the CLI's own updater, else `brew upgrade <formula>` to copy. An npm update with no
+  npm on the machine is only shown, never run.
+- **Versions.** The installed version comes from `--version` (health), cached 15 s and cleared at the moment an
+  install or update session exits (the session's own exit notification), so the sheet reads the new version before it
+  says "updated". `minVersion` is the recipe's, raised by an "X or newer is required" an agent error states at runtime
+  (`noteAgentErrorVersion`, in memory) only when the sentence names the agent, or says "version", right before the
+  number, with no runtime or system (Node.js, git, macOS…) in that span: an allowlist, because a minimum someone else
+  owns is one Update could never clear. The latest version
   comes from npm (`/<pkg>/latest`, or the newest stable within `npmMajor`), only on `GET /providers/setup?latest=1`,
   cached for 6 h (30 min after a failure). `CEZ_AGENT_VERSION_CHECK=0` turns it off. Chips: below the minimum is
   "X required", behind npm is "X available".
@@ -82,8 +90,13 @@ files in place. New starts are not held during the swap; brew, native and script
 A relay request reads the host's capabilities for this family only. A phone may start an install or update whose plan is
 runnable and needs no sudo. It may not start a login, and input to a setup session answers 409 (read-only). A sign-in
 session started at the computer is invisible to a phone: the listing omits it, and its output (the OAuth link, the
-device code) and resize answer 409. A phone reads install and update logs only. Recorded
-as pending owner ratification in AGENTS.md.
+device code) and resize answer 409. A phone reads install and update logs only, and never a host path: the listing
+and a started session carry command lines with absolute binary paths cut to the program name (`withoutHostPaths`) and
+no sign-in line, as `/workspace/agent-profiles` withholds host paths from phones. Recorded as pending owner
+ratification in AGENTS.md.
+
+**Waiting for tasks** happens in the open sheet: it says "Keep this open", and closing it mid-wait cancels the update with
+a toast that says so.
 
 ## Not here
 

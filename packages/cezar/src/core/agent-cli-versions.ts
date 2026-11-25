@@ -95,7 +95,24 @@ export function newestInMajor(versions: readonly string[], major: number): strin
 
 const REQUIRED_RE = /\b(\d+\.\d+(?:\.\d+)?)\+? or (?:newer|later|higher|above) is required\b|\brequires? (?:version |v)?(\d+\.\d+(?:\.\d+)?) or (?:newer|later|higher)\b/i;
 
-const RUNTIME_RE = /\b(?:node(?:\.js|js)?|python|bun|deno)\b/i;
+/** What each agent calls itself in its own errors. A minimum is learned only when the sentence
+ *  names the agent (or says "version") right before the number: "git 2.38 or newer is required"
+ *  or "macOS 13.0 or later is required" is someone else's minimum, and Update could never clear it. */
+const AGENT_NAMES: Readonly<Record<RunnerId, readonly string[]>> = {
+  claude: ['claude code', 'claude'],
+  codex: ['codex cli', 'codex'],
+  opencode: ['opencode'],
+  cursor: ['cursor agent', 'cursor-agent', 'cursor cli', 'cursor'],
+  pi: ['pi'],
+  junie: ['junie'],
+  copilot: ['github copilot cli', 'copilot cli', 'copilot'],
+  omp: ['omp'],
+  antigravity: ['antigravity cli', 'antigravity', 'agy'],
+  gemini: ['gemini cli', 'gemini'],
+  kimi: ['kimi code', 'kimi'],
+};
+
+const escapeRe = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 const learned = new Map<RunnerId, string>();
 
@@ -108,14 +125,27 @@ export function requiredVersionFrom(message: string): string | null {
   return version ? fullVersion(version) : null;
 }
 
+/** The minimum, when the sentence says it is this agent's own: its name, or "version", just before
+ *  the number ("OpenCode 1.18.0 or newer", "Claude Code version 2.1 or later", "requires v1.2"). */
+export function agentRequiredVersionFrom(provider: RunnerId, message: string): string | null {
+  const match = REQUIRED_RE.exec(message);
+  const version = match?.[1] ?? match?.[2];
+  if (!match || !version) return null;
+  const names = AGENT_NAMES[provider].map(escapeRe).join('|');
+  const before = message.slice(Math.max(0, match.index - 40), match.index + match[0].indexOf(version));
+  const ownName = new RegExp(`\\b(?:${names})\\b(?:\\s+(?:version|v))?\\s*$`, 'i');
+  const saysVersion = /\b(?:version|v)\s*$/i.test(before) || /\brequires? (?:version |v)/i.test(match[0]);
+  // A runtime or a system named near the number makes it theirs ("Node.js requires version 20").
+  const runtime = /\b(?:node(?:\.js|js)?|npm|python|bun|deno|git|macos|windows|linux|glibc|ios)\b/i.test(before);
+  return !runtime && (ownName.test(before) || saysVersion) ? fullVersion(version) : null;
+}
+
 /** Remember the highest minimum each agent has reported this process. In memory only: the next
  *  failure after a restart teaches it again. */
 export function noteAgentErrorVersion(provider: string | undefined, message: string): void {
   const recipe = provider ? (recipeForOrNull(provider)) : null;
   if (!recipe) return;
-  // "Node.js 20.0.0 or newer is required" is the runtime's minimum, not the CLI's.
-  if (RUNTIME_RE.test(message)) return;
-  const version = requiredVersionFrom(message);
+  const version = agentRequiredVersionFrom(recipe.provider, message);
   if (!version) return;
   const previous = learned.get(recipe.provider);
   if (!previous || compareVersions(version, previous) > 0) learned.set(recipe.provider, version);
