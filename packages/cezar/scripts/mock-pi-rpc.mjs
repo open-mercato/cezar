@@ -1,5 +1,18 @@
 #!/usr/bin/env node
+import { appendFileSync } from 'node:fs';
 import readline from 'node:readline';
+
+// Optional capture (#1225): CEZ_MOCK_ARGS_FILE gets the argv (one JSON array per line) and
+// CEZ_MOCK_STDIN_FILE the full message of every `prompt` command as `{ userText }`. Unset, no change.
+const capture = (file, value) => {
+  if (!file) return;
+  try {
+    appendFileSync(file, `${JSON.stringify(value)}\n`);
+  } catch {
+    // best effort
+  }
+};
+capture(process.env.CEZ_MOCK_ARGS_FILE, process.argv.slice(2));
 
 const sessionId = '00000000-0000-4000-8000-0000000000pi';
 const send = (value) => process.stdout.write(`${JSON.stringify(value)}\n`);
@@ -25,6 +38,7 @@ for await (const line of readline.createInterface({ input: process.stdin })) {
       },
     });
   } else if (command.type === 'prompt') {
+    capture(process.env.CEZ_MOCK_STDIN_FILE, { userText: command.message });
     send({ type: 'response', command: 'prompt', success: true });
     send({ type: 'agent_start' });
     send({ type: 'turn_start' });
