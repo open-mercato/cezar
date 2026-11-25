@@ -2449,6 +2449,22 @@ describe('CEZ:ASK parks as waiting and emits ask.requested (#473)', () => {
       }
     });
 
+    it('starts a Continue posted after the cancel once the exited process releases the run', async () => {
+      vi.useFakeTimers();
+      try {
+        const id = cancelledRun();
+        const { session } = hangingSession({ exitsOnHardStop: true });
+        const state = register(id, session);
+        manager.cancel(id);
+        expect(manager.continueRun(id, { text: 'go on' })).toEqual({ ok: true }); // queued behind the drop
+        await vi.advanceTimersByTimeAsync(1_000);
+
+        expect((manager as unknown as { active: Map<string, unknown> }).active.get(id)).not.toBe(state);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
     it('keeps the slot while the backend process is still alive', async () => {
       vi.useFakeTimers();
       try {
@@ -2461,7 +2477,9 @@ describe('CEZ:ASK parks as waiting and emits ask.requested (#473)', () => {
 
         expect(session.hardStops).toBe(1);
         expect(manager.isActive(id)).toBe(true);
-        expect(manager.continueRun(id, { text: 'go on' })).toEqual({ ok: false, error: 'run is still active' });
+        // Continue is accepted but queued behind the drop, which never comes while the provider lives.
+        expect(manager.continueRun(id, { text: 'go on' })).toEqual({ ok: true });
+        expect(manager.isActive(id)).toBe(true);
       } finally {
         vi.useRealTimers();
       }
