@@ -6,6 +6,7 @@ import { diskFloorRefusal } from './disk-space.ts';
 import { resolveTaskDiffBase } from './git-diff-base.ts';
 import { isSafeGitRef } from './git-refs.ts';
 import { resolveTaskRemotes, splitRemoteRef, type TaskRemotes } from './git-remotes.ts';
+import { unlinkSkillLinks } from './skills-provision.ts';
 import { worktreeInUse } from './worktree-in-use.ts';
 
 /**
@@ -440,6 +441,8 @@ export async function removeWorktree(
   branch?: string,
 ): Promise<void> {
   if (existsSync(worktreePath) && await worktreeInUse(worktreePath).catch(() => null)) return;
+  // Before git, which deletes through a skill junction's target on Windows (#2476).
+  await unlinkSkillLinks(worktreePath);
   await git(repoRoot, ['worktree', 'remove', '--force', worktreePath]);
   await rm(worktreePath, { recursive: true, force: true }).catch(() => undefined);
   await git(repoRoot, ['worktree', 'prune']);

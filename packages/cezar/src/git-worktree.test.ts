@@ -1,7 +1,7 @@
 import { execFile } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { promisify } from 'node:util';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import {
@@ -10,6 +10,7 @@ import {
   createWorktree,
   parseShortstat,
   pruneOrphans,
+  removeWorktree,
   resolveBaseRef,
   uniqueBranchName,
   worktreeChangedPaths,
@@ -241,6 +242,27 @@ describe('pruneOrphans (spec 2026-10-11-branch-naming-instructions, real git)', 
     await expect(run('git', ['show-ref', '--verify', '--quiet', 'refs/heads/feature/orphaned'], { cwd: repo })).rejects.toMatchObject({
       code: 1,
     });
+  });
+});
+
+describe('removeWorktree (#2476, real git)', () => {
+  it('removes a provisioned skill link without deleting the skill it points at', async () => {
+    const repo = await fixtureRepo('cez-remove-skill-link-');
+    const skill = join(repo, '.claude', 'skills', 'my-skill');
+    mkdirSync(skill, { recursive: true });
+    writeFileSync(join(skill, 'SKILL.md'), 'keep me\n');
+    await run('git', ['add', '-A'], { cwd: repo });
+    await run('git', [...GIT_ID, 'commit', '-q', '-m', 'skill'], { cwd: repo });
+    const wt = await createWorktree(repo, '99999999-9999-4999-8999-999999999999', 'main');
+    // What provisionOne makes: a junction on Windows, where git deletes through it; a symlink elsewhere.
+    const link = join(wt.path, '.agents', 'skills', 'my-skill');
+    mkdirSync(dirname(link), { recursive: true });
+    symlinkSync(skill, link, process.platform === 'win32' ? 'junction' : 'dir');
+
+    await removeWorktree(repo, wt.path, wt.branch);
+
+    expect(existsSync(wt.path)).toBe(false);
+    expect(readFileSync(join(skill, 'SKILL.md'), 'utf8')).toBe('keep me\n');
   });
 });
 

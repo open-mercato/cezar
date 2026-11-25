@@ -1,4 +1,4 @@
-import { copyFile, cp, lstat, mkdir, readFile, realpath, symlink, unlink, writeFile } from 'node:fs/promises';
+import { copyFile, cp, lstat, mkdir, readdir, readFile, realpath, rmdir, symlink, unlink, writeFile } from 'node:fs/promises';
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import type { Skill } from './skills.ts';
 import { excludeFromGit, materializeSkillDir, skillPathIsUntracked, TASK_SKILL_IGNORE_MARK } from './skills-remote.ts';
@@ -33,6 +33,22 @@ async function recordLink(cwd: string, dest: string, target: string): Promise<vo
   const set = linkedTargets.get(key) ?? new Set<string>();
   set.add(expected!);
   linkedTargets.set(key, set);
+}
+
+/**
+ * Remove every link directly under `cwd`'s skills dirs, never following one. Git for Windows deletes
+ * through a junction on `git worktree remove`, emptying the linked skill in the main checkout (#2476).
+ * Removing a link leaves its target alone, so any link there may go, whoever made it. Never throws.
+ */
+export async function unlinkSkillLinks(cwd: string): Promise<void> {
+  for (const dir of PROVISION_SKILL_DIRS) {
+    for (const name of await readdir(join(cwd, dir)).catch(() => [])) {
+      const path = join(cwd, dir, name);
+      if (!(await lstat(path).catch(() => undefined))?.isSymbolicLink()) continue;
+      // A junction is a directory to Windows: a non-recursive rmdir removes only the link.
+      await unlink(path).catch(() => rmdir(path)).catch(() => undefined);
+    }
+  }
 }
 
 /** Bound on one closure — a skill that names the whole catalog must not copy all of it. */
