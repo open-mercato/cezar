@@ -120,6 +120,33 @@ const stateSchema = z
       })
       .optional()
       .catch(undefined),
+    /** The agent chain (spec 2026-11-25-manager-agent-chain): the row answering now and the rows that cannot. */
+    chain: z
+      .object({
+        /** Absent = #1. */
+        active: z.object({ slot: z.number().int().min(0).max(3), reason: z.string(), since: z.string() }).optional(),
+        /** `runner|account` → why that row is skipped and until when. */
+        holds: z.record(z.string(), z.object({
+          until: z.string(),
+          reason: z.enum(['usage-limit', 'held', 'auth', 'billing', 'missing-cli']),
+          streak: z.number().int().min(1).optional(),
+          accountKey: z.string().optional(),
+        })).catch({}),
+      })
+      .optional()
+      .catch(undefined),
+    /** Transcripts of the other chain rows, by session key: going back resumes a still-young one. */
+    parkedSessions: z
+      .record(z.string(), z.object({
+        sessionId: z.string().optional(),
+        watchSessionId: z.string().optional(),
+        jobSessionId: z.string().optional(),
+        sessions: z.object({ chat: sessionMetaSchema, watch: sessionMetaSchema, job: sessionMetaSchema }).catch({}),
+        /** The chat's last seq when it was parked: a reply after it means the transcript missed turns. */
+        parkedSeq: z.number().int().optional(),
+      }))
+      .optional()
+      .catch(undefined),
   })
   .passthrough();
 
