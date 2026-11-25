@@ -2543,7 +2543,8 @@ export class RunManager {
         const defaultRunner = anyHold ? (await loadConfig(this.repoRoot)).defaultRunner : undefined;
         const startable = (id: string): boolean => {
           const queued = this.store.getRun(id);
-          if (routedBusy.has(id)) return false;
+          // Busy is a soft limit: "Start now" overrides it as it overrides `maxParallel`.
+          if (routedBusy.has(id) && !this.startNowRequested.has(id)) return false;
           if (queued && anyHold && accountHeldFor(queued, holds, defaultRunner ?? 'claude', this.askingAccounts(), this.pendingJobs.get(id)?.workflow)) return false;
           // "Start now" goes over `maxParallel` on purpose, but a non-git root still runs one at a time.
           if (this.startNowRequested.has(id)) return repo !== null || this.busySlots() < 1;
@@ -4735,13 +4736,19 @@ export class RunManager {
     for (const id of [...this.queue]) {
       const run = this.store.getRun(id);
       if (!run) continue;
-      const route = this.managerRoute(run, holds, load);
+      // Only before it ever starts: a Continue, auto-resume or requeue resumes where it ran, under
+      // the manager's mid-task setting instead.
+      const fresh = this.pendingJobs.has(id) && !this.pendingContinuations.has(id) && !run.steps.some((step) => step.startedAt);
+      const route = fresh ? this.managerRoute(run, holds, load) : { kind: 'stay' as const };
       if (route.kind === 'busy') {
         waiting.add(id);
         if (run.queueWaitReason?.kind !== 'account-busy') this.store.updateRun(id, { queueWaitReason: { kind: 'account-busy' } });
         continue;
       }
-      if (route.kind !== 'move') continue;
+      if (route.kind !== 'move') {
+        if (run.queueWaitReason?.kind === 'account-busy') this.store.updateRun(id, { queueWaitReason: undefined });
+        continue;
+      }
       const from = runAccountKey(run, run.runner ?? 'claude', this.askingAccounts());
       const moved = this.switchAgent(id, { runner: route.runner, agentProfile: route.agentProfile, changedBy: 'manager routing' });
       if ('error' in moved) continue;

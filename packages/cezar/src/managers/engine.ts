@@ -3422,8 +3422,9 @@ export class ManagerEngine {
         managerAgent: {
           note: agentNote.slice(0, 500),
           ...(fallback ? { fallback: fallback.slice(0, 10) } : {}),
-          // The queue may move a routed task to an account that frees up; an explicit --account stays.
-          ...(roles && input.agentProfile === undefined ? { routed: true } : {}),
+          // The queue may move a routed task to an account that frees up; an explicit --account or
+          // --runner stays, since the queue's targets span every agent on the list.
+          ...(roles && input.agentProfile === undefined && input.runner === undefined ? { routed: true } : {}),
         },
       },
     });

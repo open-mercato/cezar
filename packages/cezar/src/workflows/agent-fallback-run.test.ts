@@ -846,6 +846,49 @@ describe('automatic agent fallback', () => {
       expect(store.getRun(waiting.id)?.queueWaitReason).toBeUndefined();
     }, 40_000);
 
+    /** A queue that never has a free slot, with `claude:default` already running `load` tasks elsewhere. */
+    const fullQueue = (load: number) => {
+      const semaphore = new WorkspaceSemaphore({ initial: { maxParallel: 1 } });
+      semaphore.register({ busySlots: () => 1, oldestQueuedAt: () => null, pump: () => {}, accountLoad: () => new Map([['claude:default', load]]) });
+      return semaphore;
+    };
+
+    it('never moves a routed task that already ran: it resumes where it ran', async () => {
+      registerAccounts(['second']);
+      setManagerTaskAccountsLookup(() => ({ agents: [{ runner: 'claude', agentProfile: 'default', role: 'main' }, { runner: 'claude', agentProfile: 'second', role: 'main' }], maxRunning: 1 }));
+      const semaphore = fullQueue(1);
+      manager = new RunManager(store, repoRoot, { semaphore });
+      const queued = routedTask('quick one mock:done');
+      // As a usage-limit auto-resume or a restart re-queues it: a step that already started.
+      const step = store.getRun(queued.id)?.steps[0];
+      expect(step).toBeDefined();
+      store.updateStep(queued.id, step!.id, { startedAt: new Date().toISOString() });
+      await semaphore.release();
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      expect(store.getRun(queued.id)).toMatchObject({ status: 'queued', agentProfile: 'default' });
+      expect(store.getRun(queued.id)?.queueWaitReason).toBeUndefined();
+      expect(messages(queued.id).some((m) => m.startsWith('Routed to'))).toBe(false);
+    }, 40_000);
+
+    it('"Start now" overrides the busy wait, and the label clears once its own account opens', async () => {
+      setManagerTaskAccountsLookup(() => ({ agents: [{ runner: 'claude', agentProfile: 'default', role: 'main' }], maxRunning: 1 }));
+      let load = 1;
+      const semaphore = new WorkspaceSemaphore({ initial: { maxParallel: 1 } });
+      semaphore.register({ busySlots: () => 1, oldestQueuedAt: () => null, pump: () => {}, accountLoad: () => new Map([['claude:default', load]]) });
+      manager = new RunManager(store, repoRoot, { semaphore });
+      const waiting = routedTask('quick one mock:done');
+      await until(() => store.getRun(waiting.id)?.queueWaitReason?.kind === 'account-busy', 'the routed task to wait');
+      load = 0;
+      await semaphore.release();
+      await until(() => store.getRun(waiting.id)?.queueWaitReason === undefined, 'the busy label to clear');
+      expect(store.getRun(waiting.id)?.status).toBe('queued');
+      load = 1;
+      await semaphore.release();
+      await until(() => store.getRun(waiting.id)?.queueWaitReason?.kind === 'account-busy', 'busy again');
+      expect(await manager.startNow(waiting.id)).toBe('started');
+      await until(() => store.getRun(waiting.id)?.status !== 'queued', 'Start now to start it');
+    }, 40_000);
+
     it('a task without the routed flag, or a list without roles, starts as before', async () => {
       registerAccounts(['second']);
       setManagerTaskAccountsLookup(() => [{ runner: 'claude', agentProfile: 'default' }, { runner: 'claude', agentProfile: 'second' }]);

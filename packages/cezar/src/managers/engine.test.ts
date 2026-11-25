@@ -3382,6 +3382,14 @@ describe('ManagerEngine', () => {
           expect(requests.at(-1)?.body).toMatchObject({ agentProfile: 'first' });
           expect((requests.at(-1)?.body as { managerAgent: object }).managerAgent).not.toHaveProperty('routed');
         });
+
+        it('--runner picks by role among that agent but is never routed: the queue would cross agents', async () => {
+          const engine = routed({ 'claude:first': 2, 'claude:second': 0 });
+          const id = await managerWith(engine, roles);
+          await engine.createTask(id, { projectId: 'alpha', task: 'Fix it', runner: 'claude' });
+          expect(requests.at(-1)?.body).toMatchObject({ runner: 'claude', agentProfile: 'second' });
+          expect((requests.at(-1)?.body as { managerAgent: object }).managerAgent).not.toHaveProperty('routed');
+        });
       });
 
       it('takes the first allowed account with no flags, says why and hands the rest to fallback', async () => {

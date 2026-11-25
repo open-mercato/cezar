@@ -1,4 +1,4 @@
-import { GripVerticalIcon, ListChecksIcon, XIcon } from 'lucide-react'
+import { ArrowUpIcon, GripVerticalIcon, ListChecksIcon, XIcon } from 'lucide-react'
 import { useState, type DragEvent, type ReactNode } from 'react'
 
 import { useAgentProfiles } from '@/api/queries'
@@ -81,7 +81,10 @@ export function TaskRoutingSection({ manager, onPatch }: { manager: ManagerSumma
       <div>
         <h3 className="flex items-center gap-2 text-sm font-semibold"><ListChecksIcon aria-hidden="true" className="size-4 text-muted-foreground" />For new tasks</h3>
         <p className="mt-1 text-xs text-muted-foreground">
-          {agents.length > 0 ? 'Main accounts share new tasks evenly. Backup accounts are used in order.' : 'Choose the agents and accounts this Manager may use. Automatic lets it choose freely.'}
+          {agents.length === 0 ? 'Choose the agents and accounts this Manager may use. Automatic lets it choose freely.'
+            // A list without roles keeps the original order on the server (spec 2026-11-25-manager-task-routing).
+            : routed ? 'Main accounts share new tasks evenly. Backup accounts are used in order.'
+            : 'Each task goes to the first account with capacity, this Manager’s own agent first. Set a role to share tasks between Main accounts.'}
         </p>
       </div>
       {agents.length > 0 ? (
@@ -106,6 +109,17 @@ export function TaskRoutingSection({ manager, onPatch }: { manager: ManagerSumma
                   label={label}
                   onChange={(role) => saveAgents(withRoles(agents).map((entry, at) => (at === index ? { ...entry, role } : entry)))}
                 />
+                {index > 0 ? (
+                  <button
+                    type="button"
+                    aria-label={`Move ${label} up`}
+                    data-slot="manager-task-agent-up"
+                    className="inline-flex size-7 shrink-0 items-center justify-center rounded-md text-muted-foreground outline-none hover:bg-muted focus-visible:ring-[3px] focus-visible:ring-ring/50 pointer-coarse:size-11"
+                    onClick={() => move(index, index - 1)}
+                  >
+                    <ArrowUpIcon aria-hidden="true" className="size-3.5" />
+                  </button>
+                ) : null}
                 <button
                   type="button"
                   aria-label={`Remove ${label}`}

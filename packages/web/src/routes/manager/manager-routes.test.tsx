@@ -1822,6 +1822,20 @@ describe('/manager/:id', () => {
       fireEvent.click(within(dialog).getByRole('button', { name: 'Remove claude · Default' }))
       await waitFor(() => expect(patches()).toContainEqual({ taskRunner: null, taskAgents: [{ runner: 'codex', agentProfile: 'default' }] }))
     })
+
+    it('a list without roles says it keeps the original order, and Move up reorders without dragging', async () => {
+      seedChat({ taskAgents: [{ runner: 'claude', agentProfile: 'default' }, { runner: 'codex', agentProfile: 'default' }] })
+      renderAt('/manager/global')
+      const dialog = await openDialog()
+      expect(within(dialog).getByText(/first account with capacity/)).toBeTruthy()
+      expect(within(dialog).queryByText(/share new tasks evenly/)).toBeNull()
+      expect(within(dialog).queryByRole('button', { name: 'Move claude · Default up' })).toBeNull()
+      fireEvent.click(within(dialog).getByRole('button', { name: 'Move codex · Default up' }))
+      await waitFor(() => expect(patches()).toContainEqual({
+        taskRunner: null,
+        taskAgents: [{ runner: 'codex', agentProfile: 'default' }, { runner: 'claude', agentProfile: 'default' }],
+      }))
+    })
   })
 
   describe('agent chain (spec 2026-11-25-manager-agent-chain)', () => {
