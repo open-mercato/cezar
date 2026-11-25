@@ -3,10 +3,10 @@ import { GlobalInstructionsCard } from './global-instructions-section'
 import { SkillsCard } from './skills-section'
 
 /**
- * Settings → Agents (design doc, Proposal 8): global Instructions (first: a long account list hid
- * them), Agent accounts and Skills as
- * one page — they are one decision, "which agents run my tasks, and with what". Each card keeps
- * the id of the page it replaced, so `/settings/global/accounts` lands on `#accounts`.
+ * Settings → Agents (design doc, Proposal 8): global Instructions, Agent accounts and Skills as one
+ * page — they are one decision, "which agents run my tasks, and with what". Instructions come first:
+ * below a long account list they were lost (#2488). Each card keeps the id of the page it replaced,
+ * so `/settings/global/accounts` lands on `#accounts`.
  */
 export function AgentsGlobalSection() {
   return (
