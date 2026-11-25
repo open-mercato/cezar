@@ -522,9 +522,11 @@ whose counter never resets within a run, so every run is finite.
   <node>.<field>`, `op`, `value` — numeric when both sides are numbers) and `branch`
   (`equals` / `matches` on the base branch).
 - **`github.pr-checkout`** takes the first PR URL in the task whose repository this checkout has a
-  remote for (same owner/repo on the PR's host, or on an SSH host alias such as
-  `git@github-work:o/r`), and fetches its `pull/<n>/head` from that remote into a private ref
-  deleted afterwards (never `FETCH_HEAD`); with no such remote it fetches nothing. When GitHub
+  remote for (same owner/repo on the PR's host, or an SSH URL on a host alias such as
+  `git@github-work:o/r` that is no other forge — used only when GitHub names the PR's head), and
+  fetches its `pull/<n>/head` from that remote into a private ref deleted afterwards (never
+  `FETCH_HEAD`); with no such remote it fetches nothing. SSH runs with `-o BatchMode=yes` appended
+  to your own `GIT_SSH_COMMAND` or `core.sshCommand` (a `GIT_SSH` program is left as it is). When GitHub
   reports the PR's head, the two must agree (one re-fetch after a short wait if
   `refs/pull/<n>/head` lags a push). It exports that head under
   `~/.cezar/pr-checkouts/<repo>/<run>/tree` (symlinks as plain files, no LFS download, and on git
@@ -539,7 +541,7 @@ whose counter never resets within a run, so every run is finite.
   `.mcp.json` never load; a check against Claude Code 2.1.328 also found that a `CLAUDE.md` or
   `.claude/skills` nested in `tree/` did not load on reading files there, and review steps have no
   Skill tool. The exported `tree/` is freed on the idle-worktree schedule (default 7 days), on
-  archive and on a manual reclaim (`pr-<n>.json` then says `checkedOut: false`; a re-run exports
+  archive and on a manual reclaim (`pr-<n>.json` and its artifacts copy then say `checkedOut: false`; a re-run exports
   it again), and the whole folder is deleted with the task. It never throws: a disk error, no
   remote, an old git without `--no-write-fetch-head` (2.29+) or a private repo the remote cannot
   reach leaves by `failed`, and the reviewers fall back to `gh pr view`/`gh pr diff`. It posts

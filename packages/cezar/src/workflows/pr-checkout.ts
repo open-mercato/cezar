@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { chmodSync, copyFileSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, copyFileSync, mkdirSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { ghEnv } from '../core/gh-env.ts';
 import { parseRemote } from '../git-remotes.ts';
@@ -52,8 +52,8 @@ export type Exec = (file: string, args: string[], opts: { cwd: string; timeoutMs
 const exec: Exec = (file, args, { cwd, timeoutMs, env }) => new Promise((done) => {
   execFile(file, args, {
     cwd, timeout: timeoutMs, maxBuffer: 64 * 1024 * 1024, encoding: 'utf8',
-    // Unattended: an HTTPS or SSH credential prompt fails instead of hanging.
-    env: { ...(env ?? process.env), GIT_TERMINAL_PROMPT: '0', GIT_SSH_COMMAND: 'ssh -o BatchMode=yes', GH_PROMPT_DISABLED: '1' },
+    // Unattended: an HTTPS credential prompt fails instead of hanging (SSH: `batchSshEnv`).
+    env: { ...(env ?? process.env), GIT_TERMINAL_PROMPT: '0', GH_PROMPT_DISABLED: '1' },
   }, (err, stdout, stderr) => done({ ok: !err, stdout: String(stdout ?? ''), stderr: String(stderr || err?.message || '') }));
 });
 
@@ -88,21 +88,57 @@ export interface PrCheckoutResult {
   problems: string[];
 }
 
+/** Hosts that are some other forge, never an SSH alias of a GitHub host. */
+const OTHER_FORGE = /(^|\.)(gitlab|bitbucket|codeberg|gitea|forgejo|sourcehut|sr\.ht|azure|visualstudio)(\.|$)/;
+
+/** An SSH URL (`ssh://`, `git+ssh://` or scp-like `host:path`), the only form an SSH alias takes. */
+const isSshUrl = (url: string) => /^(ssh|git\+ssh):\/\//i.test(url) || (!/^[a-z][a-z0-9+.-]*:\/\//i.test(url) && /^[^/:]+:/.test(url));
+
+export interface PrRemoteMatch {
+  name: string;
+  /** Matched through an SSH host alias, not the PR's own host: only GitHub's head can vouch for it. */
+  viaAlias: boolean;
+}
+
 /**
- * The remote whose URL IS the PR's repository: same owner/repo on the PR's host, or on a host that
- * is no GitHub host (an SSH alias, `git@github-work:o/r`). Another GitHub host is another
- * repository. Undefined when none is — then nothing is fetched.
+ * The remote whose URL IS the PR's repository: same owner/repo on the PR's host, or an SSH URL on
+ * a host that is neither a GitHub host nor another forge (an alias, `git@github-work:o/r`).
+ * Another GitHub host is another repository. Undefined when none is — then nothing is fetched.
  */
-export async function prRemote(cwd: string, pr: PrRef, run: Exec = exec): Promise<string | undefined> {
+export async function prRemoteMatch(cwd: string, pr: PrRef, run: Exec = exec): Promise<PrRemoteMatch | undefined> {
   const res = await run('git', ['config', '--get-regexp', '^remote\\..*\\.url$'], { cwd, timeoutMs: 10_000 });
+  let alias: string | undefined;
   for (const line of res.ok ? res.stdout.split('\n') : []) {
     const m = /^remote\.(.+)\.url (.*)$/.exec(line.trim());
-    const parsed = m ? parseRemote(m[2] ?? '') : null;
+    const url = m?.[2] ?? '';
+    const parsed = m ? parseRemote(url) : null;
     const host = parsed?.host.toLowerCase();
-    if (m && parsed && host && isSafeGitRef(m[1]!) && (host === pr.host || !isGithubHost(host))
-      && parsed.owner.toLowerCase() === pr.owner.toLowerCase() && parsed.repo.toLowerCase() === pr.repo.toLowerCase()) return m[1]!;
+    if (!m || !parsed || !host || !isSafeGitRef(m[1]!)) continue;
+    if (parsed.owner.toLowerCase() !== pr.owner.toLowerCase() || parsed.repo.toLowerCase() !== pr.repo.toLowerCase()) continue;
+    if (host === pr.host) return { name: m[1]!, viaAlias: false };
+    if (!alias && isSshUrl(url.trim()) && !isGithubHost(host) && !OTHER_FORGE.test(host)) alias = m[1]!;
   }
-  return undefined;
+  return alias ? { name: alias, viaAlias: true } : undefined;
+}
+
+/** The name of `prRemoteMatch`'s remote. */
+export async function prRemote(cwd: string, pr: PrRef, run: Exec = exec): Promise<string | undefined> {
+  return (await prRemoteMatch(cwd, pr, run))?.name;
+}
+
+/**
+ * SSH that fails instead of prompting, on the user's own SSH command: BatchMode is appended to
+ * `GIT_SSH_COMMAND` or `core.sshCommand` (their key, their proxy), never put in their place. A
+ * `GIT_SSH` program is left alone — `GIT_SSH_COMMAND` would override it.
+ */
+export async function batchSshEnv(cwd: string, run: Exec = exec, env: NodeJS.ProcessEnv = process.env): Promise<NodeJS.ProcessEnv | undefined> {
+  const BATCH = '-o BatchMode=yes';
+  const own = env.GIT_SSH_COMMAND?.trim();
+  if (own) return { ...env, GIT_SSH_COMMAND: `${own} ${BATCH}` };
+  if (env.GIT_SSH?.trim()) return undefined;
+  const configured = await run('git', ['config', '--get', 'core.sshCommand'], { cwd, timeoutMs: 10_000 });
+  const command = configured.ok ? configured.stdout.trim() : '';
+  return { ...env, GIT_SSH_COMMAND: command ? `${command} ${BATCH}` : `ssh ${BATCH}` };
 }
 
 const lastLine = (s: string) => s.trim().split('\n').pop()?.slice(0, 300) ?? '';
@@ -126,7 +162,14 @@ export async function checkoutPr(input: PrCheckoutInput): Promise<PrCheckoutResu
   try {
     return await checkoutPrOrThrow(input);
   } catch (err) {
+    // Nothing may outlive a failed checkout as if it were one: no tree, and no metadata or diff
+    // still saying `checkedOut: true` for agents to read through `--add-dir`.
     try { rmSync(join(input.dir, 'tree'), { recursive: true, force: true }); } catch { /* nothing more to do */ }
+    try {
+      for (const name of readdirSync(input.dir)) {
+        if (/^pr-\d+\.(json|diff)$/.test(name)) rmSync(join(input.dir, name), { force: true });
+      }
+    } catch { /* nothing more to do */ }
     return {
       checkedOut: false, head: '', tree: '', diffPath: '', metaPath: '',
       problems: [`the PR checkout failed — ${lastLine(err instanceof Error ? err.message : String(err))}`],
@@ -163,15 +206,18 @@ async function checkoutPrOrThrow(input: PrCheckoutInput): Promise<PrCheckoutResu
   }
   const ghHead = typeof meta.headRefOid === 'string' ? meta.headRefOid : '';
 
-  const remote = await prRemote(cwd, pr, run);
+  const match = input.offline ? undefined : await prRemoteMatch(cwd, pr, run);
+  // An alias may point anywhere; without GitHub's head, what it serves cannot pass as the PR.
+  const remote = match && (!match.viaAlias || ghHead) ? match.name : undefined;
   const source = remote ?? '';
+  const sshEnv = remote ? await batchSshEnv(cwd, run) : undefined;
   const headRef = `${input.refPrefix}/head`;
   const baseRef = `${input.refPrefix}/base`;
   const touchedRefs = new Set<string>();
   /** Fetch one ref into a private ref and resolve it there. */
   const fetchInto = async (from: string, into: string): Promise<{ sha?: string; error?: string }> => {
     touchedRefs.add(into);
-    const f = await git(['fetch', '--no-tags', '--quiet', '--no-write-fetch-head', source, `+${from}:${into}`], 120_000);
+    const f = await git(['fetch', '--no-tags', '--quiet', '--no-write-fetch-head', source, `+${from}:${into}`], 120_000, sshEnv);
     if (!f.ok) return { error: lastLine(f.stderr) };
     const r = await git(['rev-parse', '--verify', `${into}^{commit}`]);
     return r.ok && r.stdout.trim() ? { sha: r.stdout.trim() } : { error: `could not read it — ${lastLine(r.stderr)}` };
@@ -179,6 +225,7 @@ async function checkoutPrOrThrow(input: PrCheckoutInput): Promise<PrCheckoutResu
   const pullRef = `refs/pull/${pr.number}/head`;
   try {
     if (input.offline) problems.push('CEZ_DRY_RUN=1: the PR was not fetched or checked out');
+    else if (match && !remote) problems.push(`the remote ${match.name} is an SSH alias and GitHub did not confirm the PR's head; the PR was not fetched`);
     else if (!remote) problems.push(`no remote of this repository is ${pr.owner}/${pr.repo} on ${pr.host}; the PR was not fetched`);
     else {
       let got = await fetchInto(pullRef, headRef);

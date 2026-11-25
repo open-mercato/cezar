@@ -2483,6 +2483,11 @@ export class RunStore extends EventEmitter {
     return prCheckoutDir(this.dataDir, runId);
   }
 
+  /** A run's artifacts directory (`artifactsDir`). */
+  artifactsDir(runId: string): string {
+    return artifactsDir(this.dataDir, runId);
+  }
+
   /** The event log's mtime in ms, or undefined when it has none — age retention's activity clock. */
   eventsMtimeMs(runId: string): number | undefined {
     try { return statSync(this.eventsPath(runId)).mtimeMs; } catch { return undefined; }

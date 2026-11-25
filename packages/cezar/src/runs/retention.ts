@@ -57,6 +57,8 @@ export interface RetentionStore {
   eventsMtimeMs?(id: string): number | undefined;
   /** Where a run's PR review export lives (`prCheckoutDir`). Optional for test fakes. */
   prCheckoutDir?(id: string): string;
+  /** The run's artifacts (`artifactsDir`), which hold the user's copy of `pr-N.json`. Optional for test fakes. */
+  artifactsDir?(id: string): string;
 }
 
 /** The slice of the store the re-materializer needs. */
@@ -360,15 +362,20 @@ export function freePrCheckoutTree(store: RetentionStore, runId: string, now = (
   try {
     if (!existsSync(tree)) return false;
     rmSync(tree, { recursive: true, force: true });
+    const reclaimedAt = now();
     for (const name of readdirSync(dir)) {
       if (!/^pr-\d+\.json$/.test(name)) continue;
-      try {
-        const meta = JSON.parse(readFileSync(join(dir, name), 'utf8')) as Record<string, unknown>;
-        delete meta.tree;
-        // Read-only on disk (`pr-checkout.ts`): replaced, never written over.
-        rmSync(join(dir, name), { force: true });
-        writeFileSync(join(dir, name), `${JSON.stringify({ ...meta, checkedOut: false, treeReclaimedAt: now() }, null, 2)}\n`, { mode: 0o444 });
-      } catch { /* an unreadable metadata file stays as it was */ }
+      // The agents' copy and the user's copy in the artifacts (what Assets shows) say the same.
+      for (const path of [join(dir, name), ...(store.artifactsDir ? [join(store.artifactsDir(runId), name)] : [])]) {
+        try {
+          if (!existsSync(path)) continue;
+          const meta = JSON.parse(readFileSync(path, 'utf8')) as Record<string, unknown>;
+          delete meta.tree;
+          // Read-only on disk (`pr-checkout.ts`): replaced, never written over.
+          rmSync(path, { force: true });
+          writeFileSync(path, `${JSON.stringify({ ...meta, checkedOut: false, treeReclaimedAt: reclaimedAt }, null, 2)}\n`, { mode: 0o444 });
+        } catch { /* an unreadable metadata file stays as it was */ }
+      }
     }
     return true;
   } catch {

@@ -189,13 +189,25 @@ describe('reclaimIdlePrCheckouts', () => {
     const root = mkdtempSync(join(tmpdir(), 'cez-pr-retention-'));
     try {
       exportFor(root, 'r1');
-      const store = { listRuns: () => [run({ id: 'r1', status: 'done', finishedAt: '2026-07-01T00:00:00Z' })], updateRun: vi.fn(), prCheckoutDir: (id: string) => join(root, id) };
+      // The user's copy in the artifacts, as the checkout leaves it.
+      const artifacts = join(root, 'artifacts', 'r1');
+      mkdirSync(artifacts, { recursive: true });
+      writeFileSync(join(artifacts, 'pr-7.json'), readFileSync(join(root, 'r1', 'pr-7.json')), { mode: 0o444 });
+      const store = {
+        listRuns: () => [run({ id: 'r1', status: 'done', finishedAt: '2026-07-01T00:00:00Z' })], updateRun: vi.fn(),
+        prCheckoutDir: (id: string) => join(root, id), artifactsDir: (id: string) => join(root, 'artifacts', id),
+      };
       expect(reclaimIdlePrCheckouts(store, 7, { isLive: () => false, nowMs: () => Date.parse('2026-07-15T00:00:00Z') })).toEqual(['r1']);
       const meta = JSON.parse(readFileSync(join(root, 'r1', 'pr-7.json'), 'utf8'));
       expect(meta).toMatchObject({ number: 7, checkedOut: false });
       expect(meta.tree).toBeUndefined();
       expect(typeof meta.treeReclaimedAt).toBe('string');
       expect(statSync(join(root, 'r1', 'pr-7.json')).mode & 0o222).toBe(0);
+      // ...and the copy Assets shows says the same, still read-only.
+      const copy = JSON.parse(readFileSync(join(artifacts, 'pr-7.json'), 'utf8'));
+      expect(copy).toMatchObject({ number: 7, checkedOut: false, treeReclaimedAt: meta.treeReclaimedAt });
+      expect(copy.tree).toBeUndefined();
+      expect(statSync(join(artifacts, 'pr-7.json')).mode & 0o222).toBe(0);
     } finally { rmSync(root, { recursive: true, force: true }); }
   });
 

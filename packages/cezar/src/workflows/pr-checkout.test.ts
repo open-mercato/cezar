@@ -1,9 +1,9 @@
 import { execFileSync } from 'node:child_process';
-import { existsSync, lstatSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, lstatSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { checkoutPr, parsePrUrl, pickPr, prRemote, type Exec } from './pr-checkout.ts';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { batchSshEnv, checkoutPr, parsePrUrl, pickPr, prRemote, prRemoteMatch, type Exec } from './pr-checkout.ts';
 
 const GIT_ID = ['-c', 'user.name=test', '-c', 'user.email=test@local'];
 const PR = { host: 'github.com', owner: 'o', repo: 'r', number: 7, url: 'https://github.com/o/r/pull/7' };
@@ -48,9 +48,38 @@ describe('prRemote', () => {
     const unsafe = scripted([['git config --get-regexp', { ok: true, stdout: 'remote.-x.url https://github.com/o/r.git' }]]);
     expect(await prRemote('/w', PR, unsafe.exec)).toBeUndefined();
   });
+  it('takes an alias only as an SSH URL on a host that is no other forge, and says it is one', async () => {
+    const remotes = (url: string) => scripted([['git config --get-regexp', { ok: true, stdout: `remote.m.url ${url}` }]]).exec;
+    expect(await prRemoteMatch('/w', PR, remotes('git@github-work:o/r.git'))).toEqual({ name: 'm', viaAlias: true });
+    expect(await prRemoteMatch('/w', PR, remotes('ssh://git@github-work/o/r.git'))).toEqual({ name: 'm', viaAlias: true });
+    expect(await prRemoteMatch('/w', PR, remotes('https://github.com/o/r.git'))).toEqual({ name: 'm', viaAlias: false });
+    for (const other of ['git@gitlab.com:o/r.git', 'ssh://git@gitlab.internal.example/o/r.git', 'git@bitbucket.org:o/r.git', 'https://mirror.example/o/r.git']) {
+      expect(await prRemoteMatch('/w', PR, remotes(other)), other).toBeUndefined();
+    }
+    // The PR's own host wins over an alias listed first.
+    const both = scripted([['git config --get-regexp', { ok: true, stdout: 'remote.alias.url git@github-work:o/r.git\nremote.origin.url https://github.com/o/r.git' }]]);
+    expect(await prRemoteMatch('/w', PR, both.exec)).toEqual({ name: 'origin', viaAlias: false });
+  });
+
   it("picks none when no remote is the PR's repository", async () => {
     const { exec } = scripted([['git config --get-regexp', { ok: true, stdout: 'remote.origin.url git@github.com:me/r.git' }]]);
     expect(await prRemote('/w', PR, exec)).toBeUndefined();
+  });
+});
+
+describe('batchSshEnv', () => {
+  const config = (sshCommand?: string) => scripted([['git config --get core.sshCommand', sshCommand ? { ok: true, stdout: `${sshCommand}\n` } : { ok: false }]]);
+  it("appends BatchMode to the user's own GIT_SSH_COMMAND, without asking git", async () => {
+    const { exec, calls } = config('ssh -i ~/.ssh/other');
+    expect((await batchSshEnv('/w', exec, { GIT_SSH_COMMAND: 'ssh -i ~/.ssh/work_key' }))?.GIT_SSH_COMMAND).toBe('ssh -i ~/.ssh/work_key -o BatchMode=yes');
+    expect(calls).toEqual([]);
+  });
+  it("appends BatchMode to core.sshCommand, which GIT_SSH_COMMAND would otherwise override", async () => {
+    expect((await batchSshEnv('/w', config('ssh -i ~/.ssh/work_key').exec, {}))?.GIT_SSH_COMMAND).toBe('ssh -i ~/.ssh/work_key -o BatchMode=yes');
+  });
+  it('uses plain ssh with BatchMode when nothing is set, and leaves a GIT_SSH program alone', async () => {
+    expect((await batchSshEnv('/w', config().exec, {}))?.GIT_SSH_COMMAND).toBe('ssh -o BatchMode=yes');
+    expect(await batchSshEnv('/w', config().exec, { GIT_SSH: '/usr/local/bin/my-ssh' })).toBeUndefined();
   });
 });
 
@@ -77,6 +106,37 @@ describe('checkoutPr, scripted', () => {
     expect(res.checkedOut).toBe(false);
     expect(res.problems).toContain('CEZ_DRY_RUN=1: the PR was not fetched or checked out');
     expect(JSON.parse(readFileSync(res.metaPath, 'utf8'))).toMatchObject({ number: 7, checkedOut: false, headVerified: false });
+  });
+
+  it("fetches from an SSH alias only when GitHub names the PR's head, with the user's SSH command kept", async () => {
+    const answers = (view: string) => {
+      const fetchEnvs: Array<string | undefined> = [];
+      const exec: Exec = async (file, args, opts) => {
+        const line = [file, ...args].join(' ');
+        if (line.startsWith('git config --get-regexp')) return { ok: true, stdout: 'remote.work.url git@github-work:o/r.git', stderr: '' };
+        if (line.startsWith('git config --get core.sshCommand')) return { ok: true, stdout: 'ssh -i ~/.ssh/work_key\n', stderr: '' };
+        if (line.startsWith('gh pr view')) return { ok: true, stdout: view, stderr: '' };
+        if (line.startsWith('gh pr diff')) return { ok: true, stdout: 'D', stderr: '' };
+        if (line.startsWith('git fetch')) { fetchEnvs.push(opts.env?.GIT_SSH_COMMAND); return { ok: true, stdout: '', stderr: '' }; }
+        if (line.startsWith('git rev-parse --verify')) return { ok: true, stdout: 'abc\n', stderr: '' };
+        if (line.startsWith('git -c core.symlinks=false') || line.startsWith('git update-ref')) return { ok: true, stdout: '', stderr: '' };
+        return { ok: false, stdout: '', stderr: `unscripted: ${line}` };
+      };
+      return { exec, fetchEnvs };
+    };
+    // Hermetic: the machine's own SSH settings play no part.
+    vi.stubEnv('GIT_SSH_COMMAND', '');
+    vi.stubEnv('GIT_SSH', '');
+    const unverified = answers('{}');
+    const refused = await checkoutPr({ cwd: '/w', dir: join(dir, 'a'), pr: PR, refPrefix: REF_PREFIX, exec: unverified.exec, sleep: NO_SLEEP });
+    expect(unverified.fetchEnvs).toEqual([]);
+    expect(refused.checkedOut).toBe(false);
+    expect(refused.problems).toEqual(["the remote work is an SSH alias and GitHub did not confirm the PR's head; the PR was not fetched"]);
+    const verified = answers(JSON.stringify({ headRefOid: 'abc' }));
+    const ok = await checkoutPr({ cwd: '/w', dir: join(dir, 'b'), pr: PR, refPrefix: REF_PREFIX, exec: verified.exec, sleep: NO_SLEEP });
+    expect(ok.checkedOut).toBe(true);
+    expect(verified.fetchEnvs).toEqual(['ssh -i ~/.ssh/work_key -o BatchMode=yes']);
+    vi.unstubAllEnvs();
   });
 
   it("fetches nothing from a repository this checkout has no remote for, and still saves gh's diff", async () => {
@@ -117,6 +177,8 @@ describe('checkoutPr, scripted', () => {
     expect(res.checkedOut).toBe(false);
     expect(res.problems[0]).toMatch(/^the PR checkout failed — /);
     expect(existsSync(join(pr, 'tree'))).toBe(false);
+    // The metadata was written before the copy failed: it must not still claim a checkout.
+    expect(readdirSync(pr).filter((f) => /^pr-\d+\.(json|diff)$/.test(f))).toEqual([]);
   });
 
   it('leaves no partial tree and no throwaway index when the export fails', async () => {
