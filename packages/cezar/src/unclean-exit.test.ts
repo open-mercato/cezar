@@ -124,6 +124,18 @@ describe('logFacts', () => {
     expect(logFacts(log, 5)).toMatchObject({ endedBy: 'signal: 9 (SIGKILL)', signal: 9 });
   });
 
+  it('never takes cockpit output that looks like a shell line for one', () => {
+    const log = [
+      '2026-11-25T12:00:00.000Z --- starting the cockpit: /opt/x.js (port 4321)',
+      '2026-11-25T12:00:00.010Z --- cockpit process pid 5',
+      '2026-11-25T12:00:01.000Z --- secret heading from a prompt',
+      '2026-11-25T12:00:02.000Z [run] acme-corp --- notes',
+    ].join('\n');
+    const facts = logFacts(log, 5);
+    expect(facts.lifecycle).toBe(log.split('\n').slice(0, 2).join('\n'));
+    expect(facts.lastOutputAt).toBe('2026-11-25T12:00:02.000Z');
+  });
+
   it('knows nothing about a pid the log never names', () => {
     expect(logFacts(LOG, 4242)).toEqual({});
   });

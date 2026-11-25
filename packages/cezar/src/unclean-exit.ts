@@ -20,6 +20,8 @@ const BEAT_MS = 60_000;
 const STALE_MS = 30 * 86_400_000;
 /** How much of the cockpit log's end is read for the dead process's lifecycle lines. */
 const LOG_TAIL_BYTES = 64 * 1024;
+/** The shell's own start line (#2489): `<ts> --- starting the cockpit: <entry> (port <n>)`. */
+const STARTING_LINE = /^\S+ --- starting the cockpit: .* \(port \d+\)$/;
 
 export interface LiveMarker {
   pid: number;
@@ -141,15 +143,20 @@ export function logFacts(tail: string, pid: number): {
   signal?: number;
 } {
   const lines = tail.split('\n').filter((line) => /^\d{4}-\d\d-\d\dT[\d:.]+Z /.test(line));
+  const pidLine = ` --- cockpit process pid ${pid}`;
   let start = -1;
-  lines.forEach((line, i) => { if (line.endsWith(` --- cockpit process pid ${pid}`)) start = i; });
+  lines.forEach((line, i) => { if (line.endsWith(pidLine)) start = i; });
   if (start < 0) return {};
-  let end = lines.findIndex((line, i) => i > start && / --- starting the cockpit/.test(line));
+  let end = lines.findIndex((line, i) => i > start && STARTING_LINE.test(line));
   if (end < 0) end = lines.length;
   const segment = lines.slice(start, end);
-  const lifecycle = segment.filter((line) => line.includes(' --- ')).slice(-6).join('\n');
-  const lastOutputAt = segment.at(-1)?.split(' ')[0];
-  const ended = segment.find((line) => line.includes(` --- cockpit process pid ${pid} ended: `));
+  // Output lines share the shell's format, so only the shell's exact lifecycle shapes are kept.
+  const lifecycle = [
+    ...(start > 0 && STARTING_LINE.test(lines[start - 1]!) ? [lines[start - 1]!] : []),
+    ...segment.filter((line) => line.endsWith(pidLine) || line.includes(`${pidLine} ended: `)),
+  ].slice(-6).join('\n');
+  const lastOutputAt = segment.slice(1).filter((line) => !line.includes(`${pidLine} ended: `)).at(-1)?.split(' ')[0];
+  const ended = segment.find((line) => line.includes(`${pidLine} ended: `));
   const endedBy = ended?.slice(ended.indexOf(' ended: ') + 8).trim();
   const signal = endedBy ? /signal: (\d+)/.exec(endedBy)?.[1] : undefined;
   return {
