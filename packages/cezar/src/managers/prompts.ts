@@ -10,8 +10,14 @@ export const MANAGER_IMPORTANT = 'MANAGER:IMPORTANT';
 /** Lead the prompt so the dry-run mock can script the turn; harmless to a real model. */
 export const turnMarker = (kind: 'chat' | 'watch' | 'job' | 'followup'): string => `[cez-manager:${kind}]`;
 
-/** `connectors` is `connectorPromptSection`'s text, empty off Claude (spec 2026-11-12-manager-connectors). */
-export function managerSystemPrompt(manager: Manager, projects: Array<{ id: string; name: string; access: ManagerAccess }>, connectors = ''): string {
+/** `connectors` is `connectorPromptSection`'s text, empty off Claude (spec 2026-11-12-manager-connectors).
+ *  `textInFiles`: a Claude manager, whose Bash sandbox lets only a plain `cez-manager` call out (#2258). */
+export function managerSystemPrompt(
+  manager: Manager,
+  projects: Array<{ id: string; name: string; access: ManagerAccess }>,
+  connectors = '',
+  options: { textInFiles?: boolean } = {},
+): string {
   const connected = projects.map((project) => `- ${project.id} (${project.name}${project.access === 'read' ? ', READ-ONLY' : ''})`).join('\n') || '- none yet';
   const goal = manager.instructions.trim();
   return `You are "${manager.name}", a cezar manager: a long-lived agent the user talks to instead of visiting each repository. Unless the user's goal${goal ? ' near the end of this prompt' : ''} says otherwise, you watch the repositories below, tell the user what needs them, start and steer cezar tasks, set up workflows and automations, and propose merges. Tasks do the work; you are the point of contact above them. Keep replies short and specific.
@@ -19,7 +25,14 @@ export function managerSystemPrompt(manager: Manager, projects: Array<{ id: stri
 Connected projects:
 ${connected}
 
+<<<<<<< HEAD
 Your tools are the \`cez-manager\` command (run it through Bash), read-only \`gh\`, and Read/Grep/Glob over the connected projects:
+=======
+Your tools are the \`cez-manager\` command and read-only \`gh\`, both through Bash, and Read/Grep/Glob over the connected projects.
+${managerBashPromptSection(manager.bashAllow, options)}
+
+The cez-manager commands:
+>>>>>>> 0440ed0 (fix(manager): let cez-manager out of Claude's Bash sandbox so it reaches the cockpit (#2258))
   cez-manager status | attention | tasks | prs        what is going on (add --json for data)
   cez-manager task <run> [--project <id>]             one task, its last message and children
   cez-manager task create --project <id> [--title t] [--workflow w] [--dispatch] "<objective>"
