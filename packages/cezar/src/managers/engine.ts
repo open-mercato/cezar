@@ -59,6 +59,7 @@ import type { AttentionKind, AutomationDefinition, AutomationReportMode, Manager
 import { DEFAULT_AGENT_ACCOUNT_ID } from '../workspace/agent-accounts.ts';
 import { taskAgentSelection } from '../runs/agent-selection.ts';
 import { loadConfig } from '../config.ts';
+import { loadWorkspaceConfig } from '../workspace/config.ts';
 import { agentModelsLocked } from '../core/agent-model-policy.ts';
 import { parseAskCloseMarkers, parseAskMarker, stripAskCloseMarkers, stripAskMarker, type AskCloseMarker } from '../core/ask.ts';
 import type { RunRecord } from '../runs/store.ts';
@@ -2470,6 +2471,8 @@ export class ManagerEngine {
     const connectorRules = connectorTurn ? connectorAllowRules(manager.connectors, state.connectors) : [];
     // A manager with nothing granted loads no connector; a watch never calls one (spec 2026-11-21 § 2.4).
     const noMcpServers = runner === 'claude' && (!connectorTurn || !hasConnectorGrant(manager.connectors));
+    // Read per turn, so an edit in Settings reaches a resumed session too.
+    const globalInstructions = (await loadWorkspaceConfig().catch(() => null))?.systemPrompt;
     const base: AgentRunSpec = {
       systemPrompt: managerSystemPrompt(
         manager,
@@ -2479,6 +2482,7 @@ export class ManagerEngine {
         {
           textInFiles: runner === 'claude' && writable !== undefined,
           memory: renderMemory(this.memoryFor(id, (profile.env as Record<string, string | undefined>).CLAUDE_CONFIG_DIR ?? process.env.CLAUDE_CONFIG_DIR).entries),
+          globalInstructions,
         },
       ),
       // A session restored from another row may not have seen the cards an ids-only prompt names.
