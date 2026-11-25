@@ -70,6 +70,8 @@ a second success status spelled the session out twice, and `versionState` and `i
 fields already say, so the reader derives those two (`entryVersionState`, `install.runnable ? install.command : null`).
 The entry has no `installHint` either (the first-run row shows the copy line or the docs link), and `?latest` takes
 only `1`: on Windows `main` itself sits within a character of the limit, so this family must cost less than `main`'s.
+Every refusal in the family is plain `{ error }`, as on `main`: a second error shape (`{ error, command }`) was reduced
+away on macOS but not on Windows, which tipped the Windows build over. The command to copy is in the listing.
 
 ## The sheet
 

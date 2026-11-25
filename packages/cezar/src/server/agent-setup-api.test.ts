@@ -117,10 +117,12 @@ describe('/api/v1/providers/setup', () => {
     expect(spawns).toHaveLength(0);
   });
 
-  it('answers a copy-only agent with its command instead of running it', async () => {
-    const junie = await post(build(), { provider: 'junie', action: 'install' });
+  it('refuses to run a copy-only agent; its command to copy is in the listing', async () => {
+    const app = build();
+    const junie = await post(app, { provider: 'junie', action: 'install' });
     expect(junie.status).toBe(409);
-    expect(await junie.json()).toMatchObject({ command: 'npm install -g @jetbrains/junie' });
+    const listing = await (await apiRequest(app, '/api/v1/providers/setup')).json() as { agents: Array<{ provider: string; install: { command: string | null; runnable: boolean } }> };
+    expect(listing.agents.find((agent) => agent.provider === 'junie')?.install).toMatchObject({ command: 'npm install -g @jetbrains/junie', runnable: false });
     const omp = await post(build(), { provider: 'omp', action: 'install' });
     expect(omp.status).toBe(409);
     expect((await omp.json() as { error: string }).error).toContain('third-party');
@@ -335,7 +337,7 @@ describe('/api/v1/providers/setup', () => {
       // codex would need `sudo npm` here: its password goes in at the computer.
       const sudo = await start(routes, { provider: 'codex', action: 'install' });
       expect(sudo.status).toBe(409);
-      expect(await sudo.json()).toMatchObject({ command: 'sudo npm install -g @openai/codex' });
+      expect((await sudo.json() as { error: string }).error).toContain('computer password');
       expect(spawns).toHaveLength(0);
     });
 

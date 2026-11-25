@@ -89,6 +89,11 @@ const forPhone = (agent: AgentSetupEntry): AgentSetupEntry => ({
   update: agent.update ? { ...agent.update, command: withoutHostPaths(agent.update.command) } : null,
 });
 
+/** Every refusal in this family is `{ error }` and nothing more: the typed API sits at the
+ *  compiler's size limit (TS7056), and a second error shape tipped it over on Windows (#2474).
+ *  A command to copy is already in the listing. */
+const refusal = (error: string): { error: string } => ({ error });
+
 const plan = (value: CommandPlan): AgentSetupEntry['install'] =>
   ({ command: value.command, runnable: value.runnable, method: value.method, sudo: value.sudo });
 
@@ -188,7 +193,7 @@ export function agentSetupRoutes(deps: AgentSetupDeps) {
     const info = deps.sessions.get(sessionId);
     return info && info.runId === AGENT_SETUP_OWNER ? info : null;
   };
-  const refusal = async (): Promise<string | null> => {
+  const unavailable = async (): Promise<string | null> => {
     const policy = deps.refusal();
     if (policy) return policy;
     const binding = await deps.loadPty();
@@ -204,7 +209,7 @@ export function agentSetupRoutes(deps: AgentSetupDeps) {
       const info = currentInfo();
       const status = await (deps.currentStatus ?? deps.status)().catch((): ProviderStatusResponse => ({ providers: [] }));
       const agents = await entries(c.req.valid('query').latest === '1', status);
-      const reason = await refusal();
+      const reason = await unavailable();
       // Refused (hosted, terminal off): the install lines and docs still help, but a sign-in or
       // update line names the host's binary path, which a hosted reader must not learn.
       if (reason) {
@@ -223,11 +228,11 @@ export function agentSetupRoutes(deps: AgentSetupDeps) {
       return c.json(state);
     })
     .post('/providers/setup/sessions', jsonZodValidator(agentSetupStartSchema), async (c) => {
-      const reason = await refusal();
-      if (reason) return c.json({ error: reason }, 409);
+      const reason = await unavailable();
+      if (reason) return c.json(refusal(reason), 409);
       const { provider, action, cols, rows, force } = c.req.valid('json');
       // A phone may start only what needs nobody at the computer: a sign-in has the card for that.
-      if (phone() && action === 'login') return c.json({ error: 'Sign in from the sign-in card, or finish on your computer.' }, 409);
+      if (phone() && action === 'login') return c.json(refusal('Sign in from the sign-in card, or finish on your computer.'), 409);
       const live = currentInfo();
       if (live?.exitCode === null) {
         // A double click or a second tab joins the session already running (a phone never a sign-in's).
@@ -235,34 +240,34 @@ export function agentSetupRoutes(deps: AgentSetupDeps) {
           const joined: AgentSetupSession = agentSetupSessionSchema.parse(describe(live));
           return c.json(joined, 201);
         }
-        return c.json({ error: 'Another agent is being set up. Finish or cancel it first.' }, 409);
+        return c.json(refusal('Another agent is being set up. Finish or cancel it first.'), 409);
       }
-      if (starting) return c.json({ error: 'Another agent is being set up. Finish or cancel it first.' }, 409);
+      if (starting) return c.json(refusal('Another agent is being set up. Finish or cancel it first.'), 409);
       starting = true;
       try {
         const dryRun = process.env.CEZ_DRY_RUN === '1';
         const row = dryRun ? undefined : (await deps.status()).providers.find((candidate) => candidate.provider === provider);
-        if (!dryRun && !row) return c.json({ error: 'The agent could not be checked. Try again.' }, 409);
+        if (!dryRun && !row) return c.json(refusal('The agent could not be checked. Try again.'), 409);
         // The status decides, so a stale page can neither reinstall an agent nor sign in to a missing one.
-        if (action === 'install' && row && row.status !== 'not-installed') return c.json({ error: 'This agent is already installed.' }, 409);
-        if (action !== 'install' && row?.status === 'not-installed') return c.json({ error: 'Install this agent first.' }, 409);
-        if (action === 'login' && row?.status === 'connected') return c.json({ error: 'This agent is already signed in.' }, 409);
+        if (action === 'install' && row && row.status !== 'not-installed') return c.json(refusal('This agent is already installed.'), 409);
+        if (action !== 'install' && row?.status === 'not-installed') return c.json(refusal('Install this agent first.'), 409);
+        if (action === 'login' && row?.status === 'connected') return c.json(refusal('This agent is already signed in.'), 409);
         let command: string | null;
         if (action === 'login') {
           command = deps.loginCommand(provider);
-          if (command === null) return c.json({ error: deps.installHint(provider) }, 409);
+          if (command === null) return c.json(refusal(deps.installHint(provider)), 409);
         } else {
           const env = await installEnv();
           const chosen = action === 'install' ? planInstall(provider, env) : updatePlan(provider, env);
           if (!chosen?.runnable || !chosen.command) {
             const copyOnly = recipeFor(provider).copyOnly;
             const error = copyOnly ?? (action === 'install' ? deps.installHint(provider) : 'cezar does not run this update itself. Run it in a terminal.');
-            return c.json({ error, ...(chosen?.command ? { command: chosen.command } : {}) }, 409);
+            return c.json(refusal(error), 409);
           }
-          if (phone() && chosen.sudo) return c.json({ error: 'This needs your computer password. Finish it on your computer.', command: chosen.command }, 409);
+          if (phone() && chosen.sudo) return c.json(refusal('This needs your computer password. Finish it on your computer.'), 409);
           const running = await (deps.activeRuns?.(provider) ?? 0);
           if (action === 'update' && running > 0 && !force) {
-            return c.json({ error: `${running} task${running === 1 ? ' is' : 's are'} running on this agent. Update when they finish, or update now.` }, 409);
+            return c.json(refusal(`${running} task${running === 1 ? ' is' : 's are'} running on this agent. Update when they finish, or update now.`), 409);
           }
           command = chosen.command;
         }
@@ -275,7 +280,7 @@ export function agentSetupRoutes(deps: AgentSetupDeps) {
           ...(cols !== undefined ? { cols } : {}),
           ...(rows !== undefined ? { rows } : {}),
         });
-        if (!created.ok) return c.json({ error: created.reason }, 409);
+        if (!created.ok) return c.json(refusal(created.reason), 409);
         current = { id: created.session.id, provider, action, command };
         for (const id of actions.keys()) if (!deps.sessions.get(id)) actions.delete(id);
         actions.set(created.session.id, action);
@@ -304,12 +309,12 @@ export function agentSetupRoutes(deps: AgentSetupDeps) {
       queryZodValidator(terminalOutputQuerySchema),
       async (c) => {
         const info = owned(c.req.valid('param').sessionId);
-        if (!info) return c.json({ error: 'setup session not found' }, 404);
+        if (!info) return c.json(refusal('setup session not found'), 404);
         const reason = deps.refusal();
-        if (reason) return c.json({ error: reason }, 409);
-        if (!phoneMayRead(info.id)) return c.json({ error: 'A sign-in is shown only on the computer.' }, 409);
+        if (reason) return c.json(refusal(reason), 409);
+        if (!phoneMayRead(info.id)) return c.json(refusal('A sign-in is shown only on the computer.'), 409);
         const read = deps.sessions.read(info.id, c.req.valid('query').cursor ?? 0);
-        if (!read) return c.json({ error: 'setup session not found' }, 404);
+        if (!read) return c.json(refusal('setup session not found'), 404);
         c.header('Cache-Control', 'no-store');
         const output: TerminalOutput = terminalOutputSchema.parse(read);
         return c.json(output);
@@ -321,11 +326,11 @@ export function agentSetupRoutes(deps: AgentSetupDeps) {
       jsonZodValidator(terminalInputSchema),
       async (c) => {
         const info = owned(c.req.valid('param').sessionId);
-        if (!info) return c.json({ error: 'setup session not found' }, 404);
+        if (!info) return c.json(refusal('setup session not found'), 404);
         const reason = deps.refusal();
-        if (reason) return c.json({ error: reason }, 409);
+        if (reason) return c.json(refusal(reason), 409);
         // Read-only on a phone: a password or an answer goes in at the computer.
-        if (phone()) return c.json({ error: 'The terminal is read-only on your phone.' }, 409);
+        if (phone()) return c.json(refusal('The terminal is read-only on your phone.'), 409);
         return c.json({ delivered: deps.sessions.write(info.id, c.req.valid('json').data) });
       },
     )
@@ -335,12 +340,12 @@ export function agentSetupRoutes(deps: AgentSetupDeps) {
       jsonZodValidator(terminalResizeSchema),
       async (c) => {
         const info = owned(c.req.valid('param').sessionId);
-        if (!info) return c.json({ error: 'setup session not found' }, 404);
+        if (!info) return c.json(refusal('setup session not found'), 404);
         const reason = deps.refusal();
-        if (reason) return c.json({ error: reason }, 409);
-        if (!phoneMayRead(info.id)) return c.json({ error: 'A sign-in is shown only on the computer.' }, 409);
+        if (reason) return c.json(refusal(reason), 409);
+        if (!phoneMayRead(info.id)) return c.json(refusal('A sign-in is shown only on the computer.'), 409);
         // The computer is the one typing: a phone viewer must not reflow its terminal.
-        if (phone()) return c.json({ error: 'The terminal is read-only on your phone.' }, 409);
+        if (phone()) return c.json(refusal('The terminal is read-only on your phone.'), 409);
         const { cols, rows } = c.req.valid('json');
         return c.json({ resized: deps.sessions.resize(info.id, cols, rows) });
       },
@@ -348,7 +353,7 @@ export function agentSetupRoutes(deps: AgentSetupDeps) {
     // Not policy-gated, like a task's terminal: stopping a process only ever reduces exposure.
     .delete('/providers/setup/sessions/:sessionId', paramZodValidator(agentSetupSessionParamsSchema), (c) => {
       const info = owned(c.req.valid('param').sessionId);
-      if (!info) return c.json({ error: 'setup session not found' }, 404);
+      if (!info) return c.json(refusal('setup session not found'), 404);
       deps.sessions.kill(info.id);
       return c.json({ stopped: true });
     });
