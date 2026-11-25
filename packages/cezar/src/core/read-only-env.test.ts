@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { buildGeminiArgs } from './gemini-acp-runner.ts';
 import { opencodeReadOnlyConfig } from './private-mcp.ts';
-import { createRunner, readOnlyUnsupportedMessage } from './runner-factory.ts';
+import { createRunner, canEnforceReadOnly, readOnlyUnsupportedMessage } from './runner-factory.ts';
 import { readOnlyEnv } from './read-only-env.ts';
 
 const dirs: string[] = [];
@@ -60,7 +60,11 @@ describe('read-only on the newer backends', () => {
     expect(buildGeminiArgs({})).toEqual(expect.arrayContaining(['--approval-mode', 'yolo']));
   });
 
-  it.each(['kimi', 'omp', 'antigravity'] as const)('refuses a read-only task on %s instead of running it unguarded', async (backend) => {
+  it('allows read-only enforcement on antigravity', () => {
+    expect(canEnforceReadOnly('antigravity')).toBe(true);
+  });
+
+  it.each(['kimi', 'omp'] as const)('refuses a read-only task on %s instead of running it unguarded', async (backend) => {
     const spec = { userPrompt: 'x', cwd: tmpdir(), enforceReadOnly: true };
     await expect(createRunner(backend).run(spec)).rejects.toThrow(readOnlyUnsupportedMessage(backend));
     expect(() => createRunner(backend).startSession(spec)).toThrow(readOnlyUnsupportedMessage(backend));

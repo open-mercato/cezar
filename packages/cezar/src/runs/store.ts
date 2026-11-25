@@ -238,6 +238,8 @@ export const runRecordSchema = z.object({
     revision: z.number().int().nonnegative(), incarnation: z.string().nullable(), revocation: z.string().nullable(),
     source: z.literal('manager').optional().catch(undefined),
     managerId: z.string().optional().catch(undefined),
+    /** Placed by the manager's roles, not an explicit account (spec 2026-11-25-manager-task-routing). */
+    routed: z.boolean().optional().catch(undefined),
   }).optional().catch(undefined),
   /** Echo of the extra system prompt this run actually used (R2): the
    *  `POST /api/runs` override, or the `config.json` default it fell back to.

@@ -1392,6 +1392,8 @@ export const createRunInputBaseSchema = z
      *  accounts a usage limit falls back to. Honored only with `startedByManager`. */
     managerAgent: z.object({
       note: z.string().min(1).max(500),
+      /** Chosen by the manager's roles: the queue may move it to an account that frees up. */
+      routed: z.literal(true).optional(),
       fallback: z.array(z.object({
         provider: runnerSchema,
         profileId: z.string().min(1).max(64),

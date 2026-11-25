@@ -842,7 +842,9 @@ Code's `list_models` control request; the Codex app-server's `model/list`;
 Junie's ACP `session/new` config options; `opencode models`) and shows exactly
 that, in that order — so a model your account gained yesterday is selectable
 today with no cezar release, and one your provider retired stops being offered.
-Discovery is read-only, costs no tokens, and is cached briefly in memory. If the
+Discovery is read-only, costs no tokens, and is cached briefly in memory;
+the picker's **Refresh models…** re-asks the CLI now (a failed re-ask keeps
+the last list it had). If the
 CLI is missing, logged out, too old or slow, the picker quietly falls back to
 that runner's built-in entries (`auto` plus Claude's tier aliases) and says so
 in a status row; `pi`, which has no host-local catalog yet, always shows its
