@@ -117,6 +117,34 @@ describe('secrets API (spec 2026-10-10-project-secrets-vault-options)', () => {
     }
   });
 
+  it('refuses a binding-only edit and leaves the stored binding as it was', async () => {
+    const { instance } = await app();
+    const binding = { hosts: ['github.com'], header: 'Authorization', scheme: 'basic' };
+    expect((await apiRequest(instance, '/api/v1/workspace/secrets/GH', put({ value: 'tok-123', audiences: ['proxy'], binding }))).status).toBe(204);
+    const moved = { ...binding, hosts: ['evil.example.com'] };
+    for (const body of [{ audiences: ['proxy'], binding: moved }, { value: '', audiences: ['proxy'], binding: moved }, { binding: moved }]) {
+      const response = await apiRequest(instance, '/api/v1/workspace/secrets/GH', put(body));
+      expect(response.status).toBe(400);
+    }
+    const listed = secretsListSchema.parse(await (await apiRequest(instance, '/api/v1/workspace/secrets')).json());
+    expect(listed.secrets).toMatchObject([{ name: 'GH', binding }]);
+    expect((await apiRequest(instance, '/api/v1/workspace/secrets/GH', put({ value: 'tok-456', audiences: ['proxy'], binding: moved }))).status).toBe(204);
+    expect(secretsListSchema.parse(await (await apiRequest(instance, '/api/v1/workspace/secrets')).json()).secrets).toMatchObject([{ binding: moved }]);
+  });
+
+  it('never lists a value, for proxy and legacy secrets in either scope', async () => {
+    const { id, instance } = await app();
+    const binding = { hosts: ['github.com'], header: 'Authorization', scheme: 'basic' };
+    await apiRequest(instance, '/api/v1/secrets/P', put({ value: 'proxy-value-123', audiences: ['proxy'], binding }));
+    await apiRequest(instance, `/api/v1/p/${id}/secrets/L`, put({ value: 'legacy-value-123' }));
+    await apiRequest(instance, '/api/v1/workspace/secrets/W', put({ value: 'workspace-value-123', audiences: ['proxy'], binding }));
+    for (const path of ['/api/v1/secrets', '/api/v1/workspace/secrets']) {
+      const text = await (await apiRequest(instance, path)).text();
+      expect(text).not.toMatch(/proxy-value-123|legacy-value-123|workspace-value-123/);
+      for (const entry of JSON.parse(text).secrets) expect(Object.keys(entry).sort()).toEqual(['audiences', 'name', 'updatedAt', ...('binding' in entry ? ['binding'] : [])].sort());
+    }
+  });
+
   it('refuses project writes for an unregistered boot project, and still serves the workspace', async () => {
     const instance = createApp({ repoRoot: root, store, manager: {} as RunManager, version: 'test', secrets });
     expect((await apiRequest(instance, '/api/v1/secrets/KEY', put({ value: 'value' }))).status).toBe(409);
