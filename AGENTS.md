@@ -238,3 +238,11 @@ network), reuses an already-healthy instance instead of double-booting, and writ
 - `CODE_REVIEW.md` — what reviewers check and how severities are assigned.
 - `BACKWARD_COMPATIBILITY.md` — the public surfaces you must not break silently.
 - `.ai/agentic.config.json` — machine-readable pipeline config every om-* skill reads (base branch, validation commands, labels).
+
+## Fork rules (MigukNamja/cezar-fork, branch `vito`)
+
+This section belongs to the fork. It sits at the end so upstream merges stay clean; do not edit above it.
+
+- `main` mirrors `open-mercato/cezar`. Fork work goes on `vito`; never rebase or force-push it.
+- Comments: code the fork adds follows the Comments section above — a short why-comment where the reason is not in the code, citing the spec or issue. This holds even when a parent workspace's `AGENTS.md` says otherwise.
+- Keep fork changes narrow and additive, and note each in `BACKWARD_COMPATIBILITY.md`, so they can be proposed upstream.
