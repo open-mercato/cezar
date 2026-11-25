@@ -1,12 +1,13 @@
 import { spawn } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { flushTelemetry, setTelemetryConsent } from './telemetry.ts';
 import {
-  cockpitLogPath, collectUncleanExits, hostId, logFacts, parseMarker, reportUncleanExits, startLiveMarker,
+  cockpitLogPath, collectUncleanExits, hostId, logFacts, parseMarker, reportUncleanExits, resolveHostSeed, startLiveMarker,
   uncleanShutdownError, type LiveMarker,
 } from './unclean-exit.ts';
 
@@ -133,6 +134,19 @@ describe('collectUncleanExits', () => {
     expect(exit!.context['unclean.foreign_host']).toBe(true);
   });
 
+  it('does not let this host’s reboot suppress a dead marker from another host sharing ~/.cezar', () => {
+    const other = hostId('nfs-peer');
+    put(marker({ host: other, pid: 1, beatAt: NOW - 15 * 60_000 }));
+    // This machine booted 5 minutes ago, after the peer's last beat — the peer did not reboot.
+    const [exit] = collect('', { hostUptimeS: 300, isAlive: () => true });
+    expect(exit).toBeDefined();
+    expect(exit!.context['unclean.foreign_host']).toBe(true);
+    // Ancient (>30d) foreign markers are still dropped unreported.
+    put(marker({ host: other, pid: 2, beatAt: NOW - 31 * 86_400_000 }));
+    expect(collect('', { hostUptimeS: 300 })).toEqual([]);
+    expect(readdirSync(dir)).toEqual([]);
+  });
+
   it('leaves a live cockpit alone', () => {
     put(marker());
     expect(collect('', { isAlive: () => true })).toEqual([]);
@@ -164,6 +178,47 @@ describe('collectUncleanExits', () => {
     writeFileSync(join(dir, '7.json'), JSON.stringify({ ...marker({ pid: 7 }), host: undefined }));
     expect(collect()).toEqual([]);
     expect(readdirSync(dir)).toEqual([]);
+  });
+});
+
+describe('resolveHostSeed', () => {
+  it('keeps the same seed on macOS when the hostname changes across networks', () => {
+    const ioreg = () => '    "IOPlatformUUID" = "A1B2C3D4-E5F6-7890-ABCD-EF1234567890"\n';
+    const atHome = resolveHostSeed({ platform: 'darwin', execFile: ioreg, hostname: () => 'macbook.local' });
+    const atOffice = resolveHostSeed({ platform: 'darwin', execFile: ioreg, hostname: () => 'dhcp-10-0-1-9.corp' });
+    expect(atHome).toBe('darwin:A1B2C3D4-E5F6-7890-ABCD-EF1234567890');
+    expect(atOffice).toBe(atHome);
+    // Falls back cleanly to hostname when ioreg is unavailable.
+    expect(resolveHostSeed({
+      platform: 'darwin',
+      execFile: () => { throw new Error('ENOENT'); },
+      hostname: () => 'fallback.local',
+    })).toBe('fallback.local');
+  });
+
+  it('uses /etc/machine-id on Linux hosts, and hostname inside containers', () => {
+    const readFile = (p: string) => (p === '/etc/machine-id' ? '0123456789abcdef\n' : '');
+    expect(resolveHostSeed({ platform: 'linux', readFile, exists: () => false, hostname: () => 'box-a' }))
+      .toBe('linux:0123456789abcdef');
+    expect(resolveHostSeed({ platform: 'linux', readFile, exists: () => false, hostname: () => 'box-b' }))
+      .toBe('linux:0123456789abcdef');
+    // Containers built from the same image may share /etc/machine-id; stay distinct by container hostname.
+    expect(resolveHostSeed({
+      platform: 'linux',
+      readFile,
+      exists: (p) => p === '/.dockerenv',
+      hostname: () => 'container-1',
+    })).toBe('container-1');
+    expect(resolveHostSeed({
+      platform: 'linux',
+      readFile,
+      exists: (p) => p === '/run/.containerenv',
+      hostname: () => 'container-2',
+    })).toBe('container-2');
+  });
+
+  it('uses hostname on Windows', () => {
+    expect(resolveHostSeed({ platform: 'win32', hostname: () => 'DESKTOP-123' })).toBe('DESKTOP-123');
   });
 });
 
@@ -286,5 +341,61 @@ describe('startLiveMarker', () => {
     expect(readdirSync(live)).toEqual([]);
     const killed = await run('kill');
     expect(readdirSync(live)).toEqual([`${killed}-${hostId()}.json`]);
+  }, 30_000);
+
+  it.skipIf(process.platform === 'win32')('serve handles SIGHUP cleanly and removes its live marker', async () => {
+    const port = await new Promise<number>((resolve, reject) => {
+      const srv = createServer();
+      srv.once('error', reject);
+      srv.listen(0, '127.0.0.1', () => {
+        const addr = srv.address();
+        const p = typeof addr === 'object' && addr ? addr.port : 0;
+        srv.close(() => resolve(p));
+      });
+    });
+    const home = join(dir, 'home');
+    const repo = join(dir, 'repo');
+    mkdirSync(home, { recursive: true });
+    mkdirSync(repo, { recursive: true });
+    const entry = fileURLToPath(new URL('./index.ts', import.meta.url));
+    const child = spawn(
+      process.execPath,
+      ['--import', 'tsx', entry, 'serve', '--no-open', '--port', String(port), '--repo', repo],
+      {
+        stdio: ['ignore', 'pipe', 'pipe'],
+        env: {
+          ...process.env,
+          CEZ_HOME: home,
+          CEZ_DRY_RUN: '1',
+          CEZ_NO_BANNER: '1',
+          CEZ_TELEMETRY: '0',
+          CEZ_SKILLS_AUTO_UPDATE: '0',
+          CEZ_AUTOMATIONS: '0',
+          CEZ_MANAGERS: '0',
+          CEZ_RELAY: '0',
+          CEZ_DISPATCH: '0',
+        },
+      },
+    );
+    const exited = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve) =>
+      child.once('exit', (code, signal) => resolve({ code, signal })),
+    );
+    let output = '';
+    child.stdout.on('data', (chunk: Buffer) => { output += chunk.toString('utf8'); });
+    child.stderr.on('data', (chunk: Buffer) => { output += chunk.toString('utf8'); });
+    try {
+      const live = join(home, 'telemetry', 'live');
+      const markerFile = join(live, `${child.pid}-${hostId()}.json`);
+      await vi.waitFor(() => {
+        expect(existsSync(markerFile), output).toBe(true);
+        expect(output).toContain(`:${port}/`);
+      }, { timeout: 20_000, interval: 50 });
+      child.kill('SIGHUP');
+      const result = await exited;
+      expect(result, output).toEqual({ code: 0, signal: null });
+      expect(readdirSync(live)).toEqual([]);
+    } finally {
+      if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
+    }
   }, 30_000);
 });

@@ -8,8 +8,9 @@
  * and reports it — consent permitting — with what the marker and the desktop shell's
  * `~/.cezar/logs/cockpit.log` (#2489) say about it: facts only, never output text or paths.
  */
+import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { closeSync, fstatSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { closeSync, existsSync, fstatSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { hostname, uptime as hostUptime } from 'node:os';
 import { join } from 'node:path';
 import { assertCezarHomeWriteIsSandboxed, cezarHomeDir } from './paths.ts';
@@ -27,7 +28,7 @@ const RUNTIMES = new Set(['app', 'cli']);
 
 export interface LiveMarker {
   pid: number;
-  /** Hash of the hostname: containers sharing `~/.cezar` see each other's pids as dead. */
+  /** Hash of a local machine/container id (never sent in telemetry): hosts sharing `~/.cezar` see each other's pids as dead. */
   host: string;
   startedAt: number;
   beatAt: number;
@@ -53,8 +54,53 @@ export function cockpitLogPath(): string {
   return join(cezarHomeDir(), 'logs', 'cockpit.log');
 }
 
-export function hostId(name: string = hostname()): string {
-  return createHash('sha256').update(name).digest('hex').slice(0, 12);
+let cachedHostId: string | undefined;
+
+/**
+ * Stable identifier for the local OS or container so a macOS hostname change on Wi-Fi/DHCP does
+ * not make this machine's own marker look like a foreign host. Zero-config and never sent in
+ * telemetry: only its local hash is stored in the marker filename and JSON.
+ */
+export function resolveHostSeed(deps: {
+  platform?: NodeJS.Platform;
+  readFile?: (path: string) => string;
+  execFile?: (file: string, args: string[]) => string;
+  exists?: (path: string) => boolean;
+  hostname?: () => string;
+} = {}): string {
+  const platform = deps.platform ?? process.platform;
+  const readFile = deps.readFile ?? ((p: string) => readFileSync(p, 'utf8'));
+  const execFile = deps.execFile ?? ((file: string, args: string[]) =>
+    execFileSync(file, args, { encoding: 'utf8', timeout: 1_000, stdio: ['ignore', 'pipe', 'ignore'] }));
+  const exists = deps.exists ?? existsSync;
+  const host = deps.hostname ?? hostname;
+
+  if (platform === 'darwin') {
+    try {
+      const out = execFile('/usr/sbin/ioreg', ['-rd1', '-c', 'IOPlatformExpertDevice']);
+      const uuid = /"IOPlatformUUID"\s*=\s*"([^"]+)"/.exec(out)?.[1]?.trim();
+      if (uuid) return `darwin:${uuid}`;
+    } catch { /* fall back to hostname */ }
+  } else if (platform === 'linux') {
+    // Two containers built from the same image may share `/etc/machine-id` while their hostname is
+    // the distinct container id (and does not change on Wi-Fi switches).
+    const inContainer = exists('/.dockerenv') || exists('/run/.containerenv');
+    if (!inContainer) {
+      for (const path of ['/etc/machine-id', '/var/lib/dbus/machine-id']) {
+        try {
+          const id = readFile(path).trim();
+          if (id) return `linux:${id}`;
+        } catch { /* try next */ }
+      }
+    }
+  }
+  return host();
+}
+
+export function hostId(seed?: string): string {
+  if (seed !== undefined) return createHash('sha256').update(seed).digest('hex').slice(0, 12);
+  cachedHostId ??= createHash('sha256').update(resolveHostSeed()).digest('hex').slice(0, 12);
+  return cachedHostId;
 }
 
 function markerName(marker: Pick<LiveMarker, 'pid' | 'host'>): string {
@@ -265,17 +311,21 @@ export function collectUncleanExits(opts: {
     try { raw = readFileSync(file, 'utf8'); } catch { continue; }
     const marker = parseMarker(raw, name);
     let report = false;
-    if (marker && marker.beatAt >= bootedAt) {
+    if (marker) {
       if (marker.host !== host) {
+        // Another machine's marker: our own uptime says nothing about whether THAT machine rebooted,
+        // and we cannot probe its pid. Silent beyond FOREIGN_STALE_MS means dead; drop ancient ones.
         if (now - marker.beatAt < FOREIGN_STALE_MS) continue;
-        report = true;
-      } else if (marker.pid === process.pid) {
-        if (marker.startedAt >= selfStartedAt) continue;
-        report = true;
-      } else if (isAlive(marker.pid)) {
-        if (now - marker.beatAt < STALE_MS) continue;
-      } else {
-        report = true;
+        if (now - marker.beatAt < STALE_MS) report = true;
+      } else if (marker.beatAt >= bootedAt) {
+        if (marker.pid === process.pid) {
+          if (marker.startedAt >= selfStartedAt) continue;
+          report = true;
+        } else if (isAlive(marker.pid)) {
+          if (now - marker.beatAt < STALE_MS) continue;
+        } else {
+          report = true;
+        }
       }
     }
     const claimed = `${file}.claimed-${process.pid}`;

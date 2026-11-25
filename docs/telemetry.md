@@ -137,7 +137,8 @@ location or `PATH`, and its extension) and the CLI's `--version`. Never its outp
 
 A process killed outright (SIGKILL, an out-of-memory kill) runs no handler and cannot report
 itself. So a running cockpit keeps a small marker, `~/.cezar/telemetry/live/<pid>-<host>.json` (the
-host part is a hash of the machine's name, so containers sharing a home stay apart), with its
+host part is a hash of a local machine id, never sent in telemetry, so containers or hosts sharing
+a home stay apart), with its
 version, start time, memory and number of running tasks. The marker is refreshed every minute and
 deleted on every exit Node sees, a closed terminal included. When the next cockpit starts and
 finds a marker whose process is gone, it reports an `UncleanShutdown` (code `unclean_shutdown`)
