@@ -274,6 +274,7 @@ const IDLE_CLOSED_LIFECYCLE = 'run closed after inactivity — nobody replied; C
 /** Tail of an agent node's last turn kept as `{{nodes.<id>.summary}}`. */
 const NODE_SUMMARY_CAP = 4_000;
 import { freshContinuationContext } from './continuation-context.ts';
+import { laterInstructions, resumeWithContext } from './resume-prompt.ts';
 
 const CHECK_OUTPUT_CAP = 20_000;
 
@@ -1497,6 +1498,15 @@ const RESTART_CONTINUATION_PROMPT =
   'The cezar process restarted while you were working on this task. Read the handoff file (CEZ_HANDOFF_FILE) to recover context, then continue the task from where you left off.';
 const SWITCH_AGENT_PROMPT =
   'Continue this task on the newly selected agent. Use the handoff, conversation and existing worktree to pick up the work. If a user decision was pending, wait for their answer.';
+/** Openings cezar sends on its own; recorded like the user's messages, but not instructions. */
+const CEZAR_OPENINGS = [
+  RESTART_CONTINUATION_PROMPT,
+  SWITCH_AGENT_PROMPT,
+  AUTO_RESUME_PROMPT,
+  TRANSIENT_RETRY_PROMPT,
+  AUTH_RECONNECTED_PROMPT,
+  'Sent automatically by cezar',
+];
 
 interface PendingContinuation {
   stepId: string;
@@ -5317,13 +5327,9 @@ export class RunManager {
       return { ...continuation, persistedImages: [], persistedAttachments: [] };
     }
     const stack = run.queuedMessages ?? [];
-    const amendedTask = [run.task, ...stack.map((message) => message.text)]
-      .map((part) => part.trim())
-      .filter((part) => part.length > 0)
-      .join('\n\n');
-    const prompt = amendedTask
-      ? `${continuation.prompt}\n\nCurrent task and queued updates:\n\n${amendedTask}`
-      : continuation.prompt;
+    // The newest instructions win, labelled by age — not the first objective as "current".
+    const later = laterInstructions(this.store.readEvents(runId), run.task, CEZAR_OPENINGS);
+    const prompt = resumeWithContext(continuation.prompt, run.task, later, stack.map((message) => message.text));
     const persisted = this.readPersistedAttachments(
       runId,
       stack.flatMap((message) => message.images ?? []),
