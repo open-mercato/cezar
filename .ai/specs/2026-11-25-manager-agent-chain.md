@@ -35,7 +35,9 @@ With `available`, every turn starts from #1, so the first turn after #1's hold e
 `back` notice). A reconnect of a row's login releases its `auth` hold. `PATCH {switchToPrimary:
 true}` (Switch back now) clears every hold and posts a `manual` notice. Editing any row or the
 failback choice clears `chain.active` and the non-limit holds. Each row's transcript is parked under
-its session key, so #1's resumes when `resumes()` still allows it.
+its session key with the chat's last seq; it resumes only when no reply was written since (and
+`resumes()` still allows it). One that missed another row's replies starts over from the preamble,
+which carries them.
 
 ## Shared limits
 
