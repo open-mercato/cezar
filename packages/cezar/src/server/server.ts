@@ -438,7 +438,7 @@ import { onPrClosed, reportPrClosed } from './forge/pr-closed.ts';
 import { fetchGithub, fetchGithubChecks, fetchGithubComments, fetchGithubPrDiff, fetchGithubRefStatus, forgetRefStatus, readCachedPrEnds, readCachedRefStatuses, refNumberFromUrl, searchGithubItems, GithubPrNotFoundError, GH_CHECKS_MAX, GH_SEARCH_MAX, GH_REF_STATUS_MAX, forgetGithubListCache } from './github.ts';
 import { ensureLaunchKey } from './launch-key.ts';
 import { openInTerminal } from './open-in-terminal.ts';
-import { agentSetupRoutes } from './agent-setup-routes.ts';
+import { AGENT_SETUP_OWNER, agentSetupRoutes } from './agent-setup-routes.ts';
 import type { InstallEnv } from './agent-setup.ts';
 import {
   agentCliRunner,
@@ -1715,6 +1715,12 @@ export function createApp(deps: ServerDeps) {
   const detectedUrls = new DetectedUrls();
   const terminalSessions = deps.terminalSessions ?? new TerminalSessions(undefined, detectedUrls);
   deps.onDispose?.(() => terminalSessions.closeAll());
+  // An agent install or sign-in still running is work a restart would cut off.
+  const offSetupGate = deps.semaphore?.restartGate.addSource(() => [{
+    kind: 'setup',
+    names: terminalSessions.listFor(AGENT_SETUP_OWNER).filter((session) => session.exitCode === null).map((session) => session.label),
+  }]);
+  if (offSetupGate) deps.onDispose?.(offSetupGate);
   /** Stop a task's shells, their process trees and the addresses they printed (archive + delete). */
   const stopTaskProcesses = (runId: string) => {
     for (const session of terminalSessions.listFor(runId)) terminalSessions.kill(session.id);
@@ -9265,6 +9271,7 @@ export function createApp(deps: ServerDeps) {
     // An inactive manager's cards leave the Questions count (spec 2026-11-19-manager-deactivate).
     onActivityChange: () => refreshQuestions(),
     ...(deps.managerRunnerFor ? { runnerFor: deps.managerRunnerFor } : {}),
+    ...(deps.semaphore ? { restartGate: deps.semaphore.restartGate } : {}),
     onAccountHoldsChanged: () => {
       deps.semaphore?.notifyAccountHoldsChanged();
       void deps.semaphore?.release();

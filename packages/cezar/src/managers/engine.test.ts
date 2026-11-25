@@ -17,6 +17,7 @@ import { followupPrompt, MANAGER_QUIET, managerSystemPrompt, watchPrompt } from 
 import { readColdRuns, type ManagerProjectSource } from './snapshot.ts';
 import type { RunRecord } from '../runs/store.ts';
 import { ManagerStore } from './store.ts';
+import { RestartGate } from '../workspace/restart-gate.ts';
 import { createManagerQuestionProvider } from './questions.ts';
 
 interface Script {
@@ -292,6 +293,38 @@ describe('ManagerEngine', () => {
       engine.send(created.id, 'b');
       await settled(engine);
       expect(backend.specs.map((spec) => [spec.model, spec.reasoningEffort])).toEqual([['opus', 'high'], ['opus', 'high']]);
+    });
+
+    it('a turn in flight blocks "restart when idle"; while one is pending only chat starts a turn', async () => {
+      const gate = new RestartGate();
+      const engine = makeEngine({ restartGate: gate });
+      const id = await create(engine);
+      const name = store.get(id)!.name;
+      backend.scripts.push({ hold: true }, say('ok'));
+      engine.send(id, 'long one');
+      await vi.waitFor(() => expect(backend.open).toHaveLength(1));
+      expect(gate.blockers()).toEqual([{ kind: 'manager', count: 1, names: [name] }]);
+      backend.open[0]?.finish();
+      await settled(engine);
+      expect(gate.idle()).toBe(true);
+
+      // Pending: a timed or forced check waits; it would otherwise start a turn mid-restart.
+      gate.hold();
+      const checkedBefore = store.state(id).lastCheckAt;
+      engine.check(id);
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(engine.inFlight()).toBe(0);
+      expect(store.state(id).lastCheckAt).toBe(checkedBefore);
+      // What the user types still runs — and the restart waits for it.
+      engine.send(id, 'quick question');
+      await settled(engine);
+      expect(assistants(id).at(-1)?.text).toBe('ok');
+      expect(store.state(id).lastCheckAt).toBe(checkedBefore);
+
+      // Cancelled: the held check runs.
+      gate.release();
+      await vi.waitFor(() => expect(store.state(id).lastCheckAt).not.toBe(checkedBefore));
+      await settled(engine);
     });
 
     it('queues during a turn and folds what piled up into one', async () => {
