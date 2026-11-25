@@ -196,13 +196,15 @@ export function AgentSetupFlow({ provider, action, onClose }: { provider: AgentS
   }, [queryClient])
   const reread = React.useCallback(() => queryClient.invalidateQueries({ queryKey: workspaceQueryKeys.agentSetup }), [queryClient])
   // Stopped: once the listing has been read again without it, it needs no guarding.
-  const stopped = React.useCallback((id: string) => {
+  // `fresh`: the cancel mutation's own onSettled already re-read it (mutateAsync waits for that).
+  const stopped = React.useCallback((id: string, fresh = false) => {
+    if (fresh) return void cancelling.delete(id)
     void reread().finally(() => cancelling.delete(id))
   }, [reread])
   // A cancel that failed: the server still runs the session, so it may be shown again.
-  const keep = React.useCallback((id: string) => {
+  const keep = React.useCallback((id: string, fresh = false) => {
     cancelling.delete(id)
-    void reread()
+    if (!fresh) void reread()
   }, [reread])
 
   // A login terminal nobody watches holds the one setup slot. Closing cancels only one this sheet
@@ -226,9 +228,9 @@ export function AgentSetupFlow({ provider, action, onClose }: { provider: AgentS
   const stop = React.useCallback((id: string, onFail: () => void) => {
     forget(id)
     cancelAsync(id).then(
-      () => stopped(id),
+      () => stopped(id, true),
       () => {
-        keep(id)
+        keep(id, true)
         if (alive.current) onFail()
       },
     )

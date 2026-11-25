@@ -49,6 +49,9 @@ let cancelGate: Promise<void> | null = null
 let listFails = false
 /** When set, GET /providers/setup waits for it before answering. */
 let listGate: Promise<void> | null = null
+/** GET /providers/setup requests received, and gated ones answered. */
+let listRequests = 0
+let gatedAnswered = 0
 /** When true, a POST answers as the server's join of the running session, with its header. */
 let joinNext = false
 /** When true, `GET /api/v1/providers/status?refresh=1` answers 500. */
@@ -81,7 +84,11 @@ beforeEach(() => {
       if (url.searchParams.get('refresh') === '1' && refreshFails) return json({ error: 'down' }, 500)
       return json({ providers: Object.entries(statuses).map(([provider, status]) => ({ provider, status, enabled: true })) })
     }
-    if (url.pathname === '/api/v1/providers/setup' && listGate) await listGate
+    if (url.pathname === '/api/v1/providers/setup') listRequests += 1
+    if (url.pathname === '/api/v1/providers/setup' && listGate) {
+      await listGate
+      gatedAnswered += 1
+    }
     if (url.pathname === '/api/v1/providers/setup' && listFails) return json({ error: 'down' }, 500)
     if (url.pathname === '/api/v1/providers/setup') return json({ available: refusedWith === null, reason: refusedWith, interactive, session, agents })
     if (url.pathname === '/api/v1/providers/setup/sessions' && method === 'POST') {
@@ -131,6 +138,8 @@ afterEach(async () => {
   cancelGate = null
   listFails = false
   listGate = null
+  listRequests = 0
+  gatedAnswered = 0
   joinNext = false
   // Module-level in the sheet, and the tests reuse ids (s1, s2): never carried into the next case.
   agentSetupCancelsForTests().clear()
@@ -463,10 +472,15 @@ describe('AgentSetupFlow: terminal sign-in and lost sessions (#2474 re-review)',
     renderFlow('antigravity', 'sign-in')
     fireEvent.click(await screen.findByRole('button', { name: 'Open terminal here' }))
     await screen.findByTestId('terminal')
+    await pause(50)
+    const before = listRequests
     fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
     await waitFor(() => expect(cancelled).toEqual(['s1']))
     expect(await screen.findByRole('button', { name: 'Open terminal here' })).toBeTruthy()
     expect(screen.queryByTestId('terminal')).toBeNull()
+    // The cancel's own onSettled re-reads the listing; the sheet does not read it a second time.
+    await pause(200)
+    expect(listRequests - before).toBe(1)
   })
 
   it('opened as a sign-in, rejoins a sign-in terminal already running', async () => {
@@ -1032,11 +1046,15 @@ describe('AgentSetupFlow: the re-check timer and unmount (#2474 final review)', 
     let release!: () => void
     listGate = new Promise<void>((resolve) => { release = resolve })
     listFails = true
+    const before = listRequests
     act(() => { client.setQueryData(['workspace', 'providers', 'setup'], (state: Record<string, unknown>) => ({ ...state, session: null })) })
-    await pause(50)
+    // Positive control: the sheet's re-read is in flight, held at the gate, when the sheet closes.
+    await waitFor(() => expect(listRequests).toBeGreaterThan(before))
+    expect(gatedAnswered).toBe(0)
     view.unmount()
     const setTimer = vi.spyOn(window, 'setTimeout')
     release()
+    await waitFor(() => expect(gatedAnswered).toBeGreaterThan(0))
     await pause(100)
     expect(setTimer.mock.calls.some(([, ms]) => ms === RECHECK_MS)).toBe(false)
   })
