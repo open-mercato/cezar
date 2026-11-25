@@ -322,6 +322,60 @@ export const githubCommentsDataSchema = z.object({
 });
 export type GithubCommentsData = z.infer<typeof githubCommentsDataSchema>;
 
+/** A diff side in the cockpit's own vocabulary: GitHub's `RIGHT` is `new`, `LEFT` is `old`. */
+export const githubDiffSideSchema = z.enum(['old', 'new']);
+
+/**
+ * One inline (line-anchored) PR review comment — `GET /repos/{o}/{r}/pulls/{n}/comments`,
+ * normalized. Read-only in the cockpit: never editable, never sent to the agent as the user's
+ * own review (spec 2026-07-18-github-comment-threads, follow-up note).
+ */
+export const githubReviewCommentSchema = z.object({
+  id: z.number(),
+  /** Author login, `'?'` fallback when gh omits the user. */
+  author: z.string(),
+  avatarUrl: z.string().optional(),
+  createdAt: z.string(),
+  /** Markdown, capped like thread comment bodies. */
+  body: z.string(),
+  /** Opens the comment on GitHub. */
+  url: z.string(),
+  path: z.string(),
+  side: githubDiffSideSchema,
+  /** The line on the PR head today. Absent ⇔ `outdated`. */
+  line: z.number().int().positive().optional(),
+  /** The line when the comment was written — what an outdated comment is labelled with. */
+  originalLine: z.number().int().positive().optional(),
+  /** First line of a multi-line comment, on the current head. */
+  startLine: z.number().int().positive().optional(),
+  startSide: githubDiffSideSchema.optional(),
+  originalStartLine: z.number().int().positive().optional(),
+  /** The root comment's id when this is a reply. Replies carry the root's anchor. */
+  inReplyTo: z.number().optional(),
+  /** No current line: the code it was left on is gone from the PR head. */
+  outdated: z.boolean(),
+  /** `file` for a comment on a whole file rather than a line. */
+  subjectType: z.enum(['line', 'file']).optional(),
+  /** GitHub's hunk excerpt ending at the commented line, capped — context for an outdated one. */
+  diffHunk: z.string().optional(),
+  /** Root comments only, best-effort (GraphQL `reviewThreads`); absent when unknown. */
+  resolved: z.boolean().optional(),
+});
+export type GithubReviewComment = z.infer<typeof githubReviewCommentSchema>;
+
+/**
+ * `GET /api/v1/github/prs/:number/review-comments` — the PR's inline review comments, oldest
+ * first. Degrades to `{ available: false, reason, comments: [] }`, never an error.
+ */
+export const githubReviewCommentsDataSchema = z.object({
+  available: z.boolean(),
+  reason: z.string().optional(),
+  comments: z.array(githubReviewCommentSchema),
+  /** True when the entry cap or the page cap cut the list. */
+  truncated: z.boolean().optional(),
+});
+export type GithubReviewCommentsData = z.infer<typeof githubReviewCommentsDataSchema>;
+
 export const githubMergeMethodSchema = z.enum(['merge', 'squash', 'rebase']);
 export type GithubMergeMethod = z.infer<typeof githubMergeMethodSchema>;
 
