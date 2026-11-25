@@ -188,7 +188,12 @@ export function AgentSetupList({
               </div>
               <RowAction row={row} open={open} busy={busy} onStart={begin} />
             </div>
-            {!open && !rowStopped && row.state === 'missing' && row.installCommand === null ? <p className="mt-3 text-ui text-soft-foreground">{row.installHint}</p> : null}
+            {!open && !rowStopped && row.state === 'missing' && row.installCommand === null ? (
+              <p className="mt-3 text-ui text-soft-foreground">
+                {row.install.command ? <>Run <code className="font-mono text-meta">{row.install.command}</code> on this computer, or see </> : 'See '}
+                <a href={row.docsUrl} target="_blank" rel="noopener noreferrer" className="underline underline-offset-2">the install docs</a>.
+              </p>
+            ) : null}
             {!open && !rowStopped && row.state === 'missing' && row.installCommand ? <CommandLine command={row.installCommand} /> : null}
             {open && shown ? <SetupTerminal key={shown.id} session={shown} running={running} installing={installing} /> : null}
             {rowStopped && !open ? <CommandLine command={(rowStopped.action === 'install' ? row.installCommand : row.loginCommand) ?? ''} /> : null}

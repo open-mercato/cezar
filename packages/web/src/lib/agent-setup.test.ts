@@ -6,7 +6,6 @@ import { agentRowAction, agentSetupListRows, agentVersionChip, entryVersionState
 
 const agent = (provider: AgentSetupProvider, over: Partial<AgentSetupEntry> = {}): AgentSetupEntry => ({
   provider,
-  installHint: 'hint',
   loginCommand: `login ${provider}`,
   install: { command: `install ${provider}`, runnable: true, method: 'npm', sudo: false },
   update: null,

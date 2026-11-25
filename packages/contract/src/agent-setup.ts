@@ -35,7 +35,6 @@ export type AgentVersionState = z.infer<typeof agentVersionStateSchema>;
 
 export const agentSetupEntrySchema = z.object({
   provider: agentSetupProviderSchema,
-  installHint: z.string(),
   loginCommand: z.string().nullable(),
   /** The install for this machine: cezar runs it when `runnable`, else it is the line to copy. */
   install: agentCommandPlanSchema,
@@ -100,5 +99,5 @@ export type AgentSetupStart = z.infer<typeof agentSetupStartSchema>;
 export const agentSetupSessionParamsSchema = z.object({ sessionId: z.string() });
 
 /** `GET /api/v1/providers/setup?latest=1` also looks up the newest release of each agent. */
-export const agentSetupQuerySchema = z.object({ latest: z.enum(['0', '1']).optional() });
+export const agentSetupQuerySchema = z.object({ latest: z.literal('1').optional() });
 export type AgentSetupQuery = z.infer<typeof agentSetupQuerySchema>;

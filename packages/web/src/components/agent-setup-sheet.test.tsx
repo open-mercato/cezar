@@ -37,7 +37,6 @@ const json = (body: unknown, status = 200) => new Response(JSON.stringify(body),
 
 const entry = (provider: AgentSetupProvider, over: Partial<AgentSetupEntry> = {}): AgentSetupEntry => ({
   provider,
-  installHint: '',
   loginCommand: `${provider} login`,
   install: { command: null, runnable: false, method: null, sudo: false },
   update: null,

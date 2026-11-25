@@ -155,7 +155,6 @@ describe('ProviderAuthRequiredCard', () => {
 describe('AgentUpdateRequiredCard', () => {
   const entry = (provider: string, update: { command: string; runnable: boolean; method: string | null; sudo: boolean }) => ({
     provider,
-    installHint: '',
     loginCommand: null,
     install: { command: null, runnable: false, method: null, sudo: false },
     update: { command: update.command, runnable: update.runnable, sudo: update.sudo },

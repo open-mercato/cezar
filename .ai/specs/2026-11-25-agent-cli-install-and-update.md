@@ -68,6 +68,8 @@ running session answers 201 like a fresh start, and "could not be checked" answe
 `3bc0ef093`/`4ce90da91` it had about 100 characters to spare. A union of two states spelled the agent list out twice,
 a second success status spelled the session out twice, and `versionState` and `installCommand` repeat what the other
 fields already say, so the reader derives those two (`entryVersionState`, `install.runnable ? install.command : null`).
+The entry has no `installHint` either (the first-run row shows the copy line or the docs link), and `?latest` takes
+only `1`: on Windows `main` itself sits within a character of the limit, so this family must cost less than `main`'s.
 
 ## The sheet
 

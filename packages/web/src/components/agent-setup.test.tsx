@@ -33,7 +33,6 @@ let sessionCount = 0
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } })
 const agents = ['claude', 'codex'].map((provider) => ({
   provider,
-  installHint: `Install ${provider}.`,
   loginCommand: `${provider} login`,
   install: { command: `npm install -g ${provider}`, runnable: true, method: 'npm', sudo: false },
 }))

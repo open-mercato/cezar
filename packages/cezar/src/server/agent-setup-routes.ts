@@ -142,7 +142,6 @@ export function agentSetupRoutes(deps: AgentSetupDeps) {
       const latestVersion = installed && withLatest && deps.latest ? await deps.latest.latest(provider) : null;
       return {
         provider,
-        installHint: deps.installHint(provider),
         loginCommand: deps.loginCommand(provider),
         install: plan(installPlan),
         update: update ? { command: update.command, runnable: update.runnable, sudo: update.sudo } : null,
