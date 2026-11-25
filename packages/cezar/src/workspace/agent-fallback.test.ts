@@ -252,4 +252,30 @@ describe('a manager fallback policy', () => {
     const selected = { ...store, selections: { '/repo': { claude: 'second' } } } as unknown as AgentAccountStore;
     expect(eligibleFallbackCandidates(policy, new Set(), new Set(), selected, '/repo').eligible).toHaveLength(1);
   });
+
+  it('follows the manager’s mid-task setting live: same agent only, or wait for the reset', () => {
+    const mixed = managerFallbackPolicy([{ provider: 'claude', profileId: 'default' }, { provider: 'codex', profileId: 'default' }], 'm1');
+    const agents = [{ runner: 'claude' }, { runner: 'codex' }];
+    setManagerTaskAccountsLookup(() => ({ agents, limitSwitch: 'same-agent' }));
+    expect(eligibleFallbackCandidates(mixed, new Set(), new Set(), null, undefined, 'claude').eligible.map((c) => c.provider)).toEqual(['claude']);
+    setManagerTaskAccountsLookup(() => ({ agents, limitSwitch: 'wait' }));
+    expect(eligibleFallbackCandidates(mixed, new Set(), new Set(), null, undefined, 'claude').eligible).toEqual([]);
+    // An older lookup shape (a bare list) still works: any listed account.
+    setManagerTaskAccountsLookup(() => agents);
+    expect(eligibleFallbackCandidates(mixed, new Set(), new Set(), null, undefined, 'claude').eligible).toHaveLength(2);
+  });
+
+  it('with roles, orders Main by load, then Backup, with a busy account last', () => {
+    const list = managerFallbackPolicy([
+      { provider: 'opencode', profileId: 'default' }, { provider: 'claude', profileId: 'default' }, { provider: 'codex', profileId: 'default' },
+    ], 'm1');
+    setManagerTaskAccountsLookup(() => ({
+      agents: [{ runner: 'opencode', role: 'backup' }, { runner: 'claude', role: 'main' }, { runner: 'codex', role: 'main' }],
+      maxRunning: 2,
+    }));
+    const load = new Map([['claude:default', 1], ['codex:default', 0]]);
+    expect(eligibleFallbackCandidates(list, new Set(), new Set(), null, undefined, 'x', load).eligible.map((c) => c.provider)).toEqual(['codex', 'claude', 'opencode']);
+    load.set('codex:default', 2);
+    expect(eligibleFallbackCandidates(list, new Set(), new Set(), null, undefined, 'x', load).eligible.map((c) => c.provider)).toEqual(['claude', 'opencode', 'codex']);
+  });
 });

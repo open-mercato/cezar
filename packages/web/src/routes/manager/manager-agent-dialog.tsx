@@ -1,4 +1,3 @@
-import { ListChecksIcon } from 'lucide-react'
 import { useRef } from 'react'
 
 import type { ManagerSummary } from '@open-mercato/cezar-api-client'
@@ -6,9 +5,8 @@ import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 
 import { AgentChainSection } from './manager-agent-chain'
-import { TaskRunnerPicker, type ManagerPatch } from './manager-pickers'
-
-const FIELD = 'h-11 w-full justify-between rounded-lg border border-border bg-background px-3 text-foreground [&>svg]:order-last [&>span]:min-w-0 [&>span]:flex-1 [&>span]:text-left'
+import { type ManagerPatch } from './manager-pickers'
+import { TaskRoutingSection } from './manager-task-routing'
 
 export function ManagerAgentDialog({ manager, onPatch, onClose, onCloseAutoFocus, focusAccount = false }: {
   manager: ManagerSummary
@@ -39,13 +37,7 @@ export function ManagerAgentDialog({ manager, onPatch, onClose, onCloseAutoFocus
           <div ref={account}>
             <AgentChainSection manager={manager} onPatch={onPatch} {...(focusAccount ? { initialEditing: 0 } : {})} />
           </div>
-          <section aria-label="Agents for new tasks" className="space-y-3 rounded-xl border border-border p-4">
-            <div>
-              <h3 className="flex items-center gap-2 text-sm font-semibold"><ListChecksIcon aria-hidden="true" className="size-4 text-muted-foreground" />For new tasks</h3>
-              <p className="mt-1 text-xs text-muted-foreground">Choose the agents and accounts this Manager may use. Automatic lets it choose freely.</p>
-            </div>
-            <TaskRunnerPicker taskAgents={manager.taskAgents} {...(manager.taskRunner ? { taskRunner: manager.taskRunner } : {})} onChange={onPatch} className={FIELD} />
-          </section>
+          <TaskRoutingSection manager={manager} onPatch={onPatch} />
         </div>
         <DialogFooter className="items-center gap-3">
           <p className="text-xs text-muted-foreground sm:mr-auto">Changes are saved as you choose.</p>

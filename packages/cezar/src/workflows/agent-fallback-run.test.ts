@@ -811,4 +811,51 @@ describe('automatic agent fallback', () => {
     await manager.recover();
     await until(() => store.getRun(id)?.agentProfile === 'third', 'third account takes over after restart');
   }, 40_000);
+
+  describe('a manager-routed queued task (spec 2026-11-25-manager-task-routing)', () => {
+    const startedByManager = { id: 'm1', name: 'Coding Manager' };
+    const both = [{ provider: 'claude' as const, profileId: 'default' }, { provider: 'claude' as const, profileId: 'second' }];
+    const routedTask = (task: string, routed = true) => manager!.startRun(workflow, {
+      task, worktree: false, agentProfile: 'default', startedByManager,
+      managerAgent: { note: 'chosen', fallback: both, ...(routed ? { routed: true as const } : {}) },
+    });
+
+    it('moves to an open Main account when its own already runs as many as the manager allows', async () => {
+      registerAccounts(['second']);
+      setManagerTaskAccountsLookup(() => ({ agents: [{ runner: 'claude', agentProfile: 'default', role: 'main' }, { runner: 'claude', agentProfile: 'second', role: 'main' }], maxRunning: 1 }));
+      manager = new RunManager(store, repoRoot);
+      const busy = manager.startRun(workflow, { task: 'hold the account mock:slow', worktree: false, agentProfile: 'default' });
+      await until(() => store.getRun(busy.id)?.status === 'running', 'the first task to run');
+      const moved = routedTask('quick one mock:done');
+      await until(() => store.getRun(moved.id)?.agentProfile === 'second', 'the routed task to move');
+      expect(messages(moved.id)).toContain('Routed to claude · second: claude · default is busy');
+      // Started on the other account (in-place tasks then share the working tree, which is not this test's).
+      await until(() => store.getRun(moved.id)?.status !== 'queued', 'the moved task to start');
+    }, 40_000);
+
+    it('waits, labelled, while every account is busy, and starts once one frees up', async () => {
+      setManagerTaskAccountsLookup(() => ({ agents: [{ runner: 'claude', agentProfile: 'default', role: 'main' }], maxRunning: 1 }));
+      manager = new RunManager(store, repoRoot);
+      const busy = manager.startRun(workflow, { task: 'hold the account mock:slow', worktree: false, agentProfile: 'default' });
+      await until(() => store.getRun(busy.id)?.status === 'running', 'the first task to run');
+      const waiting = routedTask('quick one mock:done');
+      await until(() => store.getRun(waiting.id)?.queueWaitReason?.kind === 'account-busy', 'the routed task to wait');
+      expect(store.getRun(waiting.id)?.status).toBe('queued');
+      manager.cancel(busy.id);
+      await until(() => store.getRun(waiting.id)?.status !== 'queued', 'the routed task to start');
+      expect(store.getRun(waiting.id)?.queueWaitReason).toBeUndefined();
+    }, 40_000);
+
+    it('a task without the routed flag, or a list without roles, starts as before', async () => {
+      registerAccounts(['second']);
+      setManagerTaskAccountsLookup(() => [{ runner: 'claude', agentProfile: 'default' }, { runner: 'claude', agentProfile: 'second' }]);
+      manager = new RunManager(store, repoRoot);
+      const busy = manager.startRun(workflow, { task: 'hold the account mock:slow', worktree: false, agentProfile: 'default' });
+      await until(() => store.getRun(busy.id)?.status === 'running', 'the first task to run');
+      const plain = routedTask('quick one mock:done', false);
+      await until(() => store.getRun(plain.id)?.status !== 'queued', 'the task to start');
+      expect(store.getRun(plain.id)?.agentProfile).toBe('default');
+      expect(messages(plain.id).some((m) => m.startsWith('Routed to'))).toBe(false);
+    }, 40_000);
+  });
 });

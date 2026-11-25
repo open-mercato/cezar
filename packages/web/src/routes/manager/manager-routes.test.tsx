@@ -1788,6 +1788,42 @@ describe('/manager/:id', () => {
     await waitFor(() => expect(posted('/global/check')).toHaveLength(1))
   })
 
+  describe('new-task routing (spec 2026-11-25-manager-task-routing)', () => {
+    const patches = () => calls.filter((call) => call.method === 'PATCH').map((call) => call.body)
+    const openDialog = async () => {
+      fireEvent.click(await screen.findByRole('button', { name: 'Manager settings' }))
+      fireEvent.click(within(await waitFor(() => document.querySelector<HTMLElement>('[data-slot="manager-settings-menu"]')!)).getByRole('button', { name: 'Manager agent…' }))
+      return screen.findByRole('dialog', { name: 'Manager agent' })
+    }
+
+    it('Automatic shows no roles or routing settings', async () => {
+      seedChat()
+      renderAt('/manager/global')
+      const dialog = await openDialog()
+      expect(dialog.querySelector('[data-slot="manager-task-agent-row"]')).toBeNull()
+      expect(dialog.querySelector('[data-slot="manager-task-backup-when"]')).toBeNull()
+      expect(within(dialog).getByRole('button', { name: 'Agent for new tasks' })).toBeTruthy()
+    })
+
+    it('a role, the busy rule and the mid-task setting each save as one PATCH', async () => {
+      seedChat({ taskAgents: [{ runner: 'claude', agentProfile: 'default' }, { runner: 'codex', agentProfile: 'default' }] })
+      renderAt('/manager/global')
+      const dialog = await openDialog()
+      expect(dialog.querySelectorAll('[data-slot="manager-task-agent-row"]')).toHaveLength(2)
+      fireEvent.click(within(within(dialog).getByRole('radiogroup', { name: 'Role of codex · Default' })).getByRole('radio', { name: 'Backup' }))
+      await waitFor(() => expect(patches()).toContainEqual({
+        taskRunner: null,
+        taskAgents: [{ runner: 'claude', agentProfile: 'default', role: 'main' }, { runner: 'codex', agentProfile: 'default', role: 'backup' }],
+      }))
+      fireEvent.click(within(dialog).getByRole('radio', { name: /Out of limits or busy/ }))
+      await waitFor(() => expect(patches()).toContainEqual(expect.objectContaining({ taskBusyAt: 2 })))
+      fireEvent.click(within(dialog).getByRole('radio', { name: /Wait for the reset/ }))
+      await waitFor(() => expect(patches()).toContainEqual({ taskLimitSwitch: 'wait' }))
+      fireEvent.click(within(dialog).getByRole('button', { name: 'Remove claude · Default' }))
+      await waitFor(() => expect(patches()).toContainEqual({ taskRunner: null, taskAgents: [{ runner: 'codex', agentProfile: 'default' }] }))
+    })
+  })
+
   describe('agent chain (spec 2026-11-25-manager-agent-chain)', () => {
     const ref = (slot: number, runner: string, label: string) => ({ slot, runner, profileId: label.toLowerCase(), label })
     const patches = () => calls.filter((call) => call.method === 'PATCH').map((call) => call.body)

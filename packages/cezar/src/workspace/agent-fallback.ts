@@ -25,29 +25,55 @@ export type AgentFallbackPolicy = {
   source?: 'manager';
   /** The manager whose current list a `manager` policy is re-checked against. */
   managerId?: string;
+  /** Placed by the manager's roles: the queue may move it before it starts. */
+  routed?: boolean;
 };
 
-/** A manager's current task accounts; `null` = the manager is gone or no longer limits tasks. */
-export type ManagerTaskAccountsLookup = (managerId: string) => ReadonlyArray<{ runner: string; agentProfile?: string }> | null;
+/** A manager's task routing now (spec 2026-11-25-manager-task-routing). */
+export interface ManagerTaskRouting {
+  agents: ReadonlyArray<{ runner: string; agentProfile?: string; role?: 'main' | 'backup' }>;
+  /** A task out of limits mid-way: another listed account (absent), the same agent only, or wait. */
+  limitSwitch?: 'any' | 'same-agent' | 'wait';
+  /** With roles: an account running this many tasks is busy. */
+  maxRunning?: number;
+}
+/** A manager's current task accounts; `null` = the manager is gone or no longer limits tasks. A bare
+ *  list (an older lookup) is the agents alone. */
+export type ManagerTaskAccountsLookup = (managerId: string) => ReadonlyArray<{ runner: string; agentProfile?: string }> | ManagerTaskRouting | null;
 let managerTaskAccounts: ManagerTaskAccountsLookup | undefined;
 /** Installed by the server, which owns the manager store; absent (`cezar run`, tests) keeps the snapshot. */
 export function setManagerTaskAccountsLookup(lookup: ManagerTaskAccountsLookup | undefined): void {
   managerTaskAccounts = lookup;
 }
+/** The manager's routing now, `null` when withdrawn, `undefined` when it cannot be asked (keep the snapshot). */
+export function currentManagerRouting(snapshot: Pick<AgentFallbackPolicy, 'managerId'>): ManagerTaskRouting | null | undefined {
+  const found = snapshot.managerId && managerTaskAccounts ? managerTaskAccounts(snapshot.managerId) : undefined;
+  if (found === undefined || found === null) return found;
+  return 'agents' in found ? found : { agents: found as ManagerTaskRouting['agents'] };
+}
 /** The manager's list now, or `undefined` when it cannot be asked (keep the snapshot). */
 function currentManagerList(snapshot: AgentFallbackPolicy) {
-  return snapshot.managerId && managerTaskAccounts ? managerTaskAccounts(snapshot.managerId) : undefined;
+  const routing = currentManagerRouting(snapshot);
+  return routing === undefined || routing === null ? routing : routing.agents;
 }
 /** A bare `{ runner }` entry is that runner's resolved default account — the one the manager engine
  *  resolves for it (`resolveAccountId`, as the queue's key does) — never every account on the runner. */
+function managerEntry<T extends { runner: string; agentProfile?: string }>(
+  list: ReadonlyArray<T>,
+  c: AgentFallbackCandidate,
+  accounts: AgentAccountStore | null,
+  repoRoot: string | undefined,
+): T | undefined {
+  return list.find((entry) => entry.runner === c.provider && (entry.agentProfile
+    ?? (accounts ? resolveAccountId(accounts, { provider: c.provider, ...(repoRoot ? { repoRoot } : {}) }) : DEFAULT_AGENT_ACCOUNT_ID)) === c.profileId);
+}
 function inManagerList(
   list: ReadonlyArray<{ runner: string; agentProfile?: string }>,
   c: AgentFallbackCandidate,
   accounts: AgentAccountStore | null,
   repoRoot: string | undefined,
 ): boolean {
-  return list.some((entry) => entry.runner === c.provider && (entry.agentProfile
-    ?? (accounts ? resolveAccountId(accounts, { provider: c.provider, ...(repoRoot ? { repoRoot } : {}) }) : DEFAULT_AGENT_ACCOUNT_ID)) === c.profileId);
+  return managerEntry(list, c, accounts, repoRoot) !== undefined;
 }
 
 const candidateSchema = z.object({
@@ -273,13 +299,14 @@ export function fallbackConsentCurrent(snapshot: AgentFallbackPolicy, live: Agen
 export function managerFallbackPolicy(
   candidates: readonly AgentFallbackCandidate[],
   managerId: string,
+  routed = false,
 ): AgentFallbackPolicy {
   // An empty remainder is recorded, disabled, so the task and its dispatched children never take the
   // project's policy and leave the manager's list.
   return {
     enabled: candidates.length > 0,
     candidates: candidates.slice(0, 10).map((c) => ({ provider: c.provider, profileId: c.profileId, ...(c.model ? { model: c.model } : {}) })),
-    revision: 0, incarnation: null, revocation: null, source: 'manager', managerId,
+    revision: 0, incarnation: null, revocation: null, source: 'manager', managerId, ...(routed ? { routed: true } : {}),
   };
 }
 
@@ -297,16 +324,26 @@ export function eligibleFallbackCandidates(
   accounts: AgentAccountStore | null,
   /** The task's project: a bare manager entry resolves to this project's default account. */
   repoRoot?: string,
+  /** The runner the task ran out on, for "same agent only". */
+  fromRunner?: string,
+  /** Running tasks per `provider:profileId`, to order Main accounts by load. */
+  load?: ReadonlyMap<string, number>,
 ): { eligible: AgentFallbackCandidate[]; skipped: FallbackSkip[] } {
   const eligible: AgentFallbackCandidate[] = [];
   const skipped: FallbackSkip[] = [];
   if (!policy.enabled) return { eligible, skipped };
-  const managerList = policy.source === 'manager' ? currentManagerList(policy) : undefined;
+  const routing = policy.source === 'manager' ? currentManagerRouting(policy) : undefined;
+  const managerList = routing === undefined || routing === null ? routing : routing.agents;
   for (const candidate of policy.candidates) {
     const key = candidateKey(candidate);
     if (attempted.has(key)) continue;
     if (managerList === null || (managerList && !inManagerList(managerList, candidate, accounts, repoRoot))) {
       skipped.push({ candidate, reason: 'no longer in the manager’s settings for new tasks' }); continue;
+    }
+    // The manager's mid-task setting, read now: a change applies to tasks already running.
+    if (routing?.limitSwitch === 'wait') { skipped.push({ candidate, reason: 'the manager waits for the reset (setting: wait for the reset)' }); continue; }
+    if (routing?.limitSwitch === 'same-agent' && fromRunner !== undefined && candidate.provider !== fromRunner) {
+      skipped.push({ candidate, reason: 'another agent (setting: finish on the same agent only)' }); continue;
     }
     if (heldAccounts.has(key)) { skipped.push({ candidate, reason: 'waiting out its own usage limit' }); continue; }
     if (candidate.profileId !== DEFAULT_AGENT_ACCOUNT_ID) {
@@ -315,6 +352,18 @@ export function eligibleFallbackCandidates(
       if (!known) { skipped.push({ candidate, reason: 'account no longer exists' }); continue; }
     }
     eligible.push(candidate);
+  }
+  // With roles: Main by load, then Backup in list order; a busy account last but never refused.
+  if (routing && managerList?.some((entry) => 'role' in entry && entry.role !== undefined)) {
+    const roleOf = (candidate: AgentFallbackCandidate) =>
+      (managerEntry(routing.agents, candidate, accounts, repoRoot)?.role ?? 'main');
+    const busy = (candidate: AgentFallbackCandidate) =>
+      routing.maxRunning !== undefined && (load?.get(candidateKey(candidate)) ?? 0) >= routing.maxRunning;
+    const rank = (candidate: AgentFallbackCandidate) => (busy(candidate) ? 2 : 0) + (roleOf(candidate) === 'backup' ? 1 : 0);
+    const order = new Map(eligible.map((candidate, index) => [candidate, index]));
+    eligible.sort((a, b) => rank(a) - rank(b)
+      || (roleOf(a) === 'main' && roleOf(b) === 'main' ? (load?.get(candidateKey(a)) ?? 0) - (load?.get(candidateKey(b)) ?? 0) : 0)
+      || order.get(a)! - order.get(b)!);
   }
   return { eligible, skipped };
 }
