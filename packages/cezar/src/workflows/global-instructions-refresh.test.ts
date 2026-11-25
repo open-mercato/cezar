@@ -112,6 +112,34 @@ describe('withCurrentGlobalInstructions', () => {
     }
   });
 
+  it('stays stable across refreshes when the user text looks like a task rule', () => {
+    const global = 'Rule A\n\n---\n\nLanding: squash-merge only';
+    const own = `Keep it small.\n\n---\n\n${MANAGER_LINE}`;
+    const first = join(resolveExtraSystemPrompt(undefined, own, global), LANDING);
+    let next = first;
+    for (let i = 0; i < 3; i++) next = withCurrentGlobalInstructions(next, global)!;
+    expect(next).toBe(first);
+    expect(withCurrentGlobalInstructions(join(resolveExtraSystemPrompt(undefined, own, OLD), LANDING), global)).toBe(first);
+    const globalOnly = resolveExtraSystemPrompt(undefined, undefined, global)!;
+    expect(withCurrentGlobalInstructions(globalOnly, global)).toBe(globalOnly);
+  });
+
+  it('keeps a project prompt that opens with a heading named like cezar\'s own', () => {
+    for (const own of ['## Project instructions\n\nUse pnpm.\n\nNever push.', '## Global instructions\n\nAlways write tests.']) {
+      expect(withCurrentGlobalInstructions(own, undefined)).toBe(own);
+      expect(withCurrentGlobalInstructions(own, NEW)).toBe(resolveExtraSystemPrompt(own, undefined, NEW));
+      expect(withCurrentGlobalInstructions(resolveExtraSystemPrompt(own, undefined, OLD), NEW)).toBe(resolveExtraSystemPrompt(own, undefined, NEW));
+    }
+  });
+
+  it('parses the first shipped heading wording (#1693)', () => {
+    const stored = join(
+      `## Global instructions\n\nThese apply to every project. Where they conflict with the project instructions below, the project instructions win.\n\n${OLD}`,
+      `## Project instructions\n\nThese are specific to this project and take precedence over the global instructions above.\n\n${project}`,
+    );
+    expect(withCurrentGlobalInstructions(stored, NEW)).toBe(resolveExtraSystemPrompt(undefined, project, NEW));
+  });
+
   it('says global instructions never lift cezar\'s own safety rules, by name', () => {
     expect(GLOBAL_INSTRUCTIONS_HEADING).toContain('never lift cezar\'s own safety rules');
     expect(GLOBAL_INSTRUCTIONS_HEADING).not.toContain('that follow them');

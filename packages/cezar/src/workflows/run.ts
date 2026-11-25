@@ -86,7 +86,7 @@ import { loadConfig, type CezConfig } from '../config.ts';
 import { bypassPermissionsBlocked } from '../bypass-permissions.ts';
 import { isLifecycleConfigTracked } from '../worktree-lifecycle/config.ts';
 import { generateCommitMessage } from './commit-message.ts';
-import { hasUnlanded, landInPlace, landingPromptPart, READ_ONLY_PROMPT, READ_ONLY_TOOLS, type LandResult } from './landing.ts';
+import { hasUnlanded, landInPlace, LANDING_PROMPT_LEAD, landingPromptPart, READ_ONLY_PROMPT, READ_ONLY_TOOLS, type LandResult } from './landing.ts';
 import { deleteRunLayouts } from '../runs/layouts.ts';
 import {
   autosaveCommit,
@@ -1247,7 +1247,7 @@ const PROJECT_HEADING_TITLE = '## Project instructions\n\n';
 function splitTaskRules(text: string): { extra: string; rules: string[] } {
   const matchers: Array<(part: string) => boolean> = [
     (part) => part === READ_ONLY_PROMPT,
-    (part) => part.startsWith('Landing: '),
+    (part) => part.startsWith(LANDING_PROMPT_LEAD),
     (part) => part === MANAGER_TASK_SYSTEM_PROMPT,
   ];
   let extra = text;
