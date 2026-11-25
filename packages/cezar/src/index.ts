@@ -1,5 +1,7 @@
 #!/usr/bin/env node
 import { initCommand } from './init.ts';
+import { installCrashLogging } from './crash-logging.ts';
+import { guardChildProcessKill } from './core/child-kill-guard.ts';
 import { sweepOrphanedServers } from './core/opencode-server-registry.ts';
 import { WebhookCoordinator } from './webhooks/coordinator.ts';
 import { webhooksEnabled } from './webhooks/service.ts';
@@ -347,6 +349,8 @@ async function serveCommand(
   openBrowser: boolean,
   bindHost?: string,
 ): Promise<void> {
+  // A failing request or task must not take the whole cockpit down, and must leave a trace.
+  installCrashLogging();
   const runtimeId = newRuntimeId();
   let cockpitLease: CockpitLease | undefined;
   let runtimeReleased = false;
@@ -1095,6 +1099,9 @@ function firstLine(s: string): string {
   const line = s.split('\n')[0] ?? '';
   return line.length > 120 ? `${line.slice(0, 117)}…` : line;
 }
+
+// Before anything spawns: a kill of a child that failed to start must never reach our group.
+guardChildProcessKill();
 
 main().catch((err: unknown) => {
   console.error(err instanceof Error ? err.message : String(err));

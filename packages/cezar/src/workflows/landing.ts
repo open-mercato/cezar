@@ -1,4 +1,5 @@
-import { execFile, spawn } from 'node:child_process';
+import { execFile } from 'node:child_process';
+import { signalCheck, spawnCheck } from './check-process.ts';
 import { CEZAR_DATA_EXCLUDE } from '../data-gitignore.ts';
 import { gitHasIdentity, unresolvedConflicts } from '../git-worktree.ts';
 
@@ -56,12 +57,12 @@ const reason = (res: GitResult, fallback: string) =>
 
 export function runShellCheck(command: string, cwd: string, env?: NodeJS.ProcessEnv): Promise<{ ok: boolean; output: string }> {
   return new Promise((resolve) => {
-    const child = spawn('bash', ['-lc', command], { cwd, env: env ?? process.env });
+    const child = spawnCheck(command, cwd, env ?? process.env);
     let output = '';
     const collect = (chunk: Buffer) => {
       output = (output + chunk.toString('utf8')).slice(-CHECK_OUTPUT_TAIL);
     };
-    const timer = setTimeout(() => child.kill('SIGTERM'), CHECK_TIMEOUT_MS);
+    const timer = setTimeout(() => signalCheck(child, 'SIGTERM'), CHECK_TIMEOUT_MS);
     child.stdout.on('data', collect);
     child.stderr.on('data', collect);
     child.on('error', (err) => {
