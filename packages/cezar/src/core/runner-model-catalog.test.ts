@@ -27,6 +27,13 @@ describe('RunnerModelCatalog', () => {
     expect(discover).toHaveBeenCalledTimes(3);
   });
 
+  it('reprobe after an unavailable discovery stays unavailable when it fails again', async () => {
+    const discover = vi.fn().mockRejectedValue(new Error('offline'));
+    const catalog = new RunnerModelCatalog({ adapters: { cursor: { discover } } });
+    await expect(catalog.get('cursor')).resolves.toMatchObject({ source: 'unavailable' });
+    await expect(catalog.reprobe('cursor')).resolves.toMatchObject({ source: 'unavailable', stale: false, models: [] });
+  });
+
   it('coalesces a reprobe into a discovery already in flight', async () => {
     let finish!: (value: ModelOption[]) => void;
     const discover = vi.fn().mockImplementationOnce(() => new Promise<ModelOption[]>((resolve) => { finish = resolve; }));

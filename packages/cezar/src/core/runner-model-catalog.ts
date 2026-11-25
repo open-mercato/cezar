@@ -75,7 +75,10 @@ export class RunnerModelCatalog {
   reprobe(runner: RunnerId): Promise<RunnerModelCatalogResult> {
     const pending = this.#inFlight.get(runner);
     if (pending) return pending;
-    const refresh = this.#refresh(runner, this.#cache.get(runner)).finally(() => {
+    const cached = this.#cache.get(runner);
+    // A failure-only entry has no list to fall back to — never dress it up as a cached one.
+    const lastGood = cached && cached.models.length > 0 ? cached : undefined;
+    const refresh = this.#refresh(runner, lastGood).finally(() => {
       this.#inFlight.delete(runner);
     });
     this.#inFlight.set(runner, refresh);
