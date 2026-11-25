@@ -1,11 +1,8 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { Trash2Icon } from 'lucide-react'
-import { useState } from 'react'
+import { PencilIcon, Trash2Icon } from 'lucide-react'
+import { useRef, useState } from 'react'
 
-import {
-  SECRET_BINDING_SCHEMES, secretBindingSchema, secretNameIssue,
-  type SecretAudience, type SecretBinding, type SecretBindingScheme, type SecretsList,
-} from '@open-mercato/cezar-api-client'
+import { secretNameIssue, type SecretAudience, type SecretBinding, type SecretEntry, type SecretsList } from '@open-mercato/cezar-api-client'
 import { queryScope } from '@open-mercato/cezar-api-client'
 import {
   removeProjectSecret, removeWorkspaceSecret, saveProjectSecret, saveWorkspaceSecret,
@@ -13,40 +10,14 @@ import {
 import { queryKeys, useProjectSecrets, useWorkspaceSecrets, workspaceQueryKeys } from '@/api/queries'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { toast } from '@/components/ui/toaster'
 import { LoadingState, RowsSkeleton } from '@/components/loading-state'
 import { CardNote, FormRow, SettingsCard } from './form-row'
-
-/** Secrets stored before every secret went through the proxy keep their old audiences; the table says so. */
-const LEGACY_LABELS: Record<Exclude<SecretAudience, 'proxy'>, string> = {
-  checks: 'check steps',
-  cezar: 'cezar itself',
-}
-
-const bindingSummary = (binding: SecretBinding) =>
-  `${binding.hosts.join(', ')} · ${binding.header} (${binding.scheme})${binding.sentinel ? ` · $${binding.sentinel}` : ''}`
-
-/** The form's text fields → a binding, or the first reason there is none. */
-function parseBinding(hosts: string, header: string, scheme: SecretBindingScheme, sentinel: string): { binding?: SecretBinding; issue?: string } {
-  const parsed = secretBindingSchema.safeParse({
-    hosts: [...new Set(hosts.split(/[\s,]+/).map((h) => h.trim().toLowerCase()).filter(Boolean))].sort(),
-    header: header.trim(),
-    scheme,
-    ...(sentinel.trim() ? { sentinel: sentinel.trim() } : {}),
-  })
-  return parsed.success ? { binding: parsed.data } : { issue: parsed.error.issues[0]?.message ?? 'invalid binding' }
-}
-
-const usageSummary = (audiences: readonly SecretAudience[]) =>
-  `Not proxied (legacy: ${audiences.filter((a): a is Exclude<SecretAudience, 'proxy'> => a !== 'proxy').map((a) => LEGACY_LABELS[a]).join(' · ')})`
-
-/** The backend line under the list: a file fallback is never silent. */
-function keyBackendNote(keyBackend: SecretsList['keyBackend']): string {
-  return keyBackend === 'keychain'
-    ? 'Encrypted with a data key kept in your OS keychain.'
-    : 'Encrypted with a data key in ~/.cezar/secrets/.key (0600) — no OS keychain is available on this machine, so this is a private file, not a vault.'
-}
+import {
+  EMPTY_BINDING_FIELDS, FILE_KEY_PROXY_NOTE, bindingSummary, fieldsOf, keyBackendNote, parseBinding, usageSummary,
+  type BindingFields,
+} from './secrets-binding'
+import { SecretBindingFields } from './secrets-binding-fields'
 
 interface SecretsSectionProps {
   scope: 'project' | 'workspace'
@@ -66,17 +37,16 @@ function SecretsSection({ scope, list, save, remove, invalidate }: SecretsSectio
   const queryClient = useQueryClient()
   const [name, setName] = useState('')
   const [value, setValue] = useState('')
-    const [hosts, setHosts] = useState('')
-  const [header, setHeader] = useState('Authorization')
-  const [scheme, setScheme] = useState<SecretBindingScheme>('bearer')
-  const [sentinel, setSentinel] = useState('')
+    const [fields, setFields] = useState<BindingFields>(EMPTY_BINDING_FIELDS)
+  const [editing, setEditing] = useState<{ name: string; legacy: boolean } | null>(null)
+  const valueInput = useRef<HTMLInputElement>(null)
   const [error, setError] = useState<string | null>(null)
   const nameIssue = name === '' ? null : secretNameIssue(name)
 
   const saving = useMutation({
-    mutationFn: async () => { const projectId = queryScope(); await save(name, { value, audiences: ['proxy'], binding: parseBinding(hosts, header, scheme, sentinel).binding }); return { projectId, saved: name } },
+    mutationFn: async () => { const projectId = queryScope(); await save(name, { value, audiences: ['proxy'], binding: parseBinding(fields).binding }); return { projectId, saved: name } },
     onSuccess: async ({ projectId, saved }) => {
-      if (queryScope() === projectId) { setName(''); setValue(''); setHosts(''); setSentinel(''); setError(null) }
+      if (queryScope() === projectId) { resetForm() }
       await invalidate(queryClient, projectId)
       toast(`${saved} saved`)
     },
@@ -84,6 +54,15 @@ function SecretsSection({ scope, list, save, remove, invalidate }: SecretsSectio
     // makes a transient 409 cost the user a re-paste of a 100-character key.
     onError: (e: Error) => setError(e.message),
   })
+  const resetForm = () => { setName(''); setValue(''); setFields(EMPTY_BINDING_FIELDS); setEditing(null); setError(null) }
+  const startEdit = (stored: SecretEntry) => {
+    setName(stored.name)
+    setValue('')
+    setFields(stored.binding ? fieldsOf(stored.binding) : EMPTY_BINDING_FIELDS)
+    setEditing({ name: stored.name, legacy: !stored.binding })
+    setError(null)
+    valueInput.current?.focus()
+  }
   const removing = useMutation({
     mutationFn: async (target: string) => { const projectId = queryScope(); await remove(target); return { projectId, removed: target } },
     onSuccess: async ({ projectId, removed }) => { await invalidate(queryClient, projectId); toast(`${removed} removed`) },
@@ -93,7 +72,7 @@ function SecretsSection({ scope, list, save, remove, invalidate }: SecretsSectio
   const submit = () => {
     const issue = secretNameIssue(name)
     if (issue) { setError(issue); return }
-    const { issue: bindingIssue } = parseBinding(hosts, header, scheme, sentinel)
+    const { issue: bindingIssue } = parseBinding(fields)
     if (bindingIssue) { setError(bindingIssue); return }
     setError(null)
     saving.mutate()
@@ -130,6 +109,9 @@ function SecretsSection({ scope, list, save, remove, invalidate }: SecretsSectio
                         : usageSummary(stored.audiences)}
                     </td>
                     <td className="px-4 py-2 text-right whitespace-nowrap">
+                      <Button variant="ghost" size="xs" aria-label={stored.binding ? `Edit ${stored.name}` : `Convert ${stored.name} to a proxy secret`} onClick={() => startEdit(stored)}>
+                        <PencilIcon /> {stored.binding ? 'Edit' : 'Convert'}
+                      </Button>
                       <Button variant="danger-ghost" size="xs" aria-label={`Delete ${stored.name}`} disabled={removing.isPending} onClick={() => removing.mutate(stored.name)}>
                         <Trash2Icon /> Delete
                       </Button>
@@ -142,6 +124,7 @@ function SecretsSection({ scope, list, save, remove, invalidate }: SecretsSectio
         ) : null}
         {list.data?.skipped ? <p role="alert" className="px-4 py-2 text-meta text-danger" data-slot="secrets-skipped">Stored values cannot be read: {list.data.skipped}.</p> : null}
         {list.data ? <CardNote slot="key-backend">{keyBackendNote(list.data.keyBackend)}</CardNote> : null}
+        {list.data?.keyBackend === 'file' ? <CardNote slot="key-backend-proxy">{FILE_KEY_PROXY_NOTE}</CardNote> : null}
 
         <form autoComplete="off" onSubmit={(event) => { event.preventDefault(); submit() }}>
           <FormRow
@@ -152,41 +135,27 @@ function SecretsSection({ scope, list, save, remove, invalidate }: SecretsSectio
             <div className="grid gap-3 sm:grid-cols-2">
               <label className="block text-ui">Name
                 <Input aria-label="Name" value={name} onChange={(event) => { setName(event.target.value.toUpperCase()); setError(null) }}
-                  autoComplete="off" spellCheck={false} placeholder="AI_GATEWAY_API_KEY" aria-invalid={nameIssue ? true : undefined}
+                  autoComplete="off" spellCheck={false} placeholder="AI_GATEWAY_API_KEY" readOnly={!!editing} aria-invalid={nameIssue ? true : undefined}
                   className="mt-1 h-8 font-mono text-ui" />
               </label>
               <label className="block text-ui">Value
-                <Input aria-label="Value" type="password" autoComplete="off" required value={value} onChange={(event) => setValue(event.target.value)}
+                <Input ref={valueInput} aria-label="Value" type="password" autoComplete="off" required value={value} onChange={(event) => setValue(event.target.value)}
                   className="mt-1 h-8" />
               </label>
             </div>
             {nameIssue ? <p className="text-meta text-danger">{nameIssue}</p> : null}
-            <div className="grid gap-3 sm:grid-cols-2" data-slot="secret-binding-form">
-                <label className="block text-ui sm:col-span-2">Hosts (comma or space separated, exact, https only)
-                  <Input aria-label="Hosts" value={hosts} onChange={(event) => { setHosts(event.target.value); setError(null) }}
-                    autoComplete="off" spellCheck={false} placeholder="api.github.com, github.com" className="mt-1 h-8 font-mono text-ui" />
-                </label>
-                <label className="block text-ui">Header
-                  <Input aria-label="Header" value={header} onChange={(event) => { setHeader(event.target.value); setError(null) }}
-                    autoComplete="off" spellCheck={false} className="mt-1 h-8 font-mono text-ui" />
-                </label>
-                <div className="block text-ui">Scheme
-                  <Select value={scheme} onValueChange={(value) => setScheme(value as SecretBindingScheme)}>
-                    <SelectTrigger size="sm" aria-label="Scheme" className="mt-1 w-full"><SelectValue /></SelectTrigger>
-                    <SelectContent position="popper">
-                      {SECRET_BINDING_SCHEMES.map((option) => <SelectItem key={option} value={option}>{option}</SelectItem>)}
-                    </SelectContent>
-                  </Select>
-                </div>
-                <label className="block text-ui sm:col-span-2">Placeholder env var (optional — what the sandbox sees instead of the value)
-                  <Input aria-label="Placeholder env var" value={sentinel} onChange={(event) => { setSentinel(event.target.value.toUpperCase()); setError(null) }}
-                    autoComplete="off" spellCheck={false} placeholder="GH_TOKEN" className="mt-1 h-8 font-mono text-ui" />
-                </label>
-                <p className="text-meta text-soft-foreground sm:col-span-2">Changing hosts, header or scheme means re-entering the value — it is stored sealed to its destinations.</p>
-            </div>
+            {editing ? (
+              <p className="text-meta text-soft-foreground" data-slot="secret-editing">
+                {editing.legacy
+                  ? `Converting ${editing.name} to a proxy secret: name the hosts and re-enter the value. Until you save, it stays readable by its current consumers.`
+                  : `Editing ${editing.name}: the value is never shown, so re-enter it; saving replaces the stored secret and its destinations.`}
+              </p>
+            ) : null}
+            <SecretBindingFields fields={fields} onChange={(next) => { setFields(next); setError(null) }} />
             {error && error !== nameIssue ? <p role="alert" className="text-ui text-danger">{error}</p> : null}
             <div>
-              <Button type="submit" size="sm" disabled={saving.isPending || name === '' || value === '' || !!nameIssue || hosts.trim() === ''}>Save secret</Button>
+              <Button type="submit" size="sm" disabled={saving.isPending || name === '' || value === '' || !!nameIssue || fields.hosts.trim() === ''}>Save secret</Button>
+              {editing ? <Button type="button" variant="ghost" size="sm" className="ml-2" onClick={resetForm}>Cancel</Button> : null}
             </div>
           </FormRow>
         </form>

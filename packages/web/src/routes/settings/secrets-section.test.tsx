@@ -2,13 +2,14 @@ import { QueryClientProvider } from '@tanstack/react-query'
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { setApiScope } from '@open-mercato/cezar-api-client'
+import { secretHostIssue, setApiScope } from '@open-mercato/cezar-api-client'
 import { createQueryClient } from '@/api/query-client'
+import { parseBinding } from './secrets-binding'
 import { ProjectSecretsSection, WorkspaceSecretsSection } from './secrets-section'
 
 afterEach(() => { cleanup(); setApiScope(null); vi.unstubAllGlobals() })
 
-type Stored = { name: string; audiences: ('checks' | 'cezar')[]; updatedAt: string }
+type Stored = { name: string; audiences: ('checks' | 'cezar' | 'proxy')[]; updatedAt: string; binding?: { hosts: string[]; header: string; scheme: 'bearer' | 'basic' | 'raw'; sentinel?: string } }
 const DEFAULT: Stored[] = [
   { name: 'OPENAI_API_KEY', audiences: ['checks'], updatedAt: '2026-10-10T00:00:00Z' },
   { name: 'STAGING_TOKEN', audiences: ['checks', 'cezar'], updatedAt: '2026-10-10T00:00:00Z' },
@@ -167,4 +168,92 @@ describe('Secrets settings', () => {
     expect(document.querySelector('select:not([aria-hidden])')).toBeNull()
     expect(screen.getByRole('button', { name: 'Delete OPENAI_API_KEY' }).getAttribute('data-variant')).toBe('danger-ghost')
   })
+  it('edits a proxy secret in place: the form is prefilled, the value is empty and required, the whole binding is re-sent', async () => {
+    const calls = setup({ secrets: [{
+      name: 'GH', audiences: ['proxy'], updatedAt: '2026-10-10T00:00:00Z',
+      binding: { hosts: ['api.github.com', 'github.com'], header: 'Authorization', scheme: 'basic', sentinel: 'GH_TOKEN' },
+    }] })
+    fireEvent.click(await screen.findByRole('button', { name: 'Edit GH' }))
+    expect((screen.getByLabelText('Name') as HTMLInputElement).value).toBe('GH')
+    expect((screen.getByLabelText('Name') as HTMLInputElement).readOnly).toBe(true)
+    expect((screen.getByLabelText('Hosts') as HTMLInputElement).value).toBe('api.github.com, github.com')
+    expect((screen.getByLabelText('Header') as HTMLInputElement).value).toBe('Authorization')
+    expect((screen.getByLabelText('Placeholder env var') as HTMLInputElement).value).toBe('GH_TOKEN')
+    const value = screen.getByLabelText('Value') as HTMLInputElement
+    expect(value.value).toBe('')
+    expect(value.required).toBe(true)
+    expect(screen.getByText(/re-enter it/)).toBeTruthy()
+    expect((screen.getByRole('button', { name: /save secret/i }) as HTMLButtonElement).disabled).toBe(true)
+    fireEvent.submit(value.closest('form')!)
+    expect(calls.some((c) => c.method === 'PUT')).toBe(false)
+    fireEvent.change(screen.getByLabelText('Hosts'), { target: { value: 'github.com' } })
+    fireEvent.change(value, { target: { value: 'tok-new' } })
+    fireEvent.click(screen.getByRole('button', { name: /save secret/i }))
+    await waitFor(() => expect(calls.some((c) => c.method === 'PUT')).toBe(true))
+    expect(JSON.parse(calls.find((c) => c.method === 'PUT')!.body!)).toEqual({
+      value: 'tok-new', audiences: ['proxy'],
+      binding: { hosts: ['github.com'], header: 'Authorization', scheme: 'basic', sentinel: 'GH_TOKEN' },
+    })
+    await waitFor(() => expect((screen.getByLabelText('Name') as HTMLInputElement).value).toBe(''))
+    expect((screen.getByLabelText('Name') as HTMLInputElement).readOnly).toBe(false)
+  })
+
+  it('cancelling an edit empties the form', async () => {
+    setup({ secrets: [{ name: 'GH', audiences: ['proxy'], updatedAt: '', binding: { hosts: ['github.com'], header: 'Authorization', scheme: 'basic' } }] })
+    fireEvent.click(await screen.findByRole('button', { name: 'Edit GH' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+    expect((screen.getByLabelText('Name') as HTMLInputElement).value).toBe('')
+    expect((screen.getByLabelText('Hosts') as HTMLInputElement).value).toBe('')
+  })
+
+  it('converts a legacy secret: no hosts yet, the value re-entered, saved as a proxy secret', async () => {
+    const calls = setup()
+    fireEvent.click(await screen.findByRole('button', { name: 'Convert OPENAI_API_KEY to a proxy secret' }))
+    expect((screen.getByLabelText('Name') as HTMLInputElement).value).toBe('OPENAI_API_KEY')
+    expect((screen.getByLabelText('Hosts') as HTMLInputElement).value).toBe('')
+    expect(screen.getByText(/Converting OPENAI_API_KEY to a proxy secret/)).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'x-api-key header' }))
+    fireEvent.change(screen.getByLabelText('Hosts'), { target: { value: 'api.openai.com' } })
+    fireEvent.change(screen.getByLabelText('Value'), { target: { value: 'sk-new' } })
+    fireEvent.click(screen.getByRole('button', { name: /save secret/i }))
+    await waitFor(() => expect(calls.some((c) => c.method === 'PUT')).toBe(true))
+    expect(JSON.parse(calls.find((c) => c.method === 'PUT')!.body!)).toEqual({
+      value: 'sk-new', audiences: ['proxy'],
+      binding: { hosts: ['api.openai.com'], header: 'x-api-key', scheme: 'raw' },
+    })
+  })
+
+  it('offers the real cases as presets that fill header, scheme and hosts', async () => {
+    const calls = setup()
+    await screen.findByText('OPENAI_API_KEY')
+    expect(screen.getByText(/github\.com and api\.github\.com/)).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'GitHub over HTTPS' }))
+    expect((screen.getByLabelText('Hosts') as HTMLInputElement).value).toBe('github.com, api.github.com')
+    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'GH' } })
+    fireEvent.change(screen.getByLabelText('Value'), { target: { value: 'tok' } })
+    fireEvent.click(screen.getByRole('button', { name: /save secret/i }))
+    await waitFor(() => expect(calls.some((c) => c.method === 'PUT')).toBe(true))
+    expect(JSON.parse(calls.find((c) => c.method === 'PUT')!.body!).binding).toEqual({ hosts: ['api.github.com', 'github.com'], header: 'Authorization', scheme: 'basic' })
+    fireEvent.click(screen.getByRole('button', { name: 'Bearer token' }))
+    expect((screen.getByLabelText('Header') as HTMLInputElement).value).toBe('Authorization')
+  })
+
+  it('warns that proxy secrets are unusable with a file data key, and only then', async () => {
+    cleanup()
+    setup({ keyBackend: 'file' })
+    expect((await screen.findByText(/launcher refuses a file key/))).toBeTruthy()
+    cleanup()
+    setup({ keyBackend: 'keychain' })
+    await screen.findByText('OPENAI_API_KEY')
+    expect(screen.queryByText(/launcher refuses a file key/)).toBeNull()
+  })
+
+  it.each(['*.example.com', 'API.example.com', 'api.example.com:443', '10.0.0.1', '[::1]', 'a b.com', 'a..com', '-a.com', 'https://a.com', 'a.com/x', 'api.example.com', 'localhost'])(
+    'the form takes host %s exactly as the contract does', (host) => {
+      const fields = { hosts: host, header: 'Authorization', scheme: 'bearer' as const, sentinel: '' }
+      const lowered = host.toLowerCase()
+      const parts = lowered.split(/[\s,]+/).filter(Boolean)
+      const expected = parts.length > 0 && parts.every((part) => secretHostIssue(part) === null)
+      expect(parseBinding(fields).binding !== undefined).toBe(expected)
+    })
 })
