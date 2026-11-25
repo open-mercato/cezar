@@ -28,6 +28,8 @@ export const managerTaskAgentSchema = z.object({
   runner: runnerSchema,
   /** Absent follows the task's account default; an id pins that exact account. */
   agentProfile: z.string().min(1).max(64).optional(),
+  /** Optional default model to pass when this account starts or takes over a task. */
+  model: z.string().min(1).max(200).optional(),
   /** Main accounts share new tasks; Backup ones are used in order (spec 2026-11-25-manager-task-routing).
    *  Absent on every entry = the original order: the manager's own runner, then list order. */
   role: z.enum(['main', 'backup']).optional(),

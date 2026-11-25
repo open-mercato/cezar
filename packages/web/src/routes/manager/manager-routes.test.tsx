@@ -1836,6 +1836,14 @@ describe('/manager/:id', () => {
         taskAgents: [{ runner: 'codex', agentProfile: 'default' }, { runner: 'claude', agentProfile: 'default' }],
       }))
     })
+
+    it('lets each task-agent row pick a default model and saves it in taskAgents', async () => {
+      seedChat({ taskAgents: [{ runner: 'antigravity', agentProfile: 'default', role: 'main' }] })
+      renderAt('/manager/global')
+      const dialog = await openDialog()
+      const trigger = within(dialog).getByRole('button', { name: 'Model for antigravity · Default' })
+      expect(trigger.textContent).toContain('auto')
+    })
   })
 
   describe('agent chain (spec 2026-11-25-manager-agent-chain)', () => {

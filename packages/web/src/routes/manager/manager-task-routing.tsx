@@ -1,11 +1,20 @@
-import { ArrowUpIcon, GripVerticalIcon, ListChecksIcon, XIcon } from 'lucide-react'
+import { ArrowUpIcon, ChevronDownIcon, GripVerticalIcon, ListChecksIcon, XIcon } from 'lucide-react'
 import { useState, type DragEvent, type ReactNode } from 'react'
 
-import { useAgentProfiles } from '@/api/queries'
+import { useAgentProfiles, useRunnerModels } from '@/api/queries'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuLabel,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
 import { IntegerStepper } from '@/components/integer-stepper'
 import { PHONE_QUERY, useMediaQuery } from '@/lib/use-media-query'
 import { cn } from '@/lib/utils'
-import { DEFAULT_AGENT_ACCOUNT_ID, type ManagerSummary, type ManagerTaskAgent, type ManagerTaskLimitSwitch } from '@open-mercato/cezar-api-client'
+import { modelsForRunner } from '@/routes/new-task-form'
+import { DEFAULT_AGENT_ACCOUNT_ID, type ManagerSummary, type ManagerTaskAgent, type ManagerTaskLimitSwitch, type Runner } from '@open-mercato/cezar-api-client'
 
 import { TaskRunnerPicker, type ManagerPatch } from './manager-pickers'
 
@@ -25,6 +34,47 @@ function Radio({ checked, onSelect, slot, children }: { checked: boolean; onSele
       <span aria-hidden="true" className={cn('mt-0.5 size-4 shrink-0 rounded-full border', checked ? 'border-4 border-primary' : 'border-border')} />
       <span className="min-w-0 flex-1">{children}</span>
     </button>
+  )
+}
+
+function TaskAgentModelPicker({
+  runner,
+  model,
+  label,
+  onChange,
+}: {
+  runner: Runner
+  model?: string
+  label: string
+  onChange: (model: string | undefined) => void
+}) {
+  const catalog = useRunnerModels(runner)
+  const models = modelsForRunner(runner, catalog.data, [model])
+  const currentLabel = models.find((entry) => entry.id === (model ?? ''))?.label ?? model ?? 'auto'
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <button
+          type="button"
+          data-slot="manager-task-agent-model"
+          aria-label={`Model for ${label}`}
+          className="inline-flex h-7 max-w-40 shrink-0 items-center gap-1 rounded-md border border-border bg-muted/40 px-2 text-xs text-muted-foreground outline-none hover:bg-muted hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50 pointer-coarse:min-h-9"
+        >
+          <span className="truncate">{currentLabel}</span>
+          <ChevronDownIcon aria-hidden="true" className="size-3 shrink-0 opacity-70" />
+        </button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="max-h-[min(20rem,var(--radix-dropdown-menu-content-available-height))] max-w-[calc(100vw-2rem)] overflow-y-auto">
+        <DropdownMenuLabel className="text-xs text-muted-foreground">Model</DropdownMenuLabel>
+        <DropdownMenuRadioGroup value={model ?? ''} onValueChange={(next) => onChange(next === '' ? undefined : next)}>
+          {models.map((entry) => (
+            <DropdownMenuRadioItem key={entry.id} value={entry.id}>
+              {entry.id === '' ? 'auto (default)' : entry.label}
+            </DropdownMenuRadioItem>
+          ))}
+        </DropdownMenuRadioGroup>
+      </DropdownMenuContent>
+    </DropdownMenu>
   )
 }
 
@@ -104,6 +154,17 @@ export function TaskRoutingSection({ manager, onPatch }: { manager: ManagerSumma
               >
                 {agents.length > 1 && !phone ? <GripVerticalIcon aria-hidden="true" className="size-3.5 shrink-0 cursor-grab text-muted-foreground" /> : null}
                 <span className="min-w-0 flex-1 truncate">{agent.runner} · <b className="font-semibold">{labelOf(agent)}</b></span>
+                <TaskAgentModelPicker
+                  runner={agent.runner}
+                  {...(agent.model ? { model: agent.model } : {})}
+                  label={label}
+                  onChange={(model) => saveAgents(agents.map((entry, at) => {
+                    if (at !== index) return entry
+                    if (model) return { ...entry, model }
+                    const { model: _dropped, ...rest } = entry
+                    return rest
+                  }))}
+                />
                 <RoleSwitch
                   role={agent.role ?? 'main'}
                   label={label}

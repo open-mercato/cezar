@@ -24,7 +24,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Switch } from '@/components/ui/switch'
 import { toast } from '@/components/ui/toaster'
 import { LoadingState, SettingsSkeleton } from '@/components/loading-state'
-import { providerStatusFor } from '@/lib/provider-status'
+import { providerRowRunnable, providerStatusFor } from '@/lib/provider-status'
 import {
   DefaultAgentPicker,
   agentPickerRows,
@@ -172,7 +172,7 @@ function AgentsForm({
             !providerStatus.isPending &&
             !providerStatus.isError &&
             provider?.enabled === true &&
-            provider.status === 'connected'
+            providerRowRunnable(provider)
           const providerReason = providerStatus.isPending
             ? 'Checking provider authentication…'
             : providerStatus.isError
