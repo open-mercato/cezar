@@ -28,7 +28,7 @@ Workflows → built-in templates
 
 ## Review a pull request without touching it
 
-Start a task with the review-pr workflow and the pull request's URL as the task text. Correctness, security and tests reviewers read it with `gh pr view` and `gh pr diff`, then a judge ends with a verdict (approve, changes or reject), the findings as `path:line`, and a draft review comment for each, in its final message. Nothing is posted.
+Start a task with the review-pr workflow and the pull request's URL as the task text. Before any agent runs, cezar checks the pull request out into the task's worktree and saves its metadata and diff to the task's artifacts. Correctness, security and tests reviewers read those files (falling back to `gh pr view` and `gh pr diff` when the checkout fails) and may save notes only to the artifacts folder, then a judge ends with a verdict (approve, changes or reject), the findings as `path:line`, and a draft review comment for each, in its final message. Nothing is posted.
 
 Its agents get Read, Grep, Glob and a Bash limited to read-only `gh` and `git` commands, with no private MCP servers. Claude Code, Pi and supported Codex installations enforce those limits. Other backends refuse to start this workflow. Claude Code’s own settings can still widen its allow rules.
 

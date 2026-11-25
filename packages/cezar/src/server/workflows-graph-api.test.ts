@@ -63,6 +63,7 @@ describe('the workflow graph API', () => {
       'join',
       'if',
       'git.push',
+      'github.pr-checkout',
       'git.sync-base',
       'github.pr-update',
       'github.issue-comment',

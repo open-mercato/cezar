@@ -49,6 +49,9 @@ describe('a read-only workflow', { timeout: 30_000 }, () => {
 
   beforeEach(async () => {
     captured.launches.length = 0;
+    // No `gh` call to github.com from a unit test: the checkout reads git alone.
+    vi.stubEnv('CEZ_DRY_RUN', '1');
+    vi.stubEnv('CEZ_AUTONAME', '0');
     repoRoot = mkdtempSync(join(tmpdir(), 'cez-read-only-workflow-'));
     await run('git', ['init', '-q', '-b', 'main'], { cwd: repoRoot });
     writeFileSync(join(repoRoot, 'a.txt'), 'one\n');
@@ -65,6 +68,7 @@ describe('a read-only workflow', { timeout: 30_000 }, () => {
     manager?.dispose();
     manager = undefined;
     store.flush();
+    vi.unstubAllEnvs();
     rmSync(repoRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   });
 
@@ -79,6 +83,59 @@ describe('a read-only workflow', { timeout: 30_000 }, () => {
     expect(spec.bashAllowlist).toContain('gh pr diff');
     expect(spec.bashAllowlist).not.toContain('git push');
     expect(spec.mcpServers).toEqual([]);
+  });
+
+  it('checks the PR out before any reviewer, then reviewers only read files', async () => {
+    // A local origin carrying refs/pull/1/head, as GitHub does.
+    const origin = mkdtempSync(join(tmpdir(), 'cez-read-only-origin-'));
+    try {
+      await run('git', ['init', '-q', '--bare', '-b', 'main', origin]);
+      await run('git', ['remote', 'add', 'origin', origin], { cwd: repoRoot });
+      await run('git', ['push', '-q', 'origin', 'HEAD:main'], { cwd: repoRoot });
+      await run('git', ['checkout', '-q', '-b', 'pr'], { cwd: repoRoot });
+      writeFileSync(join(repoRoot, 'a.txt'), 'one\nfrom the PR\n');
+      await run('git', [...GIT_ID, 'commit', '-qam', 'pr change'], { cwd: repoRoot });
+      const prSha = (await run('git', ['rev-parse', 'HEAD'], { cwd: repoRoot })).stdout.trim();
+      await run('git', ['push', '-q', 'origin', 'HEAD:refs/pull/1/head'], { cwd: repoRoot });
+      await run('git', ['checkout', '-q', 'main'], { cwd: repoRoot });
+      await run('git', ['branch', '-q', '-D', 'pr'], { cwd: repoRoot });
+
+      const id = manager!.startRun(REVIEW_PR, { task: 'https://github.com/o/r/pull/1', runner: 'claude' }).id;
+      await terminal(id);
+      const record = store.getRun(id)!;
+      expect(record.status, record.error).not.toBe('failed');
+      const launches = captured.launches.filter((l) => l.spec.cwd === record.worktreePath);
+      expect(launches).toHaveLength(4);
+      const artifacts = join(repoRoot, '.ai/cezar/artifacts', id);
+      expect(readFileSync(join(artifacts, 'pr-1.diff'), 'utf8')).toContain('+from the PR');
+      for (const { spec } of launches) {
+        // The worktree holds the PR before the first reviewer starts, and every prompt names its files.
+        expect(spec.userPrompt).toContain('checked out into this worktree: yes');
+        expect(spec.userPrompt).toContain(join(artifacts, 'pr-1.diff'));
+        expect(spec.artifactsWriteDir).toBe(artifacts);
+        expect(spec.allowedTools).toEqual(['Read', 'Grep', 'Glob', 'Bash']);
+        expect(spec.bashAllowlist).not.toContain('git push');
+      }
+      expect((await run('git', ['rev-parse', 'HEAD'], { cwd: record.worktreePath! })).stdout.trim()).toBe(prSha);
+      // Nothing was pushed: origin's only PR ref is the one the test made.
+      expect((await run('git', ['ls-remote', origin])).stdout).not.toContain(record.branch!);
+    } finally {
+      rmSync(origin, { recursive: true, force: true });
+    }
+  });
+
+  it('still reviews when the checkout fails, through the gh fallback', async () => {
+    const id = manager!.startRun(REVIEW_PR, { task: 'https://github.com/o/r/pull/1', runner: 'claude' }).id;
+    await terminal(id);
+    const record = store.getRun(id)!;
+    expect(record.status, record.error).not.toBe('failed');
+    expect(readFileSync(join(repoRoot, '.ai/cezar/runs', `${id}.ndjson`), 'utf8')).toContain('no git remote');
+    const launches = captured.launches.filter((l) => l.spec.cwd === record.worktreePath);
+    expect(launches).toHaveLength(4);
+    for (const { spec } of launches) {
+      expect(spec.userPrompt).toContain('checked out into this worktree: no');
+      expect(spec.bashAllowlist).toEqual(expect.arrayContaining(['gh pr view', 'gh pr diff']));
+    }
   });
 
   it('passes the owning step limits to isolated Codex on launch and Continue', async () => {

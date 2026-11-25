@@ -504,6 +504,7 @@ whose counter never resets within a run, so every run is finite.
 | `workflow` (`workflow`, `prompt?`, `runner?`, `budgetUsd?`) | `done`, `failed` | `runId`, `status`, `summary` |
 | `if` (`condition`) | `true`, `false` | `result`, `value` |
 | `git.push` | `done`, `failed` | — |
+| `github.pr-checkout` | `done`, `failed` | `number`, `head`, `diff`, `meta`, `checkedOut` |
 | `git.sync-base` | `done`, `conflict`, `failed` | `conflicts` |
 | `github.pr-update` (`ready?`, `addLabels?`, `reviewers?`) | `done`, `failed` | — |
 | `github.issue-comment` (`body`, `issue?` — default: the task's issue) | `done`, `failed` | `issue` |
@@ -520,6 +521,10 @@ whose counter never resets within a run, so every run is finite.
   `paths-changed` (`glob`: `*` within a folder, `**` across), `output` (`ref:
   <node>.<field>`, `op`, `value` — numeric when both sides are numbers) and `branch`
   (`equals` / `matches` on the base branch).
+- **`github.pr-checkout`** fetches `pull/<n>/head` for the PR URL in the task, moves the
+  task branch to it (never the repository's own working tree, never uncommitted work), and
+  saves `pr-<n>.json` and `pr-<n>.diff` in the run's artifacts. It posts nothing; it leaves
+  by `failed` when the head is not checked out, still saving what it could.
 - **`git.sync-base`** merges the freshest base into the task branch. On a conflict it
   leaves the merge in progress and leaves by `conflict` — wire that to an agent to
   resolve it (`{{nodes.<id>.conflicts}}` lists the files).
