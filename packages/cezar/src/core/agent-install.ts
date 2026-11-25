@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, realpathSync, statSync } from 'node:fs';
+import { closeSync, existsSync, fstatSync, openSync, readSync, realpathSync, statSync } from 'node:fs';
 import { delimiter, dirname, isAbsolute, join } from 'node:path';
 
 import { compareVersions, parseVersion } from '../self-update/semver.ts';
@@ -327,14 +327,20 @@ export function installMethodFromPath(path: string): InstallMethodId | null {
  * directly into the global prefix alongside `node_modules/`, rather than symlinking into it.
  */
 function isWindowsNpmShim(filePath: string): boolean {
+  if (!existsSync(join(dirname(filePath), 'node_modules'))) return false;
+  let fd: number | null = null;
   try {
-    const stat = statSync(filePath);
+    // One descriptor for the size check and the read, so both see the same file (CodeQL js/file-system-race).
+    fd = openSync(filePath, 'r');
+    const stat = fstatSync(fd);
     if (!stat.isFile() || stat.size === 0 || stat.size > 4096) return false;
-    if (!existsSync(join(dirname(filePath), 'node_modules'))) return false;
-    const text = readFileSync(filePath, 'utf8');
-    return /(?:%dp0%|%~dp0|\$basedir)[\\/]+node_modules[\\/]/i.test(text);
+    const buffer = Buffer.alloc(stat.size);
+    const read = readSync(fd, buffer, 0, stat.size, 0);
+    return /(?:%dp0%|%~dp0|\$basedir)[\\/]+node_modules[\\/]/i.test(buffer.toString('utf8', 0, read));
   } catch {
     return false;
+  } finally {
+    if (fd !== null) closeSync(fd);
   }
 }
 
