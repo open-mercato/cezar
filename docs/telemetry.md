@@ -136,28 +136,19 @@ location or `PATH`, and its extension) and the CLI's `--version`. Never its outp
 ### Unclean shutdowns
 
 A process killed outright (SIGKILL, an out-of-memory kill) runs no handler and cannot report
-itself. So a running cockpit keeps a small marker, `~/.cezar/telemetry/live/<pid>.json`, with its
-version, start time, memory and number of running tasks, refreshed every minute and deleted on
-every exit Node sees. When the next cockpit starts and finds a marker whose process is gone, it
-reports an `UncleanShutdown` (code `unclean_shutdown`) carrying those numbers, plus what the
-desktop app's `~/.cezar/logs/cockpit.log` says about that process when the file exists: the time of
-its last output line and the app's own `---` start/stop lines (paths masked). It never sends
-what the cockpit printed. It sends nothing when the machine restarted since the
-marker's last update, and nothing when the desktop app already saw the process end and reported it.
-Under the desktop app, a cockpit whose shell disappeared without stopping it first (a quit
-always stops it) reports `SupervisorGone` (code `supervisor_gone`) before shutting down. Without
-a yes, the marker is still kept and cleaned up, and nothing is sent.
-
-### The desktop shell
-
-The desktop app's native shell reports its own failures — Node.js could not be downloaded,
-cezar could not be installed, the cockpit process never answered or exited — under runtime
-`app-shell` with the shell's version. It reads the same answer: with a yes, a failure is reported
-on its own (code, message, cezar and shell version, architecture, how Node was found) and the
-failure page says so. Without one, nothing is sent; the failure page offers a **Send error
-report** button instead, which sends that one report — the error and the log the page shows, paths
-masked as above, no install id — and only when clicked. `CEZ_TELEMETRY=0` / `DO_NOT_TRACK=1` hide
-the button too.
+itself. So a running cockpit keeps a small marker, `~/.cezar/telemetry/live/<pid>-<host>.json` (the
+host part is a hash of the machine's name, so containers sharing a home stay apart), with its
+version, start time, memory and number of running tasks. The marker is refreshed every minute and
+deleted on every exit Node sees, a closed terminal included. When the next cockpit starts and
+finds a marker whose process is gone, it reports an `UncleanShutdown` (code `unclean_shutdown`)
+under the dead build's own version, carrying those numbers. When the desktop app's
+`~/.cezar/logs/cockpit.log` exists, the report also carries the time of that process's last output
+line and the app's own start/stop lines, rewritten without paths. It never sends what the cockpit
+printed. Nothing is sent when the machine restarted since the marker's last update, or when the
+desktop app stopped the process itself (a quit, a restart) or already saw it end and reported it.
+Under the desktop app, a cockpit whose shell disappeared without stopping it first reports
+`SupervisorGone` (code `supervisor_gone`) before shutting down. Without a yes, the marker is still
+kept and cleaned up, and nothing is sent.
 
 ## What is never sent
 

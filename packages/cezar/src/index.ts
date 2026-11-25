@@ -51,8 +51,8 @@ import { initServeWorkspace, initWorkspace } from './workspace/boot.ts';
 import { loadWorkspaceConfig } from './workspace/config.ts';
 import { runProjectsCommand } from './workspace/projects-cli.ts';
 import { WorkspaceSemaphore } from './workspace/semaphore.ts';
-import { flushTelemetry, initTelemetry, installCrashReporter, registerDailyInventory, registerTelemetryContext, reportError, startDailyPing, telemetryRuntime, track } from './telemetry.ts';
-import { collectUncleanExits, startLiveMarker, supervisorGoneError, uncleanShutdownError } from './unclean-exit.ts';
+import { flushTelemetry, initTelemetry, installCrashReporter, registerDailyInventory, registerTelemetryContext, reportError, startDailyPing, telemetryEnvelope, telemetryRuntime, track } from './telemetry.ts';
+import { reportUncleanExits, startLiveMarker, supervisorGoneError } from './unclean-exit.ts';
 import { collectFeatureInventory } from './feature-telemetry.ts';
 import { runTaskCommand } from './dispatch/task-cli.ts';
 import { runAutomationCommand } from './automations/automation-cli.ts';
@@ -466,6 +466,9 @@ async function serveCommand(
   };
   process.on('SIGINT', () => shutdown('signal'));
   process.on('SIGTERM', () => shutdown('signal'));
+  // A closed terminal (or, on Windows, console window): Node resets SIGHUP to its default at
+  // startup, which ends the process with no exit event and would read as an unclean shutdown.
+  process.on('SIGHUP', () => shutdown('signal'));
   const providerAuth = new ProviderAuthService({ cwd: repoRoot, onInconclusive: (probe) => void reportInconclusiveProbe(probe) });
   const workspaceEvents = new WorkspaceEventBus();
   const providerRuntimeAuth = new ProviderRuntimeAuthObserver(providerAuth, (status) => {
@@ -479,9 +482,10 @@ async function serveCommand(
   installCrashReporter();
   track('app_start');
   // A previous cockpit that never shut down (SIGKILL, OOM) can only be reported by the next one.
-  for (const exit of collectUncleanExits()) reportError(uncleanShutdownError(), exit.context, { code: 'unclean_shutdown' });
+  reportUncleanExits();
   startLiveMarker({
     version: readOwnVersion(),
+    reportVersion: telemetryEnvelope().version ?? 'unknown',
     runtime: telemetryRuntime(),
     runsRunning: () => store.listRuns().filter((r) => r.status === 'running').length,
   });

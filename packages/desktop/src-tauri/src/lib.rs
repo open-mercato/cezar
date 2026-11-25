@@ -526,6 +526,7 @@ const SIDECAR_STOP_GRACE: Duration = Duration::from_secs(2);
 /// `SIDECAR_STOP_GRACE`. A bare `kill()` is SIGKILL — it skipped all of that. Only macOS links
 /// `libc` (Cargo.toml); elsewhere this keeps the hard kill.
 fn stop_sidecar(child: &mut Child) {
+    persist_sidecar_line(&stopped_by_app_line(child.id()));
     #[cfg(target_os = "macos")]
     {
         // SAFETY: `kill(2)` on our own child's pid; a pid that already exited is a harmless ESRCH.
@@ -1037,6 +1038,7 @@ fn supervise(app: AppHandle, shell: Arc<Shell>) {
                 _ => Failure::new("sidecar_health_timeout", format!("No answer within {}s.", HEALTH_TIMEOUT.as_secs())),
             };
             fail(&window, "cezar did not come up", &with_log_hint(&format!("No answer on {url} within {}s (pid {pid}).", HEALTH_TIMEOUT.as_secs())), &tail, Some(failure));
+            persist_sidecar_line(&stopped_by_app_line(pid));
             let _ = child.kill();
             return;
         }
@@ -2401,6 +2403,12 @@ impl SidecarLog {
 
 static SIDECAR_LOG: Mutex<Option<SidecarLog>> = Mutex::new(None);
 
+/// The shell is about to stop this cockpit itself (a quit, a restart): the next cockpit reads it
+/// in `unclean-exit.ts` and does not report the stop as an unclean shutdown.
+fn stopped_by_app_line(pid: u32) -> String {
+    format!("--- cockpit process pid {pid} stopped by the app")
+}
+
 fn persist_sidecar_line(text: &str) {
     let mut guard = SIDECAR_LOG.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     guard
@@ -2564,6 +2572,12 @@ mod tests {
         // The human line alone is not a machine contract; a plain stop has no hand-off.
         assert!(handoff_url(&lines(&["  cockpit → http://127.0.0.1:4321/"])).is_none());
         assert!(handoff_url(&[]).is_none());
+    }
+
+    #[test]
+    fn a_stop_by_the_app_is_logged_in_the_shape_the_cockpit_reads() {
+        // packages/cezar/src/unclean-exit.ts matches this line exactly.
+        assert_eq!(stopped_by_app_line(87001), "--- cockpit process pid 87001 stopped by the app");
     }
 
     #[test]
