@@ -157,6 +157,7 @@ export const workflowGraphNodeSchema = z.discriminatedUnion('type', [
   }),
   z.object({ ...graphNodeBase, type: z.literal('if'), condition: workflowConditionSchema }),
   z.object({ ...graphNodeBase, type: z.literal('git.push') }),
+  z.object({ ...graphNodeBase, type: z.literal('github.pr-checkout') }),
   z.object({ ...graphNodeBase, type: z.literal('git.sync-base') }),
   z.object({
     ...graphNodeBase,

@@ -111,6 +111,7 @@ import { loadWorkflows, newerCatalogWorkflow } from './load.ts';
 import type { QueuedMessage, RunRecord, RunStore, StepState } from '../runs/store.ts';
 import { switchedWorkflowAgent, taskAgentSelection, workflowAgentSwitch } from '../runs/agent-selection.ts';
 import { artifactsDir, authParkForAccount, isIdleParked } from '../runs/store.ts';
+import { checkoutPr, parsePrUrl } from './pr-checkout.ts';
 import { artifactsPromptPart, scanArtifacts, watchArtifacts } from '../runs/artifacts.ts';
 import { backstopRender } from '../impact/publish.ts';
 // Task dispatch (spec 2026-09-10-dispatch). Every import below is inert unless the feature is
@@ -8414,6 +8415,26 @@ export class RunManager {
         }
         note(`pushed ${run.branch}`);
         return 'done';
+      }
+      case 'github.pr-checkout': {
+        const run = record();
+        const pr = parsePrUrl(task);
+        if (!run || !pr) {
+          note('no GitHub pull request URL in the task to check out', 'danger');
+          return 'failed';
+        }
+        const res = await checkoutPr({
+          cwd: state.cwd,
+          artifactsDir: artifactsDir(this.dataDir, runId),
+          pr,
+          ownWorktree: !!run.branch && run.worktree !== false && resolvePath(state.cwd) !== resolvePath(this.repoRoot),
+          ...(run.baseBranch ? { baseBranch: run.baseBranch } : {}),
+          offline: process.env.CEZ_DRY_RUN === '1',
+        });
+        outputs.set(node.id, { number: pr.number, head: res.head, diff: res.diffPath, meta: res.metaPath, checkedOut: res.checkedOut ? 'yes' : 'no' });
+        for (const problem of res.problems) note(problem, 'danger');
+        if (res.checkedOut) note(`checked out PR #${pr.number} at ${res.head.slice(0, 12)}`);
+        return res.checkedOut ? 'done' : 'failed';
       }
       case 'git.sync-base': {
         const base = record()?.baseBranch;

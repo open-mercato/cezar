@@ -1411,6 +1411,7 @@ const OUTPUTS: Record<GraphNodeType, string[]> = {
   if: ['result', 'value'],
   'git.push': [],
   'git.sync-base': ['conflicts'],
+  'github.pr-checkout': ['number', 'head', 'diff', 'meta', 'checkedOut'],
   'github.pr-update': [],
   'github.issue-comment': ['issue'],
   'notify.webhook': ['status'],
