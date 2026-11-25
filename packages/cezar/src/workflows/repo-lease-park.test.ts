@@ -111,7 +111,7 @@ describe('a parked in-place run releases the working-tree lease', () => {
       store.readEvents(parked.id).filter((event) => event.type === 'user-message' && event.text === 'your child reported'),
     ).toHaveLength(1);
     expect(store.getRun(parked.id)?.activity).toBe('monitoring');
-    expect(notes(parked.id)).toContain('resuming — waiting for exclusive access to the repository working tree');
+    expect(notes(parked.id)).toContain(`resuming — waiting for task ${second.id.slice(0, 8)} to release the repository working tree`);
     await waitFor(second.id, (r) => r?.status === 'done');
     await waitFor(parked.id, (r) => r?.activity === undefined);
     // The resumed turn parks again (the mock answers plainly) and gives the lease back again.
@@ -149,4 +149,39 @@ describe('a parked in-place run releases the working-tree lease', () => {
     await waitFor(parked.id, (r) => r?.activity === 'monitoring');
     expect(notes(parked.id).some((m) => m.startsWith('parked — released'))).toBe(false);
   }, 30_000);
+
+  // #2396: a Continue on a finished in-place task used to wait for the tree with the task still
+  // `done`, the message missing from the thread and no word of who held the tree.
+  describe('a Continue that has to wait for the tree is visible (#2396)', () => {
+    const finishedAndBlocked = async () => {
+      const first = manager.startRun(SINGLE_STEP, { task: 'mock:done first in-place', worktree: false });
+      await waitFor(first.id, (r) => r?.status === 'done');
+      const holder = manager.startRun(SINGLE_STEP, { task: 'mock:pause mock:done holds the tree', worktree: false });
+      await waitFor(holder.id, (r) => r?.status === 'running' && r.steps[0]?.status === 'running');
+      return { first, holder };
+    };
+
+    it('shows the message, runs the task and names the holder while it waits, then announces the start', async () => {
+      const { first, holder } = await finishedAndBlocked();
+      expect(manager.continueRun(first.id, { text: 'one more thing' })).toEqual({ ok: true });
+      await waitFor(first.id, (r) => r?.status === 'running');
+      expect(
+        store.readEvents(first.id).filter((e) => e.type === 'user-message' && e.text === 'one more thing'),
+      ).toHaveLength(1);
+      expect(notes(first.id)).toContain(`waiting for task ${holder.id.slice(0, 8)} to release the repository working tree`);
+      await waitFor(holder.id, (r) => r?.status === 'done');
+      await waitFor(first.id, () => notes(first.id).includes('repository working tree is free — starting'));
+    }, 40_000);
+
+    it('puts the task back to done when stopped during the wait', async () => {
+      const { first } = await finishedAndBlocked();
+      expect(manager.continueRun(first.id, { text: 'one more thing' })).toEqual({ ok: true });
+      await waitFor(first.id, () => notes(first.id).some((m) => m.startsWith('waiting for task')));
+      expect(store.getRun(first.id)?.status).toBe('running');
+      expect(manager.cancel(first.id)).toBe(true);
+      await waitFor(first.id, (r) => r?.status === 'done');
+      expect(store.getRun(first.id)?.finishedAt).toBeDefined();
+      expect(manager.isActive(first.id)).toBe(false);
+    }, 40_000);
+  });
 });

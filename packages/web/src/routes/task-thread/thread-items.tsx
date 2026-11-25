@@ -23,7 +23,8 @@ import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'rea
 import { useMutation } from '@tanstack/react-query'
 import { Link as GlobalLink } from 'react-router'
 import { ApiError, updateProvider } from '@/api/client'
-import { useAgentProfiles } from '@/api/queries'
+import { useAgentProfiles, useRefreshSkillCatalog } from '@/api/queries'
+import { ReconnectCard, ReconnectedLine } from '@/components/reconnect/reconnect-card'
 import { Button } from '@/components/ui/button'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import { IconTooltip } from '@/components/ui/icon-tooltip'
@@ -427,6 +428,36 @@ export function NoteLine({ note }: { note: ThreadNote }) {
     >
       {note.tone === 'danger' ? '✗ ' : note.tone === 'info' ? '⇄ ' : '· '}
       {note.text}
+      {note.action === 'install-skills' ? <InstallSkillsAction skillNames={note.skillNames} /> : null}
+    </div>
+  )
+}
+
+function InstallSkillsAction({ skillNames }: { skillNames?: readonly string[] }) {
+  const refresh = useRefreshSkillCatalog()
+  const catalog = refresh.data ?? []
+  const stillMissing = skillNames?.filter((name) => !catalog.some((skill) => skill.name === name && !skill.kind && !skill.missingShared))
+
+  return (
+    <div className="mt-1.5 flex flex-wrap items-center gap-2">
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        className="text-foreground"
+        disabled={refresh.isPending}
+        onClick={() => refresh.mutate()}
+      >
+        {refresh.isPending ? 'Refreshing skills…' : 'Install skills'}
+      </Button>
+      {refresh.isSuccess ? (
+        <span role="status" className="text-soft-foreground">
+          Skills catalog refreshed.
+          {stillMissing?.length ? ` The catalog is still missing ${stillMissing.join(', ')}.` : null}
+          {!skillNames && catalog.some((skill) => skill.missingShared) ? ' Some shared skills are still unavailable.' : null}
+        </span>
+      ) : null}
+      {refresh.isError ? <span role="alert">Could not refresh skills. {refresh.error.message}</span> : null}
     </div>
   )
 }
@@ -445,69 +476,27 @@ const PROVIDER_LABEL: Record<ThreadProviderAuthRequired['provider'], string> = {
   kimi: 'Kimi Code',
 }
 
-/** Persisted recovery guidance for an authoritative runtime authentication rejection. */
+/**
+ * An authoritative runtime authentication rejection: the inline reconnect card (spec
+ * 2026-11-18-inline-account-reconnect). An older rejection on the same account, or one the
+ * account already came back from, is a quiet line instead.
+ */
 export function ProviderAuthRequiredCard({
   incident,
 }: {
   incident: ThreadProviderAuthRequired
 }) {
-  if (incident.profileId !== undefined) return <AccountAuthRequiredCard incident={incident} profileId={incident.profileId} />
-  const label = PROVIDER_LABEL[incident.provider]
+  const profileId = incident.profileId ?? 'default'
+  if (incident.state !== undefined) {
+    return (
+      <div data-slot="provider-auth-required" data-state={incident.state} data-profile-id={profileId}>
+        <ReconnectedLine provider={incident.provider} profileId={profileId} at={incident.reconnectedAt} signedOutHere={incident.state === 'older'} />
+      </div>
+    )
+  }
   return (
-    <div
-      role="alert"
-      data-slot="provider-auth-required"
-      className="rounded-md border border-danger/30 bg-danger/5 px-3.5 py-3"
-    >
-      <p className="text-ui font-semibold text-foreground">
-        This run needed {label} authorization
-      </p>
-      <p className="mt-1 text-xs text-muted-foreground">
-        Review {label} settings before retrying.
-      </p>
-      <Link
-        to="/settings/agents#providers"
-        className="mt-2 inline-flex text-xs font-medium text-foreground underline-offset-2 hover:underline"
-      >
-        Open provider settings
-      </Link>
-    </div>
-  )
-}
-
-/** A named account was rejected, not the default login (telemetry 9e4a95db): name it and send the
- *  user to the pane that can sign it in — the Providers card describes the default login only. */
-function AccountAuthRequiredCard({
-  incident,
-  profileId,
-}: {
-  incident: ThreadProviderAuthRequired
-  profileId: string
-}) {
-  const profiles = useAgentProfiles()
-  const label = PROVIDER_LABEL[incident.provider]
-  const account = profiles.data?.profiles
-    .find((p) => p.id === profileId && p.provider === incident.provider)?.label ?? profileId
-  return (
-    <div
-      role="alert"
-      data-slot="provider-auth-required"
-      data-profile-id={profileId}
-      className="rounded-md border border-danger/30 bg-danger/5 px-3.5 py-3"
-    >
-      <p className="text-ui font-semibold text-foreground">
-        This run needed {label} account “{account}” to be signed in
-      </p>
-      <p className="mt-1 text-xs text-muted-foreground">
-        Sign that account in again before retrying.
-      </p>
-      {/* Global settings sit outside every project scope — react-router's own Link. */}
-      <GlobalLink
-        to="/settings/global/accounts"
-        className="mt-2 inline-flex text-xs font-medium text-foreground underline-offset-2 hover:underline"
-      >
-        Open agent accounts
-      </GlobalLink>
+    <div data-slot="provider-auth-required" data-profile-id={profileId}>
+      <ReconnectCard provider={incident.provider} profileId={profileId} place="task" />
     </div>
   )
 }

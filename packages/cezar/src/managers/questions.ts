@@ -129,6 +129,17 @@ export function openCardsBlock(cards: AskMessage[], now: number): string {
   return `Your questions still waiting on the user:\n${lines.join('\n')}${more}\nClose any that no longer need the user with a line \`CEZ:ASK-CLOSE <id> <reason>\`, or ask again with the same id.\n\n`;
 }
 
+/** What a session already heard about its open cards: their ids and staleness, never their age. */
+export function openCardsDigest(cards: AskMessage[]): string {
+  return cards.slice(-OPEN_CARDS_LISTED).map((card) => `${cardHandle(card.ask)}${card.askStale ? '!' : ''}`).join(',');
+}
+
+/** The same cards a resumed session was already shown: their ids only (spec 2026-11-21 § 2.4). */
+export function openCardsUnchanged(cards: AskMessage[]): string {
+  if (cards.length === 0) return '';
+  return `Your questions still waiting on the user, unchanged since your last turn: ${cards.slice(-OPEN_CARDS_LISTED).map((card) => cardHandle(card.ask)).join(', ')}.\n\n`;
+}
+
 /** One card as the engine hands it over; `answeredAt` only for a card answered on itself. */
 export interface ManagerAskCard {
   managerId: string;
@@ -185,9 +196,9 @@ export function createManagerQuestionProvider(engine: ManagerEngine): QuestionPr
         .filter((item) => !item.closed || msOf(item.closed.at) >= cutoff);
     },
     owns: (key) => target(key) !== undefined,
-    answer: async (key, text) => {
+    answer: async (key, text, options) => {
       const parsed = target(key);
-      return parsed ? result(engine.answerAsk(parsed.managerId, parsed.messageId, text)) : notFound;
+      return parsed ? result(engine.answerAsk(parsed.managerId, parsed.messageId, text, options?.reactivate === true)) : notFound;
     },
     dismiss: async (key) => {
       const parsed = target(key);

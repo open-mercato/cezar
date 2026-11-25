@@ -4,8 +4,8 @@ import java.util.Locale;
 
 /** Which navigations stay in the server webview (spec "Other shell behaviour"). */
 public final class NavigationPolicy {
-    /** `SERVERS` and `RECONNECT` are the page's only two asks of the shell, by navigation, with no bridge. */
-    public enum Action { ALLOW, EXTERNAL, SERVERS, RECONNECT, BLOCK }
+    /** `SERVERS`, `RECONNECT` and `HAPTIC` are the page's only asks of the shell, by navigation, with no bridge. */
+    public enum Action { ALLOW, EXTERNAL, SERVERS, RECONNECT, HAPTIC, BLOCK }
 
     private NavigationPolicy() {}
 
@@ -16,6 +16,7 @@ public final class NavigationPolicy {
             String bare = url.toLowerCase(Locale.ROOT);
             if (bare.matches("cezar://servers/?")) return Action.SERVERS;
             if (bare.matches("cezar://reconnect/?")) return Action.RECONNECT;
+            if (bare.matches("cezar://haptic/?")) return Action.HAPTIC;
             return Action.BLOCK;
         }
         if (scheme.equals("about") || scheme.equals("blob") || scheme.equals("data")) return Action.ALLOW;

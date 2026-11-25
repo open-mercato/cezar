@@ -10,7 +10,7 @@ import { BypassPermissionsField } from './bypass-permissions-field'
 /** Settings → Agents → Permissions: the opt-in "skip all permission prompts" toggle. */
 const BASE: ConfigResponse = {
   baseBranch: null, defaultRunner: 'claude', systemPrompt: null, branchNaming: null, defaultModels: {}, modelsLocked: false,
-  maxParallel: 2, memoryLimitMb: null, worktreeRetention: 10, liveTitleUpdates: null, reviewGate: null,
+  maxParallel: 2, memoryLimitMb: null, worktreeRetention: 10, worktreeIdleDays: 7, worktreeIdleDaysOwn: false, archivedTaskDeleteDays: 90, archivedTaskDeleteDaysOwn: false, liveTitleUpdates: null, reviewGate: null,
   profile: null, taskWorkspace: null, landing: null, landingBlocked: null, requiredChecks: [], defaultSkill: null, askSkill: null,
   teamSkills: true, bypassPermissions: false, bypassPermissionsBlocked: null,
 }

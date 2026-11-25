@@ -5,18 +5,24 @@
 //   npm run icon -- path/to/new.svg           # from a new mark
 //   npm run icon -- new.svg --bg '#1a1a2e'    # …whose tile is another colour
 //
-// The SVG is wrapped full-bleed: the tile's own fill covers the whole 1024px canvas, because
-// macOS masks the squircle itself and a transparent corner or margin gets a white plate behind
-// it in the Dock. The fill is `--bg` when given, the mark's gradient when it has one, else the
-// brand tile's black. It is then rendered to PNG and fed to `tauri icon`, which writes the
-// .icns/.ico/.png set under src-tauri/icons. The splash logo (ui/icon.svg) is refreshed from
-// the same source.
-// Rendering uses rsvg-convert when present, else macOS's qlmanage.
+// Three outputs, because the platforms draw an app icon differently:
+// - Windows .ico and Linux PNGs: the mark full-bleed on the 1024px canvas, via `tauri icon`.
+// - cezar.icon + Assets.car (CFBundleIconName): an Icon Composer document (fill + glyph layer).
+//   macOS 26 masks, lights and tints it itself in every appearance; actool also flattens it into
+//   renditions that macOS 12-15 prefer to the .icns. Compiling needs Xcode 26 (icon-car.mjs);
+//   without one the .icon is still written and Assets.car is reported stale.
+// - icon.icns (CFBundleIconFile): the fallback wherever the catalog is not read (`tauri dev`,
+//   tools that read only CFBundleIconFile). macOS before 26 draws an .icns as-is, so the rounded
+//   tile is baked in, inside Apple's icon grid (824px tile centred, transparent margin, soft shadow).
+// The splash logo (ui/icon.svg) is refreshed from the same source.
+// Rendering needs rsvg-convert (brew/apt install librsvg): the legacy tile needs real alpha.
 import { execFileSync, spawnSync } from 'node:child_process'
-import { copyFileSync, existsSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+
+import { ICON_DOC, ICONS_DIR, compileCatalog } from './icon-car.mjs'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const desktop = resolve(here, '..')
@@ -26,9 +32,16 @@ const bgArg = bgAt >= 0 ? args[bgAt + 1] : undefined
 const positional = args.filter((arg, i) => arg !== '--bg' && (bgAt < 0 || i !== bgAt + 1))
 /** The brand tile's colour — what fills the corners the mark's own rounded tile leaves empty. */
 const TILE_COLOR = '#000000'
+/** Apple's macOS icon grid (Big Sur to Sequoia): the tile, its offset and corner on a 1024 canvas. */
+const GRID = { tile: 824, inset: 100, radius: 185.4 }
+
 const source = resolve(positional[0] ?? resolve(desktop, '../web/public/icon.svg'))
 if (!existsSync(source)) {
   console.error(`icon: source not found: ${source}`)
+  process.exit(1)
+}
+if (spawnSync('rsvg-convert', ['--version'], { stdio: 'ignore' }).status !== 0) {
+  console.error('icon: need rsvg-convert (brew install librsvg / apt install librsvg2-bin)')
   process.exit(1)
 }
 
@@ -41,34 +54,100 @@ if (!size) {
 const [w, h] = [Number(size[1]), Number(size[2])]
 const inner = svg.replace(/^[\s\S]*?<svg[^>]*>/, '').replace(/<\/svg>\s*$/, '')
 const gradient = /fill="url\(#([^)]+)\)"/.exec(svg)?.[1]
-const scale = 1024 / Math.max(w, h)
-// Full bleed: a rect in the mark's own gradient behind it, then the mark itself.
-const wrapper = `<svg width="1024" height="1024" viewBox="0 0 1024 1024" fill="none" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
-<g transform="scale(${scale.toFixed(6)})">
-<rect width="${w}" height="${h}" fill="${bgArg ?? (gradient ? `url(#${gradient})` : TILE_COLOR)}"/>
+const tileFill = bgArg ?? (gradient ? `url(#${gradient})` : TILE_COLOR)
+// The mark's own full-size background rect, if it has one: Tahoe gets the glyph without it.
+const bgRect = new RegExp(`<rect\\b(?![^>]*\\b[xy]="[1-9])[^>]*\\bwidth="${w}"[^>]*\\bheight="${h}"[^>]*/>`).exec(inner)
+const bgRectFill = bgRect && /\bfill="(#[0-9a-fA-F]{6})"/.exec(bgRect[0])?.[1]
+const NS = 'xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink"'
+
+/** The mark on its tile colour, scaled to `px` and placed at `at`. */
+const markOnTile = (px, at = 0) => `<g transform="${at ? `translate(${at} ${at}) ` : ''}scale(${(px / Math.max(w, h)).toFixed(6)})">
+<rect width="${w}" height="${h}" fill="${tileFill}"/>
 ${inner}
+</g>`
+
+const fullBleed = `<svg width="1024" height="1024" viewBox="0 0 1024 1024" fill="none" ${NS}>
+${markOnTile(1024)}
+</svg>
+`
+const { tile, inset, radius } = GRID
+const legacyTile = `<svg width="1024" height="1024" viewBox="0 0 1024 1024" fill="none" ${NS}>
+<defs>
+<clipPath id="cezar-tile"><rect x="${inset}" y="${inset}" width="${tile}" height="${tile}" rx="${radius}"/></clipPath>
+<filter id="cezar-shadow" x="-10%" y="-10%" width="120%" height="125%"><feDropShadow dx="0" dy="10" stdDeviation="10" flood-color="#000" flood-opacity="0.3"/></filter>
+</defs>
+<rect x="${inset}" y="${inset}" width="${tile}" height="${tile}" rx="${radius}" fill="${tileFill}" filter="url(#cezar-shadow)"/>
+<g clip-path="url(#cezar-tile)">
+${markOnTile(tile, inset)}
 </g>
 </svg>
 `
-const iconsDir = join(desktop, 'src-tauri', 'icons')
-writeFileSync(join(iconsDir, 'source.svg'), wrapper)
+// Icon Composer canvas: 1024pt, the system's squircle covers all of it.
+const glyph = bgRect && bgRectFill && !bgArg ? inner.replace(bgRect[0], '') : null
+const tahoeLayer = `<svg width="1024" height="1024" viewBox="0 0 1024 1024" fill="none" ${NS}>
+${glyph ? `<g transform="scale(${(1024 / Math.max(w, h)).toFixed(6)})">${glyph}</g>` : markOnTile(1024)}
+</svg>
+`
+const srgb = (hex) =>
+  `srgb:${[1, 3, 5].map((i) => (parseInt(hex.slice(i, i + 2), 16) / 255).toFixed(5)).join(',')},1.00000`
+const fillHex = /^#[0-9a-fA-F]{6}$/.test(bgArg ?? '') ? bgArg : (bgRectFill ?? TILE_COLOR)
+const iconJson = {
+  fill: { solid: srgb(fillHex) },
+  groups: [
+    {
+      layers: [{ glass: true, 'image-name': 'mark.svg', name: 'mark' }],
+      shadow: { kind: 'neutral', opacity: 0.5 },
+      translucency: { enabled: true, value: 0.5 },
+    },
+  ],
+  'supported-platforms': { squares: ['macOS'] },
+}
+if (!glyph) console.warn('icon: no plain full-size background rect in the mark — the Tahoe icon keeps it in its layer')
 
+const iconsDir = ICONS_DIR
 const work = mkdtempSync(join(tmpdir(), 'cezar-icon-'))
-const png = join(work, 'icon-1024.png')
-const wrapperPath = join(work, 'source.svg')
-writeFileSync(wrapperPath, wrapper)
-if (spawnSync('rsvg-convert', ['--version'], { stdio: 'ignore' }).status === 0) {
-  execFileSync('rsvg-convert', ['-w', '1024', '-h', '1024', '-o', png, wrapperPath])
-} else if (process.platform === 'darwin') {
-  execFileSync('qlmanage', ['-t', '-s', '1024', '-o', work, wrapperPath], { stdio: 'ignore' })
-  renameSync(join(work, 'source.svg.png'), png)
-} else {
-  console.error('icon: need rsvg-convert (apt/brew install librsvg) to render the SVG')
-  process.exit(1)
+const render = (name, body) => {
+  const svgPath = join(work, `${name}.svg`)
+  const pngPath = join(work, `${name}.png`)
+  writeFileSync(svgPath, body)
+  execFileSync('rsvg-convert', ['-w', '1024', '-h', '1024', '-o', pngPath, svgPath])
+  return pngPath
 }
 
-execFileSync('npx', ['tauri', 'icon', png, '-o', iconsDir], { cwd: desktop, stdio: 'inherit' })
-for (const extra of ['android', 'ios']) rmSync(join(iconsDir, extra), { recursive: true, force: true })
-copyFileSync(source, join(desktop, 'ui', 'icon.svg'))
-rmSync(work, { recursive: true, force: true })
-console.log(`icon: regenerated ${iconsDir} and ui/icon.svg from ${source}`)
+try {
+  writeFileSync(join(iconsDir, 'source.svg'), fullBleed)
+  writeFileSync(join(iconsDir, 'macos-legacy.svg'), legacyTile)
+  execFileSync('npx', ['tauri', 'icon', render('full-bleed', fullBleed), '-o', iconsDir], { cwd: desktop, stdio: 'inherit' })
+  for (const extra of ['android', 'ios']) rmSync(join(iconsDir, extra), { recursive: true, force: true })
+  // Only the .icns is taken from the tile render; every other file stays full-bleed. Its log is a
+  // second copy of the one above, so it shows only when the run fails.
+  const legacyOut = join(work, 'legacy')
+  const legacy = spawnSync('npx', ['tauri', 'icon', render('legacy', legacyTile), '-o', legacyOut], {
+    cwd: desktop,
+    encoding: 'utf8',
+  })
+  if (legacy.status !== 0) {
+    process.stderr.write(`${legacy.stdout ?? ''}${legacy.stderr ?? ''}${legacy.error ? `${legacy.error}\n` : ''}`)
+    throw new Error('tauri icon failed on the macOS tile')
+  }
+  copyFileSync(join(legacyOut, 'icon.icns'), join(iconsDir, 'icon.icns'))
+
+  rmSync(ICON_DOC, { recursive: true, force: true })
+  mkdirSync(join(ICON_DOC, 'Assets'), { recursive: true })
+  writeFileSync(join(ICON_DOC, 'icon.json'), `${JSON.stringify(iconJson, null, 2)}\n`)
+  writeFileSync(join(ICON_DOC, 'Assets', 'mark.svg'), tahoeLayer)
+  const car = join(work, 'car')
+  if (compileCatalog(car)) {
+    for (const file of ['Assets.car', 'Assets.car.json']) copyFileSync(join(car, file), join(iconsDir, file))
+  } else {
+    console.warn('icon: no Xcode 26 actool here, so icons/Assets.car is now STALE: recompile it on a Mac with Xcode 26')
+  }
+
+  copyFileSync(source, join(desktop, 'ui', 'icon.svg'))
+  console.log(`icon: regenerated ${iconsDir} and ui/icon.svg from ${source}`)
+} catch (error) {
+  console.error(`icon: ${error.message}`)
+  process.exitCode = 1
+} finally {
+  rmSync(work, { recursive: true, force: true })
+}

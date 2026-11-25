@@ -1,4 +1,4 @@
-import type { InferResponseType } from 'hono/client';
+import type { InferRequestType, InferResponseType } from 'hono/client';
 import { hc } from 'hono/client';
 import { describe, expect, it } from 'vitest';
 import type { z } from 'zod';
@@ -28,6 +28,8 @@ import type {
   artifactsBySubjectResponseSchema,
   projectAssetsResponseSchema,
   startNowResponseSchema,
+  switchRunAgentInputSchema,
+  switchRunAgentResponseSchema,
 } from '@open-mercato/cezar-contract';
 import type { AppType } from './app-type.ts';
 
@@ -118,6 +120,8 @@ describe('src/contract/runs.ts matches the runs routes exactly', () => {
     Assert<Exact<z.infer<typeof startNowResponseSchema>, StartNow200>>,
     Assert<Exact<z.infer<typeof landResponseSchema>, Land200>>,
     Assert<Exact<z.infer<typeof continueResponseSchema>, Continue200>>,
+    Assert<Exact<z.input<typeof switchRunAgentInputSchema>, InferRequestType<Run['switch-agent']['$post']>['json']>>,
+    Assert<Exact<z.infer<typeof switchRunAgentResponseSchema>, InferResponseType<Run['switch-agent']['$post'], 200>>>,
     Assert<Exact<z.infer<typeof deleteRunResponseSchema>, DeleteRun200>>,
     Assert<Exact<z.infer<typeof createPrResponseSchema>, CreatePr201>>,
     Assert<Exact<z.infer<typeof adoptPrResponseSchema>, AdoptPr200>>,

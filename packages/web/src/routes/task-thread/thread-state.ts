@@ -45,6 +45,8 @@ export interface ThreadNote {
   text: string
   /** `info`: an event the user should notice without alarm — another agent taking a task over. */
   tone: 'dim' | 'danger' | 'info'
+  action?: 'install-skills'
+  skillNames?: string[]
 }
 
 /** An image the run persisted (v1 `image` line: served from `/api/runs/:id/images/…`). */
@@ -80,6 +82,11 @@ export interface ThreadProviderAuthRequired {
   authFailureId: string
   /** The named agent account the rejection came from; absent for the default login. */
   profileId?: string
+  /** Absent = the live reconnect card. `older`: a later rejection on the same account draws it;
+   *  `reconnected`: the account came back and the run resumed (spec 2026-11-18-inline-account-reconnect). */
+  state?: 'older' | 'reconnected'
+  /** When the run resumed after the reconnect. */
+  reconnectedAt?: string
 }
 
 /** Offered after an agent error saying its CLI is too old ("1.18.0 or newer is required"). */
@@ -125,6 +132,9 @@ export interface ThreadState {
   /** Wall clock of the newest stamped event — any kind, deltas included. The live Working…
    *  indicator reads it as "last activity", so a quiet session is told apart from a busy one. */
   lastEventAt?: string
+  /** The newest `session.started.model` — the actual model of a run recorded before
+   *  `RunRecord.actualModel` existed. */
+  sessionModel?: string
 }
 
 export interface ThreadReduceOptions {
@@ -183,7 +193,10 @@ export function threadFilePaths(state: ThreadState): string[] {
   return deduped
 }
 
-const FAILURE_PREFIX = /^(?:continue failed|run stopped|step (?:"[^"]+"|\S+) failed)(?: — |: )/
+const FAILURE_PREFIX = /^(?:continue failed|run failed|run stopped|step (?:"[^"]+"|\S+) failed)(?: — |: )/
+
+/** `CodexToolPolicyError`'s refusal: it is decided before the model starts, so every step repeats it. */
+const PRE_TURN_REFUSAL = /no model turn was started/
 
 /** Engine failure summaries wrap the provider text; compare the detail, not its wrapper. */
 function failureText(text: string): string {
@@ -420,6 +433,10 @@ export function reduceThread(events: RunEvent[], options: ThreadReduceOptions = 
    *  persisted event is stamped with its workflow step. Old recordings without a step id keep
    *  the historical bare-id lookup semantics. */
   const itemsById = new Map<string, { turn: DraftTurn; entry: DraftEntry }>()
+  // One live reconnect card per account: later rejections and reconnects restyle earlier ones.
+  const authEntries: ThreadProviderAuthRequired[] = []
+  const sameAccount = (entry: ThreadProviderAuthRequired, provider: string, profileId: string | undefined) =>
+    entry.provider === provider && (entry.profileId ?? 'default') === (profileId ?? 'default')
   let sessionEnded: ThreadState['sessionEnded']
   let turnSeq = 0
   /** The latest unresolved AskUser card (#473). The next `user-message` resolves
@@ -433,6 +450,7 @@ export function reduceThread(events: RunEvent[], options: ThreadReduceOptions = 
   // Graph gates and native asks are never tracked nor closed server-side, whatever closed before them.
   const serverClosed = new Set(events.flatMap((event) => event.type === 'ask.closed' && typeof event.requestId === 'string' ? [event.requestId] : []))
   let lastEventAt: string | undefined
+  let sessionModel: string | undefined
 
   const newTurn = (sourceSeq?: number): DraftTurn => {
     turnSeq += 1
@@ -673,11 +691,17 @@ export function reduceThread(events: RunEvent[], options: ThreadReduceOptions = 
         // it does not render as the dimmest line in the thread (#936). Events
         // written before that field exists carry no `tone` and stay dim.
         const tone = event.tone === 'danger' ? 'danger' : event.tone === 'info' ? 'info' : 'dim'
+        const installSkills = event.type === 'note' && event.action === 'install-skills'
+        const names = installSkills && Array.isArray(event.skillNames)
+          ? event.skillNames.filter((name): name is string => typeof name === 'string') : undefined
         currentTurn().entries.push({
           origin: 'meta',
           ...(event.type === 'lifecycle' && FAILURE_PREFIX.test(text)
             ? { failure: { message: failureText(text), stepId: event.stepId, summary: true } } : {}),
-          entry: { kind: 'note', id: `v1:${event.seq}`, text, tone },
+          entry: {
+            kind: 'note', id: `v1:${event.seq}`, text, tone,
+            ...(installSkills ? { action: 'install-skills', ...(names?.length ? { skillNames: names } : {}) } : {}),
+          },
         })
         break
       }
@@ -706,6 +730,7 @@ export function reduceThread(events: RunEvent[], options: ThreadReduceOptions = 
       }
       case 'session.started': {
         sessionBackend = providerId(event.backend) ?? sessionBackend
+        sessionModel = str(event.model)?.trim() || sessionModel
         const turn = turns.at(-1)
         if (turn) errorTwins.delete(turn)
         break
@@ -753,16 +778,31 @@ export function reduceThread(events: RunEvent[], options: ThreadReduceOptions = 
         const authFailureId = str(event.authFailureId)
         if (provider === undefined || authFailureId === undefined || authFailureId.length < 1 || authFailureId.length > 128) break
         const profileId = str(event.profileId)
-        currentTurn().entries.push({
-          origin: 'meta',
-          entry: {
-            kind: 'provider-auth-required',
-            id: `v1:${event.seq}`,
-            provider,
-            authFailureId,
-            ...(profileId !== undefined && profileId.length <= 128 ? { profileId } : {}),
-          },
-        })
+        const entry: ThreadProviderAuthRequired = {
+          kind: 'provider-auth-required',
+          id: `v1:${event.seq}`,
+          provider,
+          authFailureId,
+          ...(profileId !== undefined && profileId.length <= 128 ? { profileId } : {}),
+        }
+        for (const earlier of authEntries) {
+          if (earlier.state === undefined && sameAccount(earlier, provider, entry.profileId)) earlier.state = 'older'
+        }
+        authEntries.push(entry)
+        currentTurn().entries.push({ origin: 'meta', entry })
+        break
+      }
+      case 'account-reconnected': {
+        // The run was resumed after its account signed in again: its cards become quiet lines.
+        const provider = providerId(event.provider)
+        if (provider === undefined) break
+        const profileId = str(event.profileId)
+        const at = stamp(event.ts)
+        for (const earlier of authEntries) {
+          if (earlier.state === 'reconnected' || !sameAccount(earlier, provider, profileId)) continue
+          earlier.state = 'reconnected'
+          if (at !== undefined) earlier.reconnectedAt = at
+        }
         break
       }
       case 'image': {
@@ -879,6 +919,12 @@ export function reduceThread(events: RunEvent[], options: ThreadReduceOptions = 
     draft.entries = draft.entries.filter(({ failure }) => !failure?.summary || !failures.some((source) =>
       source.message === failure.message && (failure.stepId === undefined || source.stepId === failure.stepId),
     ))
+    // Steps refused before any model turn say it once, not once per step (#2330 printed it 4×).
+    draft.entries = draft.entries.filter((entry, index, entries) => {
+      const previous = entries[index - 1]?.failure
+      return !entry.failure || entry.failure.summary || !PRE_TURN_REFUSAL.test(entry.failure.message)
+        || !previous || previous.summary || previous.message !== entry.failure.message
+    })
     if (!draft.v2Items) continue
     const v2Texts = new Set<string>()
     for (const { origin, entry } of draft.entries) {
@@ -918,6 +964,7 @@ export function reduceThread(events: RunEvent[], options: ThreadReduceOptions = 
     }),
     ...(sessionEnded !== undefined ? { sessionEnded } : {}),
     ...(lastEventAt !== undefined ? { lastEventAt } : {}),
+    ...(sessionModel !== undefined ? { sessionModel } : {}),
   }
 }
 

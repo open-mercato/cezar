@@ -2,8 +2,8 @@ import Foundation
 
 /// Which navigations stay in the server webview (spec "Other shell behaviour").
 enum NavigationPolicy {
-    /// `servers` and `reconnect` are the page's only two asks of the shell, by navigation, with no bridge.
-    enum Action { case allow, external, servers, reconnect, block }
+    /// `servers`, `reconnect` and `haptic` are the page's only asks of the shell, by navigation, with no bridge.
+    enum Action { case allow, external, servers, reconnect, haptic, block }
 
     static func decide(origin: PageOrigin, url: String, pageUrl: String?, mainFrame: Bool, redirect: Bool) -> Action {
         let scheme = schemeOf(url)
@@ -12,6 +12,7 @@ enum NavigationPolicy {
             if !mainFrame { return .block }
             if bare == "cezar://servers" || bare == "cezar://servers/" { return .servers }
             if bare == "cezar://reconnect" || bare == "cezar://reconnect/" { return .reconnect }
+            if bare == "cezar://haptic" || bare == "cezar://haptic/" { return .haptic }
             return .block
         }
         if ["about", "blob", "data"].contains(scheme) { return .allow }

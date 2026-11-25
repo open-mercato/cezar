@@ -4,6 +4,7 @@ import { MemoryRouter, Route, Routes, useLocation, useNavigate } from 'react-rou
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest'
 
 import { applyManagerEvent, managerKeys, type ManagerEventName } from '@/api/managers'
+import { planUsageKeys } from '@/api/plan-usage'
 import { __clearRememberedStatusesForTests, queryKeys, workspaceQueryKeys } from '@/api/queries'
 import type { ManagerMessage, ManagerSummary } from '@open-mercato/cezar-api-client'
 import { runnerSchema } from '@open-mercato/cezar-api-client'
@@ -1782,5 +1783,127 @@ describe('/manager/:id', () => {
     const menu = await waitFor(() => document.querySelector<HTMLElement>('[data-slot="manager-settings-menu"]')!)
     fireEvent.click(within(menu).getByRole('button', { name: 'Check now' }))
     await waitFor(() => expect(posted('/global/check')).toHaveLength(1))
+  })
+})
+
+describe('an inactive manager\'s chat (spec 2026-11-19-manager-deactivate)', () => {
+  beforeEach(() => {
+    server.managers = [managerFixture({ inactive: { since: '2026-11-18T23:40:00Z' } })]
+  })
+
+  it('shows the banner, a grey avatar, and keeps Check now off', async () => {
+    renderAt('/manager/global')
+    await screen.findByRole('heading', { name: 'Global Manager' })
+    const banner = document.querySelector('[data-slot="manager-inactive-banner"]')!
+    expect(banner.getAttribute('role')).toBe('status')
+    expect(within(banner as HTMLElement).getByRole('button', { name: 'Reactivate…' })).toBeTruthy()
+    expect(document.querySelector('header [data-slot="manager-avatar-inactive"]')).not.toBeNull()
+    expect((document.querySelector('[data-slot="manager-check-now"]') as HTMLButtonElement).disabled).toBe(true)
+    expect(composer().placeholder).toContain('is inactive — write anyway; sending reactivates it')
+  })
+
+  it('asks before a send: a cancel keeps the draft, a confirm sends with reactivate: true', async () => {
+    renderAt('/manager/global')
+    await screen.findByRole('heading', { name: 'Global Manager' })
+    send('wake up')
+    let dialog = await screen.findByRole('alertdialog', { name: /Reactivate Global Manager and send\?/ })
+    expect(within(dialog).queryByRole('checkbox')).toBeNull()
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }))
+    await waitFor(() => expect(composer().value).toBe('wake up'))
+    expect(posted('/global/messages')).toHaveLength(0)
+    send('wake up')
+    dialog = await screen.findByRole('alertdialog')
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Reactivate and send' }))
+    await waitFor(() => expect(posted('/global/messages')[0]?.body).toEqual({ text: 'wake up', reactivate: true, idempotencyKey: SEND_KEY }))
+  })
+
+  it('a cancelled reactivate from a question card puts focus back on the option and says “Not sent”', async () => {
+    server.messages = [assistantMessage(99, { ask: { questions: [{ header: 'Ready', question: 'Publish?', options: [{ label: 'Yes' }, { label: 'No' }] }] } })]
+    renderAt('/manager/global')
+    const no = await screen.findByRole('button', { name: 'No' })
+    no.focus()
+    fireEvent.click(no)
+    const dialog = await screen.findByRole('alertdialog', { name: /Reactivate Global Manager and answer\?/ })
+    fireEvent.keyDown(dialog, { key: 'Escape' })
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull())
+    await waitFor(() => expect(document.activeElement?.textContent).toBe('No'))
+    expect(screen.getByText(/Not sent: Global Manager is still inactive/)).toBeTruthy()
+    expect(posted('/global/messages')).toHaveLength(0)
+  })
+
+  it('/check asks first, then reactivates with Catch me up instead of a check the server would refuse', async () => {
+    renderAt('/manager/global')
+    await screen.findByRole('heading', { name: 'Global Manager' })
+    send('/check')
+    const dialog = await screen.findByRole('alertdialog', { name: /Reactivate Global Manager and check\?/ })
+    expect(dialog.textContent).toContain('A single check runs now: one model call.')
+    expect(dialog.textContent).not.toContain('Your message starts its next turn')
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Reactivate and check' }))
+    await waitFor(() => expect(calls.find((call) => call.method === 'PATCH')?.body).toEqual({ active: true, catchUp: true }))
+    expect(posted('/global/check')).toHaveLength(0)
+    expect(posted('/global/messages')).toHaveLength(0)
+  })
+
+  it('draws the deactivate line as a divider and the reactivate line with its While inactive counts', async () => {
+    server.managers = [managerFixture()]
+    server.messages = [
+      { id: 'n1', seq: 1, at: '2026-11-18T23:40:00Z', kind: 'notice', text: 'Deactivated by you', activity: { change: 'deactivated' } },
+      { id: 'n2', seq: 2, at: '2026-11-19T08:00:00Z', kind: 'notice', text: 'Reactivated by you', activity: { change: 'reactivated', since: '2026-11-18T23:40:00Z', taskUpdates: 2, automationReports: 1, checksSkipped: 5, jobRunsSkipped: 1 } },
+    ]
+    renderAt('/manager/global')
+    const lines = await waitFor(() => {
+      const found = [...document.querySelectorAll('[data-slot="manager-activity-notice"]')]
+      expect(found).toHaveLength(2)
+      return found
+    })
+    expect(lines[0]!.textContent).toContain('Deactivated by you')
+    expect(lines[0]!.querySelector('[data-slot="manager-activity-summary"]')).toBeNull()
+    const summary = lines[1]!.querySelector('[data-slot="manager-activity-summary"]')!.textContent
+    expect(summary).toContain('While inactive')
+    expect(summary).toContain('2 task updates')
+    expect(summary).toContain('1 automation report')
+    expect(summary).toContain('5 checks skipped')
+    expect(summary).toContain('1 job run skipped')
+    expect(summary).toContain('posted by cezar · no model call')
+  })
+
+  it('says the catch-up check is a model call instead of claiming none', async () => {
+    server.managers = [managerFixture()]
+    server.messages = [
+      { id: 'n2', seq: 1, at: '2026-11-19T08:00:00Z', kind: 'notice', text: 'Reactivated by you', activity: { change: 'reactivated', since: '2026-11-18T23:40:00Z', taskUpdates: 0, automationReports: 0, checksSkipped: 5, jobRunsSkipped: 0, catchUp: true } },
+    ]
+    renderAt('/manager/global')
+    const summary = await waitFor(() => document.querySelector('[data-slot="manager-activity-summary"]')!.textContent)
+    expect(summary).toContain('catching up now')
+    expect(summary).toContain('the catch-up check is one model call')
+    expect(summary).not.toContain('no model call')
+  })
+})
+
+describe('plan usage in the chat (spec 2026-11-20-manager-plan-usage-popover, footnote restored 2026-11-22)', () => {
+  it('puts a reply’s footnote on that reply only, joined by its message id, beside the header chip', async () => {
+    server.managers = [managerFixture({ id: 'global', runner: 'claude' })]
+    server.messages = [userMessage(0, 'status?'), assistantMessage(1, { text: 'First answer.' }), assistantMessage(2, { text: 'Second answer.' })]
+    const now = new Date()
+    const entry = {
+      windowId: 'w-now',
+      account: { key: 'claude:default', provider: 'claude' as const, accountId: 'default', label: 'Claude · default' },
+      kind: 'five-hour' as const,
+      startsAt: new Date(now.getTime() - 60 * 60_000).toISOString(),
+      resetsAt: new Date(now.getTime() + 4 * 60 * 60_000).toISOString(),
+      current: true,
+      consumer: {
+        id: 'mgr:global', kind: 'manager' as const, title: 'Global Manager', estimatePp: 0.7, aloneInferredPp: 0.7, sharedEstimatePp: 0,
+        retryWasteEstimatePp: 0, ranTogetherWith: { tasks: 0, managers: 0, internal: 0 }, evidence: 'account-level' as const,
+        messages: [{ messageId: 'm2', part: 'chat' as const, at: now.toISOString(), estimatePp: 0.7, aloneInferredPp: 0.7, sharedEstimatePp: 0 }],
+      },
+    }
+    renderAt('/manager/global', (client) => client.setQueryData(planUsageKeys.consumers, { entries: [entry] }))
+    const second = (await screen.findByText('Second answer.')).closest('[data-slot="manager-assistant"]')!
+    const first = screen.getByText('First answer.').closest('[data-slot="manager-assistant"]')!
+    expect(within(second as HTMLElement).getByRole('button', { name: /^This reply ≈ 0.7% of 5h/ })).toBeTruthy()
+    expect(first.querySelector('[data-slot="manager-reply-usage"]')).toBeNull()
+    expect(document.querySelectorAll('[data-slot="manager-reply-usage"]')).toHaveLength(1)
+    expect(document.querySelector('[data-slot="manager-usage-chip"]')).toBeTruthy()
   })
 })

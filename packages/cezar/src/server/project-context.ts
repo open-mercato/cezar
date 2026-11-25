@@ -2,10 +2,9 @@ import { ensureDataGitignore } from '../data-gitignore.ts';
 import { join } from 'node:path';
 import { AutomationStore } from '../automations/store.ts';
 import { reconcileAutomationReceipts } from '../automations/task-template.ts';
-import { DEFAULT_WORKTREE_RETENTION, resolveWorktreeRetention } from '../config.ts';
 import { pruneOrphans } from '../git-worktree.ts';
 import { armRepoHandle } from '../runs/arm-repo-handle.ts';
-import { reclaimWorktrees } from '../runs/retention.ts';
+import { enforceWorktreeRetention } from '../runs/retention.ts';
 import { RunStore } from '../runs/store.ts';
 import { WorkspaceSemaphore } from '../workspace/semaphore.ts';
 import { RunManager } from '../workflows/run.ts';
@@ -269,16 +268,17 @@ export class ProjectContexts {
       // Startup reconcile (spec 006) + count-based retention (#483) — the same
       // best-effort sweeps serveCommand runs for the boot project, gated on the
       // root actually being a git repo.
+      // Task files whose task is gone (spec 2026-11-19-worktree-disk-usage); never blocks the build.
+      setImmediate(() => { try { store.sweepOrphanTaskFiles(); } catch { /* best effort */ } });
       if (await getRepoInfo(project.root)) {
         await pruneOrphans(project.root, new Set(store.listRuns().map((r) => r.id)), id => manager.lifecycle.allowOrphanPrune(id)).catch(
           () => [] as string[],
         );
-        const keep = await resolveWorktreeRetention(project.root).catch(
-          () => DEFAULT_WORKTREE_RETENTION,
-        );
-        await reclaimWorktrees(project.root, store, keep, {lifecycle: manager.lifecycle}).catch(() => [] as string[]);
+        await enforceWorktreeRetention(project.root, store, {lifecycle: manager.lifecycle, isLive: (id) => manager.isActive(id)});
       }
       await manager.recover();
+      // Archived-task deletion may ask `gh` per task: queued off the build, after recovery.
+      manager.scheduleRetention();
       // Which repository this project IS (#945), so the referenced tier stops adopting another
       // repo's PR/issue as a task's subject. Fire-and-forget on purpose — it costs a `gh` spawn
       // and building a context must not wait on the network. `project.root` is already realpath'd.

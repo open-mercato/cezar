@@ -15,7 +15,10 @@ import {
   useProjectRepoBase,
   useRunArtifacts,
   useRuns,
+  useContinueRun,
 } from '@/api/queries'
+import { ReconnectSurfaceContext, type ReconnectSurface } from '@/components/reconnect/surface'
+import { ReconnectCard } from '@/components/reconnect/reconnect-card'
 import { useRunHistory, type RunHistoryState } from '@/api/run-history'
 import type { ApiRun } from '@open-mercato/cezar-api-client'
 import { MyMessagesPill } from '@/components/my-messages/my-messages-pill'
@@ -365,7 +368,27 @@ export function ThreadView({
   // (research §7: re-run scrollToEnd after the viewport settles).
   useKeyboardInsetVar(scroll.restickIfStuck)
 
+  // "Use <other> instead" on a reconnect card: Continue on that account, a fresh session (spec
+  // 2026-11-18-inline-account-reconnect; 2026-07-29-agent-profiles § sessionId and profileId).
+  const continueOn = useContinueRun(run.id)
+  // The park is the source of truth: a rejection the runtime observer could not latch leaves no
+  // card in the transcript, so the dock carries it instead.
+  const parked = run.status === 'waiting' && run.parked?.kind === 'auth' ? run.parked : undefined
+  const reconnectSurface = useMemo<ReconnectSurface>(() => ({
+    kind: 'task',
+    ownId: run.id,
+    switchTo: (agentProfile: string) => continueOn.mutateAsync({ agentProfile }),
+    parked: parked ? { provider: parked.provider, profileId: parked.profileId } : null,
+  }), [continueOn.mutateAsync, run.id, parked?.provider, parked?.profileId])
+  const transcriptCard = useMemo(
+    () => parked !== undefined && thread.turns.some((turn) => turn.items.some((item) =>
+      item.kind === 'provider-auth-required' && item.state === undefined
+      && item.provider === parked.provider && (item.profileId ?? 'default') === parked.profileId)),
+    [thread.turns, parked],
+  )
+
   return (
+    <ReconnectSurfaceContext.Provider value={reconnectSurface}>
     <div data-route="task-thread" data-run-id={run.id} className="flex min-h-full flex-col">
       {embedded ? null : <RunHeader run={run} planTally={planTally} onMarkedUnread={markedUnread} />}
 
@@ -532,6 +555,18 @@ export function ThreadView({
               </>
             ) : null}
           </div>
+        ) : !lifecycleGate && parked !== undefined ? (
+          // Parked on an expired login (spec 2026-11-18-inline-account-reconnect).
+          transcriptCard ? (
+            <div data-slot="sign-in-hint" className={HINT_ROW}>
+              <StatusDot tone="pending" />
+              <span className={HINT_TEXT}>Reconnect the account above and the task continues where it stopped</span>
+            </div>
+          ) : (
+            <div data-slot="provider-auth-required" data-profile-id={parked.profileId}>
+              <ReconnectCard provider={parked.provider} profileId={parked.profileId} place="task" />
+            </div>
+          )
         ) : !lifecycleGate && run.status === 'waiting' ? (
           <div data-slot="paused-hint" className={HINT_ROW}>
             <StatusDot tone="pending" pulse />
@@ -566,11 +601,16 @@ export function ThreadView({
             pick here is exactly what the next submission sends. */}
         {!lifecycleGate ? (
           <div data-slot="session-usage" className="flex justify-end px-1">
-            <RunUsage run={run} continuationEngine={continuable ? continueAction.pills : undefined} />
+            <RunUsage
+              run={run}
+              continuationEngine={continuable ? continueAction.pills : undefined}
+              reportedModel={currentThread.sessionModel ?? thread.sessionModel}
+            />
           </div>
         ) : null}
       </TaskDock>
     </div>
+    </ReconnectSurfaceContext.Provider>
   )
 }
 

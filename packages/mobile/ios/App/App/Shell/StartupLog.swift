@@ -1,6 +1,6 @@
 import Foundation
 
-/// What the last starts and connections did, step by step, for the user to copy from the Devices screen
+/// What the last starts and connections did, step by step, for the user to copy from Your cezars
 /// (Android's StartupLog). Steps, timings, relay states, reason and close codes only: never a key, a
 /// cookie, an id, a path or page content.
 final class StartupLog {

@@ -130,13 +130,14 @@ Notable fields (full doc-comments in the source):
   `process.env` — carries
   `CEZ_HANDOFF_FILE` / `CEZ_TODOS_FILE` / `CEZ_TASK_ID`).
   Codex sends the current `systemPrompt` with each invocation's opening user turn, preserving
-  native configured guidance. `developerInstructions` replaces native config and does not
+  native configured guidance for unrestricted tasks. Restricted tasks use the isolated profile
+  described below. `developerInstructions` replaces native config and does not
   refresh retained developer history on resume/fork; it is unsuitable for task instructions.
 - `enforceReadOnly?` — set only for a manager's read-only work (its read-only tasks and its
   unattended watch turns, spec `2026-10-31-managers`); an Ask task never sets it and keeps only its
   read-only `allowedTools`. When set, the task must not change the repository or publish anything, on every backend:
   Claude through `allowedTools` plus `--disallowedTools` for the write tools (settings allow
-  rules cannot widen a deny), Pi through `allowedTools` (no shell), Codex `sandbox: read-only`,
+  rules cannot widen a deny), Pi through `allowedTools` (no shell), Codex through an isolated home, environment-free native turns and cezar’s read broker,
   OpenCode denied `edit`/`bash` in `OPENCODE_CONFIG_CONTENT` at the top level and in every agent, Cursor `--mode ask` without `--force`, Copilot
   `--deny-tool` with its permission prompts refused, Junie without `brave_mode` with its prompts
   refused, Gemini `--approval-mode default` with its prompts refused. Kimi, omp and Antigravity
@@ -144,15 +145,76 @@ Notable fields (full doc-comments in the source):
   that cannot enforce it must fail the run, never ignore the field.
 - `allowedTools?` / `bashAllowlist?` / `additionalDirectories?` — tool access.
   **Caveat (#430):** the zero-config default (`DEFAULT_ALLOWED_TOOLS`) includes
-  unrestricted `Bash`, and Codex/OpenCode do not honor `allowedTools` at all.
+  unrestricted `Bash`. OpenCode does not honor `allowedTools`. Codex preserves the historical
+  omitted/exact-default unrestricted grant; explicit read-only subsets and an empty grant use
+  isolated execution. Unsupported write tools, MCP grants, shell hooks and Bash prefixes refuse
+  before spawning. A native sandbox or prompt alone is never considered enforcement.
   Treat the default `auto` permission mode as full shell access, not a
   sandbox: Codex uses `danger-full-access` with `approvalPolicy: never`, and
   OpenCode runs under its own permission config: a prompt it still raises is
   an ask card in an attended run (`canAskPermission`, #2042) and refused in an
   autonomous, headless or one-shot run, except this run's own files. Configurable restrictive modes are
   specified by `2026-07-17-permission-modes` (#475).
+- `brokeredShell?` — Codex only: a manager's Bash. The restricted session's broker passes each
+  command to `verify` (the manager policy, `managerShellPlan`) and spawns the returned argv
+  pipeline itself, with a heredoc body as stdin and no shell, in `env`. Claude enforces the same
+  policy through `bashHookCommand`; any other backend ignores the field. The commands run directly
+  on the host with the engine's environment: a Claude manager's `gh` stays inside the user's Claude
+  Bash sandbox, a Codex manager's does not, so a sandbox network allowlist does not cover it. Under
+  `CEZ_CODEX_NETWORK=0` only `offlinePrograms` run (a manager's: `cez-manager` and its pipe filters).
+  Every program, there and in the read broker, is resolved from absolute `PATH` entries only, never
+  the working directory. Restricted Codex refuses Windows today. The dormant Windows path uses
+  `taskkill /T` to walk a live stage's tree. Async teardown can race with pid reuse. Synchronous
+  teardown at server exit keeps the stage's handle open. If a reader quits, the writer is killed
+  by handle and its descendants survive. A child that holds stdout open after its stage exits
+  keeps the call to its timeout and survives.
 - `sessionId?` / `resume?` — stable session id for interactive takeover and for
   `--resume` ("Continue" after a run ends).
+
+**Restricted Codex execution** — `codex-restricted-policy.ts` snapshots the grant. The runner
+accepts Codex 0.169.0 or newer on macOS/Linux, validates the isolated config and its layers,
+requires no hooks/MCP and no managed requirements beyond ones that only narrow (a workspace's
+login methods and features forced off; its model-only `enterpriseManaged` layer is accepted), and
+verifies thread sandbox/approval settings before the first model turn. A 0.169.0 prerelease is
+refused; only the exact 0.169.0 build relies on the static list. Any other version (newer, or a
+`+build`) also reads every page of `experimentalFeature/list`, disables every enabled, non-`removed` feature for the thread (a newer
+Codex may add a native tool the static list does not know) and re-reads the thread's list; only
+`unified_exec`, which 0.170.0 keeps on and which has no shell or environment to run in, may stay
+on. Only flagged features can be disabled: a tool a future Codex adds without a feature flag is
+invisible to this check. Older versions, active system policy, unavailable controls and ambiguous legacy graph policies
+fail closed.
+
+Restricted steps use a separate account-and-cwd state directory under `cezarHomeDir()/codex-restricted/`.
+Only supported model/provider settings and the selected account's file-backed authentication
+travel; native hooks, rules, plugins and private MCP configuration do not. An auth symlink lets
+native refresh update the selected account. Keyring-only authentication and unsupported provider
+settings may be unavailable; cezar never silently picks another account. `CEZ_DRY_RUN=1` loads
+neither native credentials nor native config.
+
+Native shell/image/agent tools, apps/connectors, plugins and browser/computer features are disabled. Every `thread/start` and `turn/start` sends
+`environments: []`; resume can restore a local environment, so the turn override is mandatory.
+Every turn also pins read-only/network-off sandbox and `approvalPolicy: never`. All native
+approval/permission/MCP requests are denied; unknown requests return an RPC error. The dynamic
+`cezar_read` tool alone executes granted Read/Grep/Glob operations and supported read-only
+git/GitHub commands. It validates arguments at execution, starts no shell or PTY, closes stdin,
+bounds concurrency/output/time and aborts processes when the session closes. Files must remain
+inside cwd/additional read roots; Read accepts regular files up to 2 MB. Grep/Glob need `rg`.
+`CEZ_CODEX_NETWORK=0` also denies brokered GitHub reads. Write, push, PR mutation, arbitrary HTTP,
+interpreters, jq/templates and shell syntax are unavailable. GitHub positional repositories, explicit
+`--repo` values and inferred Git remote hosts must match github.com or `GH_HOST`; enterprise
+tokens travel only with an explicit `GH_HOST`. Restricted private MCP requests refuse.
+
+Each launched step persists an optional contract `toolPolicy` snapshot. Continue, restart and
+fresh-session retries reuse the owning snapshot, including synthetic/nested step policies and
+`enforceReadOnly`. Older linear definitions retain their existing fallback; a legacy graph step
+whose grant cannot be reconstructed refuses instead of widening it. Isolated resumes never load
+an unrestricted native thread's config; the existing missing-session recovery starts a fresh
+restricted session when appropriate.
+
+Native adversarial verification (local loopback provider, temporary fake accounts, no paid calls):
+`TMPDIR=/tmp node --import tsx packages/cezar/test/native/codex-restricted.mts`.
+This checks native shell/apply_patch refusal, real broker reads, narrowed grants, resume and the
+writer-lock fork path. Ordinary unit tests use the mock transport and need no Codex installation.
 
 **System prompt channel** — a backend without a dedicated system-prompt input
 must deliver `spec.systemPrompt` as a leading block of the opening user message.
@@ -200,7 +262,10 @@ type AgentEvent =
 usage windows (`limits`: `window`, `utilization` 0..1, ISO `resetsAt`) for the run header. The
 run manager merges it onto `RunRecord.liveUsage` and never writes it to the NDJSON transcript.
 Claude emits it from the main agent's message usage, `result.modelUsage[model].contextWindow`
-and `rate_limit_event.unifiedWindows`; a runner without those signals never emits it.
+and `rate_limit_event.unifiedWindows`; a runner without those signals never emits it. Claude also
+adds two optional token splits that only a manager's turn stats read, and that the run record drops:
+`cacheWriteTokens` on a message's reading (what that request wrote to the prompt cache), and
+`turnTokens` (`cacheReadTokens`, `cacheWriteTokens`, `outputTokens`) from the result's own usage.
 
 `mcp-servers` is Claude's `system/init` `mcp_servers` and `tools`, emitted once per process. Only
 a manager reads it (connectors, spec `2026-11-12-manager-connectors`); the run manager drops it, and
@@ -293,7 +358,7 @@ type UiEvent =
   | UiSessionEndedEvent      // 'session.ended'    — reason: StopReason (replaces v1 done / fatal error)
   | UiSessionErrorEvent      // 'session.error'    — message, fatal (v1 note + error unified)
   | UiTurnStartedEvent       // 'turn.started'     — turnId
-  | UiTurnCompletedEvent     // 'turn.completed'   — turnId, stopReason, usage?, costUsd?
+  | UiTurnCompletedEvent     // 'turn.completed'   — turnId, stopReason, usage?, costUsd?, models? (models reported for the turn, with shares when known)
   | UiItemStartedEvent       // 'item.started'     — item (tools usually pending/running)
   | UiItemDeltaEvent         // 'item.delta'       — itemId, field:'text'|'reasoning'|'output', delta
   | UiItemUpdatedEvent       // 'item.updated'     — item (status flips, streamed snapshots)

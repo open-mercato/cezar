@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { phonePushPrefsSchema } from './attention.ts';
 
 /** Settings > Connect a phone (spec `.ai/specs/2026-11-01-relay-qr-pairing.md`). */
 
@@ -61,6 +62,8 @@ export const phoneSchema = z.object({
   connected: z.boolean(),
   /** The phone handed over a push grant (spec R5). Absent when it has none. */
   push: z.literal(true).optional(),
+  /** Which kinds push, which count on the icon, quiet hours (spec 2026-11-20-phone-notifications-inbox). */
+  prefs: phonePushPrefsSchema,
 });
 export type Phone = z.infer<typeof phoneSchema>;
 

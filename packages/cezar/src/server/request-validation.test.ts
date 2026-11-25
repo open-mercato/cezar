@@ -49,6 +49,7 @@ describe('request validation bounds (#429)', () => {
         retiredQuestionRunId = id;
         retiredQuestionCount += 1;
       },
+      reclaimWorktreesOf: async () => [],
     } as unknown as RunManager;
     app = createApp({
       repoRoot,

@@ -114,7 +114,7 @@ export function TasksSelectionToolbar({ displayed, selection, archived, selectin
           onClick={() => void selection.apply(action, selected)}>{labels[action]} ({count})</Button>
       })}
       <Button type="button" size="sm" variant="ghost" disabled={busy} onClick={selection.clear}>Clear selection</Button>
-      <span className="text-xs text-muted-foreground">Only eligible selected tasks are changed; others are skipped.</span>
+      <span className="text-xs text-muted-foreground">Only eligible selected tasks are changed; others are skipped.{archived ? '' : ' Archiving frees each task’s worktree (branch kept).'}</span>
     </> : null}
     <p role="status" aria-label="Task action status" aria-live="polite" className="w-full empty:hidden text-xs text-muted-foreground">{selection.message}</p>
   </div>

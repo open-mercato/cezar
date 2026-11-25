@@ -2,8 +2,8 @@ import { resetScheduledTasksGate } from '@/lib/scheduled-tasks-gate'
 import { QueryClientProvider } from '@tanstack/react-query'
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import type { ComponentProps } from 'react'
-import { MemoryRouter, Route, Routes, useLocation } from 'react-router'
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { MemoryRouter, Route, Routes, useLocation, useNavigate as useRouterNavigate } from 'react-router'
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest'
 
 import { GlobalEventsProvider } from '@/api/global-events'
 import { queryKeys } from '@/api/queries'
@@ -102,6 +102,14 @@ describe('TasksOverview — the branch cell', () => {
 })
 
 describe('TasksOverview — sorting', () => {
+  it('pre-selects the Status facet a link names (the bottom bar\'s quick actions)', () => {
+    renderOverview({
+      initialStatuses: ['review'],
+      runs: [run({ id: 'a', status: 'review' }), run({ id: 'b', status: 'failed' }), run({ id: 'c', status: 'review' })],
+    })
+    expect([...document.querySelectorAll('[data-slot="task-table-row"]')].map((row) => row.getAttribute('data-run-id')).sort()).toEqual(['a', 'c'])
+  })
+
   it('sorts by recent activity by default, and by creation (Created) from the toolbar', () => {
     renderOverview({
       runs: [
@@ -308,7 +316,7 @@ describe('TasksOverview — the table', () => {
       ],
     })
 
-    // Status | Task | Workflow | Branch | ± | PR | IN/OUT | Cost | CPU | Mem | Started
+    // Status | Task | Workflow | Branch | ± | PR | IN/OUT | Cost | Plan limit (folded) | CPU | Mem | Started
     expect(cellsOf('full')).toEqual([
       'needs review',
       'Structured changes endpoint',
@@ -318,6 +326,7 @@ describe('TasksOverview — the table', () => {
       '#402',
       '184.7k / 2.4k',
       '$0.31',
+      '', // Plan limit: optional, folded by default
       '—', // no live sample, CPU has no persisted peak
       '—',
       '12m',
@@ -325,7 +334,7 @@ describe('TasksOverview — the table', () => {
     // No branch, no PR, no diff recorded, no cost yet — dashes, not zeros (a pre-R2 record has
     // no diffStat, and `+0 −0` would claim a measurement that never happened). Started falls
     // back to createdAt.
-    expect(cellsOf('bare')).toEqual(['needs you', 'Bare minimum', 'default', '—', '—', '—', '— / —', '—', '—', '—', '26m'])
+    expect(cellsOf('bare')).toEqual(['needs you', 'Bare minimum', 'default', '—', '—', '—', '— / —', '—', '', '—', '—', '26m'])
     // The pair is two colored halves, not one string — green adds, red dels (design tokens).
     const diff = tableRow('full')?.querySelector('[data-slot="diff-stat"]')
     expect(diff?.querySelector('.text-success')?.textContent).toBe('+128')
@@ -371,7 +380,7 @@ describe('TasksOverview — the table', () => {
     const headers = [...document.querySelectorAll('[data-slot="tasks-table"] th')].map(
       (cell) => cell.textContent,
     )
-    expect(headers).toEqual(['Status', 'Task', 'Workflow', 'Branch', '±', 'Ref', 'CPU', 'Mem', 'Updated'])
+    expect(headers).toEqual(['Status', 'Task', 'Workflow', 'Branch', '±', 'Ref', '', 'CPU', 'Mem', 'Updated'])
     expect(cellsOf('hidden')).toEqual([
       '', // done: a mark, no word (Proposal 7)
       'Hidden metricsdone', // + the link's hidden aria-describedby state
@@ -379,13 +388,14 @@ describe('TasksOverview — the table', () => {
       '—',
       '—',
       '—',
+      '', // Plan limit, folded
       '—',
       '—',
       '1m',
     ])
 
     const queued = tableRow('queued-hidden') as HTMLElement
-    expect(queued.querySelectorAll('td')).toHaveLength(8)
+    expect(queued.querySelectorAll('td')).toHaveLength(9)
     expect(queued.querySelector('[data-slot="queue-note"]')?.getAttribute('colspan')).toBe('2')
     expect(queued.textContent).not.toContain('12.0k')
     expect(queued.textContent).not.toContain('$0.02')
@@ -427,7 +437,7 @@ describe('TasksOverview — the table', () => {
     expect(screen.getByRole('button', { name: 'Expand Workflow column', pressed: false })).not.toBeNull()
     expect(screen.getByRole('button', { name: 'Fold Branch column', pressed: true })).not.toBeNull()
     expect(screen.getByRole('button', { name: 'Fold CPU column', pressed: true })).not.toBeNull()
-    expect(document.querySelectorAll('[data-slot="tasks-table"] thead button')).toHaveLength(9)
+    expect(document.querySelectorAll('[data-slot="tasks-table"] thead button')).toHaveLength(10)
     expect(document.querySelector('th[data-column-id="status"]')?.textContent).toBe('Status')
     expect(document.querySelector('th[data-column-id="task"]')?.textContent).toBe('Task')
   })
@@ -1282,6 +1292,45 @@ describe('TasksOverviewRoute — wired to the app', () => {
   const overviewTab = (view: string) =>
     document.querySelector(`[data-slot="overview-tab"][data-view="${view}"]`) as HTMLElement
   const sidebarRow = (id: string) => document.querySelector(`[data-slot="task-row"][data-run-id="${id}"]`)
+
+  it('takes ?status= once: the facet is set and the URL drops it, so clearing it stays cleared', async () => {
+    fetchMock.mockImplementation(async () =>
+      json([run({ id: 'a', status: 'review' }), run({ id: 'b', status: 'failed' })]))
+    let at = ''
+    function Probe() {
+      const location = useLocation()
+      at = location.pathname + location.search
+      const navigate = useRouterNavigate()
+      return <button type="button" data-testid="back" onClick={() => void navigate(-1)} />
+    }
+    render(
+      <QueryClientProvider client={createQueryClient()}>
+        <MemoryRouter initialEntries={['/elsewhere', '/tasks?status=review&q=']} initialIndex={1}>
+          <ListViewProvider>
+            <Probe />
+            <Routes>
+              <Route path="/tasks" element={<TasksOverviewRoute />} />
+              <Route path="*" element={null} />
+            </Routes>
+          </ListViewProvider>
+        </MemoryRouter>
+      </QueryClientProvider>
+    )
+    const rows = () => [...document.querySelectorAll('[data-slot="task-table-row"]')].map((row) => row.getAttribute('data-run-id'))
+    await waitFor(() => expect(rows()).toEqual(['a']))
+    // Replaced, not pushed: Back and a reload both land on the clean URL.
+    expect(at).toBe('/tasks?q=')
+    const scrollIntoView = Element.prototype.scrollIntoView
+    Element.prototype.scrollIntoView = vi.fn()
+    onTestFinished(() => { Element.prototype.scrollIntoView = scrollIntoView })
+    fireEvent.click(document.querySelector('[data-slot="facet-status"]') as HTMLElement)
+    fireEvent.click(await waitFor(() => document.querySelector('[data-action="facet-status-clear"]') as HTMLElement))
+    await waitFor(() => expect(rows().sort()).toEqual(['a', 'b']))
+    expect(at).toBe('/tasks?q=')
+    // Replaced, not pushed: one Back leaves Tasks for the page before it.
+    fireEvent.click(screen.getByTestId('back'))
+    await waitFor(() => expect(at).toBe('/elsewhere'))
+  })
 
   it('hides automation tasks from the table AND the sidebar by default, and remembers All', async () => {
     const automated = run({

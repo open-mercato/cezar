@@ -35,8 +35,12 @@ on:
 permissions:
   contents: write # create the release + upload assets
 
+# Every run that writes a release shares one group: a tag push and a manual run of the same
+# version must never overlap, or one could publish while the other removes a failed leg's assets.
+# The version is not known before checkout, so the group cannot be keyed on it. Dry runs never
+# touch a release and keep their own group.
 concurrency:
-  group: desktop-release-${{ github.ref }}
+  group: desktop-release-${{ inputs.dry_run && github.run_id || 'release' }}
   cancel-in-progress: false
 
 env:
@@ -182,7 +186,22 @@ jobs:
             } >> "$GITHUB_ENV"
           done
 
+      # The macOS icons before anything is built or uploaded (spec 2026-09-25 § Replacing the icon):
+      # tauri-action uploads as it bundles, so a bundle that fails a check afterwards has
+      # already reached the draft release.
+      - name: Check the macOS icon inputs
+        if: runner.os == 'macOS'
+        shell: bash
+        working-directory: ${{ env.DESKTOP_DIR }}
+        run: |
+          test -f src-tauri/icons/Assets.car || { echo "::error::no src-tauri/icons/Assets.car"; exit 1; }
+          node scripts/icon-car.mjs check-source || { echo "::error::Assets.car is stale against cezar.icon"; exit 1; }
+          # Captured first: under pipefail, grep -q closing the pipe early could fail a good catalog.
+          info=$(xcrun assetutil --info src-tauri/icons/Assets.car)
+          grep -Eq '"Name" ?: ?"cezar"' <<<"$info" || { echo "::error::Assets.car has no icon named cezar"; exit 1; }
+
       - name: Build and upload with tauri-action
+        id: tauri
         uses: tauri-apps/tauri-action@84b9d35b5fc46c1e45415bdb6144030364f7ebc5 # v0.6.2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -202,10 +221,9 @@ jobs:
           releaseName: ${{ !inputs.dry_run && format('cezar desktop v{0}', needs.prepare.outputs.version) || '' }}
           releaseDraft: true
           prerelease: false
-          # The manifest every installed shell polls (plugins.updater.endpoints). Renamed below
-          # so it sits beside the installers as `desktop-latest.json`.
-          includeUpdaterJson: ${{ !inputs.dry_run && steps.signing.outputs.updater == 'true' }}
-          updaterJsonKeepUniversal: false
+          # No `latest.json` from the legs: each one read-merge-replaces the same asset, and in
+          # parallel they race (desktop-v0.1.12). The publish job writes the manifest once.
+          includeUpdaterJson: false
           # macOS without a Developer ID: sign AD-HOC (`signingIdentity: "-"`). Unsigned is not an
           # option — the linker's own signature does not seal the bundle, and macOS reports a
           # downloaded app like that as "damaged", with no way for the user to allow it. An
@@ -245,9 +263,16 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
+      # Under the onboarding `test-signing` policy the signature is SignPath's self-signed test
+      # certificate, which Windows does not trust either, so a failed request falls back to the
+      # unsigned installer with a warning. Under `release-signing` a failure stops the release.
+      # v3, not v2: v2's deprecated githubactions.connectors.signpath.io intermittently answers
+      # "Invalid URL for GitHub API" (2 of 3 desktop-v0.1.12 attempts); v3 uses the Pipeline Connector.
       - name: Sign the installer with SignPath
+        id: signpath
         if: runner.os == 'Windows' && steps.signing.outputs.signpath == 'true'
-        uses: signpath/github-action-submit-signing-request@c92b958760219087e01f8d67a1669ed57afe2627 # v2
+        continue-on-error: ${{ (vars.SIGNPATH_SIGNING_POLICY_SLUG || 'release-signing') != 'release-signing' }}
+        uses: signpath/github-action-submit-signing-request@a2c5b60d9c75f073142b653c354b632eedce097b # v3.2
         with:
           api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
           organization-id: ${{ secrets.SIGNPATH_ORGANIZATION_ID }}
@@ -258,8 +283,17 @@ jobs:
           wait-for-completion: true
           output-artifact-directory: ${{ env.DESKTOP_DIR }}/signed
 
+      - name: Report the unsigned Windows fallback
+        if: runner.os == 'Windows' && steps.signing.outputs.signpath == 'true' && steps.signpath.outcome == 'failure'
+        shell: bash
+        env:
+          SIGNPATH_SIGNING_POLICY: ${{ vars.SIGNPATH_SIGNING_POLICY_SLUG || 'release-signing' }}
+        run: |
+          echo "::warning::SignPath ($SIGNPATH_SIGNING_POLICY) failed — the Windows installer ships UNSIGNED."
+          echo "⚠️ SignPath ($SIGNPATH_SIGNING_POLICY) failed: the Windows installer is UNSIGNED — SmartScreen will warn on install." >> "$GITHUB_STEP_SUMMARY"
+
       - name: Put the signed installer in place
-        if: runner.os == 'Windows' && steps.signing.outputs.signpath == 'true'
+        if: runner.os == 'Windows' && steps.signing.outputs.signpath == 'true' && steps.signpath.outcome == 'success'
         shell: bash
         working-directory: ${{ env.DESKTOP_DIR }}
         env:
@@ -303,8 +337,6 @@ jobs:
             if [ -f "$INSTALLER.sig" ]; then gh release upload "$TAG" "$INSTALLER.sig" --clobber; fi
           fi
 
-      # Stable, versionless copies: the landing page's Download button and the package-manager
-      # manifests link these, so shipping a version never means editing a link.
       # The bundle must be SEALED, whoever signed it: this is the check that fails on the build
       # macOS calls damaged.
       - name: Verify the macOS bundle's signature
@@ -318,6 +350,21 @@ jobs:
           codesign --verify --deep --strict --verbose=2 "${apps[0]}"
           codesign -dv "${apps[0]}" 2>&1 | grep -E "Signature|TeamIdentifier|Sealed"
 
+      # Both icons: without the catalog every macOS draws the .icns fallback, without the .icns
+      # the places that read only CFBundleIconFile show a blank app.
+      - name: Verify the macOS bundle's icons
+        if: runner.os == 'macOS'
+        shell: bash
+        working-directory: ${{ env.DESKTOP_DIR }}
+        run: |
+          shopt -s nullglob
+          apps=( src-tauri/target/*/release/bundle/macos/*.app )
+          test -f "${apps[0]}/Contents/Resources/Assets.car" || { echo "::error::no Assets.car in the bundle"; exit 1; }
+          test "$(plutil -extract CFBundleIconName raw "${apps[0]}/Contents/Info.plist")" = cezar || { echo "::error::CFBundleIconName is not cezar"; exit 1; }
+          test -n "$(plutil -extract CFBundleIconFile raw "${apps[0]}/Contents/Info.plist")" || { echo "::error::no CFBundleIconFile"; exit 1; }
+
+      # Stable, versionless copies: the landing page's Download button and the package-manager
+      # manifests link these, so shipping a version never means editing a link.
       - name: Upload the versionless installer
         shell: bash
         working-directory: ${{ env.DESKTOP_DIR }}
@@ -399,6 +446,30 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
+      # A macOS leg that failed or was cancelled after tauri-action ran takes its bundles back off
+      # the DRAFT, so nothing a check rejected waits there for a re-run or a manual publish. A leg
+      # that failed before tauri-action uploaded nothing, and the step skips it.
+      - name: Remove this leg's macOS assets from the draft
+        if: (failure() || cancelled()) && runner.os == 'macOS' && !inputs.dry_run && steps.tauri.outcome != 'skipped'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.prepare.outputs.tag }}
+          ARCH: ${{ startsWith(matrix.target, 'aarch64') && 'aarch64' || 'x64|x86_64' }}
+        run: |
+          # A manual run reuses an existing release, published ones included: never touch those.
+          if [ "$(gh release view "$TAG" --json isDraft -q .isDraft)" != true ]; then
+            echo "release $TAG is not a draft: leaving its assets"
+            exit 0
+          fi
+          gh release view "$TAG" --json assets -q '.assets[].name' \
+            | { grep -E "_(${ARCH})([._].*)?\.(dmg|app\.tar\.gz(\.sig)?)$|^cezar-macos-(${ARCH})\.dmg(\.sha256)?$" || true; } \
+            | while read -r asset; do
+                # Again before each delete, in case the release was published meanwhile.
+                [ "$(gh release view "$TAG" --json isDraft -q .isDraft)" = true ] || { echo "release $TAG was published: stopping"; break; }
+                gh release delete-asset "$TAG" "$asset" --yes
+              done
+
   # Arch Linux and what is built on it (Omarchy, Manjaro, EndeavourOS): a pacman package, built
   # AND installed inside a real Arch container, so a library the binary needs and Arch does not
   # have fails here rather than on a user's machine.
@@ -475,30 +546,34 @@ jobs:
     if: ${{ !inputs.dry_run }}
     runs-on: ubuntu-latest
     steps:
-      - name: Rename the updater manifest and publish
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          sparse-checkout: packages/desktop/scripts
+
+      - name: Write the updater manifest and publish
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
           TAG: ${{ needs.prepare.outputs.tag }}
           VERSION: ${{ needs.prepare.outputs.version }}
+          HAS_UPDATER_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY != '' }}
         run: |
-          # tauri-action uploads `latest.json`; the shells poll `desktop-latest.json` so the name
-          # can never collide with a future cezar (CLI) manifest on the same release page.
-          if gh release download "$TAG" --repo "$REPO" --pattern latest.json --output desktop-latest.json 2>/dev/null; then
-            # An installer signed AFTER the build has a new updater signature beside it; the
-            # manifest still carries the one made for the unsigned file. Every platform entry
-            # takes the signature of the `.sig` asset that belongs to its own download.
-            mkdir sigs && gh release download "$TAG" --repo "$REPO" --pattern '*.sig' --dir sigs
-            node packages/desktop/scripts/refresh-updater-manifest.mjs desktop-latest.json sigs
+          # Every updater bundle's `.sig` is on the release, re-made after any later signing, so
+          # the manifest is built from them here. The shells poll `desktop-latest.json`, a name
+          # that cannot collide with a future cezar (CLI) manifest on the same release page.
+          if [ "$HAS_UPDATER_KEY" = "true" ]; then
+            mkdir sigs
+            gh release download "$TAG" --repo "$REPO" --pattern '*.sig' --dir sigs
+            node packages/desktop/scripts/build-updater-manifest.mjs desktop-latest.json sigs "$VERSION" \
+              "https://github.com/$REPO/releases/download/$TAG"
             gh release upload "$TAG" desktop-latest.json --clobber --repo "$REPO"
-            gh release delete-asset "$TAG" latest.json --yes --repo "$REPO" || true
             echo "updater manifest published"
-          elif gh release view "$TAG" --repo "$REPO" --json assets --jq '.assets[].name' | grep -qx desktop-latest.json; then
-            # A re-run of this job alone: the first attempt already renamed it.
-            echo "updater manifest already published as desktop-latest.json"
           else
             echo "::warning::no updater manifest on $TAG — installed shells will not see this release. Is TAURI_SIGNING_PRIVATE_KEY configured?"
           fi
+          # A draft that predates this job writing the manifest still carries tauri-action's.
+          gh release delete-asset "$TAG" latest.json --yes --repo "$REPO" 2>/dev/null || true
           gh release edit "$TAG" --draft=false --latest=false --repo "$REPO"
 
       # `releases/latest/download/…` follows the repo's "latest" release, and that is cezar's own
@@ -563,3 +638,80 @@ jobs:
             [ "$HAS_SIGNPATH" = "true" ] || echo "⚠️ The Windows installer is UNSIGNED (no SIGNPATH_* secrets) — SmartScreen will warn on install."
             [ "$HAS_UPDATER_KEY" = "true" ] || echo "⚠️ No updater manifest (no TAURI_SIGNING_PRIVATE_KEY) — installed shells will not auto-update to this version."
           } >> "$GITHUB_STEP_SUMMARY"
+
+  # `brew install --cask open-mercato/tap/cezar` (packages/desktop/homebrew/). Points the tap's
+  # cask at this release; the tap's first commit is made by hand, so this job only ever bumps it.
+  homebrew-tap:
+    name: Update Homebrew tap
+    needs: [prepare, publish]
+    if: ${{ !inputs.dry_run }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read # only downloads release assets; the tap push uses the tap-scoped app token
+    steps:
+      # The release GitHub App (as in release.yml and backport.yml), scoped to the tap alone.
+      # Minting fails when the app is not installed on the tap or lacks Contents write there.
+      - name: Mint the tap token
+        id: app-token
+        continue-on-error: true
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.RELEASE_APP_CLIENT_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+          owner: open-mercato
+          repositories: homebrew-tap
+          permission-contents: write
+
+      - name: Homebrew tap status
+        id: tap
+        env:
+          MINTED: ${{ steps.app-token.outputs.token != '' }}
+        run: |
+          echo "token=$MINTED" >> "$GITHUB_OUTPUT"
+          if [ "$MINTED" != "true" ]; then
+            echo "::warning::Could not mint a token for open-mercato/homebrew-tap — install the release app on open-mercato/homebrew-tap (Contents: read and write). The tap was NOT updated; brew users stay on the previous version until Casks/cezar.rb is bumped."
+            echo "⚠️ Homebrew tap not updated: install the release app on open-mercato/homebrew-tap." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Check out repository
+        if: steps.tap.outputs.token == 'true'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          sparse-checkout: |
+            packages/desktop/scripts
+            packages/desktop/src-tauri/resources/bin
+
+      - name: Bump Casks/cezar.rb
+        if: steps.tap.outputs.token == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAP_TOKEN: ${{ steps.app-token.outputs.token }}
+          REPO: ${{ github.repository }}
+          TAG: ${{ needs.prepare.outputs.tag }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          mkdir sums
+          gh release download "$TAG" --repo "$REPO" --dir sums \
+            --pattern cezar-macos-aarch64.dmg.sha256 --pattern cezar-macos-x86_64.dmg.sha256
+          ARM=$(cut -d' ' -f1 sums/cezar-macos-aarch64.dmg.sha256)
+          INTEL=$(cut -d' ' -f1 sums/cezar-macos-x86_64.dmg.sha256)
+          git clone --depth 1 --branch main "https://x-access-token:${TAP_TOKEN}@github.com/open-mercato/homebrew-tap.git" tap
+          if [ ! -f tap/Casks/cezar.rb ]; then
+            echo "::warning::open-mercato/homebrew-tap has no Casks/cezar.rb on main — push the initial cask (packages/desktop/homebrew/) first."
+            exit 0
+          fi
+          # The commit this release was built from decides whether Cezar.app carries the `cez`
+          # shim; the cask gains its `binary` stanzas with the first release that does.
+          BINARIES=""
+          [ -x packages/desktop/src-tauri/resources/bin/cez ] && BINARIES="--binaries"
+          node packages/desktop/scripts/bump-homebrew-cask.mjs tap/Casks/cezar.rb "$VERSION" "$ARM" "$INTEL" $BINARIES
+          cd tap
+          if git diff --quiet; then
+            echo "Casks/cezar.rb already at $VERSION"
+            exit 0
+          fi
+          git -c user.name='github-actions[bot]' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' \
+            commit -qam "cezar $VERSION"
+          git push origin HEAD:main
+          echo "🍺 Homebrew tap: cezar $VERSION" >> "$GITHUB_STEP_SUMMARY"

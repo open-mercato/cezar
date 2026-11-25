@@ -19,6 +19,7 @@ import type {
   WorkspaceLayoutsResponse,
 } from '@open-mercato/cezar-api-client'
 import type { TaskActionSurface, TrackerAutomationOptions } from '@open-mercato/cezar-api-client'
+import type { LoginSession, LoginSessionInput, LoginSessionStartInput } from '@open-mercato/cezar-api-client'
 import { trackerWatchHandleSchema, trackerWatchSnapshotSchema, type TrackerWatchInput } from "@open-mercato/cezar-api-client"
 import type {
   AgentConfigFileContent,
@@ -1516,6 +1517,27 @@ export async function connectProvider(
   )
 }
 
+/** Start an inline sign-in (spec 2026-11-18-inline-account-reconnect). A 4xx carries `command`
+ *  for the terminal fallback (hosted cockpit without `CEZ_REMOTE_AGENT_ACCOUNTS=1`). */
+export async function startLoginSession(input: LoginSessionStartInput): Promise<LoginSession> {
+  return unwrap(await cez.api.v1.providers.login.$post({ json: input }), '/providers/login')
+}
+
+/** A pasted code or API key, straight to the CLI. The caller must not keep `input` anywhere. */
+export async function sendLoginSessionInput(sessionId: string, input: LoginSessionInput): Promise<LoginSession> {
+  return unwrap(
+    await cez.api.v1.providers.login[':sessionId'].input.$post({ param: { sessionId }, json: input }),
+    '/providers/login/:sessionId/input',
+  )
+}
+
+export async function cancelLoginSession(sessionId: string): Promise<LoginSession> {
+  return unwrap(
+    await cez.api.v1.providers.login[':sessionId'].$delete({ param: { sessionId } }),
+    '/providers/login/:sessionId',
+  )
+}
+
 /** Opens a terminal running the agent CLI's own update (`opencode upgrade`). A 409 carries
  *  `command` for the clipboard fallback, or none when the CLI cannot update itself. */
 export async function updateProvider(provider: ProviderId): Promise<ProviderUpdateResponse> {
@@ -1802,11 +1824,11 @@ export async function cancelAutoResume(id: string): Promise<CancelAutoResumeResp
 }
 
 /** Sweep every finished (done/failed/cancelled) active run into the archive in one call —
- *  the Tasks header's "Archive finished" button. */
-export async function archiveFinished(): Promise<ArchiveFinishedResponse> {
+ *  the Tasks header's "Archive finished" button. `projectId` pins it from outside a scope (the bottom bar). */
+export async function archiveFinished(projectId: string = queryScope()): Promise<ArchiveFinishedResponse> {
   return unwrap(
     await cez.api.v1.p[':projectId'].runs['archive-finished'].$post({
-      param: { projectId: queryScope() },
+      param: { projectId },
     }),
     '/runs/archive-finished',
   )

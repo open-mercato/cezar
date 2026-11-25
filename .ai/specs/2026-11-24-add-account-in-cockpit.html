@@ -1,0 +1,435 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Add an agent account from the cockpit: design</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource-variable/inter@5.1.0/index.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource-variable/jetbrains-mono@5.1.0/index.css">
+<style>
+/* Tokens copied from packages/web/src/styles/index.css (same as the reconnect design page) */
+:root{
+  --background:#0d0d0d;--foreground:#fff;--card:#171717;--card-2:#1c1c1c;--sidebar:#171717;--muted:#262626;
+  --muted-foreground:#a3a3a3;--soft-foreground:#8a8a8a;--border:#2a2a2a;--input:#262626;
+  --contrast:#ebebeb;--contrast-foreground:#171717;--primary:#6457e8;--violet:#8f86e8;--ring:#8f86e8;
+  --danger:#ef4444;--success:#10b981;--pending:#fbbf24;--info:#93c5fd;
+  --pending-strong:#fbbf24;--success-strong:#34d399;--danger-strong:#f87171;
+  --grad:linear-gradient(135deg,#b4f372 12%,#eefb63 58%,#bc9aff 100%);
+  --sans:'Inter Variable','Inter',system-ui,-apple-system,'Segoe UI',sans-serif;
+  --mono:'JetBrains Mono Variable','JetBrains Mono',ui-monospace,'SF Mono',Menlo,monospace;
+  --shadow-modal:0 16px 48px 0 rgba(0,0,0,.45);
+}
+[data-theme=light]{
+  --background:#fff;--foreground:#171717;--card:#fff;--card-2:#fbfbfb;--sidebar:#fafafa;--muted:#f2f2f2;
+  --muted-foreground:#5c5c5c;--soft-foreground:#767676;--border:#e5e5e5;--input:#ebebeb;
+  --contrast:#262626;--contrast-foreground:#fff;--primary:#5b52c7;--violet:#5b52c7;--ring:#5b52c7;
+  --info:#1d4ed8;--pending-strong:#b45309;--success-strong:#047857;--danger-strong:#b91c1c;
+  --shadow-modal:0 16px 48px 0 rgba(0,0,0,.12);
+}
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--background);color:var(--foreground);font-family:var(--sans);font-size:14px;line-height:1.5;-webkit-font-smoothing:antialiased}
+code,.mono{font-family:var(--mono);font-size:12px}
+button{font:inherit;color:inherit;cursor:pointer}
+.wrap{max-width:1240px;margin:0 auto;padding:32px 24px 80px}
+h1{font-size:26px;letter-spacing:-.02em;margin:0 0 6px}
+h2{font-size:18px;margin:48px 0 12px;letter-spacing:-.01em}
+h3{font-size:14px;margin:20px 0 8px}
+.lead{color:var(--muted-foreground);max-width:800px;margin:0}
+.grad-rule{height:3px;border-radius:2px;background:var(--grad);width:96px;margin:14px 0 20px}
+.muted{color:var(--muted-foreground)}.soft{color:var(--soft-foreground)}.small{font-size:12px}.xs{font-size:11px}
+.controls{position:sticky;top:0;z-index:20;background:color-mix(in srgb,var(--background) 88%,transparent);backdrop-filter:blur(8px);border-bottom:1px solid var(--border);margin:24px -24px 0;padding:12px 24px;display:flex;flex-wrap:wrap;gap:14px 22px;align-items:center}
+.ctl{display:flex;align-items:center;gap:8px}
+.ctl>label{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--soft-foreground)}
+.seg{display:inline-flex;background:var(--muted);border-radius:8px;padding:2px}
+.seg button{border:0;background:transparent;padding:4px 10px;border-radius:6px;font-size:12px;color:var(--muted-foreground)}
+.seg button[aria-pressed=true]{background:var(--card);color:var(--foreground);box-shadow:0 1px 2px rgba(0,0,0,.25)}
+.rec{display:inline-flex;align-items:center;gap:6px;font-size:11px;font-weight:600;border-radius:999px;padding:1px 8px;background:color-mix(in srgb,var(--success) 15%,transparent);color:var(--success-strong);border:1px solid color-mix(in srgb,var(--success) 35%,transparent)}
+.note{border-left:3px solid var(--violet);padding:6px 12px;background:var(--card);border-radius:0 8px 8px 0;color:var(--muted-foreground);max-width:860px}
+.grid{display:grid;gap:22px}
+.g3{grid-template-columns:repeat(auto-fill,minmax(360px,1fr))}
+.stage{display:flex;flex-wrap:wrap;gap:28px;align-items:flex-start}
+.label{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--soft-foreground);margin:0 0 8px}
+table{border-collapse:collapse;width:100%;max-width:1000px;font-size:13px}
+th,td{text-align:left;padding:8px 10px;border-bottom:1px solid var(--border);vertical-align:top}
+th{font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:var(--soft-foreground);font-weight:600}
+
+/* ---------- mock app ---------- */
+.win{border:1px solid var(--border);border-radius:12px;overflow:hidden;background:var(--background);position:relative;box-shadow:var(--shadow-modal)}
+.win .bar{height:30px;background:var(--sidebar);border-bottom:1px solid var(--border);display:flex;align-items:center;gap:6px;padding:0 10px}
+.win .bar i{width:10px;height:10px;border-radius:50%;background:var(--muted);display:block}
+.settings{display:grid;grid-template-columns:180px 1fr;min-height:440px}
+.snav{background:var(--sidebar);border-right:1px solid var(--border);padding:14px 10px;font-size:13px}
+.snav div{padding:5px 8px;border-radius:6px;color:var(--muted-foreground)}
+.snav .on{background:var(--muted);color:var(--foreground)}
+.spane{padding:18px 22px}
+.phead{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:12px}
+.phead h4{margin:0;font-size:16px}
+.agent{border:1px solid var(--border);border-radius:10px;margin-bottom:10px;background:var(--card)}
+.agent .h{display:flex;align-items:center;gap:8px;padding:9px 12px;font-weight:600;font-size:13px}
+.agent .h .sp{flex:1}
+.acct{display:flex;align-items:center;gap:10px;padding:8px 12px;border-top:1px solid var(--border);font-size:13px}
+.acct .n{flex:1;min-width:0}
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;height:30px;padding:0 12px;border-radius:7px;border:1px solid var(--border);background:transparent;font-size:12.5px;font-weight:500;white-space:nowrap}
+.btn.c{background:var(--contrast);color:var(--contrast-foreground);border-color:var(--contrast)}
+.btn.g{border-color:transparent;color:var(--muted-foreground)}
+.btn.d{color:var(--danger-strong);border-color:color-mix(in srgb,var(--danger) 40%,transparent)}
+.btn.sm{height:26px;padding:0 9px;font-size:12px}
+.btn.lg{height:40px;font-size:14px}
+.btn.w{width:100%}
+.btn[disabled]{opacity:.5}
+.pill{display:inline-flex;align-items:center;height:18px;border-radius:999px;border:1px solid var(--border);padding:0 7px;font-size:10.5px;font-weight:600;white-space:nowrap}
+.pill.ok{border-color:color-mix(in srgb,var(--success) 35%,transparent);background:color-mix(in srgb,var(--success) 10%,transparent);color:var(--success-strong)}
+.pill.bad{border-color:color-mix(in srgb,var(--danger) 35%,transparent);background:color-mix(in srgb,var(--danger) 10%,transparent);color:var(--danger-strong)}
+.pill.wait{border-color:color-mix(in srgb,var(--pending) 40%,transparent);background:color-mix(in srgb,var(--pending) 10%,transparent);color:var(--pending-strong)}
+.mark{width:22px;height:22px;border-radius:6px;display:inline-grid;place-items:center;font-size:11px;font-weight:700;color:#fff;flex:none}
+.mark.claude{background:#d97757}.mark.codex{background:#10a37f}.mark.omp{background:#6457e8}.mark.kimi{background:#2563eb}.mark.off{background:var(--muted);color:var(--soft-foreground)}
+.spin{width:12px;height:12px;border-radius:50%;border:2px solid var(--muted);border-top-color:var(--foreground);display:inline-block;animation:sp 1s linear infinite;flex:none}
+@keyframes sp{to{transform:rotate(360deg)}}
+
+/* dialog */
+.scrim{position:absolute;inset:30px 0 0 0;background:rgba(0,0,0,.45);display:grid;place-items:center;padding:20px}
+.dlg{width:100%;max-width:500px;background:var(--card);border:1px solid var(--border);border-radius:14px;box-shadow:var(--shadow-modal);padding:18px 20px}
+.dlg h5,.sheet h5{margin:0;font-size:16px;display:flex;align-items:center;gap:8px}
+.stepper{display:flex;gap:6px;margin:10px 0 14px;font-size:11px;color:var(--soft-foreground)}
+.stepper span{display:flex;align-items:center;gap:5px;flex:1;border-top:2px solid var(--muted);padding-top:6px}
+.stepper span.done{border-color:var(--success);color:var(--success-strong)}
+.stepper span.now{border-color:var(--foreground);color:var(--foreground)}
+.foot{display:flex;gap:8px;justify-content:flex-end;margin-top:16px;align-items:center}
+.foot .sp{flex:1}
+.runners{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.runner{border:1px solid var(--border);border-radius:9px;padding:9px 10px;display:flex;gap:9px;align-items:flex-start;font-size:13px;background:var(--card-2)}
+.runner.sel{border-color:var(--ring);box-shadow:0 0 0 3px color-mix(in srgb,var(--ring) 25%,transparent)}
+.runner.dis{opacity:.5}
+.runner small{display:block;color:var(--soft-foreground);font-size:11px;line-height:1.35}
+.field{display:flex;flex-direction:column;gap:5px;margin-top:12px;font-size:12px;color:var(--muted-foreground)}
+.input{height:32px;border:1px solid var(--border);border-radius:7px;background:var(--background);padding:0 10px;display:flex;align-items:center;font-size:13px;color:var(--foreground)}
+.input.ph{color:var(--soft-foreground)}
+.input.focus{border-color:var(--ring);box-shadow:0 0 0 3px color-mix(in srgb,var(--ring) 25%,transparent)}
+.adv{margin-top:12px;font-size:12px;color:var(--muted-foreground);border-top:1px dashed var(--border);padding-top:10px}
+.body{font-size:13px;color:var(--muted-foreground)}
+.body b{color:var(--foreground);font-weight:600}
+.code{display:inline-block;border:1px solid var(--border);background:var(--background);border-radius:9px;padding:6px 14px;font-family:var(--mono);font-size:22px;font-weight:600;letter-spacing:.18em;color:var(--foreground)}
+.row{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-top:10px}
+.steps{display:flex;flex-wrap:wrap;gap:14px;font-size:11px;color:var(--soft-foreground);margin-top:10px;padding:0;list-style:none}
+.steps .d{color:var(--success-strong)}.steps .n{color:var(--foreground)}
+.cmd{display:flex;align-items:center;gap:6px;border:1px solid var(--border);border-radius:8px;background:var(--background);padding:4px 4px 4px 9px;margin-top:8px}
+.cmd code{flex:1;min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+dl.id{display:grid;grid-template-columns:96px 1fr;gap:4px 10px;margin:10px 0 0;font-size:12.5px}
+dl.id dt{color:var(--soft-foreground)}dl.id dd{margin:0}
+.meter{height:6px;border-radius:3px;background:var(--muted);overflow:hidden;margin-top:4px}
+.meter i{display:block;height:100%;background:var(--violet)}
+.check{display:flex;gap:8px;align-items:flex-start;font-size:12.5px;margin-top:8px}
+.check .box{width:15px;height:15px;border-radius:4px;border:1px solid var(--border);flex:none;margin-top:2px;display:grid;place-items:center;font-size:10px}
+.check .box.on{background:var(--contrast);color:var(--contrast-foreground);border-color:var(--contrast)}
+.banner{border-radius:9px;padding:9px 11px;font-size:12.5px;margin-top:10px}
+.banner.bad{background:color-mix(in srgb,var(--danger) 8%,transparent);border:1px solid color-mix(in srgb,var(--danger) 30%,transparent)}
+.banner.warn{background:color-mix(in srgb,var(--pending) 8%,transparent);border:1px solid color-mix(in srgb,var(--pending) 35%,transparent)}
+.banner.ok{background:color-mix(in srgb,var(--success) 8%,transparent);border:1px solid color-mix(in srgb,var(--success) 30%,transparent)}
+.banner b{color:var(--foreground)}
+
+/* phone */
+.phone{width:340px;height:700px;border-radius:38px;border:10px solid #000;background:var(--background);position:relative;overflow:hidden;flex:none;box-shadow:var(--shadow-modal)}
+[data-theme=light] .phone{border-color:#222}
+.phone .status{height:30px;display:flex;justify-content:space-between;align-items:center;padding:0 22px;font-size:11px;font-weight:600}
+.phone .appbar{height:44px;display:flex;align-items:center;gap:8px;padding:0 14px;border-bottom:1px solid var(--border);font-weight:600}
+.phone .content{padding:12px 14px;font-size:13px}
+.phone .dim{position:absolute;inset:0;background:rgba(0,0,0,.5)}
+.sheet{position:absolute;left:0;right:0;bottom:0;background:var(--card);border-radius:18px 18px 0 0;padding:10px 16px 24px;max-height:92%;overflow:auto;border-top:1px solid var(--border)}
+.sheet.full{top:38px}
+.sheet .grab{width:36px;height:4px;border-radius:2px;background:var(--muted);margin:0 auto 10px}
+.sheet .runners{grid-template-columns:1fr}
+.sheet .foot{flex-direction:column-reverse;align-items:stretch}
+.sheet .foot .btn{height:40px;font-size:14px}
+.cap{font-size:12px;color:var(--soft-foreground);max-width:340px;margin-top:8px}
+.state-card{display:flex;flex-direction:column}
+.state-card .label{display:flex;gap:8px;align-items:center}
+.vargrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(360px,1fr));gap:22px}
+.mini .settings{min-height:330px;grid-template-columns:120px 1fr}
+.mini .spane{padding:12px 14px}
+.mini{font-size:12.5px}
+.inline-signing{border-top:1px solid var(--border);padding:10px 12px;background:var(--card-2)}
+.pagebody{padding:18px 22px}
+.toc{display:flex;flex-wrap:wrap;gap:8px 18px;font-size:13px;margin-top:10px}
+.toc a{color:var(--muted-foreground)}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Add an agent account from the cockpit</h1>
+  <p class="lead">Click <b>Add account</b>, pick an agent and sign in. cezar makes a private folder for the account and runs the agent's own login in it. You see the link and any code, paste the code back if the vendor asks for one, and the account is ready, with its identity and plan shown. It works the same on a phone through the relay. Spec: <code>.ai/specs/2026-11-24-add-account-in-cockpit.md</code>.</p>
+  <div class="grad-rule"></div>
+  <div class="toc">
+    <a href="#today">1 · Today</a><a href="#placement">2 · Where it lives</a><a href="#flow">3 · The flow, every state</a><a href="#entry">4 · Other entry points</a><a href="#tech">5 · Technical plan</a><a href="#decide">6 · Recommendation &amp; decisions</a>
+  </div>
+
+  <div class="controls">
+    <div class="ctl"><label>Theme</label><div class="seg" data-ctl="theme"><button data-v="dark" aria-pressed="true">Dark</button><button data-v="light">Light</button></div></div>
+    <div class="ctl"><label>Agent</label><div class="seg" data-ctl="runner"><button data-v="claude" aria-pressed="true">Claude Code</button><button data-v="codex">Codex</button><button data-v="omp">OMP / Kimi</button></div></div>
+    <div class="ctl"><label>Cockpit</label><div class="seg" data-ctl="where"><button data-v="local" aria-pressed="true">Local (this computer)</button><button data-v="remote">Phone / hosted</button></div></div>
+  </div>
+
+  <h2 id="today">1 · Today</h2>
+  <p class="lead">Settings → Agents → Accounts → <b>Add account</b> asks for a <i>config folder</i>. The folder has to be signed in from a terminal (<code>CLAUDE_CONFIG_DIR=~/.claude-work claude</code>), either before or through Connect. A paired phone gets no accounts at all (<code>accountsEnabled()</code> refuses relay scope, because folder paths reveal the host's layout). The sign-in UI itself already exists. The reconnect card (#2314) runs the vendor's login headless and shows a browser tab, a device code, a paste-code field or a terminal hand-off. This design reuses that body. What it adds is the <b>account creation</b> around it.</p>
+
+  <h2 id="placement">2 · Where it lives</h2>
+  <p class="lead">Exactly where it is today: Settings → <b>Agents</b> → the <b>Accounts</b> card → <b>Add account</b>. Settings gains no new page, nav item or button. The button opens the wizard instead of the folder-path dialog, and the path dialog becomes the wizard's <i>Advanced</i> option.</p>
+  <div class="vargrid" id="placements" style="margin-top:14px"></div>
+
+  <h2 id="flow">3 · The flow, every state</h2>
+  <p class="lead">The same component appears as a dialog on desktop and as a full-height sheet on a phone. Switch <b>Agent</b> and <b>Cockpit</b> above to see each sign-in method. The step-2 body is the reconnect card's <code>SigningBody</code>, reused.</p>
+  <div id="states"></div>
+
+  <h2 id="entry">4 · Other entry points</h2>
+  <div class="vargrid" id="entries"></div>
+
+  <h2 id="tech">5 · Technical plan</h2>
+  <h3>Per-agent login</h3>
+  <table>
+    <tr><th>Agent</th><th>Account variable</th><th>Local cockpit</th><th>Phone / hosted</th><th>Completion</th></tr>
+    <tr><td>Claude Code</td><td><code>CLAUDE_CONFIG_DIR</code></td><td><code>claude auth login</code>. A PATH shim captures the <code>open</code> call so no tab opens, and the URL is shown with <b>Copy link</b>. The localhost callback finishes it from any browser or profile on this computer.</td><td>The printed <code>claude.com/cai/oauth/authorize</code> URL. The user copies the code from the <code>platform.claude.com/oauth/code/callback</code> page and pastes it, and cezar writes it to the CLI's stdin.</td><td>The CLI exits 0, then <code>profileStatus</code> and the identity read</td></tr>
+    <tr><td>Codex</td><td><code>CODEX_HOME</code></td><td><code>codex login</code> (localhost:1455 callback). The URL is captured and shown with <b>Copy link</b>, never opened.</td><td><code>codex login --device-auth</code>: a code like <code>XXXX-XXXXX</code>, 15 minutes</td><td>Automatic: the CLI exits after the approval</td></tr>
+    <tr><td>Codex · API key</td><td></td><td colspan="2"><code>codex login --with-api-key</code>. The key goes on stdin and Codex stores it in the account's folder.</td><td>The CLI exits 0</td></tr>
+    <tr><td>OMP, Kimi</td><td><code>PI_CODING_AGENT_DIR</code>, <code>KIMI_CODE_HOME</code></td><td>Terminal hand-off with the variable set. The login watcher notices the sign-in.</td><td>Finish on the computer, then <i>Check again</i>. Phase 2: an in-cockpit terminal.</td><td>The watcher, or Check again</td></tr>
+    <tr><td class="soft">OpenCode, Cursor, Copilot, pi, Junie, Gemini, Antigravity</td><td colspan="4" class="soft">Can't carry a second account: their credentials don't follow one folder (<code>core/agent-profiles.ts</code>). They're listed in step 1, disabled, with that reason.</td></tr>
+  </table>
+  <p class="small muted">Why not <code>claude setup-token</code>: it prints a long-lived token that cezar would then have to store and inject. <code>auth login</code> leaves the credential in the vendor's own store (the folder, or the macOS Keychain item tied to that folder). cezar never holds a token.</p>
+
+  <div class="note" style="margin-top:12px"><b>cezar never opens a browser.</b> Every method shows the link with <b>Copy link</b> as the main action, and <i>Open in default browser</i> as a secondary button. That way the user picks the browser profile the account lives in. The reconnect card adopts the same rule: its synchronous pre-opened tab (<code>pendingTab</code> in <code>use-reconnect.ts</code>) is removed.</div>
+  <h3>Directory layout</h3>
+<pre class="cmd" style="display:block;white-space:pre;padding:10px 12px"><code style="white-space:pre">~/.cezar/                      (cezarHomeDir(); CEZ_HOME relocates it)
+  agent-accounts.json          rows gain optional  managed: true, pending: true
+  agent-homes/                 0700
+    claude/work/               0700  CLAUDE_CONFIG_DIR for account "work"
+    codex/client-acme/         0700  CODEX_HOME
+    kimi/second/               0700  KIMI_CODE_HOME</code></pre>
+  <p class="small muted"><code>managed</code> means cezar made the folder and may delete it. <code>pending</code> means no sign-in has been confirmed yet, so pickers, fallback candidates and selections skip the row. Both survive an older cezar through <code>.passthrough()</code>. An older cezar shows a pending row as an ordinary account, which is harmless.</p>
+
+  <h3>API (chained into the agent-profiles family, every shape in <code>packages/contract</code>)</h3>
+  <table>
+    <tr><th>Call</th><th>What changes</th></tr>
+    <tr><td><code>POST /workspace/agent-profiles</code></td><td>New body variant <code>{provider, label, managed: true}</code> with no <code>configDir</code>. The server allocates the id and folder and writes <code>pending: true</code>. The old body is unchanged.</td></tr>
+    <tr><td><code>POST /providers/login {provider, profileId}</code></td><td>Unchanged. On a confirmed sign-in, <code>LoginSessionManager.connect</code> clears <code>pending</code> through a new dep, <code>markSignedIn</code>, so the row turns usable even if the cockpit was closed.</td></tr>
+    <tr><td><code>DELETE /workspace/agent-profiles/:id</code></td><td>Managed rows only: runs the CLI's own logout under the account's env (best-effort, 15 s timeout), then <code>rm -rf</code> the folder after a realpath check proves it's inside <code>agent-homes/</code>. Unmanaged rows behave as today: the folder stays.</td></tr>
+    <tr><td>Cancel in step 2</td><td><code>DELETE /providers/login/:sid</code>, then the DELETE above</td></tr>
+    <tr><td>Boot sweep</td><td>A pending managed row older than 24 hours with no live session is removed along with its folder.</td></tr>
+  </table>
+
+  <h3>Phone and hosted</h3>
+  <ul class="lead" style="padding-left:18px">
+    <li><b>Paired phone (relay scope)</b> gets a narrowed allowance: the listing without <code>configDir</code> or <code>files</code>, <code>POST</code> only with <code>managed: true</code> (a client path is still refused), and <code>DELETE</code> only for managed rows. The phone never sends or receives a host path. The login session already strips a named account's command for phones (<code>phoneSafeSession</code>).</li>
+    <li>Links open in the system browser. Both shells hand a <code>window.open</code> off to the OS (<code>ServerActivity.onCreateWindow</code>, iOS <code>createWebViewWith</code>), so the vendor page opens in Safari or Chrome. The user copies the code there, switches back, and pastes it.</li>
+    <li><b>Hosted web</b>: same gate as today. The family needs <code>CEZ_REMOTE_AGENT_ACCOUNTS=1</code>, and without it step 1 shows the refusal.</li>
+  </ul>
+
+  <h3>Security</h3>
+  <ul class="lead" style="padding-left:18px">
+    <li>Tokens stay in the vendor CLI's own store. The page receives only the phase, an allow-listed URL, a device code, an expiry and a fixed reason.</li>
+    <li>A pasted code or key goes from an uncontrolled <code>&lt;input type=password&gt;</code> straight to the route and on to the CLI's stdin. It never enters React state, the query cache, the run store, logs or telemetry. Over the relay it travels inside the paired Noise tunnel, the same protection every other request gets, and nothing extra.</li>
+    <li>The folder is <code>0700</code>, and deletion is limited to <code>agent-homes/</code> by realpath. A hand-edited <code>configDir</code> can't make cezar delete anything else.</li>
+    <li>Cancel, expiry or failure on a new account kills the login's process group (as today), then deletes the pending row and its folder, so nothing half-signed is left behind.</li>
+    <li><code>CEZ_DRY_RUN=1</code> runs the mock login session in a real managed folder under the sandboxed home.</li>
+  </ul>
+
+  <h3>Tests</h3>
+  <ul class="lead" style="padding-left:18px">
+    <li>Server: managed create (id, folder, mode, <code>pending</code>), the relay-scope listing has no paths, a phone can't send <code>configDir</code>, delete refuses outside <code>agent-homes/</code> (symlink case included), pending is cleared on connect, the boot sweep, and cancel cleanup. Contract parity and route inventory cover the new body.</li>
+    <li>Web: the wizard's states (pick, each signing method, success with identity, duplicate login, expired, cancel confirm), the Advanced folder path, hiding pending rows in pickers, and the phone sheet layout.</li>
+  </ul>
+
+  <h2 id="decide">6 · Recommendation &amp; decisions</h2>
+  <div class="note">
+    <p style="margin:6px 0"><b>Recommendation.</b> A three-step dialog behind the existing <b>Add account</b> button in Settings → Agents → Accounts, the same component as a full-height sheet on a phone, managed folders by default, and the folder path moved behind <i>Advanced</i>. It reuses the reconnect card's signing body without changes, so the two flows can't drift apart.</p>
+  </div>
+  <table style="margin-top:14px">
+    <tr><th>#</th><th>Decision</th><th>Recommended</th><th>Alternative</th></tr>
+    <tr><td>1</td><td>Paired phones get the path-free, managed-only part of the accounts family</td><td>Yes</td><td>Keep phones out (no adding from a phone)</td></tr>
+    <tr><td>2</td><td>Removing a managed account logs out and deletes its folder</td><td>Yes, with the folder named in the confirm dialog</td><td>Keep the folder</td></tr>
+    <tr><td>3</td><td>OMP and Kimi (no headless login)</td><td>Offer them with the terminal hand-off</td><td>Hide them until a headless login is verified</td></tr>
+  </table>
+</div>
+
+<script>
+const S = { theme: 'dark', runner: 'claude', where: 'local' }
+const R = {
+  claude: { name: 'Claude Code', mk: 'C', cls: 'claude', host: 'claude.com', label: 'Work' },
+  codex: { name: 'Codex', mk: 'X', cls: 'codex', host: 'auth.openai.com', label: 'Client Acme' },
+  omp: { name: 'OMP', mk: 'O', cls: 'omp', host: '', label: 'Second' },
+}
+const mark = (r, extra = '') => `<span class="mark ${R[r].cls}" ${extra}>${R[r].mk}</span>`
+const stepper = (n) => `<div class="stepper">${['Agent', 'Sign in', 'Ready'].map((t, i) => `<span class="${i < n ? 'done' : i === n ? 'now' : ''}">${i < n ? '✓' : i + 1} ${t}</span>`).join('')}</div>`
+
+/* Step-2 body: identical to the reconnect card's SigningBody, per runner and cockpit. */
+function signing(r, where) {
+  const n = R[r].name, remote = where === 'remote'
+  if (r === 'claude' && !remote) return {
+    title: 'Open the link in your browser',
+    body: `<p class="body">Open this link in the browser and profile you want to sign in with, then approve as <b>Work</b>. This dialog updates by itself.</p>
+      <div class="cmd"><code>https://claude.com/cai/oauth/authorize?code=true&amp;client_id=…</code><button class="btn sm c">Copy link</button></div>
+      <ul class="steps"><li class="d">✓ Private folder created</li><li class="n">● Approve in your browser</li><li>○ Verify</li></ul>`,
+    actions: `<button class="btn">Open in default browser ↗</button>`,
+    cap: 'cezar never opens a tab on its own: you copy the link into whichever browser or profile holds the account. The link\'s callback is localhost, so any browser on this computer finishes the sign-in with no code to paste. The CLI\'s own browser launch is captured by a PATH shim and only used to read the URL. Only if no localhost URL is captured does the paste-code link appear instead.'
+  }
+  if (r === 'claude' && remote) return {
+    title: 'Approve, then paste the code',
+    body: `<ul class="steps"><li class="d">✓ Private folder created</li><li class="n">● Approve &amp; copy the code</li><li>○ Paste it here</li></ul>
+      <p class="body" style="margin-top:8px">1. Open the Claude sign-in and approve with the account you want as <b>Work</b>. Claude then shows a one-time code.<br>2. Paste that code here. It goes straight to Claude Code on your computer.</p>
+      <div class="row"><div class="input focus mono" style="flex:1;min-width:160px">••••••••••••••••••••</div><button class="btn c">Sign in</button></div>`,
+    actions: `<button class="btn">Open Claude sign-in ↗</button>`,
+    cap: 'Phone or hosted: no localhost callback can reach this browser, so Claude uses its paste-code page. On a phone the link opens in Safari or Chrome. Copy the code there, come back and paste it.'
+  }
+  if (r === 'codex' && !remote) return {
+    title: 'Open the link in your browser',
+    body: `<p class="body">Open this link in the browser and profile with the ChatGPT account you want as <b>Client Acme</b>. This dialog updates by itself.</p>
+      <div class="cmd"><code>https://auth.openai.com/oauth/authorize?response_type=code&amp;…</code><button class="btn sm c">Copy link</button></div>
+      <ul class="steps"><li class="d">✓ Private folder created</li><li class="n">● Approve in your browser</li><li>○ Verify</li></ul>`,
+    actions: `<button class="btn">Open in default browser ↗</button><button class="btn g">Use an API key instead</button>`,
+    cap: 'Local Codex: codex login with its localhost:1455 callback. The URL is captured from the CLI, never opened by cezar. Any browser profile on this computer works.'
+  }
+  if (r === 'codex' && remote) return {
+    title: 'Enter the code',
+    body: `<p class="body">Enter this code at <b>auth.openai.com</b>, on this or any device.</p>
+      <div class="row"><span class="code">K7QM-4XW2P</span><button class="btn sm">Copy code</button><span class="small muted">Expires in <span class="mono">14:31</span></span></div>`,
+    actions: `<button class="btn c">Copy code</button><button class="btn">Open auth.openai.com ↗</button><button class="btn g">Use an API key instead</button>`,
+    cap: 'Device code (codex login --device-auth). Completion is detected on its own, with nothing to paste back.'
+  }
+  return remote ? {
+    title: 'Finish on your computer',
+    body: `<p class="body">${n} can only sign in in its own terminal window. Open cezar on the computer running it, finish the sign-in there, then come back and check.</p>`,
+    actions: `<button class="btn">I've signed in · Check</button>`,
+    cap: 'OMP and Kimi have no headless login. Phase 2: a small terminal inside the cockpit, with input, so they sign in from here too.'
+  } : {
+    title: 'Sign in in the terminal',
+    body: `<p class="body">${n} signs in only in its own window. We opened it in a terminal with this account's folder already set. Finish there and this dialog notices by itself.</p>`,
+    actions: `<button class="btn">Open again</button><button class="btn">I've signed in</button>`,
+    cap: 'Local: the existing terminal hand-off plus the login watcher.'
+  }
+}
+
+/* One state = header, stepper index, body, footer. Rendered as a dialog and as a phone sheet. */
+function states() {
+  const r = S.runner, w = S.where, n = R[r].name, lbl = R[r].label
+  const sg = signing(r, w)
+  const phoneOnly = w === 'remote'
+  const id = r === 'codex'
+    ? `<dl class="id"><dt>Email</dt><dd>dev@acme.example</dd><dt>Plan</dt><dd>ChatGPT Pro</dd><dt>Workspace</dt><dd>Acme Corp</dd></dl>`
+    : r === 'claude'
+      ? `<dl class="id"><dt>Email</dt><dd>ada@work.example</dd><dt>Organization</dt><dd>Work Inc.</dd><dt>Plan</dt><dd>Claude Max</dd></dl>`
+      : `<p class="small muted" style="margin:8px 0 0">cezar can't read ${n}'s identity yet. Status: <span class="pill ok">Signed in</span></p>`
+  const usage = r === 'omp' ? '' : `<div style="margin-top:10px;font-size:12px"><div class="soft">Usage · 5-hour window</div><div class="meter"><i style="width:8%"></i></div><div class="soft" style="margin-top:6px">Weekly</div><div class="meter"><i style="width:3%"></i></div></div>`
+  return [
+    { key: 'pick', name: '1 · Pick an agent and name it', step: 0,
+      body: `<div class="runners">
+        <div class="runner ${r === 'claude' ? 'sel' : ''}">${mark('claude')}<div>Claude Code<small>Signs in with claude.com</small></div></div>
+        <div class="runner ${r === 'codex' ? 'sel' : ''}">${mark('codex')}<div>Codex<small>ChatGPT sign-in or API key</small></div></div>
+        <div class="runner ${r === 'omp' ? 'sel' : ''}">${mark('omp')}<div>OMP<small>Signs in in a terminal</small></div></div>
+        <div class="runner">${mark('omp').replace('omp', 'kimi').replace('>O<', '>K<')}<div>Kimi<small>Signs in in a terminal</small></div></div>
+        <div class="runner dis"><span class="mark off">◦</span><div>OpenCode, Cursor, Copilot…<small>Can't hold a second account: their login isn't kept in one folder</small></div></div>
+      </div>
+      <label class="field">Account name<div class="input focus">${lbl}</div></label>
+      ${phoneOnly ? '' : `<div class="adv">▸ <u>Advanced: use a folder that is already signed in</u> <span class="soft">(today's path field)</span></div>`}`,
+      foot: `<button class="btn g">Cancel</button><button class="btn c">Continue · sign in</button>`,
+      cap: phoneOnly ? 'Phone and hosted: no Advanced path field. A phone never sends or sees a host path.' : 'The name becomes the account id (work, client-acme). Advanced opens the existing folder field and browser.' },
+    { key: 'starting', name: '2 · Starting', step: 1,
+      body: `<p class="body" style="display:flex;gap:8px;align-items:center"><span class="spin"></span> Creating a private folder and starting ${n}'s sign-in…</p>`,
+      foot: `<button class="btn g">Cancel</button>`, cap: 'Usually under a second. If no sign-in URL appears within 30 s, the dialog falls back to the terminal hand-off.' },
+    { key: 'signing', name: `2 · Sign in: ${sg.title}`, step: 1, body: sg.body,
+      foot: `<span class="sp"></span>${sg.actions}<button class="btn g">Cancel</button>`, cap: sg.cap },
+    { key: 'verifying', name: '2 · Verifying', step: 1,
+      body: `<ul class="steps"><li class="d">✓ Signed in at ${R[r].host || 'the terminal'}</li><li class="n">● Checking the account works</li><li>○ Ready</li></ul>`,
+      foot: `<button class="btn g" disabled>Cancel</button>`, cap: 'Runs profileStatus on the new folder and reads its identity: proof that the account works, not just that the CLI exited.' },
+    { key: 'success', name: '3 · Ready', step: 2,
+      body: `<div class="banner ok" style="margin-top:0">✓ <b>${n} · ${lbl}</b> is signed in and ready.</div>${id}${usage}
+        <div class="check" style="margin-top:12px"><span class="box on">✓</span><span>Use for <b>this project</b> (cezar)</span></div>
+        <div class="check"><span class="box"></span><span>Make it the default for new projects</span></div>`,
+      foot: `<button class="btn c">Done</button>`, cap: 'Identity and usage come from the existing reads (account-identity.ts, AccountPlanUsage). Both switches are optional; the account can also be picked per task or manager later.' },
+    { key: 'dup', name: '3 · Ready, same login as another account', step: 2,
+      body: `<div class="banner warn" style="margin-top:0"><b>This is the same login as "Personal"</b> (ada@home.example). Two accounts on one login share one subscription and its limits.</div>${id.replace('ada@work.example', 'ada@home.example')}`,
+      foot: `<button class="btn d">Remove this one</button><span class="sp"></span><button class="btn c">Keep both</button>`, cap: 'A warning, never a block: two folders on one login is legal (separate settings and sessions). Matched on the email from the identity read.' },
+    { key: 'expired', name: '2 · Code expired', step: 1,
+      body: `<div class="banner bad" style="margin-top:0"><b>The code expired</b> before the sign-in was approved.</div>`,
+      foot: `<button class="btn g">Cancel</button><button class="btn c">Get a new code</button>`, cap: 'The fixed reason "expired" (device or paste code, or the 15-minute session limit). The folder is kept, so retrying is instant.' },
+    { key: 'failed', name: '2 · Sign-in didn\'t finish', step: 1,
+      body: `<div class="banner bad" style="margin-top:0"><b>${n} didn't accept that.</b> The code may have been mistyped, or the browser tab was closed.</div>`,
+      foot: `<button class="btn g">Cancel</button><button class="btn c">Try again</button>`, cap: 'Fixed reasons only (rejected, exited, timeout, not installed with the install hint). Vendor output is never shown.' },
+    { key: 'cancel', name: 'Cancel, confirm', step: 1,
+      body: `<p class="body"><b>Stop adding ${n} · ${lbl}?</b><br>The sign-in is stopped and the folder cezar made for it is deleted. Your other ${n} logins aren't touched.</p>`,
+      foot: `<button class="btn g">Keep signing in</button><button class="btn d">Stop &amp; delete</button>`, cap: 'Asked only after step 2 has started. Closing the tab or app mid-way does the same, through the 24-hour boot sweep.' },
+    { key: 'hosted', name: 'Hosted cockpit without permission', step: 0,
+      body: `<div class="banner bad" style="margin-top:0"><b>Agent accounts are off on this hosted cockpit.</b> The operator can turn them on with <code>CEZ_REMOTE_AGENT_ACCOUNTS=1</code>, only behind an authenticated perimeter.</div>`,
+      foot: `<button class="btn">Close</button>`, cap: 'Hosted web only. Paired phones and the local cockpit never see this.' },
+  ]
+}
+
+function dialog(st) {
+  const r = S.runner
+  return `<div class="win" style="min-height:${st.key === "pick" ? 600 : st.key === "success" || st.key === "dup" ? 560 : 420}px"><div class="bar"><i></i><i></i><i></i></div>
+    ${settingsShell(true)}
+    <div class="scrim"><div class="dlg"><h5>${mark(r)} Add agent account</h5>${stepper(st.step)}${st.body}<div class="foot">${st.foot}</div></div></div></div>`
+}
+function sheet(st) {
+  const r = S.runner
+  return `<div class="phone"><div class="status"><span>9:41</span><span>●●● ▮</span></div>
+    <div class="appbar">‹ Agents</div><div class="content soft">…</div><div class="dim"></div>
+    <div class="sheet full"><div class="grab"></div><h5>${mark(r)} Add agent account</h5>${stepper(st.step)}${st.body}<div class="foot">${st.foot}</div></div></div>`
+}
+
+function settingsShell(blur, mini) {
+  const acct = (m, name, pill) => `<div class="acct">${m}<div class="n">${name}</div>${pill}</div>`
+  return `<div class="settings" style="${blur ? 'filter:blur(.5px)' : ''}">
+    <div class="snav"><div>General</div><div class="on">Agents</div><div>Projects</div><div>Phone</div></div>
+    <div class="spane">
+      <div class="agent"><div class="h">Installed on this machine <span class="pill">4</span><span class="sp"></span><span class="soft small">Claude Code · Codex · …</span></div></div>
+      <div class="agent"><div class="h">Accounts <span class="sp"></span><button class="btn sm" style="border-color:var(--ring);box-shadow:0 0 0 3px color-mix(in srgb,var(--ring) 25%,transparent)">Add account</button></div>
+        ${acct(mark('claude'), 'Claude Code · Default <span class="soft small">· ada@home.example</span>', '<span class="pill ok">Signed in</span>')}
+        ${acct(mark('codex'), 'Codex · Default', '<span class="pill ok">Signed in</span>')}
+        <div class="acct soft small">Add a second login to keep a work account beside a personal one…</div></div>
+      <div class="agent"><div class="h soft">Global instructions</div></div>
+    </div></div>`
+}
+
+function placements() {
+  const now = `<div class="win mini"><div class="bar"><i></i><i></i><i></i></div>${settingsShell(false)}</div>`
+  document.getElementById('placements').innerHTML =
+    `<div><p class="label">Settings → Agents → Accounts (unchanged)</p>${now}<p class="cap">The highlighted button is today's <code>accounts-add</code>. It opens the wizard below. A new account shows up in this same list, as "Signing in…" until it's verified.</p></div>`
+}
+
+function entries() {
+  const r = S.runner
+  const picker = `<div class="win mini" style="padding:14px"><div class="dlg" style="max-width:300px;padding:8px">
+    <div class="xs soft" style="padding:4px 6px;text-transform:uppercase;letter-spacing:.06em">Account for this task</div>
+    <div class="acct" style="border:0">${mark('claude')}<div class="n">Claude · Default</div><span class="pill ok">Signed in</span></div>
+    <div class="acct">${mark('claude')}<div class="n">Claude · Work</div><span class="pill ok">Signed in</span></div>
+    <div class="acct" style="color:var(--foreground)">＋ Add account…</div></div></div>`
+  const reconnect = `<div class="win mini" style="padding:14px"><div style="border:1px solid color-mix(in srgb,var(--danger) 30%,transparent);background:color-mix(in srgb,var(--danger) 5%,transparent);border-radius:10px;padding:12px">
+    <div style="font-weight:600;display:flex;gap:6px;align-items:center">${mark('claude')} Claude Code · Default is signed out <span class="pill bad">Login expired</span></div>
+    <div class="row"><button class="btn c sm">Reconnect Default</button><button class="btn sm">Use another account ▾</button></div>
+    <div class="small soft" style="margin-top:8px">Menu: Work · Signed in &nbsp;|&nbsp; <b style="color:var(--foreground)">＋ Add an account…</b></div></div></div>`
+  const phone = `<div class="phone" style="height:560px"><div class="status"><span>9:41</span><span>●●● ▮</span></div><div class="appbar">‹ Agents</div>
+    <div class="content"><div class="phead"><b>Accounts</b><button class="btn sm">Add account</button></div>
+    <div class="agent"><div class="h">${mark('claude')} Claude Code</div><div class="acct"><div class="n">Default</div><span class="pill ok">Signed in</span></div><div class="acct"><div class="n">Work</div><span class="pill ok">Signed in</span></div></div>
+    <div class="agent"><div class="h">${mark('codex')} Codex</div><div class="acct"><div class="n">Default</div><span class="pill ok">Signed in</span></div></div>
+    <p class="xs soft">Rows on a phone show the name, identity and status. Folder paths are never sent over the relay.</p></div></div>`
+  document.getElementById('entries').innerHTML =
+    `<div><p class="label">Task and manager account picker</p>${picker}<p class="cap">"Add account…" opens the same dialog. On success the new account is selected in the picker that opened it.</p></div>` +
+    `<div><p class="label">Reconnect card · Use another account</p>${reconnect}<p class="cap">When there's no other account to switch to, adding one is the way out.</p></div>` +
+    `<div><p class="label">Phone · Settings → Agents → Accounts</p>${phone}<p class="cap">Newly reachable on a phone: a path-free listing, Add (managed only) and Remove (managed only).</p></div>`
+}
+
+function render() {
+  document.documentElement.dataset.theme = S.theme
+  const list = states().filter((st) => S.where === 'remote' || st.key !== 'hosted' ? true : true)
+  document.getElementById('states').innerHTML = list.map((st) => `
+    <div class="state-card" style="margin-top:26px"><p class="label">${st.name}</p>
+      <div class="stage"><div style="flex:1;min-width:420px;max-width:640px">${dialog(st)}</div>${sheet(st)}</div>
+      <p class="cap" style="max-width:900px">${st.cap}</p></div>`).join('')
+  entries()
+}
+document.querySelectorAll('[data-ctl]').forEach((seg) => seg.addEventListener('click', (e) => {
+  const b = e.target.closest('button'); if (!b) return
+  seg.querySelectorAll('button').forEach((x) => x.setAttribute('aria-pressed', String(x === b)))
+  S[seg.dataset.ctl] = b.dataset.v; render()
+}))
+placements(); render()
+</script>
+</body>
+</html>

@@ -16,6 +16,7 @@ export * from './workflows.ts';
 export * from './skills.ts';
 export * from './agent-config.ts';
 export * from './agent-profiles.ts';
+export * from './agent-login.ts';
 export * from './zoned-time.ts';
 export * from './automation-schedule.ts';
 export * from './automations.ts';
@@ -45,7 +46,9 @@ export * from './assets.ts';
 export * from './deferred-start-state.ts';
 export * from './deferred-start.ts';
 export * from './questions.ts';
+export * from './attention.ts';
 export * from './usage-windows.ts';
+export * from './plan-usage.ts';
 
 export * from './tracker-operations.ts';
 export * from './transfer.ts';

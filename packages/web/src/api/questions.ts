@@ -3,16 +3,19 @@ import {
   questionsResponseSchema,
   questionsTopicFrameSchema,
   type HealthResponse,
+  type ManagerListResponse,
   type QuestionCounts,
   type QuestionItem,
   type QuestionsResponse,
 } from '@open-mercato/cezar-api-client'
 import { useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query'
-import { useEffect, useSyncExternalStore } from 'react'
+import { useEffect, useMemo, useSyncExternalStore } from 'react'
 
 import { ApiError, cez, unwrap } from './client'
+import { managerKeys } from './managers'
 import { queryKeys } from './queries'
 import { subscribeTopic } from './ws'
+import { noteAttentionMaybeChanged } from './attention'
 
 /**
  * The Questions inbox (spec `.ai/specs/2026-11-17-questions-inbox.md`): the workspace-level read,
@@ -37,9 +40,11 @@ export async function getQuestions(opts?: { signal?: AbortSignal }): Promise<Que
   return checked(questionsResponseSchema, path, await unwrap(await questions().$get({}, opts?.signal ? { init: { signal: opts.signal } } : undefined), path))
 }
 
-export async function answerQuestion(key: string, text: string): Promise<QuestionItem> {
+/** `reactivate`: the card's manager is inactive and the user confirmed waking it (spec 2026-11-19-manager-deactivate). */
+export async function answerQuestion(key: string, text: string, opts?: { reactivate?: boolean }): Promise<QuestionItem> {
   const path = '/workspace/questions/:key/answer'
-  return checked(questionMutationResponseSchema, path, await unwrap(await questions()[':key'].answer.$post({ param: { key: encodeURIComponent(key) }, json: { text } }), path)).item
+  const json = { text, ...(opts?.reactivate ? { reactivate: true as const } : {}) }
+  return checked(questionMutationResponseSchema, path, await unwrap(await questions()[':key'].answer.$post({ param: { key: encodeURIComponent(key) }, json }), path)).item
 }
 
 export async function dismissQuestion(key: string): Promise<QuestionItem> {
@@ -57,7 +62,9 @@ export function settleQuestion(queryClient: QueryClient, item: QuestionItem): vo
   queryClient.setQueryData<QuestionsResponse>(questionKeys.all, (data) => {
     if (!data) return data
     const was = data.open.find((row) => row.key === item.key)
-    if (!was || !item.closed) return data
+    if (!item.closed) return data
+    // Already off the list (the live counts took it): record why, the counts are already right.
+    if (!was) return { ...data, closed: [item, ...data.closed.filter((row) => row.key !== item.key)] }
     const counts = {
       live: Math.max(0, data.counts.live - (was.older ? 0 : 1)),
       older: Math.max(0, data.counts.older - (was.older ? 1 : 0)),
@@ -89,6 +96,7 @@ export function useQuestionsSubscription(): void {
           const listChanged = next !== undefined && revision !== undefined && next !== revision
           revision = next
           applyQuestionCounts(queryClient, counts, listChanged)
+          noteAttentionMaybeChanged(queryClient)
         })
       } else if (!local && release !== undefined) {
         release()
@@ -108,7 +116,20 @@ export function useQuestionsSubscription(): void {
 export function applyQuestionCounts(queryClient: QueryClient, counts: QuestionCounts, listChanged = false): void {
   const before = queryClient.getQueryData<QuestionsResponse>(questionKeys.all)
   if (!listChanged && before && before.counts.live === counts.live && before.counts.older === counts.older) return
-  queryClient.setQueryData<QuestionsResponse>(questionKeys.all, (data) => (data ? { ...data, counts } : data))
+  // The server stopped counting cards the badge already subtracts and has been told about (an
+  // answer in flight, a dismissal sent): they leave the list in the same write, or the badge
+  // would subtract them twice for a frame (and settleQuestion again after).
+  let dropped = Math.max(0, (before?.counts.live ?? 0) - counts.live)
+  const gone = new Set((before?.open ?? []).filter((row) => !row.older && (answering.has(row.key) || isDismissalSent(row.key)) && dropped-- > 0).map((row) => row.key))
+  // A drop left over while a card waits out its undo window could be that card (closed elsewhere,
+  // already subtracted) or another one: the counts alone cannot say, so they wait for the list
+  // re-read below, which brings both together and cancels that dismissal if it is the one.
+  const ambiguous = dropped > 0 && (before?.open ?? []).some((row) => !row.older && isDismissalPending(row.key))
+  if (!ambiguous) {
+    queryClient.setQueryData<QuestionsResponse>(questionKeys.all, (data) => (
+      data ? { ...data, counts, ...(gone.size > 0 ? { open: data.open.filter((row) => !gone.has(row.key)) } : {}) } : data
+    ))
+  }
   void queryClient.invalidateQueries({ queryKey: questionKeys.all })
 }
 
@@ -140,14 +161,32 @@ export interface PendingDismissal {
   error?: string
 }
 
-type Entry = PendingDismissal & { timer?: ReturnType<typeof setTimeout>; remaining: number; startedAt: number; queryClient: QueryClient }
+type Entry = PendingDismissal & {
+  timer?: ReturnType<typeof setTimeout>
+  remaining: number
+  startedAt: number
+  queryClient: QueryClient
+  /** Runs where the close fails, mounted or not: Needs you un-hides its row (spec 2026-11-23-needs-you-triage). */
+  onFailed?: (error: string) => void
+}
 
 const dismissals = new Map<string, Entry>()
 let snapshot: readonly PendingDismissal[] = []
 const listeners = new Set<() => void>()
+/** Answers in flight from the Questions page: the badge drops on the click, not on the reply. */
+const answering = new Set<string>()
+let answeringSnapshot: ReadonlySet<string> = new Set()
 
 function publish(): void {
   snapshot = [...dismissals.values()].map(({ key, label, paused, error }) => ({ key, label, paused, ...(error ? { error } : {}) }))
+  for (const listener of [...listeners]) listener()
+}
+
+export function markAnswering(key: string, inFlight: boolean): void {
+  if (answering.has(key) === inFlight) return
+  if (inFlight) answering.add(key)
+  else answering.delete(key)
+  answeringSnapshot = new Set(answering)
   for (const listener of [...listeners]) listener()
 }
 
@@ -164,9 +203,14 @@ async function commit(key: string): Promise<void> {
   entry.timer = undefined
   try {
     const item = await dismissQuestion(key)
-    dismissals.delete(key)
-    publish()
     settleQuestion(entry.queryClient, item)
+    // After the cache's batched notify: the Questions page swaps the undo note for "Dismissed"
+    // when the card leaves the open list, and must not draw the open card for a frame in between.
+    setTimeout(() => {
+      if (dismissals.get(key) !== entry) return
+      dismissals.delete(key)
+      publish()
+    }, 0)
   } catch (failure) {
     // 409: it closed meanwhile (answered, replaced, ended). Nothing to retry; the refetch shows why.
     if (failure instanceof ApiError && failure.status === 409) {
@@ -177,28 +221,84 @@ async function commit(key: string): Promise<void> {
     }
     // The card comes back with the reason: a dismissal that did not land must not look done.
     entry.error = failure instanceof Error ? failure.message : String(failure)
+    try {
+      entry.onFailed?.(entry.error)
+    } catch {
+      // the caller's recovery must not stop the card coming back
+    }
     entry.paused = true
     publish()
     void entry.queryClient.invalidateQueries({ queryKey: questionKeys.all })
+    // The page dropped its manager's "Waiting for N answers" on the click: put it back.
+    void entry.queryClient.invalidateQueries({ queryKey: managerKeys.list })
   }
 }
 
-export function scheduleDismiss(queryClient: QueryClient, key: string, label: string): void {
+/** Past its undo window, request on its way: the server may already count it off. */
+function isDismissalSent(key: string): boolean {
+  const entry = dismissals.get(key)
+  return entry !== undefined && !entry.error && !entry.paused && entry.timer === undefined
+}
+
+/** Inside its undo window (paused or not): nothing sent, the badge already counts it off. */
+function isDismissalPending(key: string): boolean {
+  const entry = dismissals.get(key)
+  return entry !== undefined && !entry.error && !isDismissalSent(key)
+}
+
+const watched = new WeakSet<QueryClient>()
+
+/**
+ * The list says a card waiting out its undo window is no longer open (answered, replaced, expired,
+ * its task ended): drop the dismissal in the same cache update that drops the card, so the badge
+ * never subtracts it twice and nothing is sent for it.
+ */
+function watchClosedElsewhere(queryClient: QueryClient): void {
+  if (watched.has(queryClient)) return
+  watched.add(queryClient)
+  queryClient.getQueryCache().subscribe((event) => {
+    if (event.type !== 'updated' || dismissals.size === 0) return
+    const data = queryClient.getQueryData<QuestionsResponse>(questionKeys.all)
+    if (!data || event.query.queryHash !== queryClient.getQueryCache().find({ queryKey: questionKeys.all, exact: true })?.queryHash) return
+    let changed = false
+    for (const entry of [...dismissals.values()]) {
+      if (entry.queryClient !== queryClient || isDismissalSent(entry.key) || data.open.some((row) => row.key === entry.key)) continue
+      clearTimeout(entry.timer)
+      dismissals.delete(entry.key)
+      changed = true
+    }
+    if (changed) publish()
+  })
+}
+
+export function scheduleDismiss(queryClient: QueryClient, key: string, label: string, opts?: { onFailed?: (error: string) => void }): void {
   const existing = dismissals.get(key)
-  if (existing && !existing.error) return
+  if (existing && !existing.error) {
+    // Already on its way (the Questions page, a card): this caller still hears a failure.
+    const later = opts?.onFailed
+    if (later) {
+      const earlier = existing.onFailed
+      existing.onFailed = earlier ? (error) => { earlier(error); later(error) } : later
+    }
+    return
+  }
   clearTimeout(existing?.timer)
-  const entry: Entry = { key, label, paused: false, remaining: DISMISS_UNDO_MS, startedAt: Date.now(), queryClient }
+  const entry: Entry = { key, label, paused: false, remaining: DISMISS_UNDO_MS, startedAt: Date.now(), queryClient, ...(opts?.onFailed ? { onFailed: opts.onFailed } : {}) }
+  watchClosedElsewhere(queryClient)
   dismissals.set(key, entry)
   arm(entry)
   publish()
 }
 
-export function undoDismiss(key: string): void {
+/** `false` when it came too late: the close was already sent (or there was nothing to undo). */
+export function undoDismiss(key: string): boolean {
   const entry = dismissals.get(key)
-  if (!entry) return
+  if (!entry) return false
+  if (entry.timer === undefined && !entry.paused && !entry.error) return false
   clearTimeout(entry.timer)
   dismissals.delete(key)
   publish()
+  return true
 }
 
 export function pauseDismiss(key: string): void {
@@ -228,18 +328,22 @@ export function resumePausedDismissals(): void {
 export function resetDismissals(): void {
   for (const entry of dismissals.values()) clearTimeout(entry.timer)
   dismissals.clear()
+  answering.clear()
+  answeringSnapshot = new Set()
   publish()
 }
 
+const subscribe = (listener: () => void) => {
+  listeners.add(listener)
+  return () => { listeners.delete(listener) }
+}
+
 export function usePendingDismissals(): readonly PendingDismissal[] {
-  return useSyncExternalStore(
-    (listener) => {
-      listeners.add(listener)
-      return () => listeners.delete(listener)
-    },
-    () => snapshot,
-    () => snapshot,
-  )
+  return useSyncExternalStore(subscribe, () => snapshot, () => snapshot)
+}
+
+export function useAnsweringQuestions(): ReadonlySet<string> {
+  return useSyncExternalStore(subscribe, () => answeringSnapshot, () => answeringSnapshot)
 }
 
 /** Open questions minus the ones waiting out their undo window: what every screen shows. */
@@ -248,16 +352,42 @@ export function visibleOpen(data: QuestionsResponse | undefined, pending: readon
   return (data?.open ?? []).filter((item) => !hidden.has(item.key))
 }
 
-/** The badge: the server's live count, less a dismissal still inside its undo window. Undefined
- *  until the first answer (or when the route is missing), so the badge says nothing rather than 0. */
-export function liveQuestionCount(data: QuestionsResponse | undefined, pending: readonly PendingDismissal[]): number | undefined {
+const NO_MANAGERS: ReadonlySet<string> = new Set()
+const NO_KEYS: ReadonlySet<string> = new Set()
+
+const fromInactive = (item: QuestionItem, inactive: ReadonlySet<string>) => item.source.kind === 'manager' && inactive.has(item.source.managerId)
+
+/** The badge: the server's live count, less a dismissal still inside its undo window and an answer
+ *  in flight. Undefined until the first answer (or when the route is missing), so the badge says
+ *  nothing rather than 0. The server leaves inactive managers' cards out of `live` (spec
+ *  2026-11-19-manager-deactivate), so hiding one of them takes nothing off it. */
+export function liveQuestionCount(data: QuestionsResponse | undefined, pending: readonly PendingDismissal[], inactive: ReadonlySet<string> = NO_MANAGERS, inFlight: ReadonlySet<string> = NO_KEYS): number | undefined {
   if (!data) return undefined
-  const hidden = new Set(pending.filter((entry) => !entry.error).map((entry) => entry.key))
-  const leaving = data.open.filter((item) => hidden.has(item.key) && !item.older).length
+  const hidden = new Set([...pending.filter((entry) => !entry.error).map((entry) => entry.key), ...inFlight])
+  const leaving = data.open.filter((item) => hidden.has(item.key) && !item.older && !fromInactive(item, inactive)).length
   return Math.max(0, data.counts.live - leaving)
+}
+
+/** The "+N from inactive managers, not counted" note: their live cards still shown. */
+export function inactiveQuestionCount(data: QuestionsResponse | undefined, pending: readonly PendingDismissal[], inactive: ReadonlySet<string>): number {
+  return visibleOpen(data, pending).filter((item) => !item.older && fromInactive(item, inactive)).length
+}
+
+/** Ids of the inactive managers, from the shared list cache (never fetched from here). */
+export function useInactiveManagerIds(): ReadonlySet<string> {
+  const list = useQuery<ManagerListResponse>({ queryKey: managerKeys.list, enabled: false }).data
+  return useMemo(() => {
+    const ids = (list?.managers ?? []).filter((manager) => manager.inactive !== undefined).map((manager) => manager.id)
+    return ids.length === 0 ? NO_MANAGERS : new Set(ids)
+  }, [list])
 }
 
 export function useLiveQuestionCount(enabled = true): number | undefined {
   const query = useQuestions(enabled)
-  return liveQuestionCount(query.data, usePendingDismissals())
+  return liveQuestionCount(query.data, usePendingDismissals(), useInactiveManagerIds(), useAnsweringQuestions())
+}
+
+export function useInactiveQuestionCount(): number {
+  const query = useQuestions()
+  return inactiveQuestionCount(query.data, usePendingDismissals(), useInactiveManagerIds())
 }

@@ -3,6 +3,7 @@ title: "Reclaim space after tasks"
 description: "Check worktree sizes and remove old directories after work is finished."
 related:
   links:
+    - features/settings-and-projects/disk-usage
     - architecture/cli-and-configuration
 sources:
   - label: "Implementation"
@@ -10,7 +11,7 @@ sources:
     line: 143
     commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
 ---
-The worktree list shows linked tasks, directory sizes, and ages. Reclaim now removes directories past the retention limit. After confirming, check the cleanup script results.
+The worktree list shows linked tasks, directory sizes, last activity, and which worktrees can be reclaimed. Reclaim now removes directories past the count limit (**Keep last N worktrees**) and the age limit (**Reclaim idle worktrees after**). After confirming, check the cleanup script results. For the whole picture, including the disk guard and `cez worktrees`, see [Disk usage and worktrees](/docs/features/settings-and-projects/disk-usage).
 
 ## Where to find it
 
@@ -18,8 +19,8 @@ Project settings → Worktrees → Reclaim now
 
 ## How to use it
 
-1. Check the tasks, sizes, and directory ages.
-2. Use Reclaim now for directories past the retention limit.
+1. Check the tasks, sizes, and last activity.
+2. Use Reclaim now for directories past the count or age limit.
 3. Confirm and check the cleanup result.
 
 > **Good to know**: Reclaim keeps branches. Delete removes both the directory and its branch.
@@ -27,3 +28,7 @@ Project settings → Worktrees → Reclaim now
 > **Good to know**: A worktree a running cezar uses is marked **Protected** with the reason — the desktop app's selected version (a `cezar link` of that worktree), a cezar server or other `node` process started from inside it. Retention skips it without counting it toward the limit, and Delete is refused. It becomes eligible again once nothing runs from it.
 
 > **Good to know**: A pinned task's worktree is never reclaimed automatically and does not count toward the limit. Unpin (or archive) the task to make it eligible again.
+
+> **Good to know**: Tasks in review and waiting are reclaimed too once they pass the age limit (default 7 days). The diff keeps working, read from the kept branch. Opening a pull request and Continue restore the worktree.
+
+> **Good to know**: Archiving a task also frees its worktree. The branch is kept.

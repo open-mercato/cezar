@@ -18,7 +18,7 @@ final class ShellConnector {
     static let open = "open"
     static let login = "login"
     static let list = "list"
-    /// The connect page's pairing start, from the device switcher's Add a device.
+    /// The connect page's pairing start, from the switcher's Connect another cezar.
     static let add = "add"
     static let askCredentials = "ask-credentials"
     static let passwordRejected = "password-rejected"
@@ -223,6 +223,13 @@ final class ShellConnector {
         let health = await probe.probe(origin, username: nil, password: nil, cookies: cookies)
         guard health.kind == .cezar else { return Outcome(screen: Self.login, status: health.status, pendingId: pendingId) }
         return save(origin, username: nil, password: nil, realm: nil, label: label, health: health, id: pendingId)
+    }
+
+    /// Your cezars' Name. `CezarList.rename` has already checked it.
+    func rename(_ id: String, label: String) {
+        guard var server = servers.get(id) else { return }
+        server.label = label
+        servers.put(server)
     }
 
     /// Deletes the password first: a list that outlives it can only re-ask. A relay server's bundle goes next; its goodbye

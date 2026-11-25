@@ -344,6 +344,7 @@ export function Composer({
     label: string
     description?: string
     emphasized: boolean
+    missingShared?: true
   }
 
   const candidates = useMemo((): MenuCandidate[] => {
@@ -367,6 +368,7 @@ export function Composer({
         label: skill.name,
         description: skill.description,
         emphasized: isProjectSkill(skill),
+        missingShared: skill.missingShared,
       }))
     }
     const paths = getMentionCandidates?.() ?? []
@@ -1038,8 +1040,8 @@ export function Composer({
           <CommandList
             data-slot="composer-menu"
             data-trigger={trigger?.trigger}
-            // Clamped to the popper's reported space so the open keyboard (collisionPadding
-            // via the shared PopoverContent) shrinks the menu instead of hiding its tail.
+            // Clamped to --radix-popover-content-available-height, the room Radix measures
+            // inside the visual viewport, so the open keyboard shrinks the menu.
             className="max-h-[min(16rem,var(--radix-popover-content-available-height))] p-1"
           >
             {candidates.length === 0 ? (
@@ -1067,7 +1069,8 @@ export function Composer({
                 >
                   <span
                     className={cn(
-                      'shrink-0 truncate',
+                      'truncate',
+                      !candidate.missingShared && 'shrink-0',
                       candidate.emphasized && 'font-semibold',
                       trigger?.trigger === '@' && 'font-mono text-xs',
                     )}
@@ -1078,6 +1081,9 @@ export function Composer({
                     <span className="min-w-0 flex-1 truncate text-xs text-soft-foreground">
                       {candidate.description}
                     </span>
+                  ) : null}
+                  {candidate.missingShared ? (
+                    <span className="shrink-0 text-xs text-warning">Shared skill missing</span>
                   ) : null}
                 </CommandItem>
               ))

@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, it } from 'vitest'
+import type { ManagerMessage } from '@open-mercato/cezar-api-client'
 
 import {
+  liveAuthFailures,
   managerReplyAnnouncement,
   accessLabel,
   managerAttention,
@@ -480,5 +482,23 @@ describe('parseInlineReferences', () => {
       { kind: 'text', text: 'Assess ' },
       { kind: 'issue', projectId: 'fe-2', number: 2902 },
     ])
+  })
+})
+
+describe('liveAuthFailures (spec 2026-11-18-inline-account-reconnect)', () => {
+  it('keeps the newest failure per account', () => {
+    const failed = (id: string, provider: 'claude' | 'codex', profileId: string): ManagerMessage =>
+      ({ id, seq: 0, at: '', kind: 'assistant', text: '', turn: 'chat', streaming: false, commands: [], error: 'x', authFailure: { provider, profileId } })
+    const live = liveAuthFailures([failed('a', 'claude', 'work'), failed('b', 'codex', 'default'), failed('c', 'claude', 'work')])
+    expect([...live].sort()).toEqual(['b', 'c'])
+  })
+
+  it('a reconnect retires the older failures of that account; watch and job turns never go live', () => {
+    const failed = (id: string, turn: 'chat' | 'watch' = 'chat'): ManagerMessage =>
+      ({ id, seq: 0, at: '', kind: 'assistant', text: '', turn, streaming: false, commands: [], error: 'x', authFailure: { provider: 'claude', profileId: 'work' } })
+    const reconnected: ManagerMessage = { id: 'r', seq: 0, at: '', kind: 'assistant', text: '', turn: 'chat', streaming: false, commands: [], reconnectedAt: 't', reconnectedFrom: { provider: 'claude', profileId: 'work' } }
+    expect([...liveAuthFailures([failed('a'), reconnected])]).toEqual([])
+    expect([...liveAuthFailures([failed('a'), reconnected, failed('b')])]).toEqual(['b'])
+    expect([...liveAuthFailures([failed('w', 'watch')])]).toEqual([])
   })
 })

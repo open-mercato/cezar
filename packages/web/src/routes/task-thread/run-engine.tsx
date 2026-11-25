@@ -3,12 +3,13 @@ import { DEFAULT_AGENT_ACCOUNT_ID, type ApiRun } from '@open-mercato/cezar-api-c
 import { chipClass } from '@/components/chip'
 import { modelsForRunner } from '@/routes/new-task-form'
 import { cn } from '@/lib/utils'
+import { requestedToActual, runActualModel } from '@/lib/actual-model'
 
 /**
  * Which agent, account and model a run is ON — the one resolution the header's agent badge and
  * the composer's read-only engine chip both read, so the two can never name different engines.
  */
-export function useRunEngine(run: ApiRun) {
+export function useRunEngine(run: ApiRun, reportedModel?: string) {
   // The record keeps only what the caller ASKED for: `POST /api/runs` persists the raw optional
   // `runner` (`src/runs/store.ts`), while the run actually executes as
   // `input.runner ?? config.defaultRunner` (`src/workflows/run.ts`). Mirror that resolution —
@@ -37,8 +38,12 @@ export function useRunEngine(run: ApiRun) {
   // something `model` does not (#546). Absent on pre-#405 records and skipped when it merely
   // repeats `model` — an identity nothing wrote down is not one a reader may invent.
   const identity = run.modelIdentity && run.modelIdentity !== model ? run.modelIdentity : undefined
-  const summary = [runner, account, model].filter(Boolean).join(' · ')
-  return { runner, account, model, identity, summary }
+  // What the agent reported running — "auto" and aliases resolve here; `reportedModel` is the
+  // thread's `session.started` for runs recorded before the field existed.
+  const actualModel = runActualModel(run, reportedModel)
+  const modelLabel = requestedToActual(model || 'auto', actualModel)
+  const summary = [runner, account, modelLabel].filter(Boolean).join(' · ')
+  return { runner, account, model, actualModel, modelLabel, identity, summary }
 }
 
 /**
@@ -56,10 +61,11 @@ export function RunEnginePills({ run }: { run: ApiRun }) {
   const models = modelsForRunner(engine.runner, catalog.data, [run.model])
   const modelLabel = models.find((preset) => preset.id === engine.model)?.label ?? engine.model
   const hint = 'The session’s engine — pick another when you continue it'
+  const servedAs = engine.actualModel ?? engine.identity
   return (
     <span
       data-slot="run-engine"
-      title={engine.identity ? `${hint} (served as ${engine.identity})` : hint}
+      title={servedAs ? `${hint} (served as ${servedAs})` : hint}
       className={cn(chipClass, 'cursor-default hover:bg-card hover:text-muted-foreground')}
     >
       <span data-slot="run-engine-runner" aria-label="Agent">

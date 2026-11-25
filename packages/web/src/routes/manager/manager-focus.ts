@@ -18,3 +18,10 @@ export const FROM_MANAGER_LIST = { fromManagerList: true } as const
 export function cameFromManagerList(state: unknown): boolean {
   return typeof state === 'object' && state !== null && (state as { fromManagerList?: unknown }).fromManagerList === true
 }
+
+/** Router state from a sidebar row's Settings…: the chat opens with its gear menu open. */
+export const OPEN_MANAGER_SETTINGS = { openSettings: true } as const
+
+export function opensManagerSettings(state: unknown): boolean {
+  return typeof state === 'object' && state !== null && (state as { openSettings?: unknown }).openSettings === true
+}

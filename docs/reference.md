@@ -32,7 +32,15 @@ Three words, no jargon — **task**, **skill**, **chain**:
   `.ai/cezar/skills/`, or pull them from a shared **team skills repo** (a bare
   git clone cached globally in `~/.cache/cez/`). A workflow step references one by
   `skill: <name>` and its body becomes the agent's extra system prompt — so you
-  shape *how* the agent reasons without touching code.
+  shape *how* the agent reasons without touching code. A skill a task uses — selected,
+  a leading `/name`, or named in the prompt's text — is installed with its companions
+  into the task worktree's `.claude/skills` and `.agents/skills`. A repo's
+  `.ai/skills/<name>/SKILL.md` that extends a shared skill of the same name is layered
+  onto the shared skill. The default team repository is `open-mercato/skills`.
+  An explicit request for an `om-*` skill waits for a cold catalog and retries once
+  if the skill is missing. If it stays unavailable, select **Install skills** in the
+  task transcript to refresh the catalog. **Settings → Agents → Skill repositories**
+  shows which agent accounts can use the project's catalog and lets you repair it.
 - 🔗 **Chains (workflows)** stitch steps into a pipeline: agent steps plus shell
   checks, with bounded `onFail` retry loops. Write the YAML yourself, build one by
   drag-ordering skills in the **Workflows** tab, or press **Plan first** and let the
@@ -64,9 +72,14 @@ Five moves that make the cockpit worth the browser tab:
 - 🧹 **Bounded worktree disk.** Each task runs in its own full checkout, so a busy
   cockpit would otherwise grow without limit. cezar keeps only the last
   `worktreeRetention` **finished** worktrees on disk (default **10**; `0` =
-  unlimited) and reclaims the rest — directory only, the `cez/<id8>` branch is
-  always kept, so the work stays recoverable. Settings → Resources shows every
-  worktree's disk use with per-row delete and a **Reclaim now** button.
+  unlimited), reclaims any non-running task's tree after `worktreeIdleDays`
+  days without activity (default **7**, review and waiting included), frees a
+  task's tree when you archive it, and runs a disk guard when free space or the
+  worktrees' total crosses a threshold. Reclaiming removes the directory only:
+  the branch is always kept and Continue restores the tree. Project settings →
+  Worktrees shows every worktree's size and last activity with per-row delete
+  and a **Reclaim now** button; `cez worktrees` does the same from a terminal
+  (see [Worktree disk usage](#worktree-disk-usage)).
 - 🛡️ **Review gate.** A finished run with changes waits in `review`. Read the diff,
   type notes that go straight back into the agent's session, or push a
   `gh pr create --draft`. You stay the merge button.
@@ -213,8 +226,32 @@ held for queued tasks until that time, even if the original task is completed or
 While choosing a successor, the task shows “switching agent” without a failure notification.
 The transcript records skips and handovers, and identifies the automatic continuation message.
 The next provider receives the task and repository context and may bill its own plan. Existing
-task budgets apply; tool restrictions depend on the backend (Codex, OpenCode and Cursor do not
-enforce Claude's `allowedTools`).
+task budgets apply; tool restrictions depend on the backend. Codex supports explicit subsets of
+`Read`, `Grep`, `Glob` and a read-only `Bash` allowlist, including an empty tool grant, through an
+isolated runtime. `review-pr` can use Codex when the installed protocol passes verification.
+The omitted or exact historical default (`Read`, `Edit`, `Write`, `Grep`, `Glob`, `Bash`, with
+unrestricted shell) keeps its existing behavior. Unsupported write/MCP grants, shell hooks and
+unknown Bash prefixes refuse; they never become unrestricted.
+
+Restricted Codex steps omit native execution settings and run approved reads through cezar.
+Native execution environments and native network access stay disabled on every turn, including
+resume/fork. Supported file-backed account authentication and model/provider settings follow
+the selected account. Keyring-only authentication, active managed/system policy, Windows and
+Codex versions older than 0.169.0, and its prereleases, are unavailable for this path. On a newer
+Codex, cezar lists its native features at startup, turns every enabled one off for the thread and
+verifies that before the first model turn; a feature that stays on refuses the step. A ChatGPT workspace's
+model policy and requirements that only narrow (login methods, features forced off) are
+accepted. Unsupported controls fail before a model turn. Grep and Glob need `rg`; missing tools return a
+named read error. `CEZ_CODEX_NETWORK=0` also blocks brokered GitHub reads, and a Codex manager's
+shell then runs only `cez-manager` and its pipe filters.
+
+Continue and restart preserve each step’s recorded tools and mutation policy. Old unrestricted
+Codex sessions are kept separate; missing-session recovery can open a fresh restricted session.
+A legacy graph step with no recoverable policy refuses with a diagnostic. Dispatch preserves an
+explicit empty tool list. Codex managers still refuse their unsupported `cez-manager` shell grant;
+planning and naming can use the isolated no-tools path and keep their existing fallbacks when
+unavailable. OpenCode and Cursor do not enforce Claude’s `allowedTools`.
+
 
 **Settings changes apply to new tasks.** Existing tasks retain their saved list; tasks created
 with fallback off do not acquire it later. Turning it off cancels unstarted handovers, but does
@@ -455,7 +492,7 @@ whose counter never resets within a run, so every run is finite.
 | `loop` (`max`) | `repeat`, `exhausted` | `iteration`, `max` |
 | `agent` (`prompt`, `skill`, `runner`, `model`, `session.continue`, `verdicts`; after a fork also `review`, `budgetUsd`) | `done`, `failed` — or one port per verdict | `summary`, `verdict`, `costUsd` (a fork branch: `runId`, `status`, `summary`) |
 | `check` (`command`) | `pass`, `fail` | `exitCode`, `output` |
-| `gate.human` (`message`, `timeoutMs?`) | `approve`, `reject` (+`timeout`) | `comment` |
+| `gate.human` (`message`, `timeoutMs?`) | `approve`, `reject` (+`timeout`) | `comment` (the reply text) |
 | `ask-user` (`question`, `options?`, `timeoutMs?`) | `answered` (+`timeout`) | `answer` |
 | `dispatch` (`prompt`, `runner?`, `budgetUsd?`) | `done`, `failed` | `runId`, `status`, `summary` |
 | `git.commit` (`message`) | `done`, `nothing`, `failed` | `sha` |
@@ -489,6 +526,15 @@ whose counter never resets within a run, so every run is finite.
 - **Built-in templates** — `implement-and-verify`, `implement-review-pr`, `review-council`
   (three fresh reviewers at once, then a judge that ships or sends it back), `fix-ci` — sit
   next to `quick-task` (still the default). Open one in the editor; it saves as your copy.
+- **Human gates.** Choose **Approve** or **Reject**, or reply in the task composer or
+  through `cez-manager task say`. Plain replies such as “approve” and “reject” take the
+  corresponding path. “Request changes”, “stop here”, “not yet” and “don’t push” take the reject path. Other text, such as
+  “rebase first”, approves with instructions. An agent applies them on the task branch
+  before the workflow advances. If the agent cannot confirm completion, the gate asks again; if it
+  reads the reply as “do not continue”, the gate takes the reject path.
+  In `implement-review-pr`, `review-council`, and custom graphs whose approve port leads
+  directly to a PR node, **Approve** opens a draft. Choose **Approve, open a full PR** or
+  include “open a full PR” in your reply to open it ready for review.
 - **Restarts** resume a walk parked at a gate, question, CI wait or subtask (or mid-check)
   at that node; an interrupted agent node keeps the usual Continue path.
 - **Verdicts.** An agent with `verdicts` ends its turn with `CEZ:VERDICT <name>`; the
@@ -531,6 +577,7 @@ Useful environment variables:
 |---|---|
 | `CEZ_DRY_RUN=1` | Run every agent's tasks on its bundled mock instead of the real CLI (`claude`, `codex`, `opencode` and the rest); the Codex and OpenCode health checks and model catalogs use the mock too — the entire cockpit works offline, for demos and development. |
 | `CEZ_REMOTE_AGENT_ACCOUNTS=1` | Allow **Settings → Agent accounts** in a remote/self-hosted cockpit. Enable this only behind an authenticated perimeter: account folders expose absolute host paths and the details view can expose account identity. Remotely added folders are confined to `CEZ_BROWSE_ROOT`, including symlink ancestry. Local desktop actions stay disabled; **Connect** returns the exact login command to run on the host. |
+| `CEZ_USAGE_LOG=0` | Stop recording plan-limit usage. On by default and local only: Claude (Pro/Max) and Codex (ChatGPT) limit readings plus per-turn activity go to `~/.cezar/usage-ledger/` (kept 90 days, no prompts or code) and feed Dashboard → Usage & cost → Plan limits and `cezar usage`. One account can also be opted out in Settings → Agent accounts. |
 | `CEZ_TELEMETRY=0` | Block usage telemetry even after you opted in. Telemetry is opt-in — nothing is sent until you answer yes in the cockpit, Settings → Privacy or `cezar telemetry enable` ([docs/telemetry.md](telemetry.md)). `DO_NOT_TRACK=1` works too. `CEZ_TELEMETRY=1` only lifts the CI / test-runner / `CEZ_DRY_RUN=1` block; it never grants consent. |
 | `CEZ_INSTANCE_ID` | Internal server-install identity set automatically in generated systemd/launchd services; normally leave unset. It is surfaced additively by `/api/v1/health` for install verification. |
 | `CEZ_AGENT_MODELS_LOCKED=1` | Globally lock each runner to the model configured in its native Claude/Codex/OpenCode settings while keeping runner selection available. Exact `1` also delegates authentication and provider enablement to those native agents, so Cezar skips its credential probes and provider-disable preferences. Existing Cezar presets are preserved but ignored, and an environment change requires a restart. The config-file equivalent is `"modelsLocked": true` in global `~/.cezar/config.json` or one repository's `.ai/cezar/config.json`; config-file locks do not disable provider checks. |
@@ -542,7 +589,7 @@ Useful environment variables:
 | `CEZ_PUSH=0` | Turns phone push off. Unset, nothing is sent until a paired phone switches notifications on for this computer in its own app; then a manager's approval, question or important reply, or a task newly waiting on you, sends one text-free signal through the relay (at most one a minute, none while the app is open), and the phone shows "Cezar needs you". With `CEZ_PUSH=0` cezar takes no grant and sends nothing. |
 | `CEZ_DESIGN_MODE=0` | Turn off Design Mode in a task's **Preview** tab (spec `.ai/specs/2026-10-09-design-mode.md`). Unset, it is on for a local cockpit: switching it on makes cezar re-serve the previewed local `http://` dev server on a second `127.0.0.1` port with an element picker injected, so you can click an element and send the agent a note about it. The port opens only on that click and closes when idle. Always off on a hosted cockpit, where a loopback port reaches nobody — there is no `=1`. |
 | `CEZ_FOLLOWUPS=1` | Turn on the global follow-up **Inbox**: agents are asked to leave follow-ups in `todos.json` when they finish, and the Inbox view appears. Off by default — each task's own **Notes** handoff journal runs either way. |
-| `CEZ_MANAGERS=0` | Turn **managers** off (spec `.ai/specs/2026-10-31-managers.md`). On by default, and nothing runs until you create one: a manager is a global, long-lived agent you chat with, connected to one or more projects. It watches them on its cadence (a check with no new attention item makes no model call), starts and steers tasks, and proposes merges and automation enables that only happen when you approve them in the chat. Tool limits (`Read`, `Grep`, `Glob`, a `Bash` allowlist of `cez-manager` plus read-only `gh`/`git`, and Write only under the manager's own `files/` folder) are enforced on Claude only; other backends do not honor `allowedTools`, so there the system prompt is the only fence. Only the exact value `0` opts out; opted out, the Manager mode is absent, the endpoints answer `409` and no timer starts. Read at boot; definitions and chats in `~/.cezar/` are kept either way. |
+| `CEZ_MANAGERS=0` | Turn **managers** off (spec `.ai/specs/2026-10-31-managers.md`). On by default, and nothing runs until you create one: a manager is a global, long-lived agent you chat with, connected to one or more projects. It watches them on its cadence (a check with no new attention item makes no model call), starts and steers tasks, and proposes merges and automation enables that only happen when you approve them in the chat. Tool limits (`Read`, `Grep`, `Glob`, a `Bash` allowlist of `cez-manager` plus read-only `gh`/`git`, and Write only under the manager's own `files/` folder) are enforced on Claude only. Codex refuses these restricted manager sessions before launch; other backends do not honor `allowedTools`, so there the system prompt is the only fence. Only the exact value `0` opts out; opted out, the Manager mode is absent, the endpoints answer `409` and no timer starts. Read at boot; definitions and chats in `~/.cezar/` are kept either way. |
 | `CEZ_AUTOMATIONS=0` | Turn **automations** off. On by default since the automations redesign (spec `.ai/specs/2026-09-14-automations-redesign.md`): the Automations view lists GitHub-triggered and scheduled automations, and cezar polls GitHub or fires schedules on each enabled one while it is running — nothing runs until you enable an automation yourself. An agent can also **create an automation from a prompt**: type "whenever a PR is opened, review it" into New task — pick the built-in `create-cezar-automation` skill, or just ask; every task's system prompt teaches it to recognise the intent — and the agent writes the definition and creates it through `cez automation create` (paused, with a `cez automation check` preview of what it would match), then links the Automations page. Only the exact value `0` opts out (`CEZ_AUTOMATIONS=1`, the old opt-in, is accepted and changes nothing); opted out, the nav item is absent, the endpoints answer `409`, and the workspace scheduler never starts. Read at boot, so restart after changing it; definitions, receipts and high-watermarks are kept either way. |
 | `CEZ_WEBHOOKS=1` | Enable project lifecycle notifications in Settings → Webhooks. Off by default; independent of graph workflow notifications. See the [receiver guide](../packages/cezar/docs/webhooks.md). |
 | `CEZ_WORKFLOW_WEBHOOKS=1` | Let a workflow graph's **`notify.webhook`** node POST to the URL it names (JSON: `text`, `run`, `node`). Off by default: a workflow file — which can be imported from anywhere — calling out to an arbitrary URL widens exposure, so it is opt-in. Off, the node leaves by `failed` with a note; under `CEZ_DRY_RUN=1` nothing is sent either way. |
@@ -766,7 +813,7 @@ cezar is not married to one vendor. Every agent step runs through a single
 | Backend | CLI | How cezar drives it | Tool access |
 |---|---|---|---|
 | **Claude Code** (default) | [`claude`](https://github.com/anthropics/claude-code) | Headless `stream-json` mode. | Per-tool `--allowedTools` (`bashAllowlist` scopes `Bash`); `dontAsk` denies unapproved tools without prompting (`CEZ_APPROVAL_GATE=1` selects `acceptEdits`, but cezar cannot answer permission prompts). |
-| **Codex** | [`codex`](https://github.com/openai/codex) | `codex app-server` — JSON-RPC over stdio, the same transport the Codex IDE extensions use. | Ignores `allowedTools`; the default auto mode uses `danger-full-access` with `approvalPolicy: never` (`CEZ_CODEX_NETWORK=0` opts into the network-blocked `workspace-write` sandbox). |
+| **Codex** | [`codex`](https://github.com/openai/codex) | `codex app-server` — JSON-RPC over stdio, the same transport the Codex IDE extensions use. | Explicit read-only grants use an isolated, verified runtime and cezar’s read broker. Omitted/exact-default grants retain `danger-full-access` with `approvalPolicy: never`. `CEZ_CODEX_NETWORK=0` selects network-blocked `workspace-write` for unrestricted tasks and denies brokered GitHub reads for restricted steps. |
 | **Junie** _(experimental)_ | [`junie`](https://junie.jetbrains.com/cli) | `junie --acp=true` — the real Agent Client Protocol over stdio, the same transport JetBrains IDEs use. | Ignores `allowedTools`; every permission is auto-approved. |
 | **OpenCode** _(experimental)_ | [`opencode`](https://opencode.ai) | `opencode serve` — a local HTTP server with an SSE event stream. | Ignores `allowedTools` entirely; OpenCode's own permission config applies; a prompt it raises shows up as a card to allow or reject in a non-autonomous cockpit run, and is refused in autonomous and headless (`cezar run`) runs. |
 | **Cursor** | [`agent`](https://cursor.com/docs/cli/overview) (Cursor Agent CLI) | Headless print mode: `agent -p --force --trust --output-format stream-json`. Continue is fresh-session in v1 (print mode exits per turn). Its documented output carries no token/cost figures, so a Cursor run's header always reads zero tokens and no cost — that is the backend not reporting usage, not the run using nothing. | Ignores `allowedTools`; `--force` / `--trust` auto-approves tool use for unattended runs. |
@@ -898,6 +945,8 @@ never blocks startup; configured lifecycle transitions pause on malformed config
   // `skills/` (any depth) is picked up from them: `…/skills/<name>/SKILL.md` is a directory skill
   // (its other files are its references), any other `…/skills/**/*.md` a flat one.
   "worktreeRetention": 10,   // keep the last N finished worktrees on disk; 0 = unlimited (branch always kept)
+  "worktreeIdleDays": 7,     // reclaim a non-running task's worktree after N idle days; 0 = off;
+                             // absent = the workspace's resources.worktreeIdleDaysDefault (7)
   "defaultRunner": "claude", // agent backend: "claude" (default) · "codex" · "junie" · "opencode" · "pi"
   "modelsLocked": true,      // optional: native per-runner model is fixed/read-only; runner stays selectable
   "plannerModel": "sonnet",  // model the "Plan first" button uses to draft chains
@@ -952,6 +1001,71 @@ root — live once in `~/.cezar/config.json`, alongside the
 **Settings → Resources** and **Settings → Projects**. A `maxParallel` left over
 in a repo's `.ai/cezar/config.json` is imported into the workspace file the
 first time cezar boots there, and ignored afterwards.
+
+### Worktree disk usage
+
+Task worktrees are full checkouts and the largest thing cezar writes. These keys
+bound them (spec `.ai/specs/2026-11-19-worktree-disk-usage.md`); every one has a
+working default, and a reclaim removes the directory only (branch kept, Continue
+restores it, a tree with uncommitted changes is skipped):
+
+| Key | File | Default | Meaning |
+| --- | --- | --- | --- |
+| `worktreeRetention` | repo `.ai/cezar/config.json` | `10` | Keep the last N done/failed/cancelled worktrees; `0` = unlimited. |
+| `worktreeIdleDays` | repo `.ai/cezar/config.json` | inherits | Reclaim a review/waiting/done/failed/cancelled task's tree after N days without activity; `0` = off. Absent (or `null` through the API) inherits the workspace default. |
+| `resources.worktreeIdleDaysDefault` | `~/.cezar/config.json` | `7` | The age limit for every repo that sets none. |
+| `resources.diskGuard.minFreePercent` | `~/.cezar/config.json` | `10` | Guard triggers when free space on the worktrees' volume is below the smaller of this percentage and `minFreeGb`; `0` = off. |
+| `resources.diskGuard.minFreeGb` | `~/.cezar/config.json` | `5` | See above; `0` = off. |
+| `resources.diskGuard.maxWorktreesGb` | `~/.cezar/config.json` | `20` | Guard triggers when task worktrees across all projects total more than this; `0` = off. |
+| `archivedTaskDeleteDays` | repo `.ai/cezar/config.json` | inherits | Delete a task N days after it was archived; `0` = never. Absent (or `null` through the API) inherits the workspace default. |
+| `resources.archivedTaskDeleteDaysDefault` | `~/.cezar/config.json` | `90` | The archived-task lifetime for every repo that sets none (0–3650). |
+| `versionRetention` | `~/.cezar/config.json` | `3` | Installed cezar versions kept in `~/.cezar/versions` (the running one included); `0` = never prune automatically. |
+
+Age retention skips running, queued and parked tasks, pinned tasks, tasks with a
+pending auto-resume or monitoring wake-up, and trees a running process uses. It
+runs at boot, after a task settles, hourly and on **Reclaim now**. Archiving a
+task (or **Archive finished**) reclaims its tree too. The disk guard reclaims the
+oldest idle trees across every project until it is back under its threshold, and
+warns ("Disk almost full — N GB in task worktrees") in the cockpit, the
+attention list and a notification when that is not enough; it never stops a
+running task. It checks at boot and every 10 minutes, and
+`GET /api/v1/workspace/disk-guard` returns its thresholds and last pass. Edit the
+repo keys in Project settings → Worktrees and the workspace keys in Settings →
+Behaviour.
+
+An archived task is deleted after `archivedTaskDeleteDays`, counted from
+`archivedAt` (older records: `finishedAt`, else last activity): its record,
+event log, handoff, images, drafts, artifacts, dispatch files, worktree and branch. The branch is kept, and only the task
+deleted, when it has an open pull request (or `gh` cannot tell for a task that
+opened one) or commits neither merged into the default branch nor pushed to a
+remote. Unarchived, running and pinned tasks are never touched, and a tree with
+uncommitted changes keeps its task. It runs at boot and on the hourly sweep and
+logs a summary; the 500-archived-tasks cap stays as a safety net.
+`POST /api/v1/runs/archived/delete-expired` `{ olderThanDays?, dryRun? }` runs it
+on demand.
+
+`cez worktrees` works against the running cockpit when one serves the project
+and straight on the project directory otherwise (`--project <path>` picks
+another repo):
+
+```bash
+cez worktrees list [--json]                 # run, status, last activity, size, reclaimable
+cez worktrees reclaim                       # the configured count + age retention, now
+cez worktrees reclaim --older-than 7d       # every inactive tree idle that long (d or h)
+cez worktrees reclaim --all-inactive        # every inactive tree
+cez worktrees reclaim --all-inactive --dry-run   # list, change nothing
+cez worktrees prune                         # orphan tree dirs + `git worktree prune`
+cez worktrees prune --archived-older-than 90d [--dry-run]   # also delete tasks archived that long; --dry-run previews only them
+cez worktrees remove <runId>                # one task's tree (branch kept); refuses active tasks
+cez versions prune [--keep N] [--dry-run] [--backups]   # old installed versions; backups only with --backups
+```
+
+Deleting a task also deletes its `.ai/cezar/artifacts/<runId>` and
+`dispatch/<runId>`, as does pruning old runs past the run-count cap; a startup
+sweep removes leftovers whose run no longer exists. The attachment library
+(`.ai/cezar/attachments/`) is never deleted: it holds your own files. The cockpit-side
+details and a manual SSH cleanup walkthrough are on the docs site's **Disk usage
+and worktrees** page.
 
 **Settings → Resources** opens on a live **Machine** card, and the sidebar carries
 the same numbers as a one-row **glance** (CPU, its 60 s sparkline, compact RAM)
