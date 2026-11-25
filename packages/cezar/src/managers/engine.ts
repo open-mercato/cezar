@@ -1647,7 +1647,7 @@ export class ManagerEngine {
     }).catch((error: unknown) => ({ result: turnFailure(error), ran: manager } as ChainOutcome));
     const result = chain.result;
     if (chain.ref) base = { ...base, agent: chain.ref };
-    this.reportTurn(manager, turn, startedAt, result);
+    this.reportTurn(chain.ran, turn, startedAt, result);
     if (throttle) clearTimeout(throttle);
     if (!store.get(id)) return 'failed';
     this.addCost(id, result.costUsd);
@@ -2242,7 +2242,7 @@ export class ManagerEngine {
       .catch((error: unknown) => ({ result: turnFailure(error), ran: manager } as ChainOutcome));
     const result = chain.result;
     const agent = chain.ref ? { agent: chain.ref } : {};
-    this.reportTurn(manager, turn, startedAt, result);
+    this.reportTurn(chain.ran, turn, startedAt, result);
     if (!store.get(id)) return;
     this.addCost(id, result.costUsd);
     // A user's Stop leaves the keys fresh for the next check; a hung backend is a failure the chat shows.
@@ -2844,7 +2844,8 @@ export class ManagerEngine {
     const active = Math.min(state.chain?.active?.slot ?? 0, rows.length - 1);
     const preferred = manager.failback === 'manual' ? active : 0;
     const { row, skipped } = pickRow(rows, preferred, (candidate) => this.rowHold(id, infos[candidate.slot]!, now));
-    if (row.slot !== active) {
+    // Every row held: the preferred row is tried as today, but nothing switched, so no notice.
+    if (row.slot !== active && skipped.length < rows.length) {
       if (row.slot === 0) {
         this.chainNotice(id, manager, infos[active]!, infos[0]!, 'back');
         this.setActive(id, 0, 'back');

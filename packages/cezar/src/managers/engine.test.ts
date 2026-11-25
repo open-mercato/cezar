@@ -4941,6 +4941,25 @@ describe('ManagerEngine', () => {
       expect([...engine.accountHolds().deadlines]).toEqual([]);
     });
 
+    it('with every row held, a turn tries #1 without a false "Back on #1" notice', async () => {
+      const engine = makeEngine({ now: () => clock, autoResume: () => false });
+      const id = await withBackup(engine);
+      backend.scripts.push(limited, say('on codex'));
+      engine.send(id, 'one');
+      await settled(engine);
+      backend.scripts.push({ ...limited, fail: 'You’ve hit your usage limit · resets 4:10pm (Europe/Warsaw)' });
+      engine.send(id, 'two');
+      await settled(engine);
+      expect(switches(id)).toHaveLength(1);
+      clock += 60_000;
+      backend.scripts.push(limited);
+      engine.send(id, 'three');
+      await settled(engine);
+      expect(backend.specs.at(-1)).not.toHaveProperty('model');
+      expect(switches(id)).toHaveLength(1);
+      expect(store.state(id).chain?.active).toMatchObject({ slot: 1 });
+    });
+
     it('with "only when I switch" it stays on the backup until Switch back now', async () => {
       const engine = makeEngine({ now: () => clock });
       const id = await withBackup(engine, { failback: 'manual' });
