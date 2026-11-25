@@ -1908,6 +1908,7 @@ describe('/manager/:id', () => {
         client.setQueryData(workspaceQueryKeys.agentProfiles, { profiles: [{ provider: 'claude', id: 'automations', label: 'Automations' }] })
       })
       const info = await screen.findByRole('button', { name: 'Answering with backup #2' })
+      expect(info.className).toContain('pointer-coarse:size-11')
       await screen.findByText('From the backup')
       expect(document.querySelectorAll('[data-slot="manager-reply-agent"]')).toHaveLength(1)
       expect(document.querySelector('[data-slot="manager-reply-agent"]')?.textContent).toBe('#2 · codex Work')
@@ -1979,13 +1980,16 @@ describe('/manager/:id', () => {
         fireEvent.keyDown(info, { key: 'Escape' })
         await waitFor(() => expect(popover()).toBeNull())
 
-        // Hover then click stays open, and mouse pointerleave closes it after the short delay.
+        // Hover then click stays open, and mouse pointerleave closes it even when the click focused the button.
         fireEvent(info, new TestPointerEvent('pointerover', { bubbles: true, pointerType: 'mouse' }))
         await waitFor(() => expect(popover()).not.toBeNull())
+        fireEvent(info, new TestPointerEvent('pointerdown', { bubbles: true, pointerType: 'mouse' }))
+        info.focus()
         fireEvent.click(info)
         expect(popover()).not.toBeNull()
         fireEvent(info, new TestPointerEvent('pointerout', { bubbles: true, pointerType: 'mouse' }))
         await waitFor(() => expect(popover()).toBeNull())
+        info.blur()
 
         // Keyboard focus opens it, pointerleave while focused does not close it, activating the button keeps it open (browsers synthesize click on Enter/Space), and blur closes it.
         info.focus()
