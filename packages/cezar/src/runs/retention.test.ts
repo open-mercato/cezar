@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
@@ -207,6 +207,26 @@ describe('reclaimIdlePrCheckouts', () => {
       const copy = JSON.parse(readFileSync(join(artifacts, 'pr-7.json'), 'utf8'));
       expect(copy).toMatchObject({ number: 7, checkedOut: false, treeReclaimedAt: meta.treeReclaimedAt });
       expect(copy.tree).toBeUndefined();
+      expect(statSync(join(artifacts, 'pr-7.json')).mode & 0o222).toBe(0);
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
+  it('never writes through a symlink planted at the artifacts copy of pr-N.json', () => {
+    const root = mkdtempSync(join(tmpdir(), 'cez-pr-retention-'));
+    try {
+      exportFor(root, 'r1');
+      const victim = join(root, 'victim.json');
+      writeFileSync(victim, JSON.stringify({ secret: true }));
+      const artifacts = join(root, 'artifacts', 'r1');
+      mkdirSync(artifacts, { recursive: true });
+      symlinkSync(victim, join(artifacts, 'pr-7.json'));
+      const store = {
+        listRuns: () => [run({ id: 'r1', status: 'done', finishedAt: '2026-07-01T00:00:00Z' })], updateRun: vi.fn(),
+        prCheckoutDir: (id: string) => join(root, id), artifactsDir: (id: string) => join(root, 'artifacts', id),
+      };
+      expect(reclaimIdlePrCheckouts(store, 7, { isLive: () => false, nowMs: () => Date.parse('2026-07-15T00:00:00Z') })).toEqual(['r1']);
+      expect(readFileSync(victim, 'utf8')).toBe(JSON.stringify({ secret: true }));
+      expect(lstatSync(join(artifacts, 'pr-7.json')).isSymbolicLink()).toBe(false);
       expect(statSync(join(artifacts, 'pr-7.json')).mode & 0o222).toBe(0);
     } finally { rmSync(root, { recursive: true, force: true }); }
   });

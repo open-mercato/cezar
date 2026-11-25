@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { chmodSync, copyFileSync, mkdirSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { ghEnv } from '../core/gh-env.ts';
 import { parseRemote } from '../git-remotes.ts';
@@ -128,17 +128,19 @@ export async function prRemote(cwd: string, pr: PrRef, run: Exec = exec): Promis
 
 /**
  * SSH that fails instead of prompting, on the user's own SSH command: BatchMode is appended to
- * `GIT_SSH_COMMAND` or `core.sshCommand` (their key, their proxy), never put in their place. A
- * `GIT_SSH` program is left alone — `GIT_SSH_COMMAND` would override it.
+ * `GIT_SSH_COMMAND` or `core.sshCommand` (their key, their proxy), never put in their place —
+ * git's own order. A `GIT_SSH` program, which git uses only when neither is set, is left alone:
+ * `GIT_SSH_COMMAND` would override it.
  */
 export async function batchSshEnv(cwd: string, run: Exec = exec, env: NodeJS.ProcessEnv = process.env): Promise<NodeJS.ProcessEnv | undefined> {
   const BATCH = '-o BatchMode=yes';
   const own = env.GIT_SSH_COMMAND?.trim();
   if (own) return { ...env, GIT_SSH_COMMAND: `${own} ${BATCH}` };
-  if (env.GIT_SSH?.trim()) return undefined;
   const configured = await run('git', ['config', '--get', 'core.sshCommand'], { cwd, timeoutMs: 10_000 });
   const command = configured.ok ? configured.stdout.trim() : '';
-  return { ...env, GIT_SSH_COMMAND: command ? `${command} ${BATCH}` : `ssh ${BATCH}` };
+  if (command) return { ...env, GIT_SSH_COMMAND: `${command} ${BATCH}` };
+  if (env.GIT_SSH?.trim()) return undefined;
+  return { ...env, GIT_SSH_COMMAND: `ssh ${BATCH}` };
 }
 
 const lastLine = (s: string) => s.trim().split('\n').pop()?.slice(0, 300) ?? '';
@@ -149,7 +151,8 @@ const EMPTY_TREE = { sha1: '4b825dc642cb6eb9a060e54bf8d69288fbee4904', sha256: '
 
 /** Files the checkout wrote are read-only on disk too: a reviewer's write is refused by the OS as
  *  well as by its tool rules. */
-function writeReadOnly(path: string, content: string): void {
+function writeReadOnly(path: string, content: string | Buffer): void {
+  // The delete takes a planted symlink itself, and `wx` refuses anything created in between.
   rmSync(path, { force: true });
   writeFileSync(path, content, { mode: 0o444, flag: 'wx' });
 }
@@ -163,18 +166,24 @@ export async function checkoutPr(input: PrCheckoutInput): Promise<PrCheckoutResu
     return await checkoutPrOrThrow(input);
   } catch (err) {
     // Nothing may outlive a failed checkout as if it were one: no tree, and no metadata or diff
-    // still saying `checkedOut: true` for agents to read through `--add-dir`.
+    // still saying `checkedOut: true` — for agents through `--add-dir`, or for the user in Assets.
     try { rmSync(join(input.dir, 'tree'), { recursive: true, force: true }); } catch { /* nothing more to do */ }
-    try {
-      for (const name of readdirSync(input.dir)) {
-        if (/^pr-\d+\.(json|diff)$/.test(name)) rmSync(join(input.dir, name), { force: true });
-      }
-    } catch { /* nothing more to do */ }
+    removePrFiles(input.dir);
+    if (input.copyTo) removePrFiles(input.copyTo);
     return {
       checkedOut: false, head: '', tree: '', diffPath: '', metaPath: '',
       problems: [`the PR checkout failed — ${lastLine(err instanceof Error ? err.message : String(err))}`],
     };
   }
+}
+
+/** Remove a folder's `pr-N.json`/`pr-N.diff`. Never throws. */
+function removePrFiles(dir: string): void {
+  try {
+    for (const name of readdirSync(dir)) {
+      if (/^pr-\d+\.(json|diff)$/.test(name)) rmSync(join(dir, name), { force: true });
+    }
+  } catch { /* nothing more to do */ }
 }
 
 async function checkoutPrOrThrow(input: PrCheckoutInput): Promise<PrCheckoutResult> {
@@ -188,6 +197,8 @@ async function checkoutPrOrThrow(input: PrCheckoutInput): Promise<PrCheckoutResu
   // A re-run (a new push to the PR) starts from nothing: the old head is not this run's work.
   rmSync(dir, { recursive: true, force: true });
   mkdirSync(dir, { recursive: true });
+  // ...and neither is the previous run's copy in the artifacts.
+  if (input.copyTo) removePrFiles(input.copyTo);
 
   let meta: Record<string, unknown> = { number: pr.number, url: pr.url, repository: `${pr.owner}/${pr.repo}` };
   let diff: string | undefined;
@@ -312,10 +323,7 @@ async function checkoutPrOrThrow(input: PrCheckoutInput): Promise<PrCheckoutResu
   if (input.copyTo) {
     mkdirSync(input.copyTo, { recursive: true });
     for (const file of [metaPath, diffPath].filter(Boolean)) {
-      const target = join(input.copyTo, file.slice(dir.length + 1));
-      rmSync(target, { force: true }); // a re-run's copy replaces a read-only one
-      copyFileSync(file, target);
-      chmodSync(target, 0o444);
+      writeReadOnly(join(input.copyTo, file.slice(dir.length + 1)), readFileSync(file));
     }
   }
   return { checkedOut, head, tree: checkedOut ? tree : '', diffPath, metaPath, problems };

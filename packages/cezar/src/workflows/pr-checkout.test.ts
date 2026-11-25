@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { existsSync, lstatSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -81,6 +81,10 @@ describe('batchSshEnv', () => {
     expect((await batchSshEnv('/w', config().exec, {}))?.GIT_SSH_COMMAND).toBe('ssh -o BatchMode=yes');
     expect(await batchSshEnv('/w', config().exec, { GIT_SSH: '/usr/local/bin/my-ssh' })).toBeUndefined();
   });
+  it('puts BatchMode on core.sshCommand even when GIT_SSH is set, as git runs core.sshCommand first', async () => {
+    const env = await batchSshEnv('/w', config('ssh -i ~/.ssh/work_key').exec, { GIT_SSH: '/usr/local/bin/my-ssh' });
+    expect(env?.GIT_SSH_COMMAND).toBe('ssh -i ~/.ssh/work_key -o BatchMode=yes');
+  });
 });
 
 describe('pickPr', () => {
@@ -96,7 +100,8 @@ describe('pickPr', () => {
 describe('checkoutPr, scripted', () => {
   let dir: string;
   beforeEach(() => { dir = mkdtempSync(join(tmpdir(), 'cez-pr-scripted-')); });
-  afterEach(() => rmSync(dir, { recursive: true, force: true }));
+  // Here, not in a test body: a failing expect must not leak an env stub into the next test.
+  afterEach(() => { vi.unstubAllEnvs(); rmSync(dir, { recursive: true, force: true }); });
   const GHE = { host: 'ghe.example.com', owner: 'o', repo: 'r', number: 3, url: 'https://ghe.example.com/o/r/pull/3' };
 
   it('under CEZ_DRY_RUN runs no gh and no git fetch, and exports nothing', async () => {
@@ -136,7 +141,6 @@ describe('checkoutPr, scripted', () => {
     const ok = await checkoutPr({ cwd: '/w', dir: join(dir, 'b'), pr: PR, refPrefix: REF_PREFIX, exec: verified.exec, sleep: NO_SLEEP });
     expect(ok.checkedOut).toBe(true);
     expect(verified.fetchEnvs).toEqual(['ssh -i ~/.ssh/work_key -o BatchMode=yes']);
-    vi.unstubAllEnvs();
   });
 
   it("fetches nothing from a repository this checkout has no remote for, and still saves gh's diff", async () => {
@@ -160,8 +164,8 @@ describe('checkoutPr, scripted', () => {
     expect(res.problems[0]).toMatch(/^the PR checkout failed — /);
   });
 
-  it('never throws: an unwritable artifacts folder is a failed checkout, with no tree left behind', async () => {
-    writeFileSync(join(dir, 'file'), 'x');
+  /** A successful scripted checkout whose export really writes `tree/`, as checkout-index would. */
+  const exportingExec = (pr: string) => {
     const { exec } = scripted([
       ['git config', ORIGIN_IS_PR],
       ['gh pr view', { ok: true, stdout: JSON.stringify({ headRefOid: 'abc' }) }],
@@ -172,13 +176,39 @@ describe('checkoutPr, scripted', () => {
       ['git -c core.symlinks=false checkout-index', { ok: true }],
       ['git update-ref -d', { ok: true }],
     ]);
+    const withTree: Exec = async (file, args, opts) => {
+      if (args.includes('checkout-index')) {
+        mkdirSync(join(pr, 'tree', 'src'), { recursive: true });
+        writeFileSync(join(pr, 'tree', 'src', 'a.txt'), 'from the PR\n');
+      }
+      return exec(file, args, opts);
+    };
+    return withTree;
+  };
+
+  it('never throws: an unwritable artifacts folder is a failed checkout, with no tree left behind', async () => {
+    writeFileSync(join(dir, 'file'), 'x');
     const pr = join(dir, 'pr');
+    const exec = exportingExec(pr);
     const res = await checkoutPr({ cwd: '/w', dir: pr, copyTo: join(dir, 'file', 'artifacts'), pr: PR, refPrefix: REF_PREFIX, exec });
     expect(res.checkedOut).toBe(false);
     expect(res.problems[0]).toMatch(/^the PR checkout failed — /);
     expect(existsSync(join(pr, 'tree'))).toBe(false);
     // The metadata was written before the copy failed: it must not still claim a checkout.
     expect(readdirSync(pr).filter((f) => /^pr-\d+\.(json|diff)$/.test(f))).toEqual([]);
+  });
+
+  it("removes the previous run's artifacts copies when a re-run fails, so Assets shows no stale checkout", async () => {
+    const artifacts = join(dir, 'artifacts');
+    const pr = join(dir, 'pr');
+    const first = await checkoutPr({ cwd: '/w', dir: pr, copyTo: artifacts, pr: PR, refPrefix: REF_PREFIX, exec: exportingExec(pr) });
+    expect(first.checkedOut).toBe(true);
+    expect(JSON.parse(readFileSync(join(artifacts, 'pr-7.json'), 'utf8'))).toMatchObject({ checkedOut: true });
+    // The re-run throws at once: its PR folder cannot be made.
+    writeFileSync(join(dir, 'file'), 'x');
+    const again = await checkoutPr({ cwd: '/w', dir: join(dir, 'file', 'pr'), copyTo: artifacts, pr: PR, refPrefix: REF_PREFIX, exec: exportingExec(pr) });
+    expect(again.problems[0]).toMatch(/^the PR checkout failed — /);
+    expect(readdirSync(artifacts).filter((f) => /^pr-\d+\.(json|diff)$/.test(f))).toEqual([]);
   });
 
   it('leaves no partial tree and no throwaway index when the export fails', async () => {
@@ -434,6 +464,21 @@ describe('checkoutPr', { timeout: 30_000 }, () => {
     const again = await checkoutPr({ cwd: work, dir, copyTo: artifacts, pr: PR, baseBranch: 'main', refPrefix: REF_PREFIX, exec: withGh(newer), sleep: NO_SLEEP });
     expect(again.problems).toEqual([]);
     expect(JSON.parse(readFileSync(join(artifacts, 'pr-7.json'), 'utf8'))).toMatchObject({ headRefOid: newer });
+    for (const file of [join(artifacts, 'pr-7.diff'), join(artifacts, 'pr-7.json')]) {
+      expect(statSync(file).mode & 0o222, file).toBe(0);
+    }
+  });
+
+  it('never writes through a symlink planted at an artifacts copy', async () => {
+    const victim = join(root, 'victim.json');
+    writeFileSync(victim, 'untouched\n');
+    mkdirSync(artifacts, { recursive: true });
+    symlinkSync(victim, join(artifacts, 'pr-7.json'));
+    const res = await checkoutPr({ cwd: work, dir, copyTo: artifacts, pr: PR, baseBranch: 'main', refPrefix: REF_PREFIX, exec: withGh(prSha), sleep: NO_SLEEP });
+    expect(res.checkedOut).toBe(true);
+    expect(readFileSync(victim, 'utf8')).toBe('untouched\n');
+    expect(lstatSync(join(artifacts, 'pr-7.json')).isSymbolicLink()).toBe(false);
+    expect(JSON.parse(readFileSync(join(artifacts, 'pr-7.json'), 'utf8'))).toMatchObject({ number: 7, checkedOut: true });
   });
 
   // GIT_ATTR_SOURCE needs git 2.42; older git exports as before.

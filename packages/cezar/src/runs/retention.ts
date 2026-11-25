@@ -374,7 +374,10 @@ export function freePrCheckoutTree(store: RetentionStore, runId: string, now = (
           // afresh, so whatever appeared at the path in between is refused, never followed.
           rmSync(path, { force: true });
           writeFileSync(path, `${JSON.stringify({ ...meta, checkedOut: false, treeReclaimedAt: reclaimedAt }, null, 2)}\n`, { mode: 0o444, flag: 'wx' });
-        } catch { /* a missing or unreadable metadata file stays as it was */ }
+        } catch {
+          // Missing or unreadable: left as it was. A create that fails after the delete leaves no
+          // file, which is still no claim of a checkout.
+        }
       }
     }
     return true;
