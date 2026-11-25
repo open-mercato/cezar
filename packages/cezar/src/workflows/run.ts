@@ -12,7 +12,7 @@ import { probeCodexIdentity, probeCodexUsageWindows } from '../core/codex-usage-
 import { TrackerAgentBindingError } from '../server/tracker/agent-credentials.ts';
 import { trackerBindingComplete, trackerContextPath, trackerPrompt, trackerTaskContext } from '../server/tracker/task-access.ts';
 import { createHash, randomUUID } from 'node:crypto';
-import { spawn } from 'node:child_process';
+import { spawn, type ChildProcess } from 'node:child_process';
 import { existsSync, renameSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { mkdir, realpath, access, writeFile } from 'node:fs/promises';
 import { assertCezarHomeWriteIsSandboxed, cezarHomeDir, cezBinPath } from '../paths.ts';
@@ -37,7 +37,7 @@ import {
   type PrivateMcpServer,
 } from '../core/private-mcp.ts';
 import { onUsage, registerRunProcess, unregisterRunProcess, type ProcessUsage } from '../core/process-usage.ts';
-import { detachesProcessGroup, killProcessTree } from '../core/kill-process-tree.ts';
+import { detachesProcessGroup, killProcessTree, trackProcessTree } from '../core/kill-process-tree.ts';
 import { describeReaped, reapTaskProcesses, taskProcessReapEnabled } from '../core/task-processes.ts';
 import { isUsageExhaustion, parseUsageLimit } from '../core/usage-limit.ts';
 import { diskFullAgentErrorText } from '../disk-space.ts';
@@ -1716,6 +1716,9 @@ export class RunManager {
   private readonly hosted: () => boolean;
   private readonly parkOnAuth: boolean;
 
+  /** Live check-step children, so `dispose()` can take their process groups down. */
+  private readonly checkChildren = new Set<ChildProcess>();
+
   /** Per-execution grants retained while a live session waits for follow-up. */
   private readonly trackerCapabilities = new Map<string, { epoch: unknown; tokens: Set<string> }>();
 
@@ -1848,6 +1851,9 @@ export class RunManager {
    */
   dispose(): void {
     this.disposed = true;
+    // Detached check groups are not in the tty foreground group; nothing else stops them (#2467).
+    for (const child of this.checkChildren) killProcessTree(child.pid);
+    this.checkChildren.clear();
     ++this.queueReasonRevision;
     this.store.off('run', this.onRunHoldInputs);
     this.store.off('deleted', this.onRunDeletedHolds);
@@ -11193,6 +11199,12 @@ export class RunManager {
         if (!detachesProcessGroup) child.kill('SIGTERM');
         killProcessTree(child.pid);
       };
+      const untrack = trackProcessTree(child.pid);
+      this.checkChildren.add(child);
+      child.once('close', () => {
+        untrack();
+        this.checkChildren.delete(child);
+      });
 
       let output = '';
       const collect = (chunk: Buffer) => {

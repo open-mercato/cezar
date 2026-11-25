@@ -78,4 +78,21 @@ describe.runIf(process.platform !== 'win32')('check step cancel kills the whole 
     await manager.cancelAndWait(record.id);
     expect(await waitFor(() => !alive(child))).toBe(true);
   }, 30_000);
+
+  it('dispose() kills an active check\'s descendant', async () => {
+    const pidFile = join(repoRoot, 'pids2.txt');
+    const wf: WorkflowDef = {
+      name: 'check-only',
+      source: 'file',
+      steps: [{ id: 'verify', name: 'Verify', command: `sleep 301 & echo $! > ${pidFile}; wait` }],
+    };
+    manager.startRun(wf, { task: 'x', worktree: false });
+    expect(await waitFor(() => existsSync(pidFile) && readFileSync(pidFile, 'utf8').trim() !== '')).toBe(true);
+    const child = Number(readFileSync(pidFile, 'utf8').trim());
+    pids.push(child);
+    expect(alive(child)).toBe(true);
+
+    manager.dispose();
+    expect(await waitFor(() => !alive(child))).toBe(true);
+  }, 30_000);
 });
