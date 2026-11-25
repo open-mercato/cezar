@@ -607,7 +607,9 @@ class OpencodeSession implements AgentSession {
     const resumeId = this.spec.resume && this.apiVersion === 1 ? this.spec.sessionId : undefined;
     if (resumeId) await this.openSession(await this.reopenSession(resumeId));
     else await this.openSession(await this.createSession());
-    await this.prompt(resumeId ? this.spec.userPrompt : prependSystemPrompt(this.spec.systemPrompt, this.spec.userPrompt));
+    // A reopened session re-hears the current guidance too, as Codex does (#2257): global
+    // instructions edited in Settings must reach a Continue.
+    await this.prompt(prependSystemPrompt(this.spec.systemPrompt, this.spec.userPrompt));
   }
 
   private async createSession(): Promise<Record<string, unknown>> {

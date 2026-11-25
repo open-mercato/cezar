@@ -1,6 +1,6 @@
 import type { ChildProcessWithoutNullStreams } from 'node:child_process';
 import { EventEmitter } from 'node:events';
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -810,6 +810,37 @@ describe('#897 a turn that outlives its prompt POST', () => {
     expect(isOpencodeMissingSessionError(errors[0]!.message)).toBe(true);
     expect(types(events)).not.toContain('session');
     expect(types(events)).not.toContain('turn-end');
+  }, 30_000);
+});
+
+describe('#2488 a reopened OpenCode 1.x session', () => {
+  const mockBin = join(dirname(fileURLToPath(import.meta.url)), '__fixtures__', 'opencode', 'mock-opencode-serve.mjs');
+
+  it('reopens the saved session and hears the current system prompt before the continuation', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'cez-opencode-prompts-'));
+    const prompts = join(dir, 'prompts.ndjson');
+    const requests = join(dir, 'requests.log');
+    try {
+      const runner = new OpencodeServerRunner({ bin: mockBin, timeoutMs: 60_000 });
+      const session = runner.startSession(
+        {
+          userPrompt: 'continue the existing task', systemPrompt: 'Never run the full suite.', cwd: process.cwd(),
+          sessionId: 'ses_mock_1', resume: true, env: { MOCK_PROMPTS_FILE: prompts, MOCK_REQUESTS_FILE: requests },
+        },
+        () => undefined,
+        { autoEndAfterFirstTurn: true },
+      );
+      expect((await session.result).sessionId).toBe('ses_mock_1');
+      const sent = readFileSync(requests, 'utf8').trim().split('\n');
+      // The mock hands a NEW session the same id, so only the requests prove it was a reopen.
+      expect(sent).toContain('GET /session/ses_mock_1');
+      expect(sent).not.toContain('POST /session');
+      const [prompt] = readFileSync(prompts, 'utf8').trim().split('\n').map((line) => JSON.parse(line) as string);
+      expect(prompt?.split('Never run the full suite.')).toHaveLength(2);
+      expect(prompt?.indexOf('Never run the full suite.')).toBeLessThan(prompt!.indexOf('continue the existing task'));
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   }, 30_000);
 });
 
