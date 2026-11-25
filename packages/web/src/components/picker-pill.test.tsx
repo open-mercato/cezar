@@ -50,6 +50,26 @@ describe('PickerPill catalog status', () => {
     expect(screen.getByText('Using cached Codex model list').closest('[data-disabled]')).not.toBeNull()
   })
 
+  it('renders a disabled action that cannot be selected', async () => {
+    const onSelect = vi.fn()
+    render(
+      <PickerPill
+        slot="model-pill"
+        ariaLabel="Model"
+        label="auto"
+        value=""
+        onPick={() => {}}
+        options={[{ value: '', label: 'auto' }]}
+        action={{ label: 'Refreshing models…', slot: 'model-pill-refresh', disabled: true, onSelect }}
+      />,
+    )
+    fireEvent.pointerDown(screen.getByRole('button', { name: 'Model' }))
+    const item = await screen.findByText('Refreshing models…')
+    expect(item.closest('[data-action="model-pill-refresh"]')?.hasAttribute('data-disabled')).toBe(true)
+    fireEvent.click(item)
+    expect(onSelect).not.toHaveBeenCalled()
+  })
+
   it('moves from a filtered search into the options for keyboard selection', async () => {
     const onPick = vi.fn()
     render(
