@@ -55,6 +55,9 @@ const IDLE_DAYS_DEFAULT = 7
 /** Archived-task lifetime bounds and default in days — 0 = never, matching the config schema. */
 const ARCHIVED_DELETE_DAYS_MAX = 3650
 const ARCHIVED_DELETE_DAYS_DEFAULT = 90
+/** Task history pool bounds and default — `resources.runsKept` / `automationRunsKept`. */
+const RUNS_KEPT_MAX = 100_000
+const RUNS_KEPT_DEFAULT = 300
 
 export function ResourcesCards() {
   const config = useWorkspaceConfig()
@@ -115,6 +118,8 @@ function ResourcesForm({ config }: { config: WorkspaceConfigResponse }) {
   const idleDaysDefault = config.resources.worktreeIdleDaysDefault ?? IDLE_DAYS_DEFAULT
   const archivedDeleteDaysDefault = config.resources.archivedTaskDeleteDaysDefault ?? ARCHIVED_DELETE_DAYS_DEFAULT
   const diskGuard = config.resources.diskGuard ?? DISK_GUARD_DEFAULTS
+  const runsKept = config.resources.runsKept ?? RUNS_KEPT_DEFAULT
+  const automationRunsKept = config.resources.automationRunsKept ?? RUNS_KEPT_DEFAULT
   const saveGuard = (key: keyof typeof DISK_GUARD_DEFAULTS, value: number | null) =>
     save.mutateAsync({ resources: { diskGuard: { [key]: value ?? 0 } } })
 
@@ -332,6 +337,47 @@ function ResourcesForm({ config }: { config: WorkspaceConfigResponse }) {
           Reclaiming removes only the directory: the branch stays, and Continue on the task restores
           it. A worktree with uncommitted changes is never reclaimed. Archiving a task frees its
           worktree right away.
+        </CardNote>
+      </SettingsCard>
+
+      <SettingsCard id="task-history" slot="resources-task-history" title="Task history">
+        <FormRow
+          saved={savedFor('runsKept')}
+          label="Regular tasks kept"
+          description="How many finished tasks you started yourself each project keeps. Past this, the oldest are deleted with their logs."
+        >
+          <IntegerStepper
+            aria-label="Regular tasks kept"
+            data-slot="resources-runs-kept"
+            value={runsKept}
+            min={1}
+            max={RUNS_KEPT_MAX}
+            step={50}
+            className="w-28"
+            onCommit={(value) => (value === null ? undefined : save.mutateAsync({ resources: { runsKept: value } }))}
+          />
+          <span className="text-label text-muted-foreground">tasks</span>
+        </FormRow>
+        <FormRow
+          saved={savedFor('automationRunsKept')}
+          label="Automation tasks kept"
+          description="How many finished tasks automations launched each project keeps. A separate pool, so a busy automation never pushes out your own tasks."
+        >
+          <IntegerStepper
+            aria-label="Automation tasks kept"
+            data-slot="resources-automation-runs-kept"
+            value={automationRunsKept}
+            min={1}
+            max={RUNS_KEPT_MAX}
+            step={50}
+            className="w-28"
+            onCommit={(value) => (value === null ? undefined : save.mutateAsync({ resources: { automationRunsKept: value } }))}
+          />
+          <span className="text-label text-muted-foreground">tasks</span>
+        </FormRow>
+        <CardNote>
+          Running and waiting tasks do not count, and pinned tasks are never deleted. Archived
+          tasks have their own limit.
         </CardNote>
       </SettingsCard>
 

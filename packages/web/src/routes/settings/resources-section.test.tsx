@@ -388,6 +388,29 @@ describe('Settings → Resources → Worktrees (spec 2026-11-19-worktree-disk-us
     await waitFor(() => expect(screen.getByText(/0 = never\. Never\./)).not.toBeNull())
   })
 
+  it('renders and saves the two task history pools separately', async () => {
+    serve({ runsKept: 800, automationRunsKept: 120 })
+    renderResources()
+    await waitFor(() => expect(field('resources-runs-kept')).not.toBeNull())
+    expect(field('resources-runs-kept')!.value).toBe('800')
+    expect(field('resources-automation-runs-kept')!.value).toBe('120')
+    commit(field('resources-automation-runs-kept')!, '50')
+    await waitFor(() => expect(puts()).toHaveLength(1))
+    expect(puts()[0]?.body).toEqual({ resources: { automationRunsKept: 50 } })
+    commit(field('resources-runs-kept')!, '2000')
+    await waitFor(() => expect(puts()).toHaveLength(2))
+    expect(puts()[1]?.body).toEqual({ resources: { runsKept: 2000 } })
+  })
+
+  it('refuses an empty task history pool', async () => {
+    serve()
+    renderResources()
+    await waitFor(() => expect(field('resources-runs-kept')).not.toBeNull())
+    commit(field('resources-runs-kept')!, '0')
+    expect(document.querySelector('[data-slot="stepper-invalid"]')).not.toBeNull()
+    expect(puts()).toHaveLength(0)
+  })
+
   it('refuses an archived-task lifetime past the server bound (3650)', async () => {
     serve()
     renderResources()
