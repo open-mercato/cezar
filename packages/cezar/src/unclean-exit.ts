@@ -254,8 +254,9 @@ export function collectUncleanExits(opts: {
   const out: UncleanExit[] = [];
   for (const name of names) {
     const file = join(dir, name);
-    // Leftovers: a write interrupted between tmp and rename, a claim whose removal failed.
-    if (/\.json\.tmp$|\.claimed-\d+$/.test(name)) {
+    // Leftovers: a write interrupted between tmp and rename, a claim whose removal failed, and a
+    // pre-host `<pid>.json` marker (#2493 builds), which can no longer be judged.
+    if (/\.json\.tmp$|\.claimed-\d+$|^\d+\.json$/.test(name)) {
       try { rmSync(file, { force: true }); } catch { /* best effort */ }
       continue;
     }

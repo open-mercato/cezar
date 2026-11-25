@@ -161,6 +161,7 @@ describe('collectUncleanExits', () => {
     put(marker({ pid: 0 }));
     writeFileSync(join(dir, `5-${HOST}.json.tmp`), '{}');
     writeFileSync(join(dir, `6-${HOST}.json.claimed-99`), '{}');
+    writeFileSync(join(dir, '7.json'), JSON.stringify({ ...marker({ pid: 7 }), host: undefined }));
     expect(collect()).toEqual([]);
     expect(readdirSync(dir)).toEqual([]);
   });
