@@ -200,17 +200,18 @@ export function acceptRewrite(original: string, answer: string, context: Rewrite
   }
   if (separators > 1 || files.length + dirs.length === 0) return false;
   const runs = (test: string) => files.includes(test) || dirs.some((dir) => test.startsWith(`${dir}/`));
-  // Every changed file must still be tested: a changed test that still exists runs itself, and a
-  // changed source file sits inside a passed folder, or has tests named after it and ALL of them run,
-  // so a planted `x.spec.ts` cannot stand in for the real `x.test.ts`.
+  const inDir = (file: string) => dirs.some((dir) => file.startsWith(`${dir}/`));
+  // Every changed file must still be tested: a changed test that still exists runs itself. A changed
+  // source file with tests named after it needs ALL of them to run, so neither a planted `x.spec.ts`
+  // nor a folder that misses `src/tests/a/x.test.ts` stands in for them; one without any needs a
+  // passed folder holding it.
   return context.changedFiles.every((file) => {
-    if (runs(file)) return true;
-    if (isTest(file)) return !context.isFile(file);
+    if (isTest(file)) return runs(file) || !context.isFile(file);
     const own = stem(file);
     const tests = testFoldersFor(file).flatMap((dir) => context.listFiles(dir)
       .filter((name) => isTest(name) && stem(name) === own)
       .map((name) => (dir === '.' ? name : `${dir}/${name}`)));
-    return tests.length > 0 && tests.every(runs);
+    return tests.length > 0 ? tests.every(runs) : inDir(file);
   });
 }
 

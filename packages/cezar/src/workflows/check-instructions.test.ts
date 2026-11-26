@@ -83,7 +83,7 @@ describe('check commands follow the global instructions', () => {
   // The deterministic guard (#2519 reviews): `--` plus test files or test folders that cover every change.
   const TESTS = ['src/cart/total.test.ts', 'src/cart/total.spec.ts', 'src/cart/__tests__/tax.test.ts', 'src/other/index.test.ts', 'tests/test_util.py', 'src/cart/test_util.py',
     'src/tests/index.test.ts', 'src/tests/bar/index.test.ts'];
-  const DIRS: Record<string, boolean> = { src: true, 'src/cart': true, 'src/cart/__tests__': true, 'src/other': true, tests: true, 'src/empty': false, docs: false };
+  const DIRS: Record<string, boolean> = { 'src/bar': true, src: true, 'src/cart': true, 'src/cart/__tests__': true, 'src/other': true, tests: true, 'src/empty': false, docs: false };
   const contextFor = (changedFiles: string[], kind: 'js' | 'py' = 'js') => ({
     changedFiles,
     kind,
@@ -152,6 +152,9 @@ describe('check commands follow the global instructions', () => {
     // A sibling test folder mirrors the sub-path; its top level serves only a source root.
     expect(acceptRewrite('npm test', 'npm test -- src/tests/index.test.ts', contextFor(['src/bar/index.ts']))).toBe(false);
     expect(acceptRewrite('npm test', 'npm test -- src/tests/bar/index.test.ts', contextFor(['src/bar/index.ts']))).toBe(true);
+    // A folder holding the file does not stand in for its own test kept elsewhere (re-review 2).
+    expect(acceptRewrite('npm test', 'npm test -- src/bar', contextFor(['src/bar/index.ts']))).toBe(false);
+    expect(acceptRewrite('npm test', 'npm test -- src', contextFor(['src/bar/index.ts']))).toBe(true);
     expect(acceptRewrite('pytest', 'pytest tests/test_util.py', contextFor(['src/util.py'], 'py'))).toBe(true);
     expect(acceptRewrite('pytest', 'pytest tests/test_util.py', contextFor(['src/deep/util.py'], 'py'))).toBe(false);
   });
