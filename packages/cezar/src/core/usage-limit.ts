@@ -38,6 +38,15 @@ export interface UsageLimitHit {
  */
 export const MAX_USAGE_LIMIT_WAIT_MS = 7 * 24 * 60 * 60_000;
 
+/** Claude's monthly usage-credit allowance names a reset date up to a month out (#2517). */
+export const MAX_MONTHLY_USAGE_LIMIT_WAIT_MS = 31 * 24 * 60 * 60_000;
+const MONTHLY_CREDITS_RE = /\bout\s+of\s+usage\s+(?:credits|quota)\b/i;
+
+/** Claude's monthly credits wording: an account-wide block whose reset may be weeks out. */
+export function isMonthlyCreditsLimit(message: string): boolean {
+  return MONTHLY_CREDITS_RE.test(message);
+}
+
 // A clock-only message omits reset seconds. Pad before selecting its day (#1081).
 const CLOCK_RESET_BUFFER_MS = 60_000;
 
@@ -117,6 +126,7 @@ export function parseUsageLimit(message: string | undefined, now = Date.now()): 
     return settle(epochMs, now, 'claude-marker');
   }
   if (!LIMIT_PHRASE_RE.test(message)) return null;
+  const cap = MONTHLY_CREDITS_RE.test(message) ? MAX_MONTHLY_USAGE_LIMIT_WAIT_MS : MAX_USAGE_LIMIT_WAIT_MS;
 
   const at = RESET_AT_RE.exec(message);
   if (at) {
@@ -127,14 +137,17 @@ export function parseUsageLimit(message: string | undefined, now = Date.now()): 
     // as UTC, so `2026-08-03` alone would land up to a day away from the day the provider named.
     const stamp = at[1]!.includes('T') ? at[1]! : at[1]!.replace(' ', 'T');
     const parsed = Date.parse(stamp.includes('T') ? stamp : `${stamp}T00:00`);
-    if (Number.isFinite(parsed)) return settle(parsed, now, 'timestamp');
+    if (Number.isFinite(parsed)) return settle(parsed, now, 'timestamp', cap);
   }
 
   const dated = RESET_DATE_CLOCK_RE.exec(message);
   if (dated) {
     // A named day the parser cannot place is not a reason to guess the next clock instead.
     const parsed = parseDatedReset(dated, now);
-    return parsed === null ? null : settle(parsed, now, 'clock');
+    if (parsed === null || parsed - now > cap) return null;
+    // Minute-truncated like the clock-only form: pad so the resume lands after the reset (#1081).
+    // After the cap, so a weekly reset at the window's edge is not dropped for its padding.
+    return settle(parsed + CLOCK_RESET_BUFFER_MS, now, 'clock', cap + CLOCK_RESET_BUFFER_MS);
   }
 
   const clock = RESET_CLOCK_RE.exec(message);
@@ -146,10 +159,10 @@ export function parseUsageLimit(message: string | undefined, now = Date.now()): 
   const relative = RESET_IN_RE.exec(message);
   if (relative) {
     const unit = UNIT_MS[relative[2]!.toLowerCase()];
-    if (unit !== undefined) return settle(now + Number(relative[1]) * unit, now, 'delay');
+    if (unit !== undefined) return settle(now + Number(relative[1]) * unit, now, 'delay', cap);
   }
   const header = RETRY_AFTER_HEADER_RE.exec(message);
-  if (header) return settle(now + Number(header[1]) * 1_000, now, 'delay');
+  if (header) return settle(now + Number(header[1]) * 1_000, now, 'delay', cap);
 
   return null;
 }
@@ -206,7 +219,7 @@ function parseDatedReset(match: RegExpExecArray, now: number): number | null {
   const candidate = at(year);
   if (candidate === null) return null;
   // A day ago or more is last year's date read as this year's; minutes ago is a limit that lifted.
-  // A stale date rolled a year ahead fails `settle`'s one-week cap and reads as unparsed.
+  // A stale date rolled a year ahead fails `settle`'s cap and reads as unparsed.
   return now - candidate > 24 * 60 * 60_000 ? at(year + 1) : candidate;
 }
 
@@ -244,8 +257,13 @@ function nextClockInTimeZone(hour: number, minute: number, timeZone: string, now
 }
 
 /** Bound a candidate instant: past → now (the limit already lifted), absurd → not believed. */
-function settle(epochMs: number, now: number, evidence: UsageLimitHit['evidence']): UsageLimitHit | null {
+function settle(
+  epochMs: number,
+  now: number,
+  evidence: UsageLimitHit['evidence'],
+  maxWaitMs = MAX_USAGE_LIMIT_WAIT_MS,
+): UsageLimitHit | null {
   if (!Number.isFinite(epochMs)) return null;
-  if (epochMs - now > MAX_USAGE_LIMIT_WAIT_MS) return null;
+  if (epochMs - now > maxWaitMs) return null;
   return { resetAt: new Date(Math.max(epochMs, now)), evidence };
 }
