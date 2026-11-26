@@ -1,4 +1,5 @@
 import { randomBytes, randomInt } from 'node:crypto';
+import { renameSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { z } from 'zod';
 import {
@@ -13,15 +14,16 @@ import {
   type TaskTagRef,
 } from '@open-mercato/cezar-contract';
 import { taskTagsPath } from '../paths.ts';
-import { atomicWriteJsonSync } from './config.ts';
+import { atomicWriteJsonSync, serializedByPath } from './config.ts';
 
 /**
  * `~/.cezar/task-tags.json` — the task-tag registry (spec `2026-11-23-task-tags.md` § 4.2).
  *
  * Its own file for the `agent-accounts.json` reason, and with its house rules: `.catch` per field,
- * `.passthrough()` at every level, per-row salvage, one atomic merge-write, and a corrupt file
- * degrading to empty with one warning. A project-scoped tag stores the realpath'd root, never the
- * slug (D3); the wire speaks `projectId`, resolved against the registry on every read.
+ * `.passthrough()` at every level, per-row salvage, one serialized atomic merge-write, and a corrupt
+ * file degrading to empty with one warning (moved aside on the next write, never overwritten). A
+ * project-scoped tag stores the realpath'd root, never the slug (D3); the wire speaks `projectId`,
+ * resolved against the registry on every read.
  */
 
 /** Tombstones kept; the oldest go first. A dropped one can only bring a tag back as a snapshot chip. */
@@ -95,24 +97,34 @@ let warnedCorrupt = false;
 
 /** Read on demand, never cached (every cezar process shares `~/.cezar`), never throws. */
 export async function loadTaskTags(): Promise<TaskTagStore> {
-  const path = taskTagsPath();
+  return (await readTaskTagsFile(taskTagsPath())).store;
+}
+
+/** `corrupt`: read but not parsable — the next write moves it aside. `unreadable`: the read itself
+ *  failed (permissions, a transient error) — writes are refused so a good file is never shelved. */
+async function readTaskTagsFile(path: string): Promise<{ store: TaskTagStore; state: 'ok' | 'corrupt' | 'unreadable' }> {
   let raw: string;
   try {
     raw = await readFile(path, 'utf8');
-  } catch {
-    return defaultTaskTagStore();
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { store: defaultTaskTagStore(), state: 'ok' };
+    warnCorrupt(path, 'is unreadable');
+    return { store: defaultTaskTagStore(), state: 'unreadable' };
   }
   try {
     const parsed = storeSchema.safeParse(JSON.parse(raw));
-    if (parsed.success) return parsed.data;
+    if (parsed.success) return { store: parsed.data, state: 'ok' };
   } catch {
     // malformed JSON — fall through to the warning + defaults
   }
-  if (!warnedCorrupt) {
-    warnedCorrupt = true;
-    console.warn(`[cez] task tags ${path} is corrupt — ignoring it (no tags until the next tag edit replaces it)`);
-  }
-  return defaultTaskTagStore();
+  warnCorrupt(path, 'is corrupt');
+  return { store: defaultTaskTagStore(), state: 'corrupt' };
+}
+
+function warnCorrupt(path: string, cause: string): void {
+  if (warnedCorrupt) return;
+  warnedCorrupt = true;
+  console.warn(`[cez] task tags ${path} ${cause} — ignoring it (a corrupt file is moved aside to ${path}.corrupt-<time> on the next tag edit)`);
 }
 
 /** Test seam: the corrupt-file warning is once per process. */
@@ -121,23 +133,30 @@ export function resetTaskTagWarningForTests(): void {
 }
 
 /**
- * Re-read, apply `mutator`, write atomically. The mutator is synchronous so the read→rename window
- * stays as small as every other `~/.cezar` writer's. A `TaskTagError` thrown by the mutator aborts
- * without writing; a failed write throws `TaskTagWriteError`.
+ * Re-read, apply `mutator`, write atomically — serialized per path in-process, so two concurrent
+ * requests never read the same old file and drop each other's tag (#2434 review). A corrupt file is
+ * moved aside and an unreadable one refuses the write — neither is ever overwritten. A
+ * `TaskTagError` thrown by the mutator aborts without writing; a failed write throws
+ * `TaskTagWriteError`.
  */
-export async function mergeWriteTaskTags(mutator: (store: TaskTagStore) => void): Promise<TaskTagStore> {
-  const store = await loadTaskTags();
-  mutator(store);
-  if (store.deleted.length > TASK_TAG_TOMBSTONES_MAX) {
-    store.deleted.sort((a, b) => a.deletedAt.localeCompare(b.deletedAt));
-    store.deleted.splice(0, store.deleted.length - TASK_TAG_TOMBSTONES_MAX);
-  }
-  try {
-    atomicWriteJsonSync(taskTagsPath(), store);
-  } catch (error) {
-    throw new TaskTagWriteError(`could not save task tags: ${error instanceof Error ? error.message : String(error)}`);
-  }
-  return store;
+export function mergeWriteTaskTags(mutator: (store: TaskTagStore) => void): Promise<TaskTagStore> {
+  const path = taskTagsPath();
+  return serializedByPath(path, async () => {
+    const { store, state } = await readTaskTagsFile(path);
+    if (state === 'unreadable') throw new TaskTagWriteError(`could not save task tags: ${path} is unreadable`);
+    mutator(store);
+    if (store.deleted.length > TASK_TAG_TOMBSTONES_MAX) {
+      store.deleted.sort((a, b) => a.deletedAt.localeCompare(b.deletedAt));
+      store.deleted.splice(0, store.deleted.length - TASK_TAG_TOMBSTONES_MAX);
+    }
+    try {
+      if (state === 'corrupt') renameSync(path, `${path}.corrupt-${new Date().toISOString().replace(/[:.]/g, '-')}`);
+      atomicWriteJsonSync(path, store);
+    } catch (error) {
+      throw new TaskTagWriteError(`could not save task tags: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    return store;
+  });
 }
 
 // ---- pure helpers ---------------------------------------------------------------------------

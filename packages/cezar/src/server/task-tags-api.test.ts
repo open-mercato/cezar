@@ -155,6 +155,8 @@ describe('task tags API', () => {
       expect(a.status).toBe(200);
       expect(b.status).toBe(200);
       expect(store.getRun(run.id)?.tags?.map((t) => t.name).sort()).toEqual(['alpha', 'beta']);
+      // …and so does the registry: the run must not keep an id the registry lost.
+      expect((await loadTaskTags()).tags.map((t) => t.name).sort()).toEqual(['alpha', 'beta']);
     });
   });
 

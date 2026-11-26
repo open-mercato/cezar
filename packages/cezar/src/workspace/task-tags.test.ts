@@ -1,6 +1,6 @@
-import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { TASK_TAGS_MAX } from '@open-mercato/cezar-contract';
 import { taskTagsPath } from '../paths.ts';
@@ -17,6 +17,7 @@ import {
   resolveTagRefs,
   resolveTagRefsIn,
   TaskTagError,
+  TaskTagWriteError,
   updateTaskTag,
   visibleTaskTags,
   type TaskTagStore,
@@ -100,6 +101,41 @@ describe('task tag registry', () => {
         }),
       ).rejects.toBeInstanceOf(TaskTagError);
       expect(readFileSync(taskTagsPath(), 'utf8')).toBe(before);
+    });
+
+    // #2434 review: two unserialized writers both read the old file and the later write erased
+    // the earlier tag.
+    it('two concurrent writes both land', async () => {
+      await Promise.all([resolveTagRefs([{ name: 'alpha' }], null), resolveTagRefs([{ name: 'beta' }], null)]);
+      expect((await loadTaskTags()).tags.map((t) => t.name).sort()).toEqual(['alpha', 'beta']);
+    });
+
+    it('moves a corrupt file aside instead of overwriting it', async () => {
+      vi.spyOn(console, 'warn').mockImplementation(() => {});
+      write('{ not json');
+      await mergeWriteTaskTags((store) => {
+        createTaskTag(store, { name: 'fresh', projectRoot: null });
+      });
+      expect((await loadTaskTags()).tags.map((t) => t.name)).toEqual(['fresh']);
+      const aside = readdirSync(dirname(taskTagsPath())).filter((f) => f.startsWith(`${basename(taskTagsPath())}.corrupt-`));
+      expect(aside).toHaveLength(1);
+      expect(readFileSync(join(dirname(taskTagsPath()), aside[0]!), 'utf8')).toBe('{ not json');
+    });
+
+    it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)('refuses to write over an unreadable file', async () => {
+      vi.spyOn(console, 'warn').mockImplementation(() => {});
+      write({ tags: [tag('tt-keep00000001')] });
+      chmodSync(taskTagsPath(), 0o000);
+      try {
+        await expect(
+          mergeWriteTaskTags((store) => {
+            createTaskTag(store, { name: 'fresh', projectRoot: null });
+          }),
+        ).rejects.toBeInstanceOf(TaskTagWriteError);
+      } finally {
+        chmodSync(taskTagsPath(), 0o600);
+      }
+      expect((await loadTaskTags()).tags.map((t) => t.id)).toEqual(['tt-keep00000001']);
     });
 
     it('caps tombstones, oldest first', async () => {

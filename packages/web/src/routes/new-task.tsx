@@ -812,6 +812,12 @@ export function NewTaskRoute() {
       <TaskTagPicker projectId={activeProjectId} stateOf={tagStateOf} onToggle={toggleDraftTag}>
         <AddTagButton compact={shownTags.length > 0} disabled={draftTags.length >= RUN_TAGS_MAX} />
       </TaskTagPicker>
+      {/* Phase-1 limit (spec § 5): a deferred start drops its tags, so say so before it is scheduled. */}
+      {startChoice && draftTags.length > 0 ? (
+        <span role="note" data-slot="composer-tags-scheduled" className="text-xs text-muted-foreground">
+          Scheduled tasks start untagged
+        </span>
+      ) : null}
     </span>
   )
   const sourcePill = (
