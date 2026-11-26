@@ -134,9 +134,9 @@ const stepStateSchema = z.object({
   /** A Continue opened with `freshContext` (#2513): a restart while it is queued must not resume. */
   freshContext: z.literal(true).optional().catch(undefined),
   /** A queued fresh Continue's instruction, so a restart opens it with that text; cleared on open
-   *  and on cancel. Like `task` and `queuedMessages`, it is the user's own prompt replayed to the
-   *  agent, so it is deliberately NOT redacted: a scrubbed token would reach the agent as
-   *  [REDACTED]. A longer one is never written (`FRESH_PROMPT_MAX`). */
+   *  and on cancel. Redacted on write like `error` (`redactStepPatch`), so no secret reaches
+   *  `runs.json` or the SSE stream: a fresh Continue revived after a restart sees [REDACTED] where
+   *  the instruction held a secret. A longer one is never written (`FRESH_PROMPT_MAX`). */
   freshPrompt: z.string().max(FRESH_PROMPT_MAX).optional().catch(undefined),
   toolPolicy: stepToolPolicySchema.optional(),
   /** Canonical provider/model identity resolved for this step. Optional so older runs.json files
@@ -1694,7 +1694,8 @@ export class RunStore extends EventEmitter {
    * `StepState.error` is the step-level counterpart and is scrubbed the same
    * way in `updateStep` — `run.ts` feeds the SAME `err.message` string to both
    * calls, so redacting only the run-level copy left the token verbatim one
-   * field away (#456 review).
+   * field away (#456 review). An agent switch's saved `continuationInput.prompt`
+   * is scrubbed too, like a step's `freshPrompt` (#2526).
    */
   private redactPatch(
     patch: Partial<Omit<RunRecord, 'id' | 'steps'>>,
@@ -1706,21 +1707,27 @@ export class RunStore extends EventEmitter {
       const value = out[field];
       if (typeof value === 'string') out[field] = this.redactText(value, runId);
     }
+    // Read back only to revive a switch after a restart; the live switch keeps its own copy.
+    const input = out.agentSwitch?.continuationInput;
+    if (input) out.agentSwitch = { ...out.agentSwitch!, continuationInput: { ...input, prompt: this.redactText(input.prompt, runId) } };
     if (out.attentionRequest) out.attentionRequest = { ...out.attentionRequest, questions: out.attentionRequest.questions.map(q => ({ ...q, question: this.redactText(q.question, runId), ...(q.options ? { options: q.options.map(o => ({ ...o, label: this.redactText(o.label, runId), ...(o.description ? { description: this.redactText(o.description, runId) } : {}) })) } : {}) })) };
     return out;
   }
 
   /**
-   * Step-level counterpart of `redactPatch` (#456 review). `error` is the only redacted
-   * free-text `StepState` field (`freshPrompt` is the user's prompt, see its schema) — it is set from raw `err.message` /process
+   * Step-level counterpart of `redactPatch` (#456 review). `error` and `freshPrompt` are the
+   * free-text `StepState` fields — `error` is set from raw `err.message` /process
    * output (`run.ts` `finishStep`), and `touch()` fans the whole record out
    * over SSE, so an unscrubbed copy leaked to `runs.json` AND to the browser.
    * The remaining fields are ids, enums, counters and timestamps.
    */
   private redactStepPatch(patch: Partial<Omit<StepState, 'id'>>, runId: string): Partial<Omit<StepState, 'id'>> {
     if (process.env.CEZ_REDACT_SECRETS === '0') return patch;
-    if (typeof patch.error !== 'string') return patch;
-    return { ...patch, error: this.redactText(patch.error, runId) };
+    return {
+      ...patch,
+      ...(typeof patch.error === 'string' ? { error: this.redactText(patch.error, runId) } : {}),
+      ...(typeof patch.freshPrompt === 'string' ? { freshPrompt: this.redactText(patch.freshPrompt, runId) } : {}),
+    };
   }
 
   /** Append a step to an existing run (used by "Continue" — spec 003). */
