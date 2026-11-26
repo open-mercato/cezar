@@ -123,6 +123,22 @@ describe('RunStore — directional usage persistence', () => {
     rmSync(dataDir, { recursive: true, force: true });
   });
 
+  it('round-trips a fresh Continue step through runs.json, and drops an unreadable marker', () => {
+    const store = RunStore.open(dataDir);
+    const run = store.createRun({ title: 't', workflow: 'quick-task', task: 't', steps: [{ id: 'task', name: 'Task', kind: 'agent' }] });
+    store.addStep(run.id, { id: 'continue-1', name: 'Continue', kind: 'agent', freshContext: true });
+    store.updateStep(run.id, 'continue-1', { freshPrompt: 'Re-review PR 7' });
+    store.flush();
+
+    expect(RunStore.open(dataDir).getRun(run.id)?.steps[1]).toMatchObject({ freshContext: true, freshPrompt: 'Re-review PR 7' });
+
+    const file = join(dataDir, 'runs.json');
+    writeFileSync(file, readFileSync(file, 'utf8').replace('"freshContext":true', '"freshContext":"yes"'));
+    const salvaged = RunStore.open(dataDir).getRun(run.id);
+    expect(salvaged?.steps[1]?.freshContext).toBeUndefined();
+    expect(salvaged?.steps[1]?.freshPrompt).toBe('Re-review PR 7');
+  });
+
   it('round-trips step checkpoints and complete run aggregates through runs.json', () => {
     const store = RunStore.open(dataDir);
     const run = store.createRun({
@@ -816,6 +832,19 @@ describe('RunStore — secret redaction before persistence (#427)', () => {
     const store = RunStore.open(dataDir);
     const run = store.createRun({ title: 't', workflow: 'w', task: 'deploy the thing', steps: [] });
     expect(store.getRun(run.id)?.task).toBe('deploy the thing');
+  });
+
+  /** A queued fresh Continue's `freshPrompt` is replayed to the agent like `task` (#2513). */
+  it('leaves a fresh Continue step\'s freshPrompt unredacted, in memory and in runs.json', () => {
+    process.env.GITHUB_TOKEN = 'gho_thisisarealsecrettoken123456';
+    delete process.env.CEZ_REDACT_SECRETS;
+    const store = RunStore.open(dataDir);
+    const run = store.createRun({ title: 't', workflow: 'w', task: 't', steps: [] });
+    store.addStep(run.id, { id: 'continue-1', name: 'Continue', kind: 'agent', freshContext: true });
+    store.updateStep(run.id, 'continue-1', { freshPrompt: 'use gho_thisisarealsecrettoken123456 to re-review' });
+    expect(store.getRun(run.id)?.steps[0]?.freshPrompt).toBe('use gho_thisisarealsecrettoken123456 to re-review');
+    store.flush();
+    expect(RunStore.open(dataDir).getRun(run.id)?.steps[0]?.freshPrompt).toBe('use gho_thisisarealsecrettoken123456 to re-review');
   });
 
   it('CEZ_REDACT_SECRETS=0 opts runs.json out as well', () => {

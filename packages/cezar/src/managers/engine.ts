@@ -3583,8 +3583,11 @@ export class ManagerEngine {
     const { forward } = composed;
     const body = { text: composed.text, ...(forward && forward.images.length > 0 ? { images: forward.images } : {}) };
     this.rememberTaskSource(id, input.projectId, input.runId);
-    const sent = { ok: true as const, ...(forward ? { forwarded: forward.forwarded } : {}) };
-    this.managerActed(id, { tasks: [followKey(input.projectId, input.runId)] }, 'you messaged that task since');
+    // Recorded only once the task took the message: a refusal changed nothing to report.
+    const sent = () => {
+      this.managerActed(id, { tasks: [followKey(input.projectId, input.runId)] }, 'you messaged that task since');
+      return { ok: true as const, ...(forward ? { forwarded: forward.forwarded } : {}) };
+    };
     const path = `/p/${encodeURIComponent(input.projectId)}/runs/${encodeURIComponent(input.runId)}`;
     if (input.model || input.effort || input.freshContext) {
       // A live session cannot change engine or drop its conversation mid-turn: only a Continue can.
@@ -3606,13 +3609,13 @@ export class ManagerEngine {
           ...(input.freshContext ? { freshContext: true } : {}),
         },
       });
-      return continued.ok ? sent : ManagerEngine.refusalOf(continued);
+      return continued.ok ? sent() : ManagerEngine.refusalOf(continued);
     }
     const delivered = await this.forward(`${path}/messages`, { method: 'POST', body });
-    if (delivered.ok) return sent;
+    if (delivered.ok) return sent();
     if (delivered.status !== 409) return ManagerEngine.refusalOf(delivered);
     const continued = await this.forward(`${path}/continue`, { method: 'POST', body });
-    return continued.ok ? sent : ManagerEngine.refusalOf(continued);
+    return continued.ok ? sent() : ManagerEngine.refusalOf(continued);
   }
 
   /** `--model`/`--effort` against the runner and the host's model catalog; a 400 naming the valid ones. */
