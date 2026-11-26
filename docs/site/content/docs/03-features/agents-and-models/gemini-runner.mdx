@@ -23,3 +23,9 @@ Specification: not yet available
 2. Detect the backend and select it in the task form.
 
 > **Good to know**: In the reviewed code, Gemini is absent from RUNNER_IDS and the runner factory. Copilot from the same specification is already implemented. There is no confirmed delivery date.
+
+## Migrating to Antigravity
+
+Google is moving Gemini CLI users to Antigravity (`agy`), so cezar labels the `gemini` runner "deprecated" in `cez doctor`, the runner pickers and Settings, and points to the `antigravity` runner. It is a label only: existing `gemini` tasks, workflow steps, automations and saved defaults keep running, and cezar never rewrites a saved choice.
+
+Antigravity can keep a read-only task read-only (review and QA steps), as Gemini does, through a tool guard that denies write, shell and MCP tools. To migrate, install `agy`, sign in from Settings → Agents, then switch the runner on the tasks, workflows and defaults you want to move.

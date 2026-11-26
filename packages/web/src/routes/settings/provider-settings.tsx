@@ -37,7 +37,7 @@ export const PROVIDERS = [
   { id: 'omp', label: 'OMP', login: 'omp' },
   { id: 'antigravity', label: 'Antigravity', login: 'agy' },
   // No login subcommand: `/auth` inside the interactive CLI, or GEMINI_API_KEY in the environment.
-  { id: 'gemini', label: 'Gemini CLI', login: 'gemini' },
+  { id: 'gemini', label: 'Gemini CLI (deprecated → Antigravity)', login: 'gemini' },
   { id: 'kimi', label: 'Kimi Code', login: 'kimi login' },
 ] as const
 

@@ -173,7 +173,7 @@ export const AGENT_DESCRIPTORS: AgentDescriptor[] = [
   },
   {
     id: 'gemini',
-    label: 'Gemini CLI',
+    label: 'Gemini CLI (deprecated → Antigravity)',
     note: EDITOR_PLUS_COMMIT,
     groups: [
       group('gemini', 'settings', 'Settings'),
