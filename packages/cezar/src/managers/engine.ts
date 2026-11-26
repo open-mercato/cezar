@@ -3586,19 +3586,25 @@ export class ManagerEngine {
     const sent = { ok: true as const, ...(forward ? { forwarded: forward.forwarded } : {}) };
     this.managerActed(id, { tasks: [followKey(input.projectId, input.runId)] }, 'you messaged that task since');
     const path = `/p/${encodeURIComponent(input.projectId)}/runs/${encodeURIComponent(input.runId)}`;
-    if (input.model || input.effort) {
-      // A live session cannot change engine mid-turn: only a Continue takes a model.
+    if (input.model || input.effort || input.freshContext) {
+      // A live session cannot change engine or drop its conversation mid-turn: only a Continue can.
       const run = scope.source?.runs().find((candidate) => candidate.id === input.runId);
       if (!run) return { error: 'task not found', status: 404 };
       // An idle park has no live session, so a Continue may change its engine like a finished task's.
       if (LIVE_STATUSES.has(run.status) && !isIdleParked(run)) {
-        return { error: `task ${input.runId} is ${run.status}: --model and --effort apply only when continuing a finished task. Send the message without them, or wait for it to finish`, status: 409 };
+        const flags = [input.model || input.effort ? '--model and --effort' : '', input.freshContext ? '--fresh' : ''].filter(Boolean).join(' and ');
+        return { error: `task ${input.runId} is ${run.status}: ${flags} apply only when continuing a finished task. Send the message without them, or wait for it to finish`, status: 409 };
       }
-      const issue = await this.modelIssue(run.runner ?? 'claude', input.model, input.effort);
+      const issue = input.model || input.effort ? await this.modelIssue(run.runner ?? 'claude', input.model, input.effort) : undefined;
       if (issue) return issue;
       const continued = await this.forward(`${path}/continue`, {
         method: 'POST',
-        body: { ...body, ...(input.model ? { model: input.model } : {}), ...(input.effort ? { reasoningEffort: input.effort } : {}) },
+        body: {
+          ...body,
+          ...(input.model ? { model: input.model } : {}),
+          ...(input.effort ? { reasoningEffort: input.effort } : {}),
+          ...(input.freshContext ? { freshContext: true } : {}),
+        },
       });
       return continued.ok ? sent : ManagerEngine.refusalOf(continued);
     }

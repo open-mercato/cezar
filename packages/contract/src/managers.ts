@@ -859,6 +859,8 @@ export const managerTaskMessageInputSchema = z.object({
   /** Only for a finished task, which the message continues on this model and effort. */
   model: modelInput.optional(),
   effort: managerTaskEffortSchema.optional(),
+  /** Only for a finished task: continue it in a new session with no prior conversation. */
+  freshContext: z.boolean().optional(),
   ...forwardFields,
 }).refine((input) => Boolean(input.text) || input.fromMessage !== undefined, {
   message: 'write a message or forward one (fromMessage)',

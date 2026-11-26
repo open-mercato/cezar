@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AgentEvent, AgentRunResult, AgentRunSpec } from '../core/agent-runner.ts';
 import { RunStore } from '../runs/store.ts';
 import type { StepToolPolicy } from '@open-mercato/cezar-contract';
-import { RunManager } from './run.ts';
+import { FRESH_CONTEXT_NOTE, RunManager } from './run.ts';
 import { DEFAULT_ALLOWED_TOOLS, type WorkflowDef } from './types.ts';
 
 const run = promisify(execFile);
@@ -294,6 +294,62 @@ describe('a resumed session keeps its workflow step tools', { timeout: 20_000 },
     expect(spec.userPrompt).toContain('User:\nfirst fix the API');
     expect(spec.userPrompt).toContain('Assistant:\nThe API is fixed; UI remains.');
     expect(spec.userPrompt).toContain('## New user instruction\nkeep going');
+    await settled(id);
+  });
+
+  it('freshContext opens a new session with no prior conversation on the same backend (#2474)', async () => {
+    const id = terminalRun({
+      def: SINGLE_DEF,
+      steps: [{ id: 'work', sessionId: 'sess-1', backend: 'claude' }],
+    });
+    store.appendEvent(id, { type: 'user-message', text: 'review PR 7' });
+    store.appendEvent(id, { type: 'text', text: 'Verdict: request changes.' });
+
+    expect(manager!.continueRun(id, { text: 'Re-review PR 7 at abc123', freshContext: true })).toEqual({ ok: true });
+    const spec = await specAt(0);
+    expect(spec.resume).toBe(false);
+    expect(spec.sessionId).toBeDefined();
+    expect(spec.sessionId).not.toBe('sess-1');
+    expect(spec.userPrompt).toBe(`${FRESH_CONTEXT_NOTE}\n\nRe-review PR 7 at abc123`);
+    expect(spec.userPrompt).not.toContain('Verdict: request changes.');
+    await settled(id);
+  });
+
+  it('a queued freshContext Continue revived after a restart still opens a new session (#2513)', async () => {
+    const id = terminalRun({
+      def: SINGLE_DEF,
+      steps: [{ id: 'work', sessionId: 'sess-1', backend: 'claude' }],
+    });
+    // As `startContinuation` leaves a deferred fresh Continue: the step records the choice,
+    // the in-memory queue entry is lost with the process.
+    store.addStep(id, { id: 'continue-1', name: 'Continue', kind: 'agent', freshContext: true });
+    store.updateRun(id, { status: 'queued', finishedAt: undefined });
+    manager?.dispose();
+    manager = new RunManager(store, repoRoot);
+
+    await manager.recover();
+    const spec = await specAt(0);
+    expect(spec.resume).toBe(false);
+    expect(spec.sessionId).not.toBe('sess-1');
+    expect(spec.userPrompt.startsWith(FRESH_CONTEXT_NOTE)).toBe(true);
+    expect(store.getRun(id)?.steps.find((step) => step.id === 'continue-1')?.freshContext).toBe(true);
+    await settled(id);
+  });
+
+  it('a queued Continue without freshContext revived after a restart resumes its session', async () => {
+    const id = terminalRun({
+      def: SINGLE_DEF,
+      steps: [{ id: 'work', sessionId: 'sess-1', backend: 'claude' }],
+    });
+    store.addStep(id, { id: 'continue-1', name: 'Continue', kind: 'agent' });
+    store.updateRun(id, { status: 'queued', finishedAt: undefined });
+    manager?.dispose();
+    manager = new RunManager(store, repoRoot);
+
+    await manager.recover();
+    const spec = await specAt(0);
+    expect(spec.resume).toBe(true);
+    expect(spec.sessionId).toBe('sess-1');
     await settled(id);
   });
 

@@ -4004,6 +4004,17 @@ describe('ManagerEngine', () => {
       expect(await engine.taskMessage(id, { projectId: 'alpha', runId: 'live', text: 'x', model: 'opus' })).toMatchObject({ status: 409 });
     });
 
+    it('continues a finished task in a fresh session, and refuses that for a live task', async () => {
+      const engine = withRuns([run('done', { status: 'review', runner: 'claude' }), run('live')]);
+      const id = await create(engine);
+      expect(await engine.taskMessage(id, { projectId: 'alpha', runId: 'done', text: 'Re-review PR 7', freshContext: true })).toEqual({ ok: true });
+      expect(requests.at(-1)).toMatchObject({ path: '/api/v1/p/alpha/runs/done/continue', body: { text: 'Re-review PR 7', freshContext: true } });
+      expect(requests.some((request) => request.path.endsWith('/messages'))).toBe(false);
+      const live = await engine.taskMessage(id, { projectId: 'alpha', runId: 'live', text: 'x', freshContext: true });
+      expect(live).toMatchObject({ status: 409 });
+      expect('error' in live && live.error).toContain('--fresh');
+    });
+
     it('retries a failed task with its objective, workflow, runner, model and effort', async () => {
       const engine = withRuns([
         run('failed', { status: 'failed', workflow: 'review-pr', runner: 'claude', model: 'opus', reasoningEffort: 'max' }),

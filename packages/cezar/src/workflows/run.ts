@@ -599,6 +599,8 @@ interface ContinueRunOptions {
   /** Agent account for the reopened session (spec 2026-07-29-agent-profiles). Omitted = the
    *  account the run is already on. */
   agentProfile?: string;
+  /** Open a new session with no prior conversation (#2474 re-reviews): same task, worktree and branch. */
+  freshContext?: boolean;
 }
 
 class AgentAccountUnavailableError extends Error {}
@@ -1582,6 +1584,9 @@ export const VARIANT_HINTS: Record<string, string | undefined> = {
 
 const RESTART_CONTINUATION_PROMPT =
   'The cezar process restarted while you were working on this task. Read the handoff file (CEZ_HANDOFF_FILE) to recover context, then continue the task from where you left off.';
+/** Opens a `freshContext` continuation, ahead of the instruction. */
+export const FRESH_CONTEXT_NOTE =
+  'This is a fresh session on the same task, worktree and branch: the earlier conversation was cleared on purpose. Form your own judgement from the code as it is now, and do not rely on earlier verdicts or conclusions, including any in the handoff file.';
 const SWITCH_AGENT_PROMPT =
   'Continue this task on the newly selected agent. Use the handoff, conversation and existing worktree to pick up the work. If a user decision was pending, wait for their answer.';
 /** Openings cezar sends on its own; recorded like the user's messages, but not instructions. */
@@ -1603,6 +1608,8 @@ interface PendingContinuation {
    *  be given the path of. Persisted when the continuation actually opens, not here. */
   images: PastedContent[];
   attachmentUrls?: string[];
+  /** `ContinueRunOptions.freshContext`: no resume and no portable transcript. */
+  freshContext?: true;
 }
 
 interface ManualAgentHandoff {
@@ -2774,13 +2781,15 @@ export class RunManager {
       const sessionAccount = sessionStep?.profileId ?? DEFAULT_AGENT_ACCOUNT_ID;
       const accountMatches = run.agentProfile === undefined || run.agentProfile === sessionAccount;
       const switchedInput = switched ? run.agentSwitch?.continuationInput : undefined;
+      const fresh = queuedContinuation.freshContext === true;
       this.pendingContinuations.set(run.id, {
         stepId: queuedContinuation.id,
-        sessionId: !switched && sessionStep?.sessionId && sessionBackend === backend && accountMatches ? sessionStep.sessionId : undefined,
+        sessionId: !switched && !fresh && sessionStep?.sessionId && sessionBackend === backend && accountMatches ? sessionStep.sessionId : undefined,
         backend,
         prompt: switchedInput?.prompt ?? (switched ? SWITCH_AGENT_PROMPT : RESTART_CONTINUATION_PROMPT),
         images: [],
         attachmentUrls: switchedInput?.attachmentUrls,
+        ...(fresh ? { freshContext: true as const } : {}),
       });
       this.enqueue(run.id);
       this.store.appendEvent(run.id, {
@@ -6222,7 +6231,7 @@ export class RunManager {
       // happened; an engine override cannot be folded in, so it is still refused.
       const continuing = this.starting.has(runId)
         || (unwinding !== undefined && !unwinding.cancelled && (unwinding.continueOnDrop !== undefined || !unwinding.sessionEverOpened));
-      if (continuing && resumable && !opts.runner && opts.model === undefined && opts.reasoningEffort === undefined && opts.agentProfile === undefined) {
+      if (continuing && resumable && !opts.freshContext && !opts.runner && opts.model === undefined && opts.reasoningEffort === undefined && opts.agentProfile === undefined) {
         const content: PastedContent[] = [...(opts.images ?? []), ...(opts.text?.trim() ? [{ type: 'text' as const, text: opts.text }] : [])];
         if (content.length === 0 || this.deferMessage(runId, content)) return { ok: true };
       }
@@ -6273,7 +6282,10 @@ export class RunManager {
     const targetAccount = opts.agentProfile
       ?? (targetRunner === (run.runner ?? 'claude') ? run.agentProfile : undefined);
     const accountSwitched = targetAccount !== undefined && targetAccount !== sessionAccount;
-    const resume = !agentSwitch && Boolean(sessionStep?.sessionId) && sessionBackend === targetRunner && !accountSwitched;
+    const resume = !agentSwitch && !opts.freshContext && Boolean(sessionStep?.sessionId) && sessionBackend === targetRunner && !accountSwitched;
+    // An agent switch replays the queued Continue it replaces, its fresh intent included.
+    const freshContext = agentSwitch ? agentSwitch.previousContinuation?.freshContext === true : opts.freshContext === true;
+    const fresh = freshContext ? { freshContext: true as const } : {};
 
     // Follow-up runner/model/account override (#401, spec 2026-07-29-agent-profiles): the composer
     // lets the user pick which backend, model and login handle this continuation — the same flat
@@ -6358,7 +6370,7 @@ export class RunManager {
     // A model picked in the composer is stamped on the turn's step so it outranks the pin of the
     // step that owns the session (#1488); '' is the explicit "auto".
     if (!priorStep) this.store.addStep(runId, {
-      id: stepId, name: 'Continue', kind: 'agent', ...(opts.model !== undefined ? { model: opts.model } : {}),
+      id: stepId, name: 'Continue', kind: 'agent', ...(opts.model !== undefined ? { model: opts.model } : {}), ...fresh,
     });
     const continuationReasoningEffort = agentModelsLocked(this.repoRoot)
       ? undefined
@@ -6386,6 +6398,7 @@ export class RunManager {
         prompt,
         images: previous ? [] : images,
         attachmentUrls,
+        ...fresh,
       });
       if (!agentSwitch || (!priorStep && !this.active.has(runId) && !this.starting.has(runId))) this.queue.push(runId);
       this.store.updateRun(runId, {
@@ -6408,7 +6421,7 @@ export class RunManager {
     // registers it in `active`.
     this.starting.add(runId);
     this.launchContinuation(runId, {
-      stepId, sessionId: resume ? sessionStep?.sessionId : undefined, backend: targetRunner, prompt, images,
+      stepId, sessionId: resume ? sessionStep?.sessionId : undefined, backend: targetRunner, prompt, images, ...fresh,
     });
     return { ok: true };
   }
@@ -6419,7 +6432,7 @@ export class RunManager {
     const hydrated = queued ? this.hydrateQueuedContinuation(runId, opening) : undefined;
     void outsideRelayScope(() => this.runContinuation(
       runId, opening.stepId, opening.sessionId, opening.backend, hydrated?.prompt ?? opening.prompt, opening.images,
-      hydrated?.persistedImages, hydrated?.persistedAttachments, ownerToken,
+      hydrated?.persistedImages, hydrated?.persistedAttachments, ownerToken, opening.freshContext === true,
     )).catch((err: unknown) => {
       this.failOwnedContinuation(runId, ownerToken, err instanceof Error ? err.message : String(err));
       if (!this.abandonCancelledStart(runId)) this.starting.delete(runId);
@@ -6439,6 +6452,7 @@ export class RunManager {
     persistedImages: ContentBlock[] = [],
     persistedAttachments: PersistedAttachment[] = [],
     effectiveOwnerToken = Symbol('run-owner'),
+    freshContext = false,
   ): Promise<void> {
     // Continuation runs in the task's worktree when it still exists (spec
     // 006) — the resumed session sees exactly what the original run left.
@@ -6462,7 +6476,7 @@ export class RunManager {
       this.active.set(runId, preparing); this.starting.delete(runId);
       const preparationController = new AbortController();
       preparing.interrupt = () => preparationController.abort();
-      const pending = this.openingContinuations.get(runId) ?? { stepId, sessionId, backend, prompt, images };
+      const pending = this.openingContinuations.get(runId) ?? { stepId, sessionId, backend, prompt, images, ...(freshContext ? { freshContext: true as const } : {}) };
       const gate = await this.lifecycle.prepare(runId, beforePreparation.baseBranch ?? 'HEAD', {
         kind: 'continuation', runId, ...pending,
       }, preparationController.signal, {branch: beforePreparation.branch});
@@ -6479,7 +6493,7 @@ export class RunManager {
     // A provider/account switch cannot resume the old provider-owned session. Reconstruct the
     // portable context from Cezar's durable record + redacted event stream before this new turn's
     // user-message is appended. This works even when the interrupted agent never wrote HANDOFF.md.
-    const portableContext = record && sessionId === undefined
+    const portableContext = record && sessionId === undefined && !freshContext
       ? freshContinuationContext(record, this.store.readEvents(runId), this.attachmentsDir(runId))
       : undefined;
     // The record is mutated in place below; a missing-session fallback needs it as it was.
@@ -7038,7 +7052,9 @@ export class RunManager {
     const askNotes = this.store.takeAskNotes(runId);
     const asksBlock = openAsksBlock(this.store.getRun(runId)?.asks);
     const treeBlocks = [treeReports, treeInbox, ...askNotes, asksBlock].filter((block): block is string => Boolean(block));
-    const openingPrompt = treeBlocks.length ? `${treeBlocks.join('\n\n')}\n\n---\n\n${expandedPrompt}` : expandedPrompt;
+    // A fresh read must not be anchored on earlier verdicts, the handoff's included (#2474).
+    const freshPrompt = freshContext ? `${FRESH_CONTEXT_NOTE}\n\n${expandedPrompt}` : expandedPrompt;
+    const openingPrompt = treeBlocks.length ? `${treeBlocks.join('\n\n')}\n\n---\n\n${freshPrompt}` : freshPrompt;
     // The previous runner's portable context (#954) opens the session first, then the tree
     // blocks above, then the instruction that prompted this continuation.
     const withContext = (context: string | undefined) => context
