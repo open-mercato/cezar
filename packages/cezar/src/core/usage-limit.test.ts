@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { MAX_USAGE_LIMIT_WAIT_MS, parseUsageLimit } from './usage-limit.ts';
+import { isUsageExhaustion, MAX_USAGE_LIMIT_WAIT_MS, parseUsageLimit } from './usage-limit.ts';
 
 /** A fixed clock — every expectation below is relative to it. */
 const NOW = Date.parse('2026-08-03T12:00:00.000Z');
@@ -159,5 +159,12 @@ describe('parseUsageLimit', () => {
     expect(parseUsageLimit('You have hit your usage limit. Upgrade to continue.', NOW)).toBeNull();
     expect(parseUsageLimit("You've hit your 5-hour limit · resets 3:10pm (UTC)", NOW)?.evidence).toBe('clock');
     expect(parseUsageLimit('429 {"type":"rate_limit_error"}', NOW)).toBeNull();
+  });
+});
+
+describe('isUsageExhaustion — credits ran out (0fa28a3b)', () => {
+  it('counts the message as exhaustion, but not an RPM throttle', () => {
+    expect(isUsageExhaustion('API Error: Usage credits ran out before the response was finished.')).toBe(true);
+    expect(isUsageExhaustion('Model user RPM limit exceeded for glm/glm-5 maximum 3 requests per minute per account')).toBe(false);
   });
 });
