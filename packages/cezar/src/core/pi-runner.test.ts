@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -10,7 +10,7 @@ import type { AgentEvent } from './agent-runner.js';
 import { buildChildEnv } from './agent-env.js';
 import { detectEnvironment } from './backend-detect.js';
 import { createRunner } from './runner-factory.js';
-import { buildPiArgs, PiRunner } from './pi-runner.js';
+import { buildPiArgs, piSupportsSessionId, PiRunner } from './pi-runner.js';
 
 /**
  * The `pi` runner (#387): a new AgentBackend slotted into the runner seam as
@@ -102,7 +102,7 @@ describe('pi RPC argv', () => {
     ).toEqual([
       '--mode',
       'rpc',
-      '--session',
+      '--session-id',
       'session-1',
       '--append-system-prompt',
       'Keep changes focused.',
@@ -120,6 +120,36 @@ describe('pi RPC argv', () => {
       '--session-id',
       'session-1',
     ]);
+  });
+
+  it('old pi (no --session-id): fresh run passes no session flag, resume uses --session', () => {
+    const old = { sessionIdFlag: false };
+    expect(buildPiArgs({ cwd: '/repo', userPrompt: 'task', sessionId: 's1' }, old)).toEqual(['--mode', 'rpc']);
+    expect(buildPiArgs({ cwd: '/repo', userPrompt: 'task', sessionId: 's1', resume: true }, old)).toEqual([
+      '--mode',
+      'rpc',
+      '--session',
+      's1',
+    ]);
+  });
+
+  it('detects --session-id support from `--help`, cached per binary, defaulting to supported', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'pi-help-'));
+    const mk = (name: string, help: string): string => {
+      const f = join(dir, name);
+      writeFileSync(f, `#!/bin/sh\necho '${help}'\n`, { mode: 0o755 });
+      return f;
+    };
+    const dry = process.env.CEZ_DRY_RUN;
+    delete process.env.CEZ_DRY_RUN;
+    try {
+      expect(piSupportsSessionId(mk('old', '--session <path|id>  Use specific session'), process.env)).toBe(false);
+      expect(piSupportsSessionId(mk('new', '--session-id <id>  x\n--session <id>'), process.env)).toBe(true);
+      expect(piSupportsSessionId(join(dir, 'missing'), process.env)).toBe(true);
+    } finally {
+      if (dry !== undefined) process.env.CEZ_DRY_RUN = dry;
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it('fails closed by disabling bash when a command-prefix allowlist cannot be represented', () => {

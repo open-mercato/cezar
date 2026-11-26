@@ -1,4 +1,4 @@
-import { spawn as nodeSpawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
+import { spawn as nodeSpawn, spawnSync, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { disclaimedCommand } from './disclaim-spawn.ts';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve as resolvePath } from 'node:path';
@@ -62,7 +62,7 @@ export class PiRunner implements AgentRunner {
   ): AgentSession {
     assertReasoningEffortSupported('pi', spec.reasoningEffort);
     const env = buildChildEnv({ backend: this.backend, extraEnv: spec.env });
-    const [file, argv] = disclaimedCommand(this.bin, buildPiArgs(spec), env);
+    const [file, argv] = disclaimedCommand(this.bin, buildPiArgs(spec, { sessionIdFlag: piSupportsSessionId(this.bin, env) }), env);
     const child = nodeSpawn(file, argv, { cwd: spec.cwd, env });
     // EPIPE from a write racing the child's exit arrives as an async 'error' (acfb01e4).
     child.stdin.on('error', () => {});
@@ -284,14 +284,46 @@ export class PiRunner implements AgentRunner {
   }
 }
 
-export function buildPiArgs(spec: AgentRunSpec): string[] {
+export interface PiCaps {
+  /** pi accepts `--session-id <id>` (create-or-open an exact id); older pi rejects it as an unknown option. */
+  sessionIdFlag: boolean;
+}
+
+/**
+ * Newer pi: `--session-id` both creates and reopens an exact id, so it also covers a resume whose
+ * session file was never written (`--session` would say "No session found"). Older pi has no such
+ * flag: a fresh run takes no session flag (the id is discovered via get_state) and resume uses `--session`.
+ */
+export function buildPiArgs(spec: AgentRunSpec, caps: PiCaps = { sessionIdFlag: true }): string[] {
   const args = ['--mode', 'rpc'];
-  if (spec.sessionId) args.push(spec.resume ? '--session' : '--session-id', spec.sessionId);
+  if (spec.sessionId) {
+    if (caps.sessionIdFlag) args.push('--session-id', spec.sessionId);
+    else if (spec.resume) args.push('--session', spec.sessionId);
+  }
   if (spec.systemPrompt) args.push('--append-system-prompt', spec.systemPrompt);
   if (spec.model) args.push('--model', spec.model);
   const tools = piTools(spec.allowedTools ?? [], spec.bashAllowlist);
   if (tools.length > 0) args.push('--tools', tools.join(','));
   return args;
+}
+
+const sessionIdSupport = new Map<string, boolean>();
+
+/** Probes `pi --help` once per binary per process; any doubt assumes the current flag. */
+export function piSupportsSessionId(bin: string, env: NodeJS.ProcessEnv): boolean {
+  if (process.env.CEZ_DRY_RUN === '1') return true;
+  const cached = sessionIdSupport.get(bin);
+  if (cached !== undefined) return cached;
+  let supported = true;
+  try {
+    const out = spawnSync(bin, ['--help'], { env, encoding: 'utf8', timeout: 5000, input: '', windowsHide: true });
+    const text = `${out.stdout ?? ''}${out.stderr ?? ''}`;
+    if (out.status === 0 && text.includes('--session')) supported = text.includes('--session-id');
+  } catch {
+    /* keep the default */
+  }
+  sessionIdSupport.set(bin, supported);
+  return supported;
 }
 
 function piTools(tools: string[], bashAllowlist?: string[]): string[] {
