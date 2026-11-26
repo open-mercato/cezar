@@ -4015,12 +4015,22 @@ describe('ManagerEngine', () => {
     it('continues a finished task in a fresh session, and refuses that for a live task', async () => {
       const engine = withRuns([run('done', { status: 'review', runner: 'claude' }), run('live')]);
       const id = await create(engine);
+      for (const runId of ['done', 'live']) {
+        store.persistMessage(id, {
+          id: `card-${runId}`, seq: store.nextSeq(id), at: new Date().toISOString(), kind: 'assistant', turn: 'chat', streaming: false, commands: [],
+          text: `Should [[task:alpha/${runId}]] continue?`, ask: { questions: [{ header: 'Go', question: 'Go?', options: [{ label: 'A' }, { label: 'B' }] }] },
+        } as ManagerMessage);
+      }
       expect(await engine.taskMessage(id, { projectId: 'alpha', runId: 'done', text: 'Re-review PR 7', freshContext: true })).toEqual({ ok: true });
       expect(requests.at(-1)).toMatchObject({ path: '/api/v1/p/alpha/runs/done/continue', body: { text: 'Re-review PR 7', freshContext: true } });
       expect(requests.some((request) => request.path.endsWith('/messages'))).toBe(false);
       const live = await engine.taskMessage(id, { projectId: 'alpha', runId: 'live', text: 'x', freshContext: true });
       expect(live).toMatchObject({ status: 409 });
       expect('error' in live && live.error).toContain('--fresh');
+      // The refusal acted on nothing: the live task's card stays unflagged, the done one's is flagged.
+      const stale = (messageId: string) => (store.messages(id).find((message) => message.id === messageId) as { askStale?: unknown } | undefined)?.askStale;
+      expect(stale('card-live')).toBeUndefined();
+      expect(stale('card-done')).toMatchObject({ why: 'manager-acted' });
     });
 
     it('retries a failed task with its objective, workflow, runner, model and effort', async () => {

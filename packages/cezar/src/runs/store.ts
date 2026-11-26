@@ -96,6 +96,9 @@ const storedRunnerSchema = z
   .enum([...RUNNER_IDS, 'claude-cli'])
   .transform((id) => (id === 'claude-cli' ? ('claude' as const) : id));
 
+/** The longest `freshPrompt` a step keeps: the Continue route's own bound on its text. */
+export const FRESH_PROMPT_MAX = 100_000;
+
 const stepStateSchema = z.object({
   id: z.string(),
   name: z.string(),
@@ -130,8 +133,11 @@ const stepStateSchema = z.object({
   profileId: z.string().optional(),
   /** A Continue opened with `freshContext` (#2513): a restart while it is queued must not resume. */
   freshContext: z.literal(true).optional().catch(undefined),
-  /** A queued fresh Continue's instruction, so a restart opens it with that text; cleared on open. */
-  freshPrompt: z.string().max(100_000).optional().catch(undefined),
+  /** A queued fresh Continue's instruction, so a restart opens it with that text; cleared on open
+   *  and on cancel. Like `task` and `queuedMessages`, it is the user's own prompt replayed to the
+   *  agent, so it is deliberately NOT redacted: a scrubbed token would reach the agent as
+   *  [REDACTED]. A longer one is never written (`FRESH_PROMPT_MAX`). */
+  freshPrompt: z.string().max(FRESH_PROMPT_MAX).optional().catch(undefined),
   toolPolicy: stepToolPolicySchema.optional(),
   /** Canonical provider/model identity resolved for this step. Optional so older runs.json files
    *  remain readable and auto-model steps can retain an absent identity. */
@@ -1698,19 +1704,16 @@ export class RunStore extends EventEmitter {
   }
 
   /**
-   * Step-level counterpart of `redactPatch` (#456 review). `error` and `freshPrompt` are the
-   * free-text `StepState` fields — `error` is set from raw `err.message` /process
+   * Step-level counterpart of `redactPatch` (#456 review). `error` is the only redacted
+   * free-text `StepState` field (`freshPrompt` is the user's prompt, see its schema) — it is set from raw `err.message` /process
    * output (`run.ts` `finishStep`), and `touch()` fans the whole record out
    * over SSE, so an unscrubbed copy leaked to `runs.json` AND to the browser.
    * The remaining fields are ids, enums, counters and timestamps.
    */
   private redactStepPatch(patch: Partial<Omit<StepState, 'id'>>, runId: string): Partial<Omit<StepState, 'id'>> {
     if (process.env.CEZ_REDACT_SECRETS === '0') return patch;
-    return {
-      ...patch,
-      ...(typeof patch.error === 'string' ? { error: this.redactText(patch.error, runId) } : {}),
-      ...(typeof patch.freshPrompt === 'string' ? { freshPrompt: this.redactText(patch.freshPrompt, runId) } : {}),
-    };
+    if (typeof patch.error !== 'string') return patch;
+    return { ...patch, error: this.redactText(patch.error, runId) };
   }
 
   /** Append a step to an existing run (used by "Continue" — spec 003). */
