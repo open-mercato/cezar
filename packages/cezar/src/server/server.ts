@@ -207,6 +207,7 @@ import {
 } from './provider-telemetry.ts';
 import { RunnerModelCatalog } from '../core/runner-model-catalog.ts';
 import { setNamerModelCatalog } from '../runs/namer-model.ts';
+import { setAntigravityEffortCatalog } from '../core/antigravity-effort.ts';
 import { currentUsage, currentTimedUsage, onUsage } from '../core/process-usage.ts';
 import { DashboardReader } from '../workspace/dashboard.ts';
 import { dashboardRoutes } from './dashboard.ts';
@@ -234,6 +235,8 @@ import {
   graphToSteps,
   workflowGraphFileSchema,
   workflowGraphSchema,
+  type WorkflowGraph,
+  type WorkflowGraphBody,
 } from '../workflows/graph.ts';
 import {
   QUICK_TASK_WORKFLOW,
@@ -983,11 +986,18 @@ const saveWorkflowSchema = z
     message: 'provide either "steps" or "skills", not both',
   });
 
-const validateGraphSchema = z.object({ graph: workflowGraphSchema });
+// A NAMED body type: the inlined graph union tips `AppType` past TS7056's serialization limit.
+// Validation is unchanged — this is the same schema object.
+const graphBodySchema = workflowGraphSchema as unknown as z.ZodType<WorkflowGraph, WorkflowGraphBody>;
+// The cast is sound only while the named type and the schema's input agree, both ways.
+type GraphBodyMatches = [WorkflowGraphBody, z.input<typeof workflowGraphSchema>] extends [z.input<typeof workflowGraphSchema>, WorkflowGraphBody] ? true : false;
+const graphBodyMatches: GraphBodyMatches = true;
+void graphBodyMatches;
+const validateGraphSchema = z.object({ graph: graphBodySchema });
 const saveGraphSchema = z.object({
   name: z.string().trim().min(1).max(80),
   description: z.string().max(2_000, 'must be at most 2000 characters').optional(),
-  graph: workflowGraphSchema,
+  graph: graphBodySchema,
   overwrite: z.boolean().optional(),
 });
 
@@ -1546,6 +1556,7 @@ export function createAppParts(deps: ServerDeps) {
   });
   // Bookkeeping calls pick their cheap model from the same discovery (#2012).
   setNamerModelCatalog(modelCatalog);
+  setAntigravityEffortCatalog(modelCatalog);
   const providerAuth = deps.providerAuth
     ?? new ProviderAuthService({ cwd: bootRoot, onInconclusive: (probe) => void reportInconclusiveProbe(probe) });
   const workspaceConfig = deps.workspaceConfig ?? {
@@ -6090,6 +6101,7 @@ export function createAppParts(deps: ServerDeps) {
           model: parsed.data.model,
           reasoningEffort: parsed.data.reasoningEffort,
           agentProfile: parsed.data.agentProfile,
+          ...(parsed.data.freshContext ? { freshContext: true } : {}),
           // The user's own Continue: answers its card, or flags open cards as replied in chat.
           reply: parsed.data.askRequestId ? { askRequestId: parsed.data.askRequestId } : {},
         });

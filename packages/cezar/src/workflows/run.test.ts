@@ -873,6 +873,12 @@ describe('reasoning effort resolution', () => {
     ).toBeUndefined();
   });
 
+  it('lets an antigravity step carry an effort, applied as a model variant and never passed to the runner', () => {
+    const step = { id: 'agy', prompt: '{{task}}', runner: 'antigravity' as const, reasoningEffort: 'high' };
+    expect(reasoningEffortIssue({ steps: [step] }, 'claude', undefined)).toBeUndefined();
+    expect(resolveStepReasoningEffort(step, 'claude', undefined)).toBeUndefined();
+  });
+
   it('rejects only the values no step could ever apply — an effortless task runner, or step', () => {
     expect(reasoningEffortIssue(workflow, 'opencode', 'high')).toBe(
       'reasoning effort is only supported by the Codex and Claude runners',
@@ -1915,6 +1921,19 @@ describe('CEZ:ASK parks as waiting and emits ask.requested (#473)', () => {
       } finally {
         activeMap().delete(record.id);
       }
+    });
+
+    it('a run that is already done answers Finish as a no-op success (stale button)', () => {
+      const record = createWaiting('already done');
+      store.updateRun(record.id, { status: 'done' });
+      expect(manager.finish(record.id)).toBe(true);
+      expect(store.getRun(record.id)?.status).toBe('done');
+    });
+
+    it('a failed run still refuses Finish', () => {
+      const record = createWaiting('failed');
+      store.updateRun(record.id, { status: 'failed' });
+      expect(manager.finish(record.id)).toBe(false);
     });
 
     it('also covers the gap after teardown cleared the session object', () => {

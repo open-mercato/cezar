@@ -39,8 +39,9 @@ const USAGE = `cez manager — the tools of a cezar manager's agent (CEZ_MANAGER
   cez manager status | attention | tasks | prs   what is going on (add --json for data)
   cez manager task <run> [--project <id>]        one task, its model, PR, last message and children
   cez manager task create --project <id> [--title t] [--workflow w] [--runner r] [--account id] [--model m] [--effort e] [--dispatch] "<objective>"
-  cez manager task say --project <id> <run> [--model m] [--effort e] "<text>"
-                                                 --model/--effort only when it continues a finished task
+  cez manager task say --project <id> <run> [--model m] [--effort e] [--fresh] "<text>"
+                                                 --model/--effort/--fresh only when it continues a finished task;
+                                                 --fresh starts a new session with no prior conversation
   cez manager task switch --project <id> <run> [--runner r] [--account id] [--model m] [--effort e]
                                                  change the agent and keep the task's history and worktree
   cez manager task cancel --project <id> <run> [--reason "…"]
@@ -140,7 +141,10 @@ Starts a task.
 Messages a running task, or continues a finished one with the text.
   --project <id>     the task's project
   --model <m>        continue on this model (a finished task only)
-  --effort <e>       ${EFFORTS.join(' | ')} (a finished task only)${CONTENT_HELP}`,
+  --effort <e>       ${EFFORTS.join(' | ')} (a finished task only)
+  --fresh            continue in a new agent session with no prior conversation (a finished task only):
+                     same task id, worktree, branch and PR, but nothing anchors it on earlier verdicts.
+                     The text is all it is told, so make it self-contained, e.g. the PR and what to check${CONTENT_HELP}`,
   'task switch': `cez manager task switch --project <id> <run> [--runner r] [--account id] [--model m] [--effort e]
 
 Choose at least one agent flag. Switches a queued task before it starts, interrupts a live agent turn,
@@ -584,7 +588,7 @@ export async function runManagerCommand(
           return 0;
         }
         if (sub === 'say') {
-          const { values, positionals } = parse('task say', taskArgs, { project: { type: 'string' }, model: { type: 'string' }, effort: { type: 'string' }, ...CONTENT_OPTIONS }, true);
+          const { values, positionals } = parse('task say', taskArgs, { project: { type: 'string' }, model: { type: 'string' }, effort: { type: 'string' }, fresh: { type: 'boolean' }, ...CONTENT_OPTIONS }, true);
           const effort = effortOf(values.effort);
           const [runId, ...words] = positionals;
           const { text, ...content } = runId ? await contentOf(words, values, io, env) : { text: '' };
@@ -592,10 +596,11 @@ export async function runManagerCommand(
           const project = await projectOf(values.project);
           const sent = await call<ManagerTaskMessageResponse>('/task-message', {
             method: 'POST',
-            body: { projectId: project.projectId, runId, ...(text ? { text } : {}), ...content, ...(values.model ? { model: values.model } : {}), ...(effort ? { effort } : {}) },
+            body: { projectId: project.projectId, runId, ...(text ? { text } : {}), ...content, ...(values.model ? { model: values.model } : {}), ...(effort ? { effort } : {}), ...(values.fresh ? { freshContext: true } : {}) },
           });
-          io.log(`sent to ${runId}`);
+          io.log(values.fresh ? `continued ${runId} in a fresh session` : `sent to ${runId}`);
           if (sent.forwarded) io.log(forwardedLine(sent.forwarded));
+          if (sent.notice) io.log(sent.notice);
           return 0;
         }
         if (sub === 'cancel') {

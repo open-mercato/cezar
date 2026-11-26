@@ -17,17 +17,17 @@ import thinkingEditWriteTodo from '../../../../cezar/src/core/__fixtures__/claud
 import opencodeToolLifecycle from '../../../../cezar/src/core/__fixtures__/opencode/tool-lifecycle.expected.json'
 import { groupThreadItems } from './thread-groups'
 import {
+  ActivityGroup,
   AgentUpdateRequiredCard,
-  ContextGroup,
   AssistantMessage,
   isNearBottom,
+  NoteGroup,
   NoteLine,
   OUTPUT_CLAMP_LINES,
   ProviderAuthRequiredCard,
   ReasoningItem,
   THREAD_PROSE_MEASURE,
   ToolCard,
-  ToolStreak,
   UserBubble,
   WorkingIndicator,
 } from './thread-items'
@@ -531,29 +531,71 @@ describe('ReasoningItem', () => {
   )
 })
 
-describe('ContextGroup + ToolStreak', () => {
-  it('the group row expands to the individual tool cards', () => {
+describe('ActivityGroup + NoteGroup', () => {
+  const worktree = '/Users/me/repo/.ai/cezar/worktrees/571c15ae-0000-4000-8000-000000000000'
+  const bash = (id: string, command: string, status: UiToolItem['status'] = 'completed'): UiToolItem => ({
+    kind: 'tool', id, name: 'Bash', toolKind: 'execute', title: `Ran ${command}`, status, input: { command },
+  })
+
+  it('the summary row hides the calls until expanded, then shows every card', () => {
     const read = goldenItem(subagentTask, 'toolu_sub_01', 'completed') // the golden Grep
-    const blocks = groupThreadItems([read, { ...read, id: 'toolu_sub_02' }])
-    const group = blocks[0]!
-    if (group.kind !== 'context-group') throw new Error('expected a context group')
-    render(<ContextGroup group={group} />)
-    const button = screen.getByRole('button', { name: 'Explored 2 searches' })
+    const group = groupThreadItems([read, { ...read, id: 'toolu_sub_02' }])[0]!
+    if (group.kind !== 'activity') throw new Error('expected an activity group')
+    render(
+      <ActivityGroup group={group}>
+        {group.tools.map((tool) => <ToolCard key={tool.id} item={tool} />)}
+      </ActivityGroup>,
+    )
+    const button = screen.getByRole('button', { name: 'Searched twice.' })
+    expect(button.getAttribute('aria-expanded')).toBe('false')
     expect(document.querySelectorAll('[data-slot="tool-card"]')).toHaveLength(0)
     fireEvent.click(button)
+    expect(button.getAttribute('aria-expanded')).toBe('true')
     expect(document.querySelectorAll('[data-slot="tool-card"]')).toHaveLength(2)
   })
 
-  it('the streak fold hides its children until toggled', () => {
-    render(
-      <ToolStreak count={4}>
-        <div data-testid="older-card" />
-      </ToolStreak>,
-    )
-    const button = screen.getByRole('button', { name: '4 earlier tool calls' })
-    expect(screen.queryByTestId('older-card')).toBeNull()
+  it('while a call runs, the collapsed row is that one call, shortened, and the group is busy', () => {
+    const group = groupThreadItems([
+      bash('a', 'ls'),
+      bash('b', `cd ${worktree} && npm test -- ${worktree}/packages/web`, 'running'),
+    ])[0]!
+    if (group.kind !== 'activity') throw new Error('expected an activity group')
+    render(<ActivityGroup group={group}>{null}</ActivityGroup>)
+    const current = document.querySelector('[data-slot="activity-current"]')!
+    expect(current.textContent).toBe('Rannpm test -- packages/web')
+    expect(document.querySelector('[data-slot="activity-group"]')?.getAttribute('aria-busy')).toBe('true')
+    expect(screen.getByRole('button', { name: /^Running: Ran npm test -- packages\/web\. Ran 2 commands\.$/ })).toBeTruthy()
+  })
+
+  it('a failed call is counted on the collapsed row', () => {
+    const group = groupThreadItems([bash('a', 'ls', 'failed'), bash('b', 'pwd')])[0]!
+    if (group.kind !== 'activity') throw new Error('expected an activity group')
+    render(<ActivityGroup group={group}>{null}</ActivityGroup>)
+    expect(screen.getByText('1 failed')).toBeTruthy()
+  })
+
+  it('the setup row keeps its warnings visible, and expands to every note', () => {
+    const notes = [
+      'run started — workflow "quick-task" (runner: codex)',
+      'local "main" diverged from "origin/main" — forking from "origin/main"',
+      'worktree ready — branch cez/571c15ae (base origin/main)',
+    ].map((text, index) => ({ kind: 'note' as const, id: `n${index}`, text, tone: 'dim' as const }))
+    const group = groupThreadItems(notes)[0]!
+    if (group.kind !== 'note-group') throw new Error('expected a note group')
+    render(<NoteGroup group={group} />)
+    const button = screen.getByRole('button', { name: /^Set up: worktree cez\/571c15ae from origin\/main · runner Codex, 3 notes$/ })
+    expect(document.querySelectorAll('[data-slot="note-line"]')).toHaveLength(1)
+    expect(document.querySelector('[data-slot="note-group-warnings"]')?.textContent).toContain('diverged')
     fireEvent.click(button)
-    expect(screen.getByTestId('older-card')).toBeTruthy()
+    expect(document.querySelector('[data-slot="note-group-warnings"]')).toBeNull()
+    expect(document.querySelectorAll('[data-slot="note-line"]')).toHaveLength(3)
+  })
+
+  it('a tool card shows the shortened command, with the full one on hover', () => {
+    const command = `cd ${worktree}; grep -rn foo ${worktree}/src`
+    render(<ToolCard item={bash('c', command)} />)
+    const code = screen.getByText('grep -rn foo src')
+    expect(code.getAttribute('title')).toBe(command)
   })
 })
 
@@ -702,12 +744,12 @@ describe('WorkingIndicator — live clock', () => {
     const elapsed = () => document.querySelector('[data-slot="working-elapsed"]')?.textContent
     const last = () => document.querySelector('[data-slot="working-last-activity"]')?.textContent
     expect(elapsed()).toBe('1m 30s')
-    expect(last()).toContain('(12s ago)')
+    expect(last()).toContain('last activity 12s ago')
     act(() => {
       vi.advanceTimersByTime(5000)
     })
     expect(elapsed()).toBe('1m 35s')
-    expect(last()).toContain('(17s ago)')
+    expect(last()).toContain('last activity 17s ago')
   })
 
   it('stays a bare spinner when there are no stamps', () => {

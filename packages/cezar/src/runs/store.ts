@@ -1,7 +1,8 @@
 import { RUN_PR_REF_RANK, stepToolPolicySchema, deferredBindingSchema, modelUsageSchema, queueWaitReasonSchema, runAgentSwitchSchema, taskAskRecordSchema, trackerAccessSchema, type QuestionClosed, type QuestionStale, type TaskAskRecord } from '@open-mercato/cezar-contract';
 import { EventEmitter } from 'node:events';
 import { runLifecycleSnapshot, type RunLifecycleObserver, type RunLifecycleSnapshot } from './lifecycle.ts';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
+import { cezarHomeDir } from '../paths.ts';
 import { threadId } from 'node:worker_threads';
 import { hostname, uptime } from 'node:os';
 import {
@@ -19,7 +20,7 @@ import {
   statSync,
   writeFileSync,
 } from 'node:fs';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { z } from 'zod';
 import { StreamRedaction } from './stream-redaction.ts';
 import { renameSyncWithRetry } from '../fs-rename.ts';
@@ -96,6 +97,9 @@ const storedRunnerSchema = z
   .enum([...RUNNER_IDS, 'claude-cli'])
   .transform((id) => (id === 'claude-cli' ? ('claude' as const) : id));
 
+/** The longest `freshPrompt` a step keeps: the Continue route's own bound on its text. */
+export const FRESH_PROMPT_MAX = 100_000;
+
 const stepStateSchema = z.object({
   id: z.string(),
   name: z.string(),
@@ -128,6 +132,13 @@ const stepStateSchema = z.object({
    *  a PAIR. Without it, changing the project's account would silently make Continue resume
    *  against the wrong account's session store. Absent = the discovered default. */
   profileId: z.string().optional(),
+  /** A Continue opened with `freshContext` (#2513): a restart while it is queued must not resume. */
+  freshContext: z.literal(true).optional().catch(undefined),
+  /** A queued fresh Continue's instruction, so a restart opens it with that text; cleared on open
+   *  and on cancel. Redacted on write like `error` (`redactStepPatch`), so no secret reaches
+   *  `runs.json` or the SSE stream: a fresh Continue revived after a restart sees [REDACTED] where
+   *  the instruction held a secret. A longer one is never written (`FRESH_PROMPT_MAX`). */
+  freshPrompt: z.string().max(FRESH_PROMPT_MAX).optional().catch(undefined),
   toolPolicy: stepToolPolicySchema.optional(),
   /** Canonical provider/model identity resolved for this step. Optional so older runs.json files
    *  remain readable and auto-model steps can retain an absent identity. */
@@ -672,6 +683,20 @@ export type RepoHandle = { owner: string; name: string };
  *  the worktree, so it never reaches autosave, Changes or a PR, and survives Discard. */
 export function artifactsDir(dataDir: string, runId: string): string {
   return join(dataDir, 'artifacts', runId);
+}
+
+/** Where an agent records the command that runs the tests related to its change, for the built-in
+ *  `Run tests` check (`workflows/templates.ts`). A dotfile, so the Assets listing never shows it, in
+ *  a directory every backend's sandbox already grants. */
+export function testCommandFile(dataDir: string, runId: string): string {
+  return join(artifactsDir(dataDir, runId), '.test-command');
+}
+
+/** A `github.pr-checkout` node's PR head, diff and metadata (`workflows/pr-checkout.ts`). Under
+ *  `~/.cezar`, outside every working directory — an in-place run's included — so Claude never
+ *  picks up the PR's nested CLAUDE.md or skills; read-only to the run's agents. */
+export function prCheckoutDir(dataDir: string, runId: string): string {
+  return join(cezarHomeDir(), 'pr-checkouts', createHash('sha256').update(resolve(dataDir)).digest('hex').slice(0, 16), runId);
 }
 
 /** `https://github.com/open-mercato/cezar/pull/402` → `open-mercato/cezar`, lowercased.
@@ -1676,7 +1701,8 @@ export class RunStore extends EventEmitter {
    * `StepState.error` is the step-level counterpart and is scrubbed the same
    * way in `updateStep` — `run.ts` feeds the SAME `err.message` string to both
    * calls, so redacting only the run-level copy left the token verbatim one
-   * field away (#456 review).
+   * field away (#456 review). An agent switch's saved `continuationInput.prompt`
+   * is scrubbed too, like a step's `freshPrompt` (#2526).
    */
   private redactPatch(
     patch: Partial<Omit<RunRecord, 'id' | 'steps'>>,
@@ -1688,25 +1714,31 @@ export class RunStore extends EventEmitter {
       const value = out[field];
       if (typeof value === 'string') out[field] = this.redactText(value, runId);
     }
+    // Read back only to revive a switch after a restart; the live switch keeps its own copy.
+    const input = out.agentSwitch?.continuationInput;
+    if (input) out.agentSwitch = { ...out.agentSwitch!, continuationInput: { ...input, prompt: this.redactText(input.prompt, runId) } };
     if (out.attentionRequest) out.attentionRequest = { ...out.attentionRequest, questions: out.attentionRequest.questions.map(q => ({ ...q, question: this.redactText(q.question, runId), ...(q.options ? { options: q.options.map(o => ({ ...o, label: this.redactText(o.label, runId), ...(o.description ? { description: this.redactText(o.description, runId) } : {}) })) } : {}) })) };
     return out;
   }
 
   /**
-   * Step-level counterpart of `redactPatch` (#456 review). `error` is the only
-   * free-text `StepState` field — it is set from raw `err.message` /process
+   * Step-level counterpart of `redactPatch` (#456 review). `error` and `freshPrompt` are the
+   * free-text `StepState` fields — `error` is set from raw `err.message` /process
    * output (`run.ts` `finishStep`), and `touch()` fans the whole record out
    * over SSE, so an unscrubbed copy leaked to `runs.json` AND to the browser.
    * The remaining fields are ids, enums, counters and timestamps.
    */
   private redactStepPatch(patch: Partial<Omit<StepState, 'id'>>, runId: string): Partial<Omit<StepState, 'id'>> {
     if (process.env.CEZ_REDACT_SECRETS === '0') return patch;
-    if (typeof patch.error !== 'string') return patch;
-    return { ...patch, error: this.redactText(patch.error, runId) };
+    return {
+      ...patch,
+      ...(typeof patch.error === 'string' ? { error: this.redactText(patch.error, runId) } : {}),
+      ...(typeof patch.freshPrompt === 'string' ? { freshPrompt: this.redactText(patch.freshPrompt, runId) } : {}),
+    };
   }
 
   /** Append a step to an existing run (used by "Continue" — spec 003). */
-  addStep(runId: string, step: Pick<StepState, 'id' | 'name' | 'kind'> & Partial<Pick<StepState, 'model'>>): void {
+  addStep(runId: string, step: Pick<StepState, 'id' | 'name' | 'kind'> & Partial<Pick<StepState, 'model' | 'freshContext'>>): void {
     const run = this.runs.get(runId);
     if (!run || run.steps.some((s) => s.id === step.id)) return;
     run.steps.push({ ...step, status: 'pending', iterations: 0, tokensUsed: 0 });
@@ -2477,6 +2509,16 @@ export class RunStore extends EventEmitter {
     }
   }
 
+  /** Where a run's PR review export lives (`prCheckoutDir`). */
+  prCheckoutDir(runId: string): string {
+    return prCheckoutDir(this.dataDir, runId);
+  }
+
+  /** A run's artifacts directory (`artifactsDir`). */
+  artifactsDir(runId: string): string {
+    return artifactsDir(this.dataDir, runId);
+  }
+
   /** The event log's mtime in ms, or undefined when it has none — age retention's activity clock. */
   eventsMtimeMs(runId: string): number | undefined {
     try { return statSync(this.eventsPath(runId)).mtimeMs; } catch { return undefined; }
@@ -2583,6 +2625,7 @@ export class RunStore extends EventEmitter {
       rmSync(this.handoffPath(id), { force: true }); // spec 007: the journal goes with the task
       rmSync(this.imagesDir(id), { recursive: true, force: true }); // agent screenshots
       rmSync(artifactsDir(this.dataDir, id), { recursive: true, force: true });
+      rmSync(prCheckoutDir(this.dataDir, id), { recursive: true, force: true });
       // Unsent drafts go with the task (#939): a draft for a run that no longer exists is
       // unreachable by definition, and it may be holding megabytes of pasted screenshots.
       deleteRunDrafts(this.dataDir, id);

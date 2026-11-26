@@ -72,6 +72,10 @@ export interface AgentRunSpec {
   onUsageWindows?: (observation: UsageWindowsObservation) => void;
   /** Appended to the CLI's default system prompt (`--append-system-prompt`). */
   systemPrompt?: string;
+  /** `false` only for a call that must not be steered: a health probe, a tool call the user
+   *  approved verbatim. `'format-bound'`: a helper whose answer is parsed (they may not change
+   *  its format). Every other spec gets Settings → Global instructions (`createRunner`). */
+  globalInstructions?: false | 'format-bound';
   userPrompt: string;
   /** Image blocks delivered with the first user message — screenshots pasted
    *  into the new-task form (spec 002's paste path, at task start). */
@@ -100,6 +104,15 @@ export interface AgentRunSpec {
   sandboxExcludedCommands?: string[];
   /** Extra directories the agent may read/write besides `cwd`. */
   additionalDirectories?: string[];
+  /** Claude only: the run's own artifacts directory, writable even when `allowedTools` grants no
+   *  Write — a read-only reviewer still saves its findings there. `enforceReadOnly` wins. */
+  artifactsWriteDir?: string;
+  /** Claude only: always `--permission-mode dontAsk` — never `acceptEdits` (`CEZ_APPROVAL_GATE`),
+   *  which would let edits reach every added directory, nor `bypassPermissions`. Read-only workflows. */
+  strictPermissions?: boolean;
+  /** Claude only: absolute paths or globs no file-writing tool may touch, as `--disallowedTools`
+   *  `Edit(//…)` deny rules, which outrank every allow rule and permission mode (a PR export). */
+  readOnlyPaths?: string[];
   /** Must not change the repository or publish anything, enforced by each backend's own control
    *  (AGENT_PROTOCOL.md); a runner that cannot has to fail the run. Set only for a manager's
    *  read-only work: an Ask task's read-only tools are not this (spec 2026-10-31-managers). */
