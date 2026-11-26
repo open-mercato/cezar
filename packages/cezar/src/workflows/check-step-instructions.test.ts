@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { execFile } from 'node:child_process';
@@ -129,5 +129,28 @@ describe('check steps under global instructions', () => {
       await new Promise((resolve) => setTimeout(resolve, 100));
     }
     expect(store.getRun(started.id)!.steps.map((step) => [step.id, step.status])).toEqual([['seed', 'done'], ['implement', 'done'], ['verify', 'done']]);
+  }, 40_000);
+
+  // The other session site (`runContinuation`): a Continue is an agent round too.
+  it('empties the related-tests record when a Continue starts', async () => {
+    process.env.CEZ_DRY_RUN = '1';
+    const settled = (id: string) => ['done', 'review'].includes(store.getRun(id)?.status ?? '');
+    const waitFor = async (ok: () => boolean, ms = 25_000) => {
+      const deadline = Date.now() + ms;
+      while (!ok()) {
+        if (Date.now() > deadline) throw new Error('timed out');
+        await new Promise((resolve) => setTimeout(resolve, 100));
+      }
+    };
+    const started = manager.startRun(
+      { name: 'one-step', source: 'file', steps: [{ id: 'task', name: 'Task', prompt: '{{task}}' }] },
+      { task: 'mock:done first pass', worktree: false },
+    );
+    await waitFor(() => settled(started.id));
+    record(started.id, 'npm test -- stale.test.ts\n');
+    const file = testCommandFile(join(repoRoot, '.ai/cezar'), started.id);
+    expect(manager.continueRun(started.id, { text: 'mock:done second pass' })).toEqual({ ok: true });
+    await waitFor(() => !existsSync(file), 10_000);
+    await waitFor(() => settled(started.id));
   }, 40_000);
 });
