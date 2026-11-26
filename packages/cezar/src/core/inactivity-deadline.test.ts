@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { failureKind } from '../runs/failure-kind.ts';
-import { armInactivityDeadline, inactivityTimeoutMessage } from './inactivity-deadline.ts';
+import { agentIdleTimeoutMs, armInactivityDeadline, inactivityTimeoutMessage } from './inactivity-deadline.ts';
 
 afterEach(() => {
   vi.useRealTimers();
@@ -57,5 +57,14 @@ describe('armInactivityDeadline (cf2191f1)', () => {
   it('still classifies as a timeout', () => {
     expect(inactivityTimeoutMessage('claude CLI', 30 * 60_000)).toMatch(/^claude CLI timed out after 30m without any output/);
     expect(failureKind(inactivityTimeoutMessage('codex app-server', 30 * 60_000))).toBe('timeout');
+  });
+});
+
+describe('agentIdleTimeoutMs (#1493)', () => {
+  it('parses minutes and ignores unset or invalid values', () => {
+    expect(agentIdleTimeoutMs({ CEZ_AGENT_IDLE_TIMEOUT_MINUTES: '45' })).toBe(45 * 60_000);
+    for (const bad of [undefined, '', 'abc', '0', '-5', '1.5', '99999']) {
+      expect(agentIdleTimeoutMs({ CEZ_AGENT_IDLE_TIMEOUT_MINUTES: bad })).toBeUndefined();
+    }
   });
 });

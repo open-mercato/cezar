@@ -11,6 +11,7 @@ import { GeminiAcpRunner } from './gemini-acp-runner.ts';
 import { PiRunner } from './pi-runner.ts';
 import { OmpRpcRunner } from './omp-rpc-runner.ts';
 import { AntigravityRunner } from './antigravity-runner.ts';
+import { agentIdleTimeoutMs } from './inactivity-deadline.ts';
 import { diskFloorRefusal } from '../disk-space.ts';
 import { instructSpec } from './global-instructions.ts';
 
@@ -25,31 +26,33 @@ export function createRunner(backend: AgentBackend | RunnerId | undefined): Agen
 }
 
 function createBareRunner(backend: AgentBackend | RunnerId | undefined): AgentRunner {
+  const timeoutMs = agentIdleTimeoutMs();
+  const o = timeoutMs === undefined ? {} : { timeoutMs };
   switch (backend) {
     case 'codex':
-      return new CodexAppServerRunner();
+      return new CodexAppServerRunner(o);
     case 'opencode':
-      return new OpencodeServerRunner();
+      return new OpencodeServerRunner(o);
     case 'cursor':
-      return new CursorAgentRunner();
+      return new CursorAgentRunner(o);
     case 'pi':
-      return new PiRunner();
+      return new PiRunner(o);
     case 'junie':
-      return new JunieRunner();
+      return new JunieRunner(o);
     case 'copilot':
-      return new CopilotAcpRunner();
+      return new CopilotAcpRunner(o);
     case 'omp':
-      return new OmpRpcRunner();
+      return new OmpRpcRunner(o);
     case 'antigravity':
-      return new AntigravityRunner();
+      return new AntigravityRunner(o);
     case 'gemini':
-      return new GeminiAcpRunner();
+      return new GeminiAcpRunner(o);
     case 'kimi':
-      return new KimiRunner();
+      return new KimiRunner(o);
     case 'claude':
     case 'claude-cli':
     case undefined:
-      return new ClaudeCliRunner();
+      return new ClaudeCliRunner(o);
     default: {
       const unreachable: never = backend;
       throw new Error(`Unknown runner: ${String(unreachable)}`);
