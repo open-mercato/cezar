@@ -2752,7 +2752,7 @@ export class RunManager {
       const sessionAccount = sessionStep?.profileId ?? DEFAULT_AGENT_ACCOUNT_ID;
       const accountMatches = run.agentProfile === undefined || run.agentProfile === sessionAccount;
       const switchedInput = switched ? run.agentSwitch?.continuationInput : undefined;
-      const fresh = !switched && queuedContinuation.freshContext === true;
+      const fresh = queuedContinuation.freshContext === true;
       this.pendingContinuations.set(run.id, {
         stepId: queuedContinuation.id,
         sessionId: !switched && !fresh && sessionStep?.sessionId && sessionBackend === backend && accountMatches ? sessionStep.sessionId : undefined,
@@ -6251,7 +6251,9 @@ export class RunManager {
       ?? (targetRunner === (run.runner ?? 'claude') ? run.agentProfile : undefined);
     const accountSwitched = targetAccount !== undefined && targetAccount !== sessionAccount;
     const resume = !agentSwitch && !opts.freshContext && Boolean(sessionStep?.sessionId) && sessionBackend === targetRunner && !accountSwitched;
-    const fresh = opts.freshContext && !agentSwitch ? { freshContext: true as const } : {};
+    // An agent switch replays the queued Continue it replaces, its fresh intent included.
+    const freshContext = agentSwitch ? agentSwitch.previousContinuation?.freshContext === true : opts.freshContext === true;
+    const fresh = freshContext ? { freshContext: true as const } : {};
 
     // Follow-up runner/model/account override (#401, spec 2026-07-29-agent-profiles): the composer
     // lets the user pick which backend, model and login handle this continuation — the same flat
