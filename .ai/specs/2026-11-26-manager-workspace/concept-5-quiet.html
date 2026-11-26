@@ -1,0 +1,1034 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Quiet · Manager, calmly · design (2026-11-26)</title>
+<style>
+/* Tokens from packages/web/src/styles/index.css ("Violet only", dark default, .light flips). */
+:root{color-scheme:dark;--background:#0d0d0d;--foreground:#fff;--card:#171717;--card-2:#1c1c1c;--sidebar:#141414;--muted:#262626;--muted-foreground:#a3a3a3;--soft-foreground:#8a8a8a;--border:#2a2a2a;--primary:#6457e8;--primary-foreground:#fff;--violet:#8f86e8;--ring:#8f86e8;--danger-strong:#f87171;--success-strong:#34d399;--pending-strong:#fbbf24;--info:#93c5fd;
+--sans:'Inter Variable','Inter',system-ui,-apple-system,'Segoe UI',sans-serif;--mono:'JetBrains Mono Variable','JetBrains Mono',ui-monospace,'SF Mono',Menlo,monospace;
+--shadow-modal:0 16px 48px 0 rgba(0,0,0,.45);--shadow-pop:0 12px 32px rgba(0,0,0,.5)}
+.light{color-scheme:light;--background:#fff;--foreground:#171717;--card:#fff;--card-2:#fbfbfb;--sidebar:#fafafa;--muted:#f2f2f2;--muted-foreground:#5c5c5c;--soft-foreground:#767676;--border:#ebebeb;--primary:#5b52c7;--violet:#5b52c7;--ring:#5b52c7;--danger-strong:#b91c1c;--success-strong:#047857;--pending-strong:#b45309;--info:#1d4ed8;--shadow-modal:0 16px 48px 0 rgba(0,0,0,.12);--shadow-pop:0 12px 32px rgba(0,0,0,.14)}
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--background);color:var(--foreground);font-family:var(--sans);font-size:14px;line-height:1.5;-webkit-font-smoothing:antialiased}
+button,input,textarea{font:inherit;color:inherit}
+a{color:inherit}
+:focus-visible{outline:none;box-shadow:0 0 0 3px color-mix(in srgb,var(--ring) 45%,transparent);border-radius:8px}
+.sr-only{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+svg.i{width:16px;height:16px;flex:none;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+svg.i.s14{width:14px;height:14px}svg.i.s18{width:18px;height:18px}svg.i.s20{width:20px;height:20px}
+.muted{color:var(--muted-foreground)}.soft{color:var(--soft-foreground)}.grow{flex:1;min-width:0}
+.mono,code{font-family:var(--mono);font-size:12px}
+code{background:var(--muted);padding:1px 5px;border-radius:5px}
+.kbd{display:inline-flex;align-items:center;justify-content:center;min-width:18px;height:18px;padding:0 4px;border-radius:5px;border:1px solid var(--border);font:500 11px var(--mono);color:var(--soft-foreground);line-height:1}
+
+/* ---------- doc chrome (not part of the product) ---------- */
+.doc-top{position:sticky;top:0;z-index:40;display:flex;align-items:center;gap:12px;padding:10px 28px;border-bottom:1px solid var(--border);background:color-mix(in srgb,var(--background) 90%,transparent);backdrop-filter:blur(8px);flex-wrap:wrap}
+.doc-top .brand{font-weight:700;letter-spacing:-.01em;white-space:nowrap;text-decoration:none}
+.doc-top nav{display:flex;gap:2px;flex-wrap:wrap}
+.doc-top nav a{font-size:12.5px;text-decoration:none;color:var(--muted-foreground);padding:4px 9px;border-radius:7px}
+.doc-top nav a:hover{background:var(--muted);color:var(--foreground)}
+.doc-top nav a[aria-current="page"]{background:var(--muted);color:var(--foreground);font-weight:600}
+.doc{max-width:1320px;margin:0 auto;padding:30px 28px 120px}
+.doc h1{font-size:34px;letter-spacing:-.025em;margin:14px 0 8px;line-height:1.15}
+.lede{color:var(--muted-foreground);max-width:860px;font-size:16.5px;margin:0 0 8px;line-height:1.55}
+.doc section{margin-top:64px;scroll-margin-top:70px}
+.doc section>h2{font-size:22px;letter-spacing:-.015em;margin:0 0 8px;display:flex;align-items:baseline;gap:10px}
+.doc section>h2 .num{font-family:var(--mono);font-size:12px;color:var(--violet)}
+.doc .sub{margin:0 0 18px;color:var(--muted-foreground);max-width:880px;font-size:15px}
+.doc p{max-width:880px}
+.cols2{display:grid;grid-template-columns:1fr 1fr;gap:28px}
+.cols3{display:grid;grid-template-columns:repeat(3,1fr);gap:22px}
+@media (max-width:1050px){.cols2,.cols3{grid-template-columns:1fr}}
+.prose{font-size:14.5px;color:var(--muted-foreground)}
+.prose b,.prose strong{color:var(--foreground);font-weight:600}
+.prose ul,.prose ol{padding-left:20px;margin:8px 0}.prose li{margin:5px 0}
+.prose h3{font-size:15px;color:var(--foreground);margin:18px 0 6px}
+.quiet-card{border-left:2px solid var(--border);padding:2px 0 2px 16px}
+.quiet-card.v{border-left-color:var(--violet)}
+table.t{width:100%;border-collapse:collapse;font-size:13.5px}
+table.t th,table.t td{text-align:left;vertical-align:top;padding:10px 12px 10px 0;border-bottom:1px solid var(--border)}
+table.t th{font-size:11.5px;color:var(--soft-foreground);font-weight:600;letter-spacing:.03em}
+table.t td{color:var(--muted-foreground)}table.t td:first-child{color:var(--foreground);font-weight:500}
+table.t td b{color:var(--foreground);font-weight:600}
+.rec-pill{font-size:10.5px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;border-radius:999px;padding:2px 8px;background:var(--primary);color:var(--primary-foreground);white-space:nowrap;vertical-align:3px}
+.cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:14px}
+.ccard{display:flex;flex-direction:column;gap:6px;border:1px solid var(--border);border-radius:14px;padding:16px;text-decoration:none;background:var(--card);transition:border-color .15s}
+.ccard:hover{border-color:color-mix(in srgb,var(--violet) 55%,var(--border))}
+.ccard b{font-size:16px}.ccard span{color:var(--muted-foreground);font-size:13.5px}
+.ccard .verdict{margin-top:auto;padding-top:8px;font-size:12.5px;color:var(--soft-foreground)}
+.ccard.rec{border-color:color-mix(in srgb,var(--violet) 50%,var(--border))}
+.funnel{display:flex;align-items:stretch;gap:0;border:1px solid var(--border);border-radius:14px;overflow:hidden;max-width:880px}
+.funnel div{flex:1;padding:16px 18px;border-right:1px solid var(--border)}
+.funnel div:last-child{border-right:0;background:color-mix(in srgb,var(--primary) 9%,transparent)}
+.funnel b{display:block;font-size:28px;letter-spacing:-.02em}
+.funnel span{font-size:13px;color:var(--muted-foreground)}
+.seg{display:inline-flex;border:1px solid var(--border);border-radius:9px;padding:2px;background:var(--card);gap:2px}
+.seg button{border:0;background:transparent;padding:4px 10px;border-radius:7px;font-size:12.5px;font-weight:500;color:var(--muted-foreground);cursor:pointer;white-space:nowrap;display:inline-flex;align-items:center;gap:6px}
+.seg button[aria-pressed="true"]{background:var(--muted);color:var(--foreground)}
+.pbar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:22px 0 10px}
+.pbar .lbl{font-size:11.5px;color:var(--soft-foreground);font-weight:600}
+.flows{display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin:0 0 10px}
+.flow-btn{border:1px dashed var(--border);background:transparent;border-radius:999px;padding:4px 11px;font-size:12.5px;color:var(--muted-foreground);cursor:pointer}
+.flow-btn:hover{color:var(--foreground);border-color:color-mix(in srgb,var(--violet) 55%,var(--border))}
+.flow-btn[aria-pressed="true"]{border-style:solid;border-color:var(--violet);color:var(--foreground)}
+.tourbox{display:flex;align-items:center;gap:10px;border-left:2px solid var(--violet);padding:6px 12px;font-size:13.5px;margin:0 0 12px;color:var(--muted-foreground)}
+.tourbox[hidden]{display:none}
+.tourbox b{color:var(--foreground)}
+.tourbox .stp{font-family:var(--mono);font-size:11px;color:var(--violet);white-space:nowrap}
+.coach{position:relative;z-index:3;box-shadow:0 0 0 2px var(--violet),0 0 0 7px color-mix(in srgb,var(--violet) 22%,transparent)!important;border-radius:10px;animation:coach 1.4s ease-in-out infinite}
+@keyframes coach{50%{box-shadow:0 0 0 2px var(--violet),0 0 0 11px color-mix(in srgb,var(--violet) 0%,transparent)}}
+.linkbtn{border:0;background:transparent;padding:0;cursor:pointer;color:var(--muted-foreground);text-decoration:underline;text-underline-offset:3px;font-size:inherit}
+.linkbtn:hover{color:var(--foreground)}
+
+/* ---------- product frames ---------- */
+.stage{position:relative}
+.frame{border:1px solid var(--border);border-radius:14px;overflow:hidden;background:var(--background);box-shadow:var(--shadow-modal);position:relative}
+.app{display:grid;grid-template-columns:216px minmax(0,1fr);height:800px}
+.side{background:var(--sidebar);border-right:1px solid var(--border);display:flex;flex-direction:column;padding:14px 10px;gap:2px;min-height:0}
+.wordmark{font-family:'Chakra Petch',var(--sans);font-weight:600;font-size:17px;letter-spacing:.02em;padding:2px 8px 14px}
+.navi{display:flex;align-items:center;gap:10px;min-height:34px;padding:6px 8px;border-radius:9px;border:0;background:transparent;cursor:pointer;text-align:left;width:100%;color:var(--muted-foreground);font-size:13.5px}
+.navi:hover{background:var(--muted);color:var(--foreground)}
+.navi[aria-current="true"]{background:var(--muted);color:var(--foreground)}
+.navi .nm{display:block;color:var(--foreground);font-weight:500;font-size:13.5px;line-height:1.3}
+.navi .ln{display:block;font-size:12px;color:var(--soft-foreground);line-height:1.35;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.side .lab{font-size:11.5px;color:var(--soft-foreground);padding:14px 8px 6px}
+.pip{width:6px;height:6px;border-radius:99px;background:var(--violet);display:inline-block;flex:none}
+.av{border-radius:999px;display:inline-flex;flex:none;overflow:hidden}
+.av svg{width:100%;height:100%}
+.main{min-width:0;display:flex;flex-direction:column;min-height:0;position:relative}
+.mhead{display:flex;align-items:center;gap:12px;padding:14px 26px;flex:none}
+.mhead .who{display:flex;flex-direction:column;min-width:0}
+.mhead .who b{font-size:15px;font-weight:600}
+.mhead .who span{font-size:12.5px;color:var(--soft-foreground)}
+.tabs{display:flex;gap:18px;margin-left:auto;align-items:center}
+.tabs button{border:0;background:transparent;padding:6px 0;font-size:14px;color:var(--soft-foreground);cursor:pointer;border-bottom:2px solid transparent;display:inline-flex;align-items:center;gap:6px}
+.tabs button:hover{color:var(--foreground)}
+.tabs button[aria-selected="true"]{color:var(--foreground);border-bottom-color:var(--foreground)}
+.iconbtn{border:0;background:transparent;width:32px;height:32px;border-radius:9px;display:inline-flex;align-items:center;justify-content:center;cursor:pointer;color:var(--muted-foreground)}
+.iconbtn:hover{background:var(--muted);color:var(--foreground)}
+.cmdk{display:inline-flex;align-items:center;gap:8px;height:30px;padding:0 10px;border:1px solid var(--border);border-radius:9px;background:transparent;color:var(--soft-foreground);cursor:pointer;font-size:12.5px}
+.cmdk:hover{color:var(--foreground)}
+.scroll{flex:1;overflow:auto;min-height:0}
+
+/* ---------- calm content ---------- */
+.calm{max-width:620px;margin:0 auto;padding:44px 26px 72px}
+.status{font-size:15px;color:var(--muted-foreground);margin:0 0 44px;display:flex;align-items:baseline;gap:9px;flex-wrap:wrap}
+.status b{color:var(--foreground);font-weight:500}
+.progress{display:flex;gap:4px;margin:0 0 18px}
+.progress i{width:22px;height:3px;border-radius:2px;background:var(--muted);display:block}
+.progress i.on{background:var(--violet)}
+.ask-who{font-size:13px;color:var(--soft-foreground);margin:0 0 8px}
+.ask-q{font-size:30px;line-height:1.2;font-weight:600;letter-spacing:-.022em;margin:0 0 12px}
+.ask-why{font-size:16px;line-height:1.6;color:var(--muted-foreground);margin:0 0 26px}
+.actions{display:flex;align-items:center;gap:6px 20px;flex-wrap:wrap}
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:10px;height:42px;padding:0 18px;border-radius:10px;border:1px solid transparent;font-size:15px;font-weight:500;cursor:pointer;white-space:nowrap;background:transparent}
+.btn-primary{background:var(--primary);color:var(--primary-foreground)}
+.btn-primary:hover{filter:brightness(1.08)}
+.btn-primary .kbd{border-color:rgba(255,255,255,.35);color:rgba(255,255,255,.85)}
+.btn-quiet{border-color:var(--border);color:var(--foreground)}
+.btn-quiet:hover{background:var(--muted)}
+.btn:disabled{opacity:.5;cursor:default}
+.tbtn{border:0;background:transparent;color:var(--muted-foreground);font-size:15px;cursor:pointer;padding:8px 2px;display:inline-flex;align-items:center;gap:8px}
+.tbtn:hover{color:var(--foreground)}
+.opts{display:flex;flex-direction:column;gap:2px;margin:0 0 20px}
+.opt{display:flex;align-items:center;gap:12px;border:0;background:transparent;text-align:left;padding:10px 12px;margin:0 -12px;border-radius:10px;cursor:pointer;font-size:15.5px;color:var(--foreground)}
+.opt:hover{background:var(--muted)}
+.opt .kbd{flex:none}
+.opt .rec{font-size:12.5px;color:var(--soft-foreground)}
+.then{margin-top:26px;font-size:13.5px;color:var(--soft-foreground)}
+.others{margin:14px 0 0;font-size:14px;color:var(--soft-foreground)}
+.others .linkbtn{font-size:14px;color:var(--muted-foreground);text-decoration:none}
+.others .linkbtn:hover{color:var(--foreground);text-decoration:underline}
+.step .inline-link{text-decoration:none;color:var(--foreground)}
+.step .inline-link:hover{text-decoration:underline}
+.more{margin:28px 0 0;padding:18px 0 0;border-top:1px solid var(--border)}
+.more p{font-size:15px;line-height:1.65;color:var(--muted-foreground);margin:0 0 12px}
+.label{font-size:13px;color:var(--soft-foreground);margin:0 0 6px}
+.divider{height:1px;background:var(--border);margin:48px 0 26px}
+.goal{display:grid;grid-template-columns:20px minmax(0,1fr);gap:2px 12px;padding:11px 12px;margin:0 -12px;border-radius:10px;cursor:pointer;align-items:start;border:0;background:transparent;text-align:left;width:calc(100% + 24px)}
+.goal:hover{background:var(--muted)}
+.goal .gt{font-size:15.5px;font-weight:600;line-height:1.35}
+.goal .gs{font-size:14.5px;color:var(--soft-foreground);grid-column:2;line-height:1.45}
+.goal.you .gs{color:var(--foreground)}
+.goal.done .gt{color:var(--muted-foreground);font-weight:500}
+.pie{width:15px;height:15px;border-radius:99px;margin-top:3px;background:conic-gradient(var(--muted-foreground) calc(var(--p) * 1turn),var(--muted) 0)}
+.pie.full{background:var(--success-strong)}
+.loop{color:var(--muted-foreground);margin-top:2px}
+.footnote{margin-top:40px;font-size:13.5px;color:var(--soft-foreground);display:flex;gap:8px 18px;flex-wrap:wrap;align-items:baseline}
+.footnote .linkbtn{font-size:13.5px}
+.clear-h{font-size:30px;font-weight:600;letter-spacing:-.022em;margin:0 0 10px}
+.enter{animation:enter .38s cubic-bezier(.2,.7,.2,1)}
+@keyframes enter{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}
+.outcome{font-size:14px;color:var(--success-strong);margin:0 0 22px;display:flex;gap:8px;align-items:center}
+.page-h{font-size:26px;font-weight:600;letter-spacing:-.02em;margin:0 0 8px;line-height:1.2}
+.page-s{font-size:16px;color:var(--foreground);margin:0 0 26px}
+.back{display:inline-flex;align-items:center;gap:6px;border:0;background:transparent;color:var(--soft-foreground);cursor:pointer;font-size:13.5px;padding:4px 0;margin:0 0 22px}
+.back:hover{color:var(--foreground)}
+.story{font-size:16px;line-height:1.65;color:var(--muted-foreground);margin:0 0 20px}
+.work{margin:10px 0 0;display:flex;flex-direction:column}
+.step{display:grid;grid-template-columns:52px minmax(0,1fr);gap:12px;padding:9px 0;border-top:1px solid var(--border);font-size:14px}
+.step:first-child{border-top:0}
+.step .tm{color:var(--soft-foreground);font-variant-numeric:tabular-nums;font-size:13px;padding-top:1px}
+.step .why{display:block;font-size:13px;color:var(--soft-foreground);margin-top:3px}
+.links{display:flex;flex-wrap:wrap;gap:6px 18px;margin:14px 0 0;font-size:13.5px}
+.setting{font-size:14.5px;color:var(--muted-foreground);margin:26px 0 0}
+.setting b{color:var(--foreground);font-weight:500}
+
+/* rules */
+.radio{display:flex;flex-direction:column;gap:2px;margin:6px 0 0}
+.radio button{display:flex;align-items:center;gap:12px;border:0;background:transparent;text-align:left;padding:9px 12px;margin:0 -12px;border-radius:10px;cursor:pointer;font-size:15px;color:var(--muted-foreground)}
+.radio button:hover{background:var(--muted)}
+.radio button .dotr{width:16px;height:16px;border-radius:99px;border:1.5px solid var(--soft-foreground);flex:none;position:relative}
+.radio button[aria-checked="true"]{color:var(--foreground)}
+.radio button[aria-checked="true"] .dotr{border-color:var(--violet)}
+.radio button[aria-checked="true"] .dotr::after{content:"";position:absolute;inset:3px;border-radius:99px;background:var(--violet)}
+.rule{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:4px 16px;align-items:center;padding:12px 0;border-top:1px solid var(--border);font-size:15px}
+.rule .rk{grid-column:1;font-size:12.5px;color:var(--soft-foreground)}
+.rule.off .rt{color:var(--soft-foreground)}
+.lockline{display:flex;gap:10px;align-items:flex-start;font-size:14px;color:var(--muted-foreground);padding:12px 0;border-top:1px solid var(--border)}
+.switch{border:0;background:transparent;padding:0;cursor:pointer;display:inline-flex}
+.switch .track{width:36px;height:22px;border-radius:99px;background:var(--muted);position:relative;transition:background .15s}
+.switch .track::after{content:"";position:absolute;top:3px;left:3px;width:16px;height:16px;border-radius:99px;background:var(--soft-foreground);transition:transform .15s,background .15s}
+.switch[aria-checked="true"] .track{background:var(--primary)}
+.switch[aria-checked="true"] .track::after{transform:translateX(14px);background:#fff}
+.say{display:flex;gap:10px;align-items:center;border-bottom:1px solid var(--border);padding:12px 0}
+.say input{flex:1;min-width:0;border:0;background:transparent;font-size:15.5px;outline:none}
+.say input::placeholder{color:var(--soft-foreground)}
+.proposal{margin:16px 0 0;padding:0 0 0 16px;border-left:2px solid var(--violet)}
+.proposal p{font-size:16px;margin:0 0 14px}
+.pauses{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
+
+/* everything (power) */
+.wide{max-width:980px;margin:0 auto;padding:30px 26px 60px}
+.etabs{display:flex;gap:22px;border-bottom:1px solid var(--border);margin:0 0 6px;flex-wrap:wrap}
+.etabs button{border:0;background:transparent;padding:10px 0;font-size:14px;color:var(--soft-foreground);cursor:pointer;border-bottom:2px solid transparent;margin-bottom:-1px}
+.etabs button[aria-selected="true"]{color:var(--foreground);border-bottom-color:var(--foreground)}
+.etabs .n{color:var(--soft-foreground);font-size:12.5px;margin-left:4px}
+.filter{display:flex;align-items:center;gap:8px;margin:14px 0 6px;color:var(--soft-foreground)}
+.filter input{border:0;background:transparent;outline:none;font-size:14px;flex:1}
+table.e{width:100%;border-collapse:collapse;font-size:13.5px}
+table.e td,table.e th{padding:11px 14px 11px 0;border-bottom:1px solid var(--border);text-align:left;white-space:nowrap}
+table.e th{font-size:12px;color:var(--soft-foreground);font-weight:500}
+table.e td{color:var(--muted-foreground)}
+table.e td.first{color:var(--foreground);font-weight:500;white-space:normal}
+table.e tbody tr{cursor:pointer}
+table.e tbody tr:hover td{background:color-mix(in srgb,var(--muted) 45%,transparent)}
+.facts{display:grid;grid-template-columns:120px minmax(0,1fr);gap:9px 16px;font-size:14px;margin:6px 0 24px}
+.facts dt{color:var(--soft-foreground)}.facts dd{margin:0;color:var(--foreground)}
+.row-actions{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin:6px 0 0}
+
+/* overlays */
+.scrim{position:absolute;inset:0;background:rgba(0,0,0,.5);z-index:30;display:flex;justify-content:center;align-items:flex-start;padding-top:90px}
+.light .scrim{background:rgba(0,0,0,.2)}
+.palette{width:600px;max-width:calc(100% - 40px);background:var(--card-2);border:1px solid var(--border);border-radius:16px;box-shadow:var(--shadow-modal);overflow:hidden}
+.palette .pin{display:flex;align-items:center;gap:10px;padding:14px 16px;border-bottom:1px solid var(--border)}
+.palette .pin input{flex:1;border:0;background:transparent;outline:none;font-size:16px}
+.palette .res{max-height:420px;overflow:auto;padding:6px}
+.palette .grp{font-size:11.5px;color:var(--soft-foreground);padding:10px 10px 4px}
+.palette .it{display:flex;align-items:center;gap:12px;width:100%;border:0;background:transparent;text-align:left;padding:9px 10px;border-radius:9px;cursor:pointer;font-size:14px;color:var(--foreground)}
+.palette .it .d{margin-left:auto;font-size:12.5px;color:var(--soft-foreground);white-space:nowrap}
+.palette .it[aria-selected="true"]{background:var(--muted)}
+.palette .foot{display:flex;gap:16px;padding:9px 14px;border-top:1px solid var(--border);font-size:12px;color:var(--soft-foreground)}
+.sheet{width:520px;max-width:calc(100% - 40px);background:var(--card-2);border:1px solid var(--border);border-radius:16px;box-shadow:var(--shadow-modal);padding:22px 24px}
+.sheet h3{margin:0 0 14px;font-size:17px}
+.keys{display:grid;grid-template-columns:auto 1fr;gap:9px 16px;font-size:14px;align-items:center}
+.keys .kbd{justify-self:start}
+.toast{position:absolute;left:50%;transform:translateX(-50%);bottom:22px;display:flex;align-items:center;gap:14px;background:var(--card-2);border:1px solid var(--border);border-radius:12px;padding:10px 12px 10px 16px;font-size:14px;box-shadow:var(--shadow-pop);z-index:35;max-width:560px}
+
+/* concept: brief */
+.letter{max-width:600px;margin:0 auto;padding:46px 26px 70px}
+.letter .date{font-size:13px;color:var(--soft-foreground);margin:0 0 22px}
+.letter h2{font-size:26px;font-weight:600;letter-spacing:-.02em;line-height:1.3;margin:0 0 26px}
+.point{display:grid;grid-template-columns:28px minmax(0,1fr);gap:4px 6px;margin:0 0 26px}
+.point .n{font-size:15px;color:var(--soft-foreground);padding-top:1px}
+.point p{margin:0 0 12px;font-size:16px;line-height:1.6;color:var(--muted-foreground)}
+.point p b{color:var(--foreground);font-weight:600}
+.letter .rest{font-size:16px;line-height:1.65;color:var(--muted-foreground);margin:8px 0 0}
+.inline-link{border:0;background:transparent;padding:0;color:var(--foreground);text-decoration:underline;text-decoration-color:color-mix(in srgb,var(--foreground) 35%,transparent);text-underline-offset:3px;cursor:pointer;font-size:inherit}
+
+/* concept: quiet */
+.qline{margin:0 26px;padding:14px 0;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:14px;flex-wrap:wrap;font-size:15px}
+.qline .msg{flex:1;min-width:240px;color:var(--muted-foreground)}
+.qline .msg b{color:var(--foreground);font-weight:500}
+.qline.needs .msg{color:var(--foreground)}
+.qmore{margin:0 26px;padding:6px 0 16px;border-bottom:1px solid var(--border)}
+.chat{max-width:640px;margin:0 auto;padding:26px 26px 20px;display:flex;flex-direction:column;gap:18px}
+.bu{align-self:flex-end;background:var(--muted);border-radius:16px;padding:9px 14px;font-size:15px;max-width:440px}
+.ba{font-size:15px;line-height:1.6;max-width:560px}
+.ba .meta{display:block;font-size:12.5px;color:var(--soft-foreground);margin-bottom:3px}
+.composer{max-width:640px;width:100%;margin:0 auto;padding:8px 26px 18px;flex:none}
+.comp{display:flex;align-items:center;gap:10px;border:1px solid var(--border);border-radius:14px;padding:10px 12px;background:var(--card)}
+.comp input{flex:1;border:0;background:transparent;outline:none;font-size:15px}
+.flash{animation:flash 1.8s ease-out}
+@keyframes flash{0%{background:color-mix(in srgb,var(--violet) 18%,transparent)}100%{background:transparent}}
+
+/* phone */
+.phone-stage{display:grid;grid-template-columns:auto minmax(0,1fr);gap:40px;align-items:start}
+@media (max-width:980px){.phone-stage{grid-template-columns:1fr}}
+.phone{width:390px;height:820px;border-radius:50px;border:11px solid #050505;background:var(--background);overflow:hidden;display:flex;flex-direction:column;position:relative;box-shadow:var(--shadow-modal);outline:1px solid var(--border)}
+.light .phone{border-color:#1b1b1b}
+.ph-status{height:46px;display:flex;align-items:center;justify-content:space-between;padding:0 30px;font-size:13.5px;font-weight:600;flex:none}
+.ph-head{display:flex;align-items:center;gap:6px;padding:2px 12px 6px;flex:none;min-height:46px}
+.ph-head b{font-size:16px;font-weight:600}
+.ph-body{flex:1;overflow:auto;min-height:0;position:relative}
+.phone .calm{padding:18px 22px 40px}
+.phone .ask-q{font-size:25px}
+.phone .ask-why{font-size:15.5px}
+.phone .status{margin-bottom:30px}
+.phone .actions{flex-direction:column;align-items:stretch;gap:4px}
+.phone .actions .btn{height:52px;font-size:16px;width:100%}
+.phone .actions .tbtn{justify-content:center;min-height:44px}
+.phone .opt{min-height:52px;font-size:16px}
+.phone .goal{min-height:56px}
+.phone .letter{padding:18px 22px 40px}
+.phone .letter h2{font-size:23px}
+.phone .wide{padding:16px 16px 40px}
+.phone .qline{margin:0 16px}
+.phone .chat{padding:16px}
+.phone .composer{padding:6px 12px 10px}
+.phone .scrim{align-items:flex-end;padding:0}
+.phone .palette,.phone .sheet{width:100%;max-width:none;border-radius:20px 20px 0 0;border-bottom:0}
+.phone .toast{bottom:92px;width:calc(100% - 28px)}
+.phone .palette .it{flex-wrap:wrap;gap:2px 12px}
+.phone .palette .it .d{margin-left:0;width:100%;white-space:normal}
+.ph-bar{display:flex;border-top:1px solid var(--border);background:var(--background);flex:none;padding-bottom:22px}
+.ph-bar button{flex:1;display:flex;flex-direction:column;align-items:center;gap:3px;padding:9px 0 4px;font-size:10.5px;font-weight:500;color:var(--soft-foreground);border:0;background:transparent;position:relative;cursor:pointer}
+.ph-bar button.on{color:var(--foreground)}
+.ph-bar .pip{position:absolute;top:7px;left:calc(50% + 9px)}
+.phone .facts{grid-template-columns:100px minmax(0,1fr)}
+.phone table.e td:nth-child(n+3),.phone table.e th:nth-child(n+3){display:none}
+.notes{display:flex;flex-direction:column;gap:16px;max-width:520px;padding-top:6px}
+.notes h3{margin:0 0 6px;font-size:15px}
+.notes p,.notes li{color:var(--muted-foreground);font-size:14px}
+.notes ul{padding-left:18px;margin:6px 0}
+@media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+
+</style>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="i-check" viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></symbol>
+  <symbol id="i-repeat" viewBox="0 0 24 24"><path d="m17 2 4 4-4 4"/><path d="M3 11v-1a4 4 0 0 1 4-4h14"/><path d="m7 22-4-4 4-4"/><path d="M21 13v1a4 4 0 0 1-4 4H3"/></symbol>
+  <symbol id="i-plus" viewBox="0 0 24 24"><path d="M5 12h14M12 5v14"/></symbol>
+  <symbol id="i-back" viewBox="0 0 24 24"><path d="m15 18-6-6 6-6"/></symbol>
+  <symbol id="i-up" viewBox="0 0 24 24"><path d="m18 15-6-6-6 6"/></symbol>
+  <symbol id="i-down" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></symbol>
+  <symbol id="i-lock" viewBox="0 0 24 24"><rect width="18" height="11" x="3" y="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></symbol>
+  <symbol id="i-msg" viewBox="0 0 24 24"><path d="M7.9 20A9 9 0 1 0 4 16.1L2 22Z"/></symbol>
+  <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></symbol>
+  <symbol id="i-inbox" viewBox="0 0 24 24"><path d="M22 12h-6l-2 3h-4l-2-3H2"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/></symbol>
+  <symbol id="i-bot" viewBox="0 0 24 24"><path d="M12 8V4H8"/><rect width="16" height="12" x="4" y="8" rx="2"/><path d="M2 14h2M20 14h2M15 13v2M9 13v2"/></symbol>
+  <symbol id="i-list" viewBox="0 0 24 24"><path d="M3 12h.01M3 18h.01M3 6h.01M8 12h13M8 18h13M8 6h13"/></symbol>
+  <symbol id="i-more" viewBox="0 0 24 24"><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/><circle cx="5" cy="12" r="1"/></symbol>
+  <symbol id="i-phone" viewBox="0 0 24 24"><rect width="14" height="20" x="5" y="2" rx="2"/><path d="M12 18h.01"/></symbol>
+  <symbol id="i-monitor" viewBox="0 0 24 24"><rect width="20" height="14" x="2" y="3" rx="2"/><path d="M8 21h8M12 17v4"/></symbol>
+  <symbol id="i-send" viewBox="0 0 24 24"><path d="m5 12 7-7 7 7"/><path d="M12 19V5"/></symbol>
+  <symbol id="i-ext" viewBox="0 0 24 24"><path d="M7 7h10v10M7 17 17 7"/></symbol>
+  <symbol id="i-home" viewBox="0 0 24 24"><path d="M15 21v-8a1 1 0 0 0-1-1h-4a1 1 0 0 0-1 1v8"/><path d="M3 10a2 2 0 0 1 .709-1.528l7-5.999a2 2 0 0 1 2.582 0l7 5.999A2 2 0 0 1 21 10v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></symbol>
+</svg>
+<header class="doc-top"><a class="brand" href="index.html">Manager, calmly</a><nav aria-label="Pages"><a href="index.html">Overview</a><a href="concept-1-today-recommended.html">Today ★</a><a href="concept-2-focus.html">Focus</a><a href="concept-3-goals.html">Goals</a><a href="concept-4-brief.html">Brief</a><a href="concept-5-quiet.html" aria-current="page">Quiet</a></nav><span style="margin-left:auto" class="seg" role="group" aria-label="Theme"><button type="button" data-theme="dark" aria-pressed="true">Dark</button><button type="button" data-theme="light" aria-pressed="false">Light</button></span></header>
+<main class="doc"><h1>Quiet </h1><p class="lede">No new tab. One line at the top of the manager says “All good”, and grows into the decision only when something needs you. The same line is the sidebar row, the notch and the phone notification.</p><div class="pbar"><span class="lbl">Device</span><span class="seg" role="group" aria-label="Device"><button type="button" data-device="desktop" aria-pressed="true"><svg class="i s14" aria-hidden="true"><use href="#i-monitor"/></svg>Desktop</button><button type="button" data-device="phone" aria-pressed="false"><svg class="i s14" aria-hidden="true"><use href="#i-phone"/></svg>Phone</button></span><span class="lbl" style="margin-left:10px">Day</span><span class="seg" role="group" aria-label="Day"><button type="button" data-load="normal" aria-pressed="true">Normal</button><button type="button" data-load="busy" aria-pressed="false">Busy</button></span><span class="soft" style="font-size:12.5px;margin-left:6px">Press <span class="kbd">?</span> in the prototype for keys</span><button type="button" class="btn btn-quiet" style="height:30px;font-size:12.5px;margin-left:auto;padding:0 12px" data-reset>Reset</button></div><div class="flows" id="flows"></div><div class="tourbox" id="tourbox" hidden></div><div id="proto" class="stage"></div>
+<section style="margin-top:46px"><div class="cols3">
+<div class="prose"><h3 style="margin-top:0">The four flows, calm by default</h3><ul><li><b>Something needs me.</b> The line becomes the question with its button. <span class="kbd">↵</span> answers; the line folds back.</li><li><b>A goal.</b> Open the line (⌄): five goals, one click each.</li><li><b>Something recurring.</b> Say it in the chat; the manager confirms it as a rule. Or open the line, then <i>How it works</i>.</li><li><b>Pause or adjust.</b> Open the line, then <i>How it works</i>.</li></ul></div>
+<div class="prose"><h3 style="margin-top:0">Power, one or two steps away</h3><ul><li><b>⌘K</b> (or the search icon on a phone) finds any goal, task, pull request, automation or command. Type “nightly”, pick Nightly QA, and its switch, Run now and Edit are right there.</li><li><b>Everything</b> (key <span class="kbd">E</span>, or Tasks in the phone bar) lists goals, tasks, pull requests, recurring work and rules as plain tables, with a switch on every recurring row.</li><li>Keys: <span class="kbd">↵</span>/<span class="kbd">Y</span> main action, <span class="kbd">N</span> not now, <span class="kbd">1</span>–<span class="kbd">3</span> answers, <span class="kbd">M</span> more, <span class="kbd">R</span> rules, <span class="kbd">C</span>/<span class="kbd">T</span> chat and back, <span class="kbd">Esc</span> back, <span class="kbd">?</span> all keys.</li></ul><h3>The three-second test</h3><p>When something needs you, the eye lands on the line’s question and button: pass. When nothing does, it lands on the chat, which is the noisy surface we started from.</p></div>
+<div class="prose"><h3 style="margin-top:0">Good</h3><ul><li>The least interface possible, and zero to learn.</li><li>The ideal ambient layer: sidebar, notch, lock screen.</li><li>Keeps everyone who loves the chat in the chat.</li></ul><h3>Not good</h3><ul><li>Easy to miss, and nothing shows progress until you open it.</li><li>The chat stays the main surface.</li><li>Weak for a real working session with five decisions.</li></ul><h3>The chat and Now</h3><p>The chat is the page. As Now, a single line per manager is exactly the calm ambient status we recommend everywhere else, but not the place to work through decisions.</p></div>
+</div></section></main>
+<script>window.PAGE = 'quiet';</script><script>
+(function () {
+'use strict';
+const PAGE = window.PAGE || 'today';
+const $ = (s, r = document) => r.querySelector(s);
+const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const I = (n, c = '') => `<svg class="i ${c}" aria-hidden="true"><use href="#i-${n}"/></svg>`;
+const clone = (o) => JSON.parse(JSON.stringify(o));
+const WORDS = ['No', 'One', 'Two', 'Three', 'Four', 'Five', 'Six', 'Seven', 'Eight', 'Nine', 'Ten', 'Eleven', 'Twelve'];
+const word = (n, lower) => { const w = WORDS[n] || String(n); return lower ? w.toLowerCase() : w; };
+const minutes = (n) => (n <= 1 ? 'about a minute' : `about ${word(Math.max(2, Math.round(n * 0.75)), true)} minutes`);
+const avatar = (size, bg) => `<span class="av" style="width:${size}px;height:${size}px" aria-hidden="true"><svg viewBox="0 0 40 40"><circle cx="20" cy="20" r="20" fill="${bg || '#2d2443'}"/><path d="M8.6 18.2c1.6-5.6 6-8.7 11.4-8.7s9.8 3.1 11.4 8.7" fill="none" stroke="#d9a640" stroke-width="2.4" stroke-linecap="round" stroke-dasharray="2.6 1.7"/><circle cx="20" cy="24" r="10" fill="#f3cf9c"/><circle cx="16.6" cy="23" r="1.35" fill="#3b2416"/><circle cx="23.4" cy="23" r="1.35" fill="#3b2416"/><path d="M17.3 27.4q2.7 1.8 5.4 0" stroke="#3b2416" stroke-width="1.2" fill="none" stroke-linecap="round"/></svg></span>`;
+
+/* ============================== the world, in plain language ============================== */
+function seed() {
+  return {
+    name: 'Delivery lead',
+    paused: null,
+    autonomy: 'routine',
+    seq: 0,
+    sessionDone: 0,
+    decisions: [
+      { id: 'merge', goal: 'checkout', kind: 'approval', q: 'Merge the checkout redesign?', why: 'It passed two reviews and all 14 checks. Merging finishes the goal.', yes: 'Merge', done: 'Merged. The checkout redesign is live on main.', state: 'open', confirm: 'Merge #2318 into main?' },
+      { id: 'flaky', goal: 'flaky', kind: 'question', q: 'Let the flaky checkout test stop blocking merges for a week?', why: 'It fails about one run in five because the payment sandbox times out, not because of our code. Three tasks asked about this; one answer settles all three.', opts: [{ l: 'Yes, quarantine it for a week' }, { l: 'No, keep it blocking' }, { l: 'Try longer timeouts first' }], done: 'Quarantined until next Wednesday. The refund fix can go in.', state: 'open',
+        trust: { q: 'Next time a test is flaky because of the sandbox, should I quarantine it for a week myself and tell you after?', rule: 'Quarantine a sandbox-flaky test for a week on my own, and tell me after.' } },
+      { id: 'deps', goal: null, kind: 'approval', q: 'Keep your dependencies up to date?', why: '41 packages are behind across your three projects. Every Monday at 7:00 I would open one small update per project. You still merge them.', yes: 'Turn it on', done: 'On. The first updates arrive on Monday at 7:00.', state: 'open', confirm: 'Turn on weekly dependency updates?' },
+      { id: 'read', goal: 'offline', kind: 'review', q: 'Have a look at the offline-mode draft?', why: 'Three options. I recommend queued writes that merge field by field. It takes about six minutes, and nothing else waits on it.', yes: 'Read it now', done: 'Marked as read. Say “go” in the chat when you want the plan.', state: 'open' },
+    ],
+    defaults: [
+      { id: 'rerun', text: 'Re-run last night’s tests', why: 'One test failed at 2:14 and has passed five times since. Probably a fluke.', when: 'at 17:00', state: 'pending' },
+      { id: 'tidy', text: 'Tidy away six finished review tasks', why: 'Their pull requests are merged or closed.', when: 'tonight', state: 'pending' },
+    ],
+    handled: [
+      { n: 1, text: 'Answered “Squash or merge commit for #2318?”: squash.', why: 'Your rule: squash-merge on storefront.' },
+      { n: 1, text: 'Answered the second design task’s “How should offline edits merge?”.', why: 'You answered the same question at 10:15.' },
+      { n: 1, text: 'Answered “Which Node version for CI?”: 22.', why: 'You decided this in the chat last week.' },
+      { n: 1, text: 'Closed “Rebase #2290 before merging?”.', why: '#2290 merged at 10:12, so it no longer matters.' },
+      { n: 2, text: 'Closed two questions from “Fix cart badge count”.', why: 'That task stopped, so nobody waits on the answers.' },
+      { n: 1, text: 'Re-ran a flaky lint step on #2329.', why: 'Your rule: retry a flaky check once before asking.' },
+      { n: 2, text: 'Folded three questions about the payment sandbox into one decision.', why: 'They had one answer. It waits for you as the flaky-test decision.' },
+    ],
+    order: ['checkout', 'flaky', 'reviews', 'green', 'search', 'offline'],
+    goals: {
+      checkout: { title: 'Ship the checkout redesign', kind: 'once', p: 0.9, state: 'One step left: your merge.',
+        story: 'You asked this morning for the checkout redesign to land, with a proper review first. The first review found one real problem: a retry could charge a card twice. I fixed it, reviewed it again, and it is clean. All 14 checks pass.',
+        work: [{ tm: '09:03', t: 'Reviewed pull request #2318. One real problem, one nitpick.', why: 'Every goal like this starts with a review.', ref: 'task:rv2318' }, { tm: '10:48', t: 'Fixed the problem in two commits.', why: 'Your rule: fix important review findings without asking me.', ref: 'task:fx2318' }, { tm: '11:52', t: 'Reviewed it again. Clean, and all 14 checks pass.', why: 'A fix always gets a second review.', ref: 'task:rr2318' }],
+        links: [['Pull request #2318', 'pr:2318'], ['The review', 'task:rv2318'], ['In the chat', 'chat:c1']] },
+      flaky: { title: 'Fix the flaky checkout test', kind: 'once', p: 0.5, state: 'Found the cause. Waiting for your call.',
+        story: 'The checkout test fails about one run in five. I ran it 14 times with logs, and every failure is the payment sandbox timing out after 30 seconds. Our code is fine. The open question is whether the test should keep blocking merges while the sandbox is slow.',
+        work: [{ tm: '10:20', t: 'Noticed the test failed twice in a row on #424.' }, { tm: '10:21', t: 'Started an investigation, after you said yes.', why: 'Your rule: ask me before starting anything in orders-api.', ref: 'task:inv' }, { tm: '11:05', t: 'Found the cause: sandbox timeouts in 3 of 14 runs.', ref: 'task:inv' }],
+        links: [['The investigation', 'task:inv'], ['Pull request #424 (blocked)', 'pr:424']] },
+      reviews: { title: 'Keep pull requests reviewed', kind: 'ongoing', rule: 'reviews', state: 'Six reviewed today. One fix waits on the flaky test.',
+        story: 'Whenever someone asks for a review and the checks pass, I review the pull request. Today that was six. Five were clean. One, in the refund webhook, had a real problem; the fix is ready but waits on the flaky test.',
+        work: [{ tm: '09:15', t: 'Reviewed #424 (refunds). One real problem.', ref: 'task:rv424' }, { tm: '09:20', t: 'Started a fix, after you said yes.', why: 'Your rule: ask me before starting anything in orders-api.', ref: 'task:fx424' }, { tm: '10:52', t: 'Reviewed #2329 (saved items). Clean.', ref: 'task:rv2329' }, { tm: '11:58', t: 'Reviewing #2331 (search suggestions).', ref: 'task:rv2331' }],
+        links: [['The automation behind it', 'rec:reviews'], ['All six reviews', 'everything:tasks']] },
+      green: { title: 'Keep main green', kind: 'ongoing', rule: 'nightly', state: 'One failure last night that has not come back.',
+        story: 'Every night at 2:00 I run all 212 tests on main. Last night one failed, about the cart badge. I tried to fix it, but it passed five times in a row, so there was nothing to fix. Unless you object, I will run the whole suite again at 17:00.',
+        work: [{ tm: '02:14', t: 'Nightly run: 211 of 212 tests passed.', ref: 'task:qa26' }, { tm: '08:30', t: 'Tried to fix “cart badge shows 0 after reload”.', why: 'Your rule: fix what breaks on main.', ref: 'task:fxcart' }, { tm: '11:40', t: 'Stopped: it passed five times in a row.', ref: 'task:fxcart' }],
+        links: [['The automation behind it', 'rec:nightly'], ['Last night’s run', 'task:qa26']] },
+      search: { title: 'Make search faster', kind: 'once', p: 0.2, state: 'Measuring where the time goes.',
+        story: 'You asked for search to answer in under 300 ms; the slowest searches take 640 ms today. I am measuring before changing anything and will bring you a proposal this afternoon.',
+        work: [{ tm: '11:58', t: 'Started profiling the search endpoint.', ref: 'task:profile' }], links: [['The profiling task', 'task:profile'], ['In the chat', 'chat:c5']] },
+      offline: { title: 'Design offline mode', kind: 'once', p: 0.8, state: 'The draft is ready for you to read.',
+        story: 'You asked on Monday for an offline-mode design with options and a recommendation. The draft compares three approaches and recommends queued writes that merge field by field, behind a flag. Your answer on conflicts is in it.',
+        work: [{ tm: 'Mon', t: 'Started the design.', ref: 'task:design' }, { tm: '10:15', t: 'You chose how conflicts resolve.' }, { tm: '11:44', t: 'The draft is ready.', ref: 'task:design' }], links: [['The design task', 'task:design']] },
+      sdk: { title: 'Upgrade the payment SDK', kind: 'once', p: 1, done: true, state: 'Done yesterday.', story: 'Upgraded to v5, reviewed, and merged by you at 17:20.', work: [], links: [['Pull request #421', 'pr:421']] },
+    },
+    rules: [
+      { id: 'reviews', group: 'regular', text: 'Review every new pull request once its checks pass.', on: true, rec: 'reviews' },
+      { id: 'nightly', group: 'regular', text: 'Run all tests every night at 2:00. Tell me only if something fails.', on: true, rec: 'nightly' },
+      { id: 'summary', group: 'regular', text: 'Write me a short summary every morning at 8:30.', on: true, rec: 'summary' },
+      { id: 'fixes', group: 'alone', text: 'Fix important review findings without asking me.', on: true },
+      { id: 'orders', group: 'alone', text: 'Ask me before starting anything in orders-api.', on: true },
+      { id: 'retry', group: 'alone', text: 'Retry a flaky check once before asking me.', on: true },
+      { id: 'defaults', group: 'interrupt', text: 'Decide small, undoable things by default after four hours, unless I object.', on: true },
+      { id: 'checkin', group: 'interrupt', text: 'Hold anything that can wait until 9:00, 13:00 and 17:00.', on: false },
+    ],
+    tasks: {
+      rv2318: { t: 'Review #2318', goal: 'checkout', proj: 'storefront', st: 'Done', at: '09:41', pr: 2318, did: 'Reviewed 23 files. One real problem (a retry could charge a card twice) and one nitpick, skipped.' },
+      fx2318: { t: 'Fix review findings on #2318', goal: 'checkout', proj: 'storefront', st: 'Done', at: '10:48', pr: 2318, did: 'Added an idempotency key to both retry paths, with a test. Two commits.' },
+      rr2318: { t: 'Re-review #2318', goal: 'checkout', proj: 'storefront', st: 'Done', at: '11:52', pr: 2318, did: 'Clean.' },
+      inv: { t: 'Investigate the flaky checkout test', goal: 'flaky', proj: 'orders-api', st: 'Done', at: '11:05', did: 'Ran the test 14 times with logs. Three failures, all sandbox timeouts.' },
+      design: { t: 'Draft the offline-mode design', goal: 'offline', proj: 'mobile-app', st: 'Waiting for your review', at: '11:44', did: 'Wrote a three-option design with a recommendation.' },
+      profile: { t: 'Profile the search endpoint', goal: 'search', proj: 'storefront', st: 'Running · 12 min', at: '11:58', did: 'Load-profiling search at 200 requests per second.', live: true },
+      qa26: { t: 'Nightly tests · 26 Nov', goal: 'green', proj: 'storefront', st: 'Failed · 1 of 212', at: '02:14', did: 'One test failed: cart badge shows 0 after reload.' },
+      fxcart: { t: 'Fix cart badge count', goal: 'green', proj: 'storefront', st: 'Stopped', at: '11:40', did: 'Could not reproduce: it passed five times in a row.' },
+      rv2331: { t: 'Review #2331', goal: 'reviews', proj: 'storefront', st: 'Running · 12 min', at: '11:58', pr: 2331, did: 'Reviewing nine changed files.', live: true },
+      rv2329: { t: 'Review #2329', goal: 'reviews', proj: 'storefront', st: 'Done', at: '10:52', pr: 2329, did: 'Clean.' },
+      rv424: { t: 'Review #424', goal: 'reviews', proj: 'orders-api', st: 'Done', at: '09:15', pr: 424, did: 'One real problem: webhook retries without backoff.' },
+      fx424: { t: 'Fix review findings on #424', goal: 'reviews', proj: 'orders-api', st: 'Waiting on CI', at: '09:20', pr: 424, did: 'Added backoff. CI is blocked by the flaky test.', live: true },
+      node22: { t: 'Bump Node to 22 in CI', goal: null, proj: 'storefront', st: 'Running · 39 min', at: '11:31', pr: 2335, did: 'Updating CI images, 2 of 5 workflows done.', live: true },
+      flags: { t: 'Clean up stale feature flags', goal: null, proj: 'mobile-app', st: 'Queued', at: '11:12', did: 'Waiting for a free slot.', live: true },
+    },
+    prs: {
+      2318: { t: 'Checkout: one-page flow', proj: 'storefront', st: 'Open · ready to merge', goal: 'checkout' },
+      2329: { t: 'Cart: show saved items', proj: 'storefront', st: 'Open · checks running', goal: 'reviews' },
+      2331: { t: 'Search: debounce suggestions', proj: 'storefront', st: 'Open · in review', goal: 'reviews' },
+      2335: { t: 'CI: Node 22', proj: 'storefront', st: 'Draft', goal: null },
+      424: { t: 'Refunds: webhook retries', proj: 'orders-api', st: 'Open · blocked by the flaky test', goal: 'reviews' },
+      421: { t: 'Payments: SDK v5', proj: 'orders-api', st: 'Merged yesterday', goal: 'sdk' },
+    },
+    recs: {
+      reviews: { t: 'Review new PRs', rule: 'reviews', how: 'Automation · when a review is requested', proj: 'storefront, orders-api', report: 'Only problems', last: '11:58 · reviewing #2331', next: 'On the next request', runs: ['11:58 · #2331 · running', '10:52 · #2329 · clean', '09:15 · #424 · one real problem', 'Yesterday · #2320 · clean'] },
+      nightly: { t: 'Nightly QA', rule: 'nightly', how: 'Automation · every day at 02:00', proj: 'storefront', report: 'Every result', last: '02:14 · 1 of 212 failed', next: 'Tonight at 02:00', runs: ['Today 02:14 · 1 of 212 failed', 'Tue 02:12 · all passed', 'Mon 02:11 · all passed'] },
+      summary: { t: 'Morning summary', rule: 'summary', how: 'Saved job · every 24 hours', proj: 'all three projects', report: 'Every result', last: '08:31 · posted', next: 'Tomorrow at 08:31', runs: ['Today 08:31 · posted', 'Tue 08:30 · posted'] },
+      watch: { t: 'Watch check', rule: null, how: 'Every 15 minutes, no model call unless something is new', proj: 'all three projects', report: 'Only what is new', last: '12:05 · one new thing', next: '12:20', runs: ['12:05 · one new thing', '11:50 · nothing new', '11:35 · nothing new'], on: true },
+    },
+    chat: [
+      { id: 'c1', who: 'you', at: '09:02', t: 'Land the checkout redesign this week. Review it properly first.' },
+      { id: 'c2', who: 'mgr', at: '09:03', t: 'On it. I will review it first and come back when it is ready to merge.' },
+      { id: 'c3', who: 'you', at: '10:15', t: 'For offline edits: last write wins, per field.' },
+      { id: 'c4', who: 'mgr', at: '10:15', t: 'Noted, and saved as a decision. The design will use it.' },
+      { id: 'c5', who: 'you', at: '11:57', t: 'Search feels slow on storefront. Get it under 300 ms.' },
+      { id: 'c6', who: 'mgr', at: '11:58', t: 'I will measure first and bring you a proposal this afternoon.' },
+    ],
+    others: [
+      { id: 'o1', mgr: 'Triage bot', kind: 'question', q: 'Close twelve issues nobody has touched in 90 days?', why: 'None has linked work or a reply. I would close them with a polite note; anyone can reopen.', yes: 'Close them', done: 'Closed twelve issues.', state: 'open' },
+      { id: 'o2', mgr: 'Mobile app', kind: 'approval', q: 'Send build 0.13 to testers?', why: 'All checks pass, and 0.12 had no crashes in a week.', yes: 'Send it', done: 'Sent to testers.', state: 'open' },
+    ],
+  };
+}
+function busy(D) {
+  if (D.busy) return;
+  D.busy = true;
+  D.decisions.splice(1, 0, { id: 'merge433', goal: 'ratelimit', kind: 'approval', q: 'Merge the API rate limits?', why: 'Per-key limits with a clear “try again later” reply. The review is clean and all 9 checks pass.', yes: 'Merge', done: 'Merged. The public API now has rate limits.', state: 'open', confirm: 'Merge #433 into main?' });
+  D.decisions.push({ id: 'push', goal: 'push', kind: 'question', q: 'Send iOS notifications through the relay we already run?', why: 'One path for both platforms, and nothing new to operate. Going straight to Apple is a little faster but is a second system to look after.', opts: [{ l: 'Yes, use the relay' }, { l: 'No, go straight to Apple' }], done: 'Using the relay. Android and iOS share one path.', state: 'open' });
+  D.decisions.push({ id: 'stale', goal: null, kind: 'question', q: 'Close five draft pull requests nobody has touched in a month?', why: 'They are yours, have no reviews, and their branches are far behind main. Closing keeps the branches.', yes: 'Close them', done: 'Closed five drafts. The branches are kept.', state: 'open' });
+  D.handled.push({ n: 6, text: 'Answered six “can I rebase?” questions from review tasks.', why: 'Your rule: rebase small branches without asking.' }, { n: 5, text: 'Closed five questions on pull requests that merged in the meantime.', why: 'The work they asked about is done.' }, { n: 3, text: 'Folded three “which test account?” questions into one answer.', why: 'You use the shared staging account; it is in memory.' });
+  Object.assign(D.goals, {
+    ratelimit: { title: 'Rate-limit the public API', kind: 'once', p: 0.9, state: 'One step left: your merge.', story: 'You asked for per-key limits after last week’s traffic spike. They are built, reviewed and tested.', work: [{ tm: '10:55', t: 'Built per-key limits.' }, { tm: '11:46', t: 'Reviewed: clean.' }], links: [] },
+    push: { title: 'Notifications v2 on the phone apps', kind: 'once', p: 0.5, state: 'Works on Android. One question about iOS.', story: 'Rich notifications work on Android. iOS needs a choice of route.', work: [{ tm: '11:30', t: 'Android prototype works.' }], links: [] },
+    cdn: { title: 'Move images to the new CDN', kind: 'once', p: 0.4, state: 'Three of seven image paths moved.', story: 'Moving product images path by path, with the old bucket kept read-only until the end.', work: [{ tm: '11:10', t: 'Moved three paths.' }], links: [] },
+    a11y: { title: 'Make checkout accessible', kind: 'once', p: 0.6, state: 'Fixing four issues; two need design input later.', story: 'An accessibility pass found six issues. Four are being fixed now.', work: [{ tm: '11:20', t: 'Found six issues.' }], links: [] },
+  });
+  D.order = ['checkout', 'ratelimit', 'flaky', 'reviews', 'green', 'push', 'search', 'cdn', 'a11y', 'offline'];
+  for (let i = 0; i < 10; i++) D.tasks['b' + i] = { t: ['Review #2336', 'Review #2337', 'Review #427', 'Review #2339', 'Fix review findings on #428', 'Review #2341', 'Move image paths 4–7', 'Fix checkout labels', 'Review #2343', 'Review #429'][i], goal: ['reviews', 'reviews', 'reviews', 'reviews', 'reviews', 'reviews', 'cdn', 'a11y', 'reviews', 'reviews'][i], proj: i % 3 === 2 ? 'orders-api' : 'storefront', st: i < 6 ? 'Done' : 'Running · ' + (8 + i) + ' min', at: '11:' + String(10 + i * 4).padStart(2, '0'), did: i < 6 ? 'Clean.' : 'In progress.', live: i >= 6 };
+  D.others.push({ id: 'o3', mgr: 'Mobile app', kind: 'question', q: 'Ask testers for feedback in the app, or by email?', why: 'In-app gets more answers; email is quieter.', opts: [{ l: 'In the app' }, { l: 'By email' }], done: 'In the app it is.', state: 'open' });
+}
+
+let D = seed();
+const DEF = { tab: 'today', page: null, hist: [], expanded: false, showWork: {}, palette: false, pq: '', psel: 0, keys: false, confirm: null, toast: null, tour: null, lineOpen: false, ruleDraft: '', ruleProp: null, goalDraft: '', goalProp: null, outcome: null, trust: null, etab: 'goals', efilter: '', flash: null, nowIdx: 0, menu: false, lastDone: null };
+let S = Object.assign(clone(DEF), { device: 'desktop' });
+let toastTimer = null;
+const UNDO = {};
+
+/* ============================== derived ============================== */
+const open = () => D.decisions.filter((d) => d.state === 'open');
+const later = () => D.decisions.filter((d) => d.state === 'later');
+const queue = () => [...open(), ...later()];
+const current = () => queue()[0] || null;
+const checkinHolds = () => D.rules.find((r) => r.id === 'checkin').on;
+const handledCount = () => D.handled.reduce((a, h) => a + h.n, 0);
+const pendingDefaults = () => D.defaults.filter((d) => d.state === 'pending');
+const activeGoals = () => D.order.filter((id) => D.goals[id] && !D.goals[id].done);
+const goalWaits = (id) => queue().some((d) => d.goal === id);
+function statusLine() {
+  const n = queue().length;
+  if (D.paused) return `Paused ${D.paused}. Nothing new starts, and you can still decide.`;
+  if (checkinHolds() && n && !S.peek) return `Nothing urgent. ${word(n)} ${n === 1 ? 'thing is' : 'things are'} saved for 13:00.`;
+  if (!n) return 'Nothing needs you. Everything is on track.';
+  return `${word(n)} ${n === 1 ? 'thing needs' : 'things need'} you, ${minutes(n)}. The rest is on track.`;
+}
+function shortStatus() {
+  const n = queue().length;
+  if (D.paused) return 'Paused';
+  if (!n) return 'All on track';
+  return `${word(n)} ${n === 1 ? 'thing needs' : 'things need'} you`;
+}
+
+/* ============================== small pieces ============================== */
+function pie(g) {
+  if (g.done) return '<span class="pie full" aria-hidden="true"></span>';
+  if (g.kind === 'ongoing') return `<span class="loop" aria-hidden="true">${I('repeat', 's14')}</span>`;
+  return `<span class="pie" style="--p:${g.p}" aria-hidden="true"></span>`;
+}
+function goalRow(id, opts = {}) {
+  const g = D.goals[id];
+  const waits = goalWaits(id);
+  const rule = g.rule ? D.rules.find((r) => r.id === g.rule) : null;
+  const state = rule && !rule.on ? 'Paused by you.' : g.state;
+  return `<button class="goal ${waits ? 'you' : ''} ${g.done ? 'done' : ''}" data-act="goal" data-id="${id}" data-tour="goal-${id}">${pie(g)}<span class="gt">${esc(g.title)}</span><span class="gs">${esc(state)}</span></button>`;
+}
+function goalsBlock(limit, dev) {
+  const ids = activeGoals();
+  const shown = ids.slice(0, limit);
+  const more = ids.length - shown.length;
+  return `<div class="label">What I’m doing for you</div><div>${shown.map((id) => goalRow(id)).join('')}</div>${more > 0 ? `<button class="tbtn" style="font-size:14px" data-act="everything" data-v="goals">${word(more)} more, and what is done ›</button>` : ''}`;
+}
+function handledLine(prefix) {
+  const h = handledCount();
+  const d = pendingDefaults();
+  return `<span>${prefix || ''}I took care of ${word(h, true)} things for you today${d.length ? `, and ${word(d.length, true)} more happen by default unless you object` : ''}.</span> <button class="linkbtn" data-act="handled" data-tour="handled">See them</button>`;
+}
+function footer(dev, extra) {
+  return `<div class="footnote">${extra || ''}<button class="linkbtn" data-act="rules" data-tour="rules">How it works</button><button class="linkbtn" data-act="everything" data-tour="everything">Everything${dev === 'desktop' ? ' <span class="kbd">E</span>' : ''}</button></div>`;
+}
+
+/* ============================== the decision (one at a time) ============================== */
+function decisionBlock(dev, src) {
+  if (S.trust) return trustBlock(dev);
+  const list = src === 'now' ? nowQueue() : queue();
+  const d = list[0];
+  const out = S.outcome ? `<p class="outcome enter">${I('check', 's14')}${esc(S.outcome)}</p>` : '';
+  if (!d) return out;
+  const total = (src === 'now' ? 0 : D.sessionDone) + list.length;
+  const done = src === 'now' ? 0 : D.sessionDone;
+  const prog = src === 'now' ? '' : `<div class="progress" aria-label="${done} of ${total} done">${Array.from({ length: Math.min(total, 8) }, (_, i) => `<i class="${i < done ? 'on' : ''}"></i>`).join('')}</div>`;
+  const who = src === 'now' ? `<div class="ask-who">From ${esc(d.mgr || D.name)}</div>` : d.goal && D.goals[d.goal] ? `<div class="ask-who">${esc(D.goals[d.goal].title)}</div>` : '';
+  const k = (s) => (dev === 'desktop' ? ` <span class="kbd">${s}</span>` : '');
+  const acts = choiceActions(d, dev, src !== 'now');
+  const next = list[1];
+  const then = next ? `<p class="then">Then: ${esc(next.q.replace(/\?$/, ''))}${list.length > 2 ? `, and ${word(list.length - 2, true)} more` : ''}.</p>` : `<p class="then">That is the last one.</p>`;
+  const more = S.expanded && d.goal && D.goals[d.goal] ? `<div class="more enter"><p>${esc(D.goals[d.goal].story)}</p><button class="linkbtn" data-act="goal" data-id="${d.goal}">Open the goal and show the work ›</button></div>` : S.expanded ? `<div class="more enter"><p>${esc(d.why)} This would become a rule you can switch off at any time.</p></div>` : '';
+  const laterNote = d.state === 'later' ? `<div class="ask-who">You put this off earlier.</div>` : '';
+  return `${out}<div class="enter" data-key="${d.id}">${prog}${laterNote}${who}<h2 class="ask-q">${esc(d.q)}</h2><p class="ask-why">${esc(d.why)}</p>${acts}${more}${then}</div>`;
+}
+function choiceActions(d, dev, withMore) {
+  const k = (s) => (dev === 'desktop' ? ` <span class="kbd">${s}</span>` : '');
+  const main = d.opts ? `data-act="answer" data-id="${d.id}" data-v="0"` : `data-act="yes" data-id="${d.id}"`;
+  const label = d.opts ? d.opts[0].l : d.yes;
+  const others = d.opts && d.opts.length > 1 ? `<p class="others">Other answers: ${d.opts.slice(1).map((o, i) => `<button class="linkbtn" data-act="answer" data-id="${d.id}" data-v="${i + 1}">${esc(o.l)}</button>${dev === 'desktop' ? ` <span class="kbd">${i + 2}</span>` : ''}`).join('<span class="soft"> · </span>')}</p>` : '';
+  return `<div class="actions"><button class="btn btn-primary" ${main} data-tour="decide">${esc(label)}${k('↵')}</button><button class="tbtn" data-act="later" data-id="${d.id}">Not now${k('N')}</button>${withMore ? `<button class="tbtn" data-act="more" data-tour="more">${S.expanded ? 'Less' : 'Tell me more'}${k('M')}</button>` : ''}</div>${others}`;
+}
+function trustBlock(dev) {
+  const t = S.trust;
+  const k = (s) => (dev === 'desktop' ? ` <span class="kbd">${s}</span>` : '');
+  return `${S.outcome ? `<p class="outcome enter">${I('check', 's14')}${esc(S.outcome)}</p>` : ''}<div class="enter"><div class="ask-who">One more thing</div><h2 class="ask-q" style="font-size:24px">${esc(t.q)}</h2><p class="ask-why">It would become a rule: “${esc(t.rule)}” You can switch it off in How it works.</p><div class="actions"><button class="btn btn-primary" data-act="trust-yes" data-tour="decide">Yes, do that${k('↵')}</button><button class="tbtn" data-act="trust-no">Keep asking me${k('N')}</button></div></div>`;
+}
+function clearBlock(dev) {
+  return `${S.outcome ? `<p class="outcome enter">${I('check', 's14')}${esc(S.outcome)}</p>` : ''}<div class="enter"><h2 class="clear-h">You’re clear.</h2><p class="ask-why" style="margin-bottom:0">${handledLine()}</p></div>`;
+}
+function heldBlock() {
+  const n = queue().length;
+  return `<div class="enter"><h2 class="clear-h">Nothing urgent.</h2><p class="ask-why">${word(n)} ${n === 1 ? 'thing is' : 'things are'} saved for your 13:00 check-in, as your rule asks. <button class="linkbtn" data-act="peek">Look now</button></p></div>`;
+}
+function decideArea(dev) {
+  if (checkinHolds() && queue().length && !S.peek && !S.trust) return heldBlock();
+  if (!current() && !S.trust) return clearBlock(dev);
+  return decisionBlock(dev);
+}
+
+/* ============================== concept: Today (recommended) ============================== */
+function vToday(dev) {
+  return `<div class="calm"><p class="status">${D.paused ? `${esc(statusLine())} <button class="linkbtn" data-act="resume">Resume</button>` : esc(statusLine())}</p>${decideArea(dev)}<div class="divider"></div>${goalsBlock(5, dev)}${footer(dev, current() ? `<span>${handledLine()}</span>` : '')}</div>`;
+}
+/* ============================== concept: Focus ============================== */
+function vFocus(dev) {
+  return `<div class="calm" style="padding-top:${dev === 'phone' ? 26 : 70}px"><p class="status">${esc(statusLine())}${D.paused ? ' <button class="linkbtn" data-act="resume">Resume</button>' : ''}</p>${decideArea(dev)}${footer(dev, `<button class="linkbtn" data-act="doing" data-tour="doing">What I’m doing for you</button>`)}</div>`;
+}
+function vDoing(dev) {
+  return `<div class="calm"><button class="back" data-act="back">${I('back', 's14')}Back</button><h2 class="page-h">What I’m doing for you</h2><p class="page-s muted" style="color:var(--muted-foreground)">${esc(statusLine())}</p>${goalsBlock(5, dev)}${footer(dev)}</div>`;
+}
+/* ============================== concept: Goals ============================== */
+function vGoals(dev) {
+  const ids = activeGoals();
+  const top = ids.find((id) => goalWaits(id));
+  const topD = top ? queue().find((d) => d.goal === top) : null;
+  const k = (s) => (dev === 'desktop' ? ` <span class="kbd">${s}</span>` : '');
+  const rows = ids.slice(0, 5).map((id) => {
+    const row = goalRow(id);
+    if (id !== top || !topD || topD.opts) return row;
+    return `${row}<div style="padding:0 0 10px 32px"><button class="btn btn-primary" data-act="yes" data-id="${topD.id}" data-tour="decide">${esc(topD.yes)}${k('↵')}</button></div>`;
+  }).join('');
+  const more = ids.length - 5;
+  const extra = queue().filter((d) => !d.goal);
+  return `<div class="calm"><p class="status">${esc(statusLine())}</p>${S.outcome ? `<p class="outcome enter">${I('check', 's14')}${esc(S.outcome)}</p>` : ''}<div>${rows}</div>${more > 0 ? `<button class="tbtn" style="font-size:14px" data-act="everything" data-v="goals">${word(more)} more, and what is done ›</button>` : ''}${extra.length ? `<p class="then" style="margin-top:18px">Not tied to a goal: <button class="linkbtn" data-act="focus-one" data-id="${extra[0].id}">${esc(extra[0].q)}</button></p>` : ''}${goalAdd(dev)}${footer(dev, current() ? `<span>${handledLine()}</span>` : '')}</div>`;
+}
+function goalAdd(dev) {
+  if (S.goalProp) return `<div class="proposal enter"><p>${esc(S.goalProp.text)}</p><div class="actions"><button class="btn btn-primary" data-act="goal-start" data-tour="say-on">${S.goalProp.ongoing ? 'Start it' : 'Start'}</button><button class="tbtn" data-act="goal-change">Change it</button></div></div>`;
+  return `<div class="say" style="margin-top:22px">${I('plus', 'soft')}<input id="goal-input" placeholder="Add a goal: “Ship the app to testers” or “Keep main green”" data-enter="goal-add" data-tour="goal-input" value="${esc(S.goalDraft)}"></div>`;
+}
+/* ============================== concept: Brief ============================== */
+function vBrief(dev) {
+  const q = queue().slice(0, 3);
+  const k = (s) => (dev === 'desktop' ? ` <span class="kbd">${s}</span>` : '');
+  const head = !q.length ? 'Nothing needs you this afternoon. Everything is on track.' : q.length === 1 ? 'One decision would unblock the rest of today.' : `${word(q.length)} decisions would unblock most of today’s work.`;
+  const pts = q.map((d, i) => {
+    const btn = d.opts ? (i === 0 ? `<button class="btn btn-primary" data-act="answer" data-id="${d.id}" data-v="0" data-tour="decide">${esc(d.opts[0].l)}${k('↵')}</button>` : `<button class="btn btn-quiet" data-act="answer" data-id="${d.id}" data-v="0">${esc(d.opts[0].l)}</button>`) + `<button class="tbtn" data-act="focus-one" data-id="${d.id}">Other answers</button>` : (i === 0 ? `<button class="btn btn-primary" data-act="yes" data-id="${d.id}" data-tour="decide">${esc(d.yes)}${k('↵')}</button>` : `<button class="btn btn-quiet" data-act="yes" data-id="${d.id}">${esc(d.yes)}</button>`);
+    return `<div class="point enter"><span class="n">${i + 1}.</span><div><p><b>${esc(d.q)}</b> ${esc(d.why)}</p><div class="actions">${btn}<button class="tbtn" data-act="later" data-id="${d.id}">Not now</button></div></div></div>`;
+  }).join('');
+  const rest = queue().length > 3 ? `<p class="rest">After those, ${word(queue().length - 3, true)} smaller ${queue().length - 3 === 1 ? 'thing' : 'things'} can wait for tomorrow.</p>` : '';
+  const doing = `Everything else is on track. <button class="inline-link" data-act="goal" data-id="reviews" data-tour="goal-reviews">Reviews</button> are keeping up: six today, all handled. <button class="inline-link" data-act="goal" data-id="green" data-tour="goal-green">Main</button> had one failure overnight that has not come back, so I will re-run it at 17:00 unless you object. <button class="inline-link" data-act="goal" data-id="search" data-tour="goal-search">Search</button> profiling is underway, with a proposal this afternoon.`;
+  return `<div class="letter"><p class="date">Wednesday, 12:05 · from Delivery lead</p>${S.outcome ? `<p class="outcome enter">${I('check', 's14')}${esc(S.outcome)}</p>` : ''}<h2>${esc(head)}</h2>${pts}${rest}<p class="rest">${doing}</p><p class="rest">${handledLine()}</p>${footer(dev, '<span>Next brief at 17:00.</span><button class="linkbtn" data-act="tab" data-v="chat">Reply</button>')}</div>`;
+}
+/* ============================== concept: Quiet ============================== */
+function vQuiet(dev) {
+  const d = current();
+  const n = queue().length;
+  const k = (s) => (dev === 'desktop' ? ` <span class="kbd">${s}</span>` : '');
+  let line;
+  if (S.trust) {
+    line = `<div class="qline needs"><span class="msg"><b>${esc(S.trust.q)}</b></span><button class="btn btn-primary" data-act="trust-yes" data-tour="decide">Yes, do that</button><button class="tbtn" data-act="trust-no">Keep asking</button></div>`;
+  } else if (d && !(checkinHolds() && !S.peek)) {
+    const yes = d.opts ? `<button class="btn btn-primary" data-act="answer" data-id="${d.id}" data-v="0" data-tour="decide">${esc(d.opts[0].l)}${k('↵')}</button>` : `<button class="btn btn-primary" data-act="yes" data-id="${d.id}" data-tour="decide">${esc(d.yes)}${k('↵')}</button>`;
+    line = `<div class="qline needs"><span class="msg">${n > 1 ? `${word(n)} things need you. First: ` : ''}<b>${esc(d.q)}</b></span>${yes}<button class="tbtn" data-act="later" data-id="${d.id}">Not now</button><button class="iconbtn" data-act="line" aria-label="${S.lineOpen ? 'Less' : 'More'}" data-tour="line-more">${I(S.lineOpen ? 'up' : 'down')}</button></div>`;
+  } else {
+    line = `<div class="qline"><span class="msg">${S.outcome ? `<span style="color:var(--success-strong)">${esc(S.outcome)}</span> ` : ''}${n && checkinHolds() ? `Nothing urgent. ${word(n)} saved for 13:00.` : 'All good.'} ${word(activeGoals().length)} goals moving.</span><button class="iconbtn" data-act="line" aria-label="More" data-tour="line-more">${I(S.lineOpen ? 'up' : 'down')}</button></div>`;
+  }
+  const more = S.lineOpen ? `<div class="qmore enter">${d && !S.trust ? `<p class="ask-why" style="margin:6px 0 14px;font-size:15px">${esc(d.why)}</p>${d.opts && d.opts.length > 1 ? `<p class="others" style="margin:0 0 14px">Other answers: ${d.opts.slice(1).map((o, i) => `<button class="linkbtn" data-act="answer" data-id="${d.id}" data-v="${i + 1}">${esc(o.l)}</button>`).join('<span class="soft"> · </span>')}</p>` : ''}` : ''}${goalsBlock(5, dev)}<div class="footnote" style="margin-top:14px"><span>${handledLine()}</span><button class="linkbtn" data-act="rules" data-tour="rules">How it works</button><button class="linkbtn" data-act="everything">Everything</button></div></div>` : '';
+  return `${line}${more}${chatBody(dev)}`;
+}
+
+/* ============================== pages one step away ============================== */
+function pGoal(id, dev) {
+  const g = D.goals[id];
+  const d = queue().find((x) => x.goal === id);
+  const k = (s) => (dev === 'desktop' ? ` <span class="kbd">${s}</span>` : '');
+  let act = '';
+  if (d) act = `<div style="margin-bottom:28px">${choiceActions(d, dev, false)}</div>`;
+  const rule = g.rule ? D.rules.find((r) => r.id === g.rule) : null;
+  const open = S.showWork[id];
+  const work = open ? `<div class="work enter">${g.work.map((w) => `<div class="step"><span class="tm">${esc(w.tm)}</span><span>${w.ref ? `<button class="inline-link" data-act="ref" data-v="${w.ref}">${esc(w.t)}</button>` : esc(w.t)}${w.why ? `<span class="why">Why: ${esc(w.why)}</span>` : ''}</span></div>`).join('')}</div><div class="links">${g.links.map(([l, r]) => `<button class="linkbtn" data-act="ref" data-v="${r}">${esc(l)}</button>`).join('')}</div>` : '';
+  const auto = { ask: 'asks you first', routine: 'handles the routine and asks about the rest', all: 'handles everything it is allowed to, and tells you after' }[g.autonomy || D.autonomy];
+  return `<div class="calm"><button class="back" data-act="back">${I('back', 's14')}Back</button><h2 class="page-h">${esc(g.title)}</h2><p class="page-s">${esc(rule && !rule.on ? 'Paused by you.' : g.state)}</p>${act}<p class="story">${esc(g.story)}</p><button class="tbtn" style="font-size:14px" data-act="work" data-id="${id}" data-tour="show-work">${open ? 'Hide the work' : 'Show the work'} ${I(open ? 'up' : 'down', 's14')}</button>${work}${rule ? `<p class="setting">This goal comes from your rule: <b>“${esc(rule.text)}”</b> <button class="linkbtn" data-act="rule-toggle" data-id="${rule.id}">${rule.on ? 'Pause it' : 'Resume it'}</button></p>` : ''}<p class="setting">On this goal, Delivery lead <b>${auto}</b>. <button class="linkbtn" data-act="goal-autonomy" data-id="${id}">Change</button></p>${g.kind === 'once' && !g.done ? `<p class="setting"><button class="linkbtn" data-act="goal-stop" data-id="${id}">Stop this goal</button></p>` : ''}</div>`;
+}
+function pRules(dev) {
+  const radio = [['ask', 'asks me first'], ['routine', 'handles the routine and asks about the rest'], ['all', 'handles everything it is allowed to, and tells me after']];
+  const grp = (key, title) => `<div class="label" style="margin-top:30px">${title}</div>${D.rules.filter((r) => r.group === key).map((r) => `<div class="rule ${r.on ? '' : 'off'}"><span class="rt">${esc(r.text)}${r.rec ? ` <button class="linkbtn soft" style="font-size:12.5px;margin-left:6px" data-act="ref" data-v="rec:${r.rec}">details</button>` : ''}</span><button class="switch" role="switch" aria-checked="${r.on}" aria-label="${esc(r.text)}" data-act="rule-toggle" data-id="${r.id}" data-tour="rule-${r.id}"><span class="track"></span></button></div>`).join('')}`;
+  const prop = S.ruleProp ? `<div class="proposal enter"><p>${esc(S.ruleProp.text)}</p><div class="actions"><button class="btn btn-primary" data-act="rule-on" data-tour="say-on">Turn it on</button><button class="tbtn" data-act="rule-change">Change it</button></div></div>` : '';
+  return `<div class="calm"><button class="back" data-act="back">${I('back', 's14')}Back</button><h2 class="page-h">How Delivery lead works</h2><p class="page-s" style="color:var(--muted-foreground)">Plain rules. Switch one off, or tell it a new one.</p>
+  <div class="label">When something comes up, it…</div><div class="radio" role="radiogroup">${radio.map(([v, l]) => `<button role="radio" aria-checked="${D.autonomy === v}" data-act="autonomy" data-v="${v}" data-tour="autonomy-${v}"><span class="dotr"></span>${l}</button>`).join('')}</div>
+  <div class="say" style="margin-top:26px">${I('msg', 'soft')}<input id="rule-input" placeholder="Tell it a new rule: “Every Monday, update dependencies”" data-enter="rule-add" data-tour="say" value="${esc(S.ruleDraft)}"></div>${prop}
+  ${grp('regular', 'What it does regularly')}${grp('alone', 'What it does on its own')}${grp('interrupt', 'When it interrupts you')}
+  <div class="lockline">${I('lock', 's14')}<span>It never merges, turns on recurring work or writes through a connector without you. These always come to you as a decision.</span></div>
+  <div class="label" style="margin-top:30px">Pause Delivery lead</div><p class="setting" style="margin-top:0">${D.paused ? `Paused ${esc(D.paused)}. <button class="linkbtn" data-act="resume">Resume now</button>` : 'Nothing new starts while paused. Running work finishes, and you can still decide.'}</p>${D.paused ? '' : `<div class="pauses"><button class="btn btn-quiet" data-act="pause" data-v="until 13:10" data-tour="pause-hour">For an hour</button><button class="btn btn-quiet" data-act="pause" data-v="until tomorrow at 9:00">Until tomorrow</button><button class="btn btn-quiet" data-act="pause" data-v="until you resume">Until I resume</button></div>`}</div>`;
+}
+function pHandled(dev) {
+  const d = pendingDefaults();
+  return `<div class="calm"><button class="back" data-act="back">${I('back', 's14')}Back</button><h2 class="page-h">What I took care of</h2><p class="page-s" style="color:var(--muted-foreground)">${word(handledCount())} things today, so they never reached you. Change any of them if I got it wrong.</p>${D.handled.map((h, i) => `<div class="rule"><span class="rt">${esc(h.text)}<span class="rk" style="display:block;margin-top:2px">${esc(h.why)}</span></span><button class="tbtn" style="font-size:13.5px" data-act="toast" data-v="Opens the original question, so you can answer it differently.">Change</button></div>`).join('')}
+  ${d.length ? `<div class="label" style="margin-top:34px">Happening by default, unless you object</div>${d.map((x) => `<div class="rule"><span class="rt">${esc(x.text)} ${esc(x.when)}.<span class="rk" style="display:block;margin-top:2px">${esc(x.why)}</span></span><span style="display:flex;gap:10px"><button class="tbtn" style="font-size:13.5px" data-act="default-now" data-id="${x.id}">Do it now</button><button class="tbtn" style="font-size:13.5px" data-act="default-no" data-id="${x.id}">Don’t</button></span></div>`).join('')}` : ''}</div>`;
+}
+function pNow(dev) {
+  const list = nowQueue();
+  const n = list.length;
+  const st = n ? `${word(n)} ${n === 1 ? 'thing needs' : 'things need'} you across your managers, ${minutes(n)}.` : 'Nothing needs you, anywhere.';
+  return `<div class="calm"><p class="status">${esc(st)}</p>${n ? decisionBlock(dev, 'now') : `${S.outcome ? `<p class="outcome enter">${I('check', 's14')}${esc(S.outcome)}</p>` : ''}<h2 class="clear-h enter">You’re clear.</h2>`}<div class="divider"></div><div class="label">Your managers</div>${[['Delivery lead', shortStatus()], ['Triage bot', D.others.find((o) => o.mgr === 'Triage bot' && o.state === 'open') ? 'One thing needs you' : 'All on track'], ['Mobile app', D.others.some((o) => o.mgr === 'Mobile app' && o.state === 'open') ? 'One thing needs you' : 'All on track'], ['Docs keeper', 'All on track']].map(([m, s]) => `<button class="goal" data-act="${m === 'Delivery lead' ? 'home' : 'toast'}" data-v="Opens ${m}."><span class="loop">${I('bot', 's14')}</span><span class="gt">${m}</span><span class="gs">${s}</span></button>`).join('')}<div class="footnote"><span>Your managers took care of ${word(handledCount() + 5, true)} things today.</span><button class="linkbtn" data-act="handled">See them</button></div></div>`;
+}
+function nowQueue() { return [...queue().map((d) => Object.assign({ mgr: D.name }, d)), ...D.others.filter((o) => o.state === 'open')]; }
+function pEverything(dev) {
+  const tabs = [['goals', 'Goals', Object.keys(D.goals).length], ['tasks', 'Tasks', Object.keys(D.tasks).length], ['prs', 'Pull requests', Object.keys(D.prs).length], ['recurring', 'Recurring', Object.keys(D.recs).length], ['rules', 'Rules', D.rules.length]];
+  const f = S.efilter.toLowerCase();
+  const m = (s) => !f || String(s).toLowerCase().includes(f);
+  let body = '';
+  if (S.etab === 'goals') body = `<table class="e"><thead><tr><th>Goal</th><th>Where it stands</th><th>Kind</th></tr></thead><tbody>${Object.keys(D.goals).filter((id) => m(D.goals[id].title)).map((id) => `<tr data-act="goal" data-id="${id}"><td class="first">${esc(D.goals[id].title)}</td><td>${esc(D.goals[id].state)}</td><td>${D.goals[id].kind === 'ongoing' ? 'Ongoing' : D.goals[id].done ? 'Done' : 'One-time'}</td></tr>`).join('')}</tbody></table>`;
+  if (S.etab === 'tasks') body = `<table class="e"><thead><tr><th>Task</th><th>Status</th><th>Goal</th><th>Project</th><th>Updated</th></tr></thead><tbody>${Object.keys(D.tasks).filter((id) => m(D.tasks[id].t + ' ' + D.tasks[id].proj)).map((id) => { const t = D.tasks[id]; return `<tr data-act="ref" data-v="task:${id}"><td class="first">${esc(t.t)}</td><td>${esc(t.st)}</td><td>${t.goal ? esc(D.goals[t.goal] ? D.goals[t.goal].title : '') : '<span class="soft">No goal yet</span>'}</td><td>${esc(t.proj)}</td><td>${esc(t.at)}</td></tr>`; }).join('')}</tbody></table>`;
+  if (S.etab === 'prs') body = `<table class="e"><thead><tr><th>Pull request</th><th>State</th><th>Project</th><th>Goal</th></tr></thead><tbody>${Object.keys(D.prs).filter((n) => m(n + ' ' + D.prs[n].t)).map((n) => `<tr data-act="ref" data-v="pr:${n}"><td class="first">#${n} ${esc(D.prs[n].t)}</td><td>${esc(D.prs[n].st)}</td><td>${esc(D.prs[n].proj)}</td><td>${D.prs[n].goal && D.goals[D.prs[n].goal] ? esc(D.goals[D.prs[n].goal].title) : ''}</td></tr>`).join('')}</tbody></table>`;
+  if (S.etab === 'recurring') body = `<table class="e"><thead><tr><th>What</th><th>How</th><th>Last</th><th>Next</th><th></th></tr></thead><tbody>${Object.keys(D.recs).filter((id) => m(D.recs[id].t)).map((id) => { const r = D.recs[id]; const on = recOn(id); return `<tr data-act="ref" data-v="rec:${id}"><td class="first">${esc(r.t)}</td><td>${esc(r.how)}</td><td>${esc(r.last)}</td><td>${on ? esc(r.next) : 'Paused'}</td><td><button class="switch" role="switch" aria-checked="${on}" aria-label="Pause or resume ${esc(r.t)}" data-act="rec-toggle" data-id="${id}"><span class="track"></span></button></td></tr>`; }).join('')}</tbody></table><div class="row-actions" style="margin-top:14px"><button class="btn btn-quiet" data-act="rules">New recurring work…</button></div>`;
+  if (S.etab === 'rules') body = `<table class="e"><thead><tr><th>Rule</th><th>Kind</th><th></th></tr></thead><tbody>${D.rules.filter((r) => m(r.text)).map((r) => `<tr><td class="first">${esc(r.text)}</td><td>${{ regular: 'Regular work', alone: 'On its own', interrupt: 'Interruptions' }[r.group]}</td><td><button class="switch" role="switch" aria-checked="${r.on}" aria-label="Switch rule" data-act="rule-toggle" data-id="${r.id}"><span class="track"></span></button></td></tr>`).join('')}</tbody></table>`;
+  return `<div class="wide"><button class="back" data-act="back">${I('back', 's14')}Back</button><h2 class="page-h">Everything Delivery lead runs</h2><p class="page-s" style="color:var(--muted-foreground)">The full picture, for when you want it. Nothing here needs you unless Today says so.</p><div class="etabs" role="tablist">${tabs.map(([k, l, n]) => `<button role="tab" aria-selected="${S.etab === k}" data-act="etab" data-v="${k}">${l}<span class="n">${n}</span></button>`).join('')}</div><div class="filter">${I('search', 's14')}<input id="efilter" placeholder="Filter" value="${esc(S.efilter)}" data-bind="efilter"></div>${body}</div>`;
+}
+function recOn(id) { const r = D.recs[id]; if (r.rule) return D.rules.find((x) => x.id === r.rule).on; return r.on !== false; }
+function pRef(ref, dev) {
+  const [t, id] = ref.split(':');
+  const back = `<button class="back" data-act="back">${I('back', 's14')}Back</button>`;
+  if (t === 'task') {
+    const k = D.tasks[id];
+    return `<div class="calm">${back}<div class="label">Task</div><h2 class="page-h">${esc(k.t)}</h2><p class="page-s">${esc(k.st)}.</p><p class="story">${esc(k.did)}</p><dl class="facts"><dt>Project</dt><dd>${esc(k.proj)}</dd>${k.pr ? `<dt>Pull request</dt><dd><button class="inline-link" data-act="ref" data-v="pr:${k.pr}">#${k.pr}</button></dd>` : ''}<dt>Goal</dt><dd>${k.goal && D.goals[k.goal] ? `<button class="inline-link" data-act="goal" data-id="${k.goal}">${esc(D.goals[k.goal].title)}</button>` : 'None yet. The manager files it on its next check.'}</dd><dt>Agent</dt><dd>Claude Code · Sonnet 5.5</dd><dt>Updated</dt><dd>${esc(k.at)}</dd></dl><div class="row-actions"><button class="btn btn-quiet" data-act="toast" data-v="Opens the full task thread, as today.">${I('ext', 's14')}Open the task</button>${k.live ? '<button class="tbtn" data-act="toast" data-v="Sends a message to the task, like typing in its thread.">Steer it</button><button class="tbtn" data-act="toast" data-v="Stop asks first, as it does today.">Stop</button>' : '<button class="tbtn" data-act="toast" data-v="Continue reopens the session.">Continue</button>'}</div></div>`;
+  }
+  if (t === 'pr') {
+    const p = D.prs[id];
+    const d = id === '2318' ? queue().find((x) => x.id === 'merge') : null;
+    return `<div class="calm">${back}<div class="label">Pull request · ${esc(p.proj)}</div><h2 class="page-h">#${id} ${esc(p.t)}</h2><p class="page-s">${esc(p.st)}.</p>${d ? `<div class="actions" style="margin-bottom:26px"><button class="btn btn-primary" data-act="yes" data-id="merge">Merge</button></div>` : ''}<dl class="facts"><dt>Goal</dt><dd>${p.goal && D.goals[p.goal] ? `<button class="inline-link" data-act="goal" data-id="${p.goal}">${esc(D.goals[p.goal].title)}</button>` : 'None yet'}</dd><dt>Tasks on it</dt><dd>${Object.keys(D.tasks).filter((k) => String(D.tasks[k].pr) === id).map((k) => `<button class="inline-link" data-act="ref" data-v="task:${k}">${esc(D.tasks[k].t)}</button>`).join(', ') || 'None'}</dd></dl><div class="row-actions"><button class="btn btn-quiet" data-act="toast" data-v="Opens the pull request on GitHub.">${I('ext', 's14')}Open on GitHub</button><button class="tbtn" data-act="toast" data-v="Opens the Changes view.">See the changes</button></div></div>`;
+  }
+  if (t === 'rec') {
+    const r = D.recs[id];
+    const on = recOn(id);
+    const rule = r.rule ? D.rules.find((x) => x.id === r.rule) : null;
+    return `<div class="calm">${back}<div class="label">${esc(r.how)}</div><h2 class="page-h">${esc(r.t)}</h2><p class="page-s">${rule ? `“${esc(rule.text)}”` : esc(r.how)}</p><div class="actions" style="margin-bottom:24px"><button class="switch" role="switch" aria-checked="${on}" aria-label="On or paused" data-act="rec-toggle" data-id="${id}" data-tour="rec-toggle"><span class="track"></span></button><span class="muted">${on ? 'On' : 'Paused'}</span></div><dl class="facts"><dt>Projects</dt><dd>${esc(r.proj)}</dd><dt>Tells you</dt><dd>${esc(r.report)} <button class="linkbtn" data-act="toast" data-v="Choose: every result, only problems, or nothing.">Change</button></dd><dt>Last run</dt><dd>${esc(r.last)}</dd><dt>Next</dt><dd>${on ? esc(r.next) : 'Paused'}</dd><dt>Recent</dt><dd>${r.runs.map((x) => esc(x)).join('<br>')}</dd></dl><div class="row-actions"><button class="btn btn-quiet" data-act="toast" data-v="Started a run now.">Run it now</button><button class="tbtn" data-act="toast" data-v="Edit opens the automation editor. Saving an edit pauses it until you turn it on again.">Edit</button><button class="tbtn" data-act="toast" data-v="Delete asks first.">Delete</button></div></div>`;
+  }
+  return '';
+}
+
+/* ============================== chat ============================== */
+function chatBody(dev) {
+  return `<div class="chat">${PAGE === 'quiet' ? '' : '<p class="then" style="text-align:center;margin:0">Routine updates live in Today now. The chat is for talking.</p>'}${D.chat.map((m) => (m.who === 'you' ? `<div class="bu" id="m-${m.id}">${esc(m.t)}</div>` : `<div class="ba" id="m-${m.id}"><span class="meta">${esc(D.name)} · ${esc(m.at)}</span>${esc(m.t)}</div>`)).join('')}</div>`;
+}
+function vChat(dev) {
+  return `<div style="display:flex;flex-direction:column;height:100%"><div class="scroll" data-keep="chat">${chatBody(dev)}</div><div class="composer"><div class="comp"><input id="chat-input" placeholder="Message Delivery lead" data-enter="send"><button class="iconbtn" data-act="send" aria-label="Send">${I('send', 's14')}</button></div></div></div>`;
+}
+
+/* ============================== frames ============================== */
+function homeView(dev) {
+  if (PAGE === 'quiet') return `<div style="display:flex;flex-direction:column;height:100%"><div class="scroll" data-keep="home">${vQuiet(dev)}</div><div class="composer"><div class="comp"><input id="chat-input" placeholder="Message Delivery lead" data-enter="send"><button class="iconbtn" data-act="send" aria-label="Send">${I('send', 's14')}</button></div></div></div>`;
+  if (S.tab === 'chat') return vChat(dev);
+  return `<div class="scroll" data-keep="home">${{ today: vToday, focus: vFocus, goals: vGoals, brief: vBrief }[PAGE](dev)}</div>`;
+}
+function pageView(dev) {
+  const p = S.page;
+  const inner = p.type === 'goal' ? pGoal(p.id, dev) : p.type === 'rules' ? pRules(dev) : p.type === 'handled' ? pHandled(dev) : p.type === 'everything' ? pEverything(dev) : p.type === 'ref' ? pRef(p.ref, dev) : p.type === 'now' ? pNow(dev) : p.type === 'doing' ? vDoing(dev) : '';
+  return `<div class="scroll" data-keep="page-${p.type}">${inner}</div>`;
+}
+function sidebar() {
+  const n = queue().length;
+  const nowN = nowQueue().length;
+  const mgr = (name, line, bg, cur, pip) => `<button class="navi" ${cur ? 'aria-current="true"' : ''} data-act="${cur ? 'home' : 'toast'}" data-v="Other managers keep their own view. Out of scope this round.">${avatar(28, bg)}<span class="grow"><span class="nm">${name}</span><span class="ln">${line}</span></span>${pip ? '<span class="pip"></span>' : ''}</button>`;
+  const onNow = S.page && S.page.type === 'now';
+  return `<aside class="side"><div class="wordmark">cezar</div><button class="navi" ${onNow ? 'aria-current="true"' : ''} data-act="now" data-tour="nav-now">${I('inbox', 's18')}<span class="grow"><span class="nm">Now</span><span class="ln">${nowN ? `${word(nowN)} ${nowN === 1 ? 'decision' : 'decisions'}` : 'You’re clear'}</span></span>${nowN ? '<span class="pip"></span>' : ''}</button><div class="lab">Managers</div>${mgr('Delivery lead', PAGE === 'quiet' && current() ? esc(current().q) : shortStatus(), '#2d2443', !onNow, n > 0)}${mgr('Triage bot', 'One thing needs you', '#1f2a3a', false, true)}${mgr('Mobile app', 'One thing needs you', '#3a2a1f', false, true)}${mgr('Docs keeper', 'All on track', '#1f3a33', false, false)}<div class="grow"></div><button class="navi" data-act="toast" data-v="New manager: out of scope this round.">${I('plus', 's14')}New manager</button></aside>`;
+}
+function desktop() {
+  const onNow = S.page && S.page.type === 'now';
+  const tabs = PAGE === 'quiet' || onNow ? '' : `<div class="tabs" role="tablist"><button role="tab" aria-selected="${S.tab === 'today' && !S.page}" data-act="tab" data-v="today">${PAGE === 'brief' ? 'Brief' : PAGE === 'goals' ? 'Goals' : PAGE === 'focus' ? 'Focus' : 'Today'}${S.tab === 'chat' && queue().length ? ' <span class="pip"></span>' : ''}</button><button role="tab" aria-selected="${S.tab === 'chat' && !S.page}" data-act="tab" data-v="chat">Chat</button></div>`;
+  const sub = S.tab === 'chat' || S.page ? `<span>${esc(shortStatus())}</span>` : '';
+  const head = onNow ? `<div class="mhead"><div class="who"><b>Now</b><span>Every manager’s decisions, one at a time</span></div><div class="tabs"></div><button class="cmdk" data-act="palette" data-tour="cmdk">${I('search', 's14')}Search or jump <span class="kbd">⌘K</span></button></div>` : `<div class="mhead">${avatar(30)}<div class="who"><b>${esc(D.name)}</b>${PAGE === 'quiet' && !S.page ? '' : sub}</div>${tabs}<button class="cmdk" data-act="palette" data-tour="cmdk" style="${tabs ? 'margin-left:22px' : 'margin-left:auto'}">${I('search', 's14')}Search or jump <span class="kbd">⌘K</span></button></div>`;
+  return `<div class="frame"><div class="app">${sidebar()}<div class="main">${head}${S.page ? pageView('desktop') : homeView('desktop')}${overlays('desktop')}${toastHTML()}</div></div></div>`;
+}
+function phone() {
+  const onNow = S.page && S.page.type === 'now';
+  const head = onNow ? `<div class="ph-head"><b style="padding-left:8px">Now</b><span class="grow"></span><button class="iconbtn" data-act="palette" aria-label="Search or jump" data-tour="cmdk">${I('search')}</button></div>` : `<div class="ph-head"><button class="iconbtn" data-act="toast" data-v="All managers." aria-label="All managers">${I('back')}</button>${avatar(30)}<b>${esc(D.name)}</b><span class="grow"></span><button class="iconbtn" data-act="palette" aria-label="Search or jump" data-tour="cmdk">${I('search')}</button>${PAGE === 'quiet' ? '' : `<button class="iconbtn" data-act="tab" data-v="${S.tab === 'chat' ? 'today' : 'chat'}" aria-label="${S.tab === 'chat' ? 'Back to today' : 'Chat'}">${I(S.tab === 'chat' ? 'home' : 'msg')}</button>`}</div>`;
+  const nowN = nowQueue().length;
+  const bar = `<nav class="ph-bar">${[['inbox', 'Now', 'now', nowN > 0], ['list', 'Tasks', 'tasks'], ['bot', 'Manager', 'home'], ['more', 'More', 'more']].map(([i, l, a, pip]) => `<button class="${(a === 'now' && onNow) || (a === 'home' && !onNow) ? 'on' : ''}" data-act="${a === 'now' ? 'now' : a === 'home' ? 'home' : a === 'tasks' ? 'everything' : 'toast'}" data-v="${a === 'tasks' ? 'tasks' : 'More: settings and other pages.'}" ${a === 'now' ? 'data-tour="nav-now"' : ''}>${I(i, 's20')}${l}${pip ? '<span class="pip"></span>' : ''}</button>`).join('')}</nav>`;
+  const body = S.page ? pageView('phone') : homeView('phone');
+  return `<div class="phone-stage"><div class="phone"><div class="ph-status"><span>12:10</span><span>●●● ▮</span></div>${head}<div class="ph-body">${body}</div>${bar}${overlays('phone')}${toastHTML()}</div><div class="notes">${phoneNotes()}</div></div>`;
+}
+function phoneNotes() {
+  const n = {
+    today: ['The decision comes first, with a full-width button where your thumb is.', 'Goals sit below, five at most. A goal opens as its own page.', 'Search sits in the header. It is the same palette as ⌘K on the desktop.'],
+    focus: ['One decision fills the screen. Nothing else competes with it.', 'Big button at the bottom; “Not now” right under it.', 'What it is doing is one tap away, never on the same screen.'],
+    goals: ['Goals are the whole screen. The one that waits on you carries the only button.', 'Adding a goal is typing a sentence. “Keep …” makes it ongoing.'],
+    brief: ['Reads like a message from a colleague, top to bottom.', 'Each point has one button; the first is the primary one.'],
+    quiet: ['The chat stays the screen. One line on top says if anything needs you.', 'It grows only when something does, and folds back when you are done.'],
+  }[PAGE];
+  return `<div><h3>${I('phone', 's14')} On the phone</h3><ul>${n.map((x) => `<li>${esc(x)}</li>`).join('')}</ul></div><div><h3>Same on every screen</h3><ul><li>Approving a merge or turning on recurring work asks once more in a sheet, as phones do today.</li><li>Pushes stay content-free. Tapping one opens Now on the decision.</li><li>Tasks in the bottom bar opens Everything › Tasks: the full list is always one tap away.</li></ul></div>`;
+}
+
+/* ============================== overlays ============================== */
+function paletteItems() {
+  const it = [];
+  queue().forEach((d) => it.push({ g: 'Decide', l: d.q, a: 'focus-one', v: d.id }));
+  Object.keys(D.goals).forEach((id) => it.push({ g: 'Goals', l: D.goals[id].title, h: D.goals[id].state, a: 'goal', v: id, tour: 'pal-goal-' + id }));
+  Object.keys(D.recs).forEach((id) => it.push({ g: 'Recurring', l: D.recs[id].t, h: recOn(id) ? D.recs[id].how : 'Paused', a: 'ref', v: 'rec:' + id, tour: 'pal-rec-' + id }));
+  Object.keys(D.tasks).forEach((id) => it.push({ g: 'Tasks', l: D.tasks[id].t, h: D.tasks[id].st, a: 'ref', v: 'task:' + id }));
+  Object.keys(D.prs).forEach((n) => it.push({ g: 'Pull requests', l: `#${n} ${D.prs[n].t}`, h: D.prs[n].st, a: 'ref', v: 'pr:' + n }));
+  [['Pause for an hour', 'pause', 'until 13:10'], ['Ask me before acting', 'autonomy', 'ask'], ['Handle the routine', 'autonomy', 'routine'], ['New rule…', 'rules', ''], ['Show everything', 'everything', 'goals'], ['What it took care of', 'handled', ''], ['Open the chat', 'tab', 'chat'], ['Keyboard shortcuts', 'keys', '']].forEach(([l, a, v]) => it.push({ g: 'Do', l, a, v }));
+  const q = S.pq.trim().toLowerCase();
+  return q ? it.filter((x) => (x.l + ' ' + (x.h || '') + ' ' + x.g).toLowerCase().includes(q)) : it.filter((x) => ['Decide', 'Goals', 'Do'].includes(x.g));
+}
+function overlays(dev) {
+  let o = '';
+  if (S.palette) {
+    const items = paletteItems();
+    let last = '';
+    const rows = items.slice(0, 40).map((x, i) => { const g = x.g !== last ? `<div class="grp">${x.g}</div>` : ''; last = x.g; return `${g}<button class="it" role="option" aria-selected="${i === S.psel}" data-act="pal" data-i="${i}" ${x.tour ? `data-tour="${x.tour}"` : ''}>${esc(x.l)}${x.h ? `<span class="d">${esc(x.h)}</span>` : ''}</button>`; }).join('');
+    o += `<div class="scrim" data-act="close-overlay"><div class="palette" data-stop="1" role="dialog" aria-label="Search or jump"><div class="pin">${I('search', 'soft')}<input id="pal-input" placeholder="${dev === 'phone' ? 'Search or type a command' : 'Search goals, tasks, pull requests, automations, or type a command'}" value="${esc(S.pq)}" data-bind="pq" data-tour="pal-input" autocomplete="off"></div><div class="res" role="listbox">${rows || '<div class="grp">Nothing matches.</div>'}</div>${dev === 'desktop' ? '<div class="foot"><span><span class="kbd">↑</span> <span class="kbd">↓</span> move</span><span><span class="kbd">↵</span> open</span><span><span class="kbd">esc</span> close</span><span style="margin-left:auto">Type “nightly”, “#2318” or “pause”</span></div>' : ''}</div></div>`;
+  }
+  if (S.keys) {
+    o += `<div class="scrim" data-act="close-overlay"><div class="sheet" data-stop="1"><h3>Keyboard</h3><div class="keys">${[['⌘K', 'Search or jump anywhere'], ['↵ or Y', 'Take the main action'], ['N', 'Not now'], ['1 2 3', 'Pick an answer'], ['M', 'Tell me more'], ['E', 'Everything it runs'], ['R', 'How it works (rules, pause)'], ['C / T', 'Chat / back to today'], ['Esc', 'Back'], ['?', 'This sheet']].map(([k, l]) => `<span class="kbd">${k}</span><span>${l}</span>`).join('')}</div></div></div>`;
+  }
+  if (S.confirm) {
+    const d = [...D.decisions, ...D.others].find((x) => x.id === S.confirm);
+    o += `<div class="scrim" data-act="close-overlay"><div class="sheet" data-stop="1"><h3>${esc(d.confirm || d.q)}</h3><p class="muted" style="margin:0 0 18px">${esc(d.why)}</p><div style="display:flex;flex-direction:column;gap:6px"><button class="btn btn-primary" style="height:52px" data-act="confirm" data-id="${d.id}" data-tour="confirm">${esc(d.yes)}</button><button class="tbtn" style="justify-content:center;min-height:44px" data-act="close-overlay">Cancel</button></div></div></div>`;
+  }
+  return o;
+}
+function toastHTML() {
+  if (!S.toast) return '';
+  return `<div class="toast" role="status">${esc(S.toast.t)}${S.toast.u ? `<button class="tbtn" style="font-size:13.5px;padding:2px" data-act="undo" data-v="${S.toast.u}">Undo</button>` : ''}</div>`;
+}
+
+/* ============================== actions ============================== */
+function toast(t, undo) {
+  let key = null;
+  if (undo) { key = 'u' + (++D.seq); UNDO[key] = undo; }
+  S.toast = { t, u: key };
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => { S.toast = null; render(); }, 4200);
+}
+function decide(id, label) {
+  const d = [...D.decisions, ...D.others].find((x) => x.id === id);
+  if (!d || d.state === 'done') return;
+  d.state = 'done';
+  if (D.decisions.includes(d)) D.sessionDone++;
+  S.outcome = label ? `${label}. ${d.done}` : d.done;
+  S.expanded = false;
+  if (d.id === 'merge') { D.goals.checkout.done = true; D.goals.checkout.p = 1; D.goals.checkout.state = 'Done. Merged at 12:12.'; D.prs[2318].st = 'Merged at 12:12'; }
+  if (d.id === 'merge433' && D.goals.ratelimit) { D.goals.ratelimit.done = true; D.goals.ratelimit.state = 'Done. Merged at 12:12.'; }
+  if (d.id === 'flaky') { const yes = !label || label.startsWith('Yes'); D.goals.flaky.p = 0.8; D.goals.flaky.state = label && label.startsWith('No') ? 'Kept blocking, as you asked. I will report the sandbox issue.' : label && label.startsWith('Try') ? 'Trying longer timeouts first.' : 'Quarantined for a week. The refund fix is going in.'; if (yes) { D.goals.reviews.state = 'Six reviewed today. The refund fix is going in.'; S.trust = d.trust; } }
+  if (d.id === 'deps') { D.rules.splice(3, 0, { id: 'deps', group: 'regular', text: 'Update dependencies every Monday at 7:00, one PR per project.', on: true, rec: 'deps' }); D.recs.deps = { t: 'Dependency updates', rule: 'deps', how: 'Automation · every Monday at 07:00', proj: 'all three projects', report: 'Every result', last: 'Not run yet', next: 'Monday at 07:00', runs: [] }; D.goals.deps = { title: 'Keep dependencies up to date', kind: 'ongoing', rule: 'deps', state: 'First updates on Monday at 7:00.', story: 'Every Monday at 7:00 I open one small update per project. You merge them.', work: [], links: [] }; D.order.push('deps'); }
+  if (d.id === 'read') { D.goals.offline.state = 'You read the draft. Waiting for “go”.'; D.goals.offline.p = 0.85; }
+  if (S.page && S.page.type === 'goal' && S.page.id === d.goal) { S.page = null; S.hist = []; }
+  if (S.confirm) S.confirm = null;
+}
+function act(el, ev) {
+  const a = el.dataset.act;
+  const id = el.dataset.id;
+  const v = el.dataset.v;
+  const go = (p) => { if (S.page) S.hist.push(S.page); S.page = p; S.palette = false; S.outcome = null; };
+  switch (a) {
+    case 'yes': {
+      const d = [...D.decisions, ...D.others].find((x) => x.id === id);
+      if (S.device === 'phone' && d && d.kind === 'approval') { S.confirm = id; break; }
+      decide(id);
+      break;
+    }
+    case 'confirm': decide(id); break;
+    case 'answer': { const d = [...D.decisions, ...D.others].find((x) => x.id === id); decide(id, d.opts[+v].l); break; }
+    case 'later': { const d = [...D.decisions, ...D.others].find((x) => x.id === id); if (d) { if (D.others.includes(d)) { D.others.push(D.others.splice(D.others.indexOf(d), 1)[0]); } else { d.state = 'later'; D.decisions.push(D.decisions.splice(D.decisions.indexOf(d), 1)[0]); } S.outcome = null; S.expanded = false; toast('Put off. It comes back after the others.', () => { d.state = 'open'; }); } break; }
+    case 'more': S.expanded = !S.expanded; break;
+    case 'trust-yes': D.rules.splice(6, 0, { id: 'trust', group: 'alone', text: S.trust.rule, on: true }); toast('New rule added. Switch it off any time in How it works.'); S.trust = null; S.outcome = null; break;
+    case 'trust-no': S.trust = null; S.outcome = null; break;
+    case 'goal': go({ type: 'goal', id }); break;
+    case 'work': S.showWork[id] = !S.showWork[id]; break;
+    case 'ref': if (v.startsWith('chat:')) { S.page = null; S.hist = []; S.tab = 'chat'; S.flash = v.slice(5); } else if (v.startsWith('everything:')) { go({ type: 'everything' }); S.etab = v.slice(11); } else go({ type: 'ref', ref: v }); break;
+    case 'rules': go({ type: 'rules' }); break;
+    case 'handled': go({ type: 'handled' }); break;
+    case 'doing': go({ type: 'doing' }); break;
+    case 'everything': go({ type: 'everything' }); if (v) S.etab = v; break;
+    case 'etab': S.etab = v; S.efilter = ''; break;
+    case 'now': S.page = { type: 'now' }; S.hist = []; S.palette = false; S.outcome = null; break;
+    case 'home': S.page = null; S.hist = []; S.tab = 'today'; S.outcome = null; break;
+    case 'back': S.page = S.hist.pop() || null; S.outcome = null; break;
+    case 'tab': S.tab = v; S.page = null; S.hist = []; S.palette = false; S.outcome = null; break;
+    case 'focus-one': { const d = queue().find((x) => x.id === id); if (PAGE === 'brief' && d && d.goal) { go({ type: 'goal', id: d.goal }); break; } if (d) { D.decisions.splice(D.decisions.indexOf(d), 1); D.decisions.unshift(d); d.state = 'open'; } S.page = null; S.hist = []; S.tab = 'today'; S.palette = false; S.outcome = null; S.expanded = PAGE !== 'quiet'; if (PAGE === 'quiet') S.lineOpen = true; break; }
+    case 'autonomy': D.autonomy = v; S.palette = false; toast({ ask: 'It will ask you before acting.', routine: 'It handles the routine and asks about the rest.', all: 'It handles everything it is allowed to, and tells you after.' }[v]); break;
+    case 'goal-autonomy': { const g = D.goals[id]; const order = ['routine', 'ask', 'all']; const cur = g.autonomy || D.autonomy; g.autonomy = order[(order.indexOf(cur) + 1) % 3]; toast('Changed for this goal only.'); break; }
+    case 'goal-stop': { const g = D.goals[id]; g.done = true; g.state = 'Stopped by you.'; S.page = S.hist.pop() || null; toast(`Stopped “${g.title}”. Its tasks stay where they are.`, () => { g.done = false; }); break; }
+    case 'rule-toggle': { const r = D.rules.find((x) => x.id === id); r.on = !r.on; toast(r.on ? `On: “${r.text}”` : `Off: “${r.text}”`, () => { r.on = !r.on; }); break; }
+    case 'rec-toggle': { const r = D.recs[id]; if (r.rule) { const x = D.rules.find((y) => y.id === r.rule); x.on = !x.on; } else r.on = !recOn(id); toast(recOn(id) ? `Resumed ${r.t}.` : `Paused ${r.t}. ${id === 'nightly' ? 'It will not run tonight.' : ''}`); break; }
+    case 'rule-add': { const inp = $('#rule-input'); const t = (inp && inp.value.trim()) || S.ruleDraft.trim(); if (!t) { toast('Type a rule first, in your own words.'); break; } S.ruleDraft = t; S.ruleProp = { text: restate(t).say, rule: restate(t).rule, raw: t }; break; }
+    case 'rule-on': { const rid = 'new' + (++D.seq); const regular = /every|each|night|morning|monday|week|daily|hour/i.test(S.ruleProp.raw); D.rules.splice(3, 0, { id: rid, group: regular ? 'regular' : 'alone', text: S.ruleProp.rule, on: true, fresh: true, rec: regular ? rid : undefined }); if (regular) D.recs[rid] = { t: S.ruleProp.rule.replace(/[.:].*$/, ''), rule: rid, how: 'Automation · ' + (S.ruleProp.rule.match(/^Every [^,]+/) || ['on a schedule'])[0].toLowerCase(), proj: 'all three projects', report: 'Every result', last: 'Not run yet', next: (S.ruleProp.rule.match(/^Every [^,]+/) || ['Soon'])[0], runs: [] }; toast('On. It shows in What it does regularly.'); S.ruleProp = null; S.ruleDraft = ''; D.created = true; break; }
+    case 'rule-change': S.ruleProp = null; break;
+    case 'goal-add': { const inp = $('#goal-input'); const t = (inp && inp.value.trim()) || S.goalDraft.trim(); if (!t) break; S.goalDraft = t; const ongoing = /^keep\b/i.test(t); S.goalProp = { text: ongoing ? `An ongoing goal: ${t.replace(/\.$/, '')}. I will do it every Monday at 7:00 and tell you only when something needs you.` : `A new goal: ${t.replace(/\.$/, '')}. I will start by looking at what is there and come back with a plan.`, ongoing, raw: t }; break; }
+    case 'goal-start': { const gid = 'g' + (++D.seq); D.goals[gid] = { title: S.goalProp.raw.replace(/\.$/, ''), kind: S.goalProp.ongoing ? 'ongoing' : 'once', p: 0.05, state: S.goalProp.ongoing ? 'Starts on Monday at 7:00.' : 'Getting started.', story: S.goalProp.text, work: [], links: [] }; D.order.unshift(gid); if (S.goalProp.ongoing) { D.rules.splice(3, 0, { id: gid, group: 'regular', text: S.goalProp.raw.replace(/\.$/, '') + ', every Monday at 7:00.', on: true }); D.goals[gid].rule = gid; D.created = true; } toast('Started. It is on your goals.'); S.goalProp = null; S.goalDraft = ''; break; }
+    case 'goal-change': S.goalProp = null; break;
+    case 'pause': D.paused = v; S.palette = false; toast(`Paused ${v}.`, () => { D.paused = null; }); break;
+    case 'resume': D.paused = null; toast('Resumed.'); break;
+    case 'peek': S.peek = true; break;
+    case 'default-now': { const x = D.defaults.find((y) => y.id === id); x.state = 'done'; D.handled.push({ n: 1, text: x.text + ' (now, as you asked).', why: 'You chose to do it now.' }); toast('Done.'); break; }
+    case 'default-no': { const x = D.defaults.find((y) => y.id === id); x.state = 'cancelled'; toast('Cancelled. It will not happen.', () => { x.state = 'pending'; }); break; }
+    case 'line': S.lineOpen = !S.lineOpen; break;
+    case 'palette': S.palette = !S.palette; S.pq = ''; S.psel = 0; setTimeout(() => { const i = $('#pal-input'); if (i) i.focus(); }, 20); break;
+    case 'pal': { const x = paletteItems()[+el.dataset.i]; S.palette = false; if (x) act({ dataset: { act: x.a, id: x.v, v: x.v } }); return; }
+    case 'keys': S.keys = true; S.palette = false; break;
+    case 'close-overlay': S.palette = false; S.keys = false; S.confirm = null; break;
+    case 'send': { const inp = $('#chat-input'); const t = inp && inp.value.trim(); if (!t) break; D.chat.push({ id: 'x' + (++D.seq), who: 'you', at: '12:11', t }); setTimeout(() => { D.chat.push({ id: 'x' + (++D.seq), who: 'mgr', at: '12:11', t: /every|each|night|monday/i.test(t) ? `Got it. ${restate(t).say} It is on as a rule; switch it off in How it works.` : 'On it. (Replies are canned in this prototype.)' }); render(); }, 600); break; }
+    case 'undo': { const f = UNDO[v]; if (f) { f(); delete UNDO[v]; } S.toast = null; break; }
+    case 'toast': toast(v); break;
+    default: return;
+  }
+  render();
+}
+function restate(t) {
+  const bare = t.replace(/^every (monday|weekday|day|night),?\s*/i, '').replace(/\.$/, '');
+  const low = bare.replace(/^./, (c) => c.toLowerCase());
+  if (/depend/i.test(t)) return { say: 'Every Monday at 7:00, I will open one small dependency update per project. You merge them.', rule: 'Every Monday at 7:00, open one dependency update per project. I merge them.' };
+  if (/night|test/i.test(t)) return { say: 'Every night at 2:00, I will run all tests and tell you only if something fails.', rule: 'Run all tests every night at 2:00. Tell me only if something fails.' };
+  if (/review/i.test(t)) return { say: 'I will review every new pull request once its checks pass, and tell you only about real problems.', rule: 'Review every new pull request once its checks pass.' };
+  if (/monday|week/i.test(t)) return { say: `Every Monday at 9:00, I will ${low}.`, rule: `Every Monday at 9:00, ${low}.` };
+  return { say: `Every weekday at 9:00, I will ${low}.`, rule: `Every weekday at 9:00, ${low}.` };
+}
+
+/* ============================== tours ============================== */
+const FLOWS = [
+  { id: 'decide', label: 'Something needs me → decide', steps: { all: ['decide', 'confirm'], goals: ['goal-checkout', 'decide', 'confirm'] }, done: () => D.decisions.find((d) => d.id === 'merge').state === 'done' },
+  { id: 'goal', label: 'What’s happening with a goal?', steps: { all: ['goal-reviews', 'show-work'], focus: ['doing', 'goal-reviews', 'show-work'], quiet: ['line-more', 'goal-reviews', 'show-work'] }, done: () => !!S.showWork.reviews },
+  { id: 'recur', label: 'Set up something recurring', steps: { all: ['rules', 'say', 'say-on'], goals: ['goal-input', 'say-on'], quiet: ['line-more', 'rules', 'say', 'say-on'] }, done: () => !!D.created },
+  { id: 'autonomy', label: 'Pause it, or change how much it does alone', steps: { all: ['rules', 'pause-hour'], quiet: ['line-more', 'rules', 'pause-hour'] }, done: () => !!D.paused },
+  { id: 'power', label: 'Power: reach any automation in two steps', steps: { all: ['cmdk', 'pal-input', 'pal-rec-nightly', 'rec-toggle'] }, done: () => !recOn('nightly') },
+  { id: 'now', label: 'The new Now', steps: { all: ['nav-now', 'decide'] }, done: () => !!(S.page && S.page.type === 'now') && D.others.some((o) => o.state === 'done') || (S.page && S.page.type === 'now' && D.decisions.some((d) => d.state === 'done')) },
+];
+const stepsOf = (f) => f.steps[PAGE] || f.steps.all;
+function applyTour() {
+  document.querySelectorAll('.coach').forEach((e) => e.classList.remove('coach'));
+  const box = $('#tourbox');
+  if (!box) return;
+  if (!S.tour) { box.hidden = true; return; }
+  const f = FLOWS.find((x) => x.id === S.tour.id);
+  if (f.done()) { box.hidden = false; box.innerHTML = `<span class="stp">Done</span><span class="grow"><b>${esc(f.label)}</b>. Try it on the phone, or in another concept.</span><button class="linkbtn" data-tour-end>Close</button>`; return; }
+  const steps = stepsOf(f);
+  const root = $('#proto');
+  let target = null, k;
+  for (k = S.tour.i; k < steps.length; k++) {
+    const c = Array.from(root.querySelectorAll(`[data-tour="${steps[k]}"]`)).filter((e) => e.offsetParent !== null);
+    if (c.length) { target = c[0]; break; }
+  }
+  if (target) target.classList.add('coach');
+  const hint = { decide: 'take the main action', confirm: 'confirm in the sheet', 'goal-checkout': 'open the checkout goal', 'goal-reviews': 'open “Keep pull requests reviewed”', 'show-work': 'show the work behind it', doing: 'open “What I’m doing for you”', 'line-more': 'open the line', rules: 'open How it works', say: 'type a rule in your own words, then press Enter', 'say-on': 'turn it on', 'goal-input': 'type “Keep dependencies up to date”, then Enter', 'pause-hour': 'pause it for an hour', cmdk: 'open Search or jump (⌘K)', 'pal-input': 'type “nightly”', 'pal-rec-nightly': 'open Nightly QA', 'rec-toggle': 'switch it off', 'nav-now': 'open Now' }[steps[Math.min(k, steps.length - 1)]] || '';
+  box.hidden = false;
+  box.innerHTML = `<span class="stp">Step ${Math.min(k, steps.length - 1) + 1} of ${steps.length}</span><span class="grow"><b>${esc(f.label)}</b>: ${esc(hint)}${target ? '' : ' (go back to the home view)'}.</span><button class="linkbtn" data-tour-end>End</button>`;
+}
+function tourClick(t) {
+  if (!S.tour || !t) return;
+  const f = FLOWS.find((x) => x.id === S.tour.id);
+  const steps = stepsOf(f);
+  const el = t.closest ? t.closest('[data-tour]') : null;
+  if (!el) return;
+  const k = steps.indexOf(el.dataset.tour);
+  if (k >= S.tour.i) S.tour.i = k + 1;
+}
+function startTour(id) {
+  const f = FLOWS.find((x) => x.id === id);
+  if (f.done()) { const b = !!D.busy; D = seed(); if (b) busy(D); }
+  const dev = S.device;
+  S = Object.assign(clone(DEF), { device: dev, tour: { id, i: 0 } });
+  render();
+  const p = $('#proto');
+  if (p) p.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+/* ============================== render & events ============================== */
+function render() {
+  const root = $('#proto');
+  if (!root) return;
+  const keep = {};
+  root.querySelectorAll('[data-keep]').forEach((e) => { keep[e.dataset.keep] = e.scrollTop; });
+  const fid = document.activeElement && document.activeElement.id;
+  const caret = document.activeElement && document.activeElement.selectionStart;
+  root.innerHTML = S.device === 'phone' ? phone() : desktop();
+  root.querySelectorAll('[data-keep]').forEach((e) => { if (keep[e.dataset.keep] != null) e.scrollTop = keep[e.dataset.keep]; });
+  if (fid) { const f = document.getElementById(fid); if (f && f.focus) { f.focus(); try { if (caret != null) f.setSelectionRange(caret, caret); } catch (e) { /* not text */ } } }
+  if (S.flash) { const m = document.getElementById('m-' + S.flash); if (m) { m.scrollIntoView({ block: 'center' }); m.classList.add('flash'); } S.flash = null; }
+  document.querySelectorAll('[data-flow]').forEach((b) => b.setAttribute('aria-pressed', String(!!(S.tour && S.tour.id === b.dataset.flow))));
+  applyTour();
+}
+function boot() {
+  const flows = $('#flows');
+  if (flows) flows.innerHTML = '<span class="lbl" style="font-size:11.5px;color:var(--soft-foreground);font-weight:600;margin-right:4px">Walk a flow</span>' + FLOWS.map((f) => `<button class="flow-btn" data-flow="${f.id}" aria-pressed="false">${esc(f.label)}</button>`).join('');
+  const root = $('#proto');
+  if (root) {
+    root.addEventListener('click', (ev) => {
+      const el = ev.target.closest('[data-act]');
+      if (!el || !root.contains(el)) return;
+      if (el.dataset.act === 'close-overlay' && ev.target.closest('[data-stop]')) return;
+      ev.preventDefault();
+      tourClick(ev.target);
+      act(el, ev);
+    });
+    root.addEventListener('input', (ev) => {
+      const b = ev.target.dataset && ev.target.dataset.bind;
+      if (b === 'pq') { S.pq = ev.target.value; S.psel = 0; render(); }
+      if (b === 'efilter') { S.efilter = ev.target.value; render(); }
+      if (ev.target.id === 'rule-input') S.ruleDraft = ev.target.value;
+      if (ev.target.id === 'goal-input') S.goalDraft = ev.target.value;
+      if (b === 'pq' || ev.target.id === 'rule-input' || ev.target.id === 'goal-input') tourClick(ev.target);
+    });
+  }
+  document.addEventListener('keydown', (ev) => {
+    if (!root) return;
+    const typing = ev.target && (ev.target.tagName === 'INPUT' || ev.target.tagName === 'TEXTAREA');
+    if ((ev.metaKey || ev.ctrlKey) && ev.key.toLowerCase() === 'k') { ev.preventDefault(); act({ dataset: { act: 'palette' } }); return; }
+    if (S.palette) {
+      const items = paletteItems();
+      if (ev.key === 'ArrowDown') { ev.preventDefault(); S.psel = Math.min(S.psel + 1, Math.min(items.length, 40) - 1); render(); return; }
+      if (ev.key === 'ArrowUp') { ev.preventDefault(); S.psel = Math.max(S.psel - 1, 0); render(); return; }
+      if (ev.key === 'Enter') { ev.preventDefault(); const btn = root.querySelector(`[data-act="pal"][data-i="${S.psel}"]`); if (btn) { tourClick(btn); act(btn); } return; }
+      if (ev.key === 'Escape') { S.palette = false; render(); return; }
+      return;
+    }
+    if (typing) {
+      if (ev.key === 'Enter' && ev.target.dataset.enter) { ev.preventDefault(); tourClick(ev.target); act({ dataset: { act: ev.target.dataset.enter } }); }
+      if (ev.key === 'Escape') ev.target.blur();
+      return;
+    }
+    if (ev.metaKey || ev.ctrlKey || ev.altKey) return;
+    const d = S.trust ? null : (S.page && S.page.type === 'now' ? nowQueue()[0] : current());
+    const k = ev.key.toLowerCase();
+    if (k === 'escape') { if (S.keys || S.confirm) { S.keys = false; S.confirm = null; } else if (S.page) { S.page = S.hist.pop() || null; } render(); return; }
+    if (k === '?') { S.keys = !S.keys; render(); return; }
+    if (k === '/') { ev.preventDefault(); act({ dataset: { act: 'palette' } }); return; }
+    if (S.trust && (k === 'enter' || k === 'y')) { ev.preventDefault(); act({ dataset: { act: 'trust-yes' } }); return; }
+    if (S.trust && k === 'n') { act({ dataset: { act: 'trust-no' } }); return; }
+    if (d && (!S.page || S.page.type === 'now' || (S.page.type === 'goal' && d.goal === S.page.id))) {
+      if ((k === 'enter' || k === 'y') && !d.opts && !ev.target.closest('button')) { ev.preventDefault(); act({ dataset: { act: 'yes', id: d.id } }); return; }
+      if ((k === 'enter' || k === 'y') && d.opts && !ev.target.closest('button')) { ev.preventDefault(); act({ dataset: { act: 'answer', id: d.id, v: '0' } }); return; }
+      if (['1', '2', '3'].includes(k) && d.opts && d.opts[+k - 1]) { act({ dataset: { act: 'answer', id: d.id, v: String(+k - 1) } }); return; }
+      if (k === 'n') { act({ dataset: { act: 'later', id: d.id } }); return; }
+      if (k === 'm') { act({ dataset: { act: 'more' } }); return; }
+    }
+    if (k === 'e') { act({ dataset: { act: 'everything' } }); return; }
+    if (k === 'r') { act({ dataset: { act: 'rules' } }); return; }
+    if (k === 'c' && PAGE !== 'quiet') { act({ dataset: { act: 'tab', v: 'chat' } }); return; }
+    if (k === 't') { act({ dataset: { act: 'home' } }); return; }
+  });
+  document.addEventListener('click', (ev) => {
+    const dv = ev.target.closest('[data-device]');
+    if (dv) { S.device = dv.dataset.device; S.palette = false; S.confirm = null; document.querySelectorAll('[data-device]').forEach((b) => b.setAttribute('aria-pressed', String(b === dv))); render(); return; }
+    const th = ev.target.closest('[data-theme]');
+    if (th) { document.documentElement.classList.toggle('light', th.dataset.theme === 'light'); document.querySelectorAll('[data-theme]').forEach((b) => b.setAttribute('aria-pressed', String(b === th))); return; }
+    const fl = ev.target.closest('[data-flow]');
+    if (fl) { startTour(fl.dataset.flow); return; }
+    if (ev.target.closest('[data-tour-end]')) { S.tour = null; render(); return; }
+    const ld = ev.target.closest('[data-load]');
+    if (ld) { const dev = S.device; D = seed(); if (ld.dataset.load === 'busy') busy(D); S = Object.assign(clone(DEF), { device: dev }); document.querySelectorAll('[data-load]').forEach((b) => b.setAttribute('aria-pressed', String(b === ld))); render(); toast(ld.dataset.load === 'busy' ? `Busy day: ${queue().length} decisions after triage, ${handledCount()} handled for you.` : 'A normal day.'); render(); return; }
+    if (ev.target.closest('[data-reset]')) { const dev = S.device; const b = !!D.busy; D = seed(); if (b) busy(D); S = Object.assign(clone(DEF), { device: dev }); render(); return; }
+  });
+  const hash = new URLSearchParams(location.hash.replace(/^#/, ''));
+  if (hash.get('theme') === 'light') { document.documentElement.classList.add('light'); document.querySelectorAll('[data-theme]').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.theme === 'light'))); }
+  const q = new URLSearchParams(location.search);
+  if (q.get('device') === 'phone') { S.device = 'phone'; document.querySelectorAll('[data-device]').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.device === 'phone'))); }
+  if (q.get('load') === 'busy') busy(D);
+  render();
+}
+document.addEventListener('DOMContentLoaded', boot);
+})();
+
+</script>
+</body>
+</html>

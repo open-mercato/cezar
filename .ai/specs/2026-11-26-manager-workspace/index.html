@@ -1,0 +1,431 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Manager, calmly: overview · Manager, calmly · design (2026-11-26)</title>
+<style>
+/* Tokens from packages/web/src/styles/index.css ("Violet only", dark default, .light flips). */
+:root{color-scheme:dark;--background:#0d0d0d;--foreground:#fff;--card:#171717;--card-2:#1c1c1c;--sidebar:#141414;--muted:#262626;--muted-foreground:#a3a3a3;--soft-foreground:#8a8a8a;--border:#2a2a2a;--primary:#6457e8;--primary-foreground:#fff;--violet:#8f86e8;--ring:#8f86e8;--danger-strong:#f87171;--success-strong:#34d399;--pending-strong:#fbbf24;--info:#93c5fd;
+--sans:'Inter Variable','Inter',system-ui,-apple-system,'Segoe UI',sans-serif;--mono:'JetBrains Mono Variable','JetBrains Mono',ui-monospace,'SF Mono',Menlo,monospace;
+--shadow-modal:0 16px 48px 0 rgba(0,0,0,.45);--shadow-pop:0 12px 32px rgba(0,0,0,.5)}
+.light{color-scheme:light;--background:#fff;--foreground:#171717;--card:#fff;--card-2:#fbfbfb;--sidebar:#fafafa;--muted:#f2f2f2;--muted-foreground:#5c5c5c;--soft-foreground:#767676;--border:#ebebeb;--primary:#5b52c7;--violet:#5b52c7;--ring:#5b52c7;--danger-strong:#b91c1c;--success-strong:#047857;--pending-strong:#b45309;--info:#1d4ed8;--shadow-modal:0 16px 48px 0 rgba(0,0,0,.12);--shadow-pop:0 12px 32px rgba(0,0,0,.14)}
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--background);color:var(--foreground);font-family:var(--sans);font-size:14px;line-height:1.5;-webkit-font-smoothing:antialiased}
+button,input,textarea{font:inherit;color:inherit}
+a{color:inherit}
+:focus-visible{outline:none;box-shadow:0 0 0 3px color-mix(in srgb,var(--ring) 45%,transparent);border-radius:8px}
+.sr-only{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+svg.i{width:16px;height:16px;flex:none;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+svg.i.s14{width:14px;height:14px}svg.i.s18{width:18px;height:18px}svg.i.s20{width:20px;height:20px}
+.muted{color:var(--muted-foreground)}.soft{color:var(--soft-foreground)}.grow{flex:1;min-width:0}
+.mono,code{font-family:var(--mono);font-size:12px}
+code{background:var(--muted);padding:1px 5px;border-radius:5px}
+.kbd{display:inline-flex;align-items:center;justify-content:center;min-width:18px;height:18px;padding:0 4px;border-radius:5px;border:1px solid var(--border);font:500 11px var(--mono);color:var(--soft-foreground);line-height:1}
+
+/* ---------- doc chrome (not part of the product) ---------- */
+.doc-top{position:sticky;top:0;z-index:40;display:flex;align-items:center;gap:12px;padding:10px 28px;border-bottom:1px solid var(--border);background:color-mix(in srgb,var(--background) 90%,transparent);backdrop-filter:blur(8px);flex-wrap:wrap}
+.doc-top .brand{font-weight:700;letter-spacing:-.01em;white-space:nowrap;text-decoration:none}
+.doc-top nav{display:flex;gap:2px;flex-wrap:wrap}
+.doc-top nav a{font-size:12.5px;text-decoration:none;color:var(--muted-foreground);padding:4px 9px;border-radius:7px}
+.doc-top nav a:hover{background:var(--muted);color:var(--foreground)}
+.doc-top nav a[aria-current="page"]{background:var(--muted);color:var(--foreground);font-weight:600}
+.doc{max-width:1320px;margin:0 auto;padding:30px 28px 120px}
+.doc h1{font-size:34px;letter-spacing:-.025em;margin:14px 0 8px;line-height:1.15}
+.lede{color:var(--muted-foreground);max-width:860px;font-size:16.5px;margin:0 0 8px;line-height:1.55}
+.doc section{margin-top:64px;scroll-margin-top:70px}
+.doc section>h2{font-size:22px;letter-spacing:-.015em;margin:0 0 8px;display:flex;align-items:baseline;gap:10px}
+.doc section>h2 .num{font-family:var(--mono);font-size:12px;color:var(--violet)}
+.doc .sub{margin:0 0 18px;color:var(--muted-foreground);max-width:880px;font-size:15px}
+.doc p{max-width:880px}
+.cols2{display:grid;grid-template-columns:1fr 1fr;gap:28px}
+.cols3{display:grid;grid-template-columns:repeat(3,1fr);gap:22px}
+@media (max-width:1050px){.cols2,.cols3{grid-template-columns:1fr}}
+.prose{font-size:14.5px;color:var(--muted-foreground)}
+.prose b,.prose strong{color:var(--foreground);font-weight:600}
+.prose ul,.prose ol{padding-left:20px;margin:8px 0}.prose li{margin:5px 0}
+.prose h3{font-size:15px;color:var(--foreground);margin:18px 0 6px}
+.quiet-card{border-left:2px solid var(--border);padding:2px 0 2px 16px}
+.quiet-card.v{border-left-color:var(--violet)}
+table.t{width:100%;border-collapse:collapse;font-size:13.5px}
+table.t th,table.t td{text-align:left;vertical-align:top;padding:10px 12px 10px 0;border-bottom:1px solid var(--border)}
+table.t th{font-size:11.5px;color:var(--soft-foreground);font-weight:600;letter-spacing:.03em}
+table.t td{color:var(--muted-foreground)}table.t td:first-child{color:var(--foreground);font-weight:500}
+table.t td b{color:var(--foreground);font-weight:600}
+.rec-pill{font-size:10.5px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;border-radius:999px;padding:2px 8px;background:var(--primary);color:var(--primary-foreground);white-space:nowrap;vertical-align:3px}
+.cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:14px}
+.ccard{display:flex;flex-direction:column;gap:6px;border:1px solid var(--border);border-radius:14px;padding:16px;text-decoration:none;background:var(--card);transition:border-color .15s}
+.ccard:hover{border-color:color-mix(in srgb,var(--violet) 55%,var(--border))}
+.ccard b{font-size:16px}.ccard span{color:var(--muted-foreground);font-size:13.5px}
+.ccard .verdict{margin-top:auto;padding-top:8px;font-size:12.5px;color:var(--soft-foreground)}
+.ccard.rec{border-color:color-mix(in srgb,var(--violet) 50%,var(--border))}
+.funnel{display:flex;align-items:stretch;gap:0;border:1px solid var(--border);border-radius:14px;overflow:hidden;max-width:880px}
+.funnel div{flex:1;padding:16px 18px;border-right:1px solid var(--border)}
+.funnel div:last-child{border-right:0;background:color-mix(in srgb,var(--primary) 9%,transparent)}
+.funnel b{display:block;font-size:28px;letter-spacing:-.02em}
+.funnel span{font-size:13px;color:var(--muted-foreground)}
+.seg{display:inline-flex;border:1px solid var(--border);border-radius:9px;padding:2px;background:var(--card);gap:2px}
+.seg button{border:0;background:transparent;padding:4px 10px;border-radius:7px;font-size:12.5px;font-weight:500;color:var(--muted-foreground);cursor:pointer;white-space:nowrap;display:inline-flex;align-items:center;gap:6px}
+.seg button[aria-pressed="true"]{background:var(--muted);color:var(--foreground)}
+.pbar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:22px 0 10px}
+.pbar .lbl{font-size:11.5px;color:var(--soft-foreground);font-weight:600}
+.flows{display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin:0 0 10px}
+.flow-btn{border:1px dashed var(--border);background:transparent;border-radius:999px;padding:4px 11px;font-size:12.5px;color:var(--muted-foreground);cursor:pointer}
+.flow-btn:hover{color:var(--foreground);border-color:color-mix(in srgb,var(--violet) 55%,var(--border))}
+.flow-btn[aria-pressed="true"]{border-style:solid;border-color:var(--violet);color:var(--foreground)}
+.tourbox{display:flex;align-items:center;gap:10px;border-left:2px solid var(--violet);padding:6px 12px;font-size:13.5px;margin:0 0 12px;color:var(--muted-foreground)}
+.tourbox[hidden]{display:none}
+.tourbox b{color:var(--foreground)}
+.tourbox .stp{font-family:var(--mono);font-size:11px;color:var(--violet);white-space:nowrap}
+.coach{position:relative;z-index:3;box-shadow:0 0 0 2px var(--violet),0 0 0 7px color-mix(in srgb,var(--violet) 22%,transparent)!important;border-radius:10px;animation:coach 1.4s ease-in-out infinite}
+@keyframes coach{50%{box-shadow:0 0 0 2px var(--violet),0 0 0 11px color-mix(in srgb,var(--violet) 0%,transparent)}}
+.linkbtn{border:0;background:transparent;padding:0;cursor:pointer;color:var(--muted-foreground);text-decoration:underline;text-underline-offset:3px;font-size:inherit}
+.linkbtn:hover{color:var(--foreground)}
+
+/* ---------- product frames ---------- */
+.stage{position:relative}
+.frame{border:1px solid var(--border);border-radius:14px;overflow:hidden;background:var(--background);box-shadow:var(--shadow-modal);position:relative}
+.app{display:grid;grid-template-columns:216px minmax(0,1fr);height:800px}
+.side{background:var(--sidebar);border-right:1px solid var(--border);display:flex;flex-direction:column;padding:14px 10px;gap:2px;min-height:0}
+.wordmark{font-family:'Chakra Petch',var(--sans);font-weight:600;font-size:17px;letter-spacing:.02em;padding:2px 8px 14px}
+.navi{display:flex;align-items:center;gap:10px;min-height:34px;padding:6px 8px;border-radius:9px;border:0;background:transparent;cursor:pointer;text-align:left;width:100%;color:var(--muted-foreground);font-size:13.5px}
+.navi:hover{background:var(--muted);color:var(--foreground)}
+.navi[aria-current="true"]{background:var(--muted);color:var(--foreground)}
+.navi .nm{display:block;color:var(--foreground);font-weight:500;font-size:13.5px;line-height:1.3}
+.navi .ln{display:block;font-size:12px;color:var(--soft-foreground);line-height:1.35;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.side .lab{font-size:11.5px;color:var(--soft-foreground);padding:14px 8px 6px}
+.pip{width:6px;height:6px;border-radius:99px;background:var(--violet);display:inline-block;flex:none}
+.av{border-radius:999px;display:inline-flex;flex:none;overflow:hidden}
+.av svg{width:100%;height:100%}
+.main{min-width:0;display:flex;flex-direction:column;min-height:0;position:relative}
+.mhead{display:flex;align-items:center;gap:12px;padding:14px 26px;flex:none}
+.mhead .who{display:flex;flex-direction:column;min-width:0}
+.mhead .who b{font-size:15px;font-weight:600}
+.mhead .who span{font-size:12.5px;color:var(--soft-foreground)}
+.tabs{display:flex;gap:18px;margin-left:auto;align-items:center}
+.tabs button{border:0;background:transparent;padding:6px 0;font-size:14px;color:var(--soft-foreground);cursor:pointer;border-bottom:2px solid transparent;display:inline-flex;align-items:center;gap:6px}
+.tabs button:hover{color:var(--foreground)}
+.tabs button[aria-selected="true"]{color:var(--foreground);border-bottom-color:var(--foreground)}
+.iconbtn{border:0;background:transparent;width:32px;height:32px;border-radius:9px;display:inline-flex;align-items:center;justify-content:center;cursor:pointer;color:var(--muted-foreground)}
+.iconbtn:hover{background:var(--muted);color:var(--foreground)}
+.cmdk{display:inline-flex;align-items:center;gap:8px;height:30px;padding:0 10px;border:1px solid var(--border);border-radius:9px;background:transparent;color:var(--soft-foreground);cursor:pointer;font-size:12.5px}
+.cmdk:hover{color:var(--foreground)}
+.scroll{flex:1;overflow:auto;min-height:0}
+
+/* ---------- calm content ---------- */
+.calm{max-width:620px;margin:0 auto;padding:44px 26px 72px}
+.status{font-size:15px;color:var(--muted-foreground);margin:0 0 44px;display:flex;align-items:baseline;gap:9px;flex-wrap:wrap}
+.status b{color:var(--foreground);font-weight:500}
+.progress{display:flex;gap:4px;margin:0 0 18px}
+.progress i{width:22px;height:3px;border-radius:2px;background:var(--muted);display:block}
+.progress i.on{background:var(--violet)}
+.ask-who{font-size:13px;color:var(--soft-foreground);margin:0 0 8px}
+.ask-q{font-size:30px;line-height:1.2;font-weight:600;letter-spacing:-.022em;margin:0 0 12px}
+.ask-why{font-size:16px;line-height:1.6;color:var(--muted-foreground);margin:0 0 26px}
+.actions{display:flex;align-items:center;gap:6px 20px;flex-wrap:wrap}
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:10px;height:42px;padding:0 18px;border-radius:10px;border:1px solid transparent;font-size:15px;font-weight:500;cursor:pointer;white-space:nowrap;background:transparent}
+.btn-primary{background:var(--primary);color:var(--primary-foreground)}
+.btn-primary:hover{filter:brightness(1.08)}
+.btn-primary .kbd{border-color:rgba(255,255,255,.35);color:rgba(255,255,255,.85)}
+.btn-quiet{border-color:var(--border);color:var(--foreground)}
+.btn-quiet:hover{background:var(--muted)}
+.btn:disabled{opacity:.5;cursor:default}
+.tbtn{border:0;background:transparent;color:var(--muted-foreground);font-size:15px;cursor:pointer;padding:8px 2px;display:inline-flex;align-items:center;gap:8px}
+.tbtn:hover{color:var(--foreground)}
+.opts{display:flex;flex-direction:column;gap:2px;margin:0 0 20px}
+.opt{display:flex;align-items:center;gap:12px;border:0;background:transparent;text-align:left;padding:10px 12px;margin:0 -12px;border-radius:10px;cursor:pointer;font-size:15.5px;color:var(--foreground)}
+.opt:hover{background:var(--muted)}
+.opt .kbd{flex:none}
+.opt .rec{font-size:12.5px;color:var(--soft-foreground)}
+.then{margin-top:26px;font-size:13.5px;color:var(--soft-foreground)}
+.others{margin:14px 0 0;font-size:14px;color:var(--soft-foreground)}
+.others .linkbtn{font-size:14px;color:var(--muted-foreground);text-decoration:none}
+.others .linkbtn:hover{color:var(--foreground);text-decoration:underline}
+.step .inline-link{text-decoration:none;color:var(--foreground)}
+.step .inline-link:hover{text-decoration:underline}
+.more{margin:28px 0 0;padding:18px 0 0;border-top:1px solid var(--border)}
+.more p{font-size:15px;line-height:1.65;color:var(--muted-foreground);margin:0 0 12px}
+.label{font-size:13px;color:var(--soft-foreground);margin:0 0 6px}
+.divider{height:1px;background:var(--border);margin:48px 0 26px}
+.goal{display:grid;grid-template-columns:20px minmax(0,1fr);gap:2px 12px;padding:11px 12px;margin:0 -12px;border-radius:10px;cursor:pointer;align-items:start;border:0;background:transparent;text-align:left;width:calc(100% + 24px)}
+.goal:hover{background:var(--muted)}
+.goal .gt{font-size:15.5px;font-weight:600;line-height:1.35}
+.goal .gs{font-size:14.5px;color:var(--soft-foreground);grid-column:2;line-height:1.45}
+.goal.you .gs{color:var(--foreground)}
+.goal.done .gt{color:var(--muted-foreground);font-weight:500}
+.pie{width:15px;height:15px;border-radius:99px;margin-top:3px;background:conic-gradient(var(--muted-foreground) calc(var(--p) * 1turn),var(--muted) 0)}
+.pie.full{background:var(--success-strong)}
+.loop{color:var(--muted-foreground);margin-top:2px}
+.footnote{margin-top:40px;font-size:13.5px;color:var(--soft-foreground);display:flex;gap:8px 18px;flex-wrap:wrap;align-items:baseline}
+.footnote .linkbtn{font-size:13.5px}
+.clear-h{font-size:30px;font-weight:600;letter-spacing:-.022em;margin:0 0 10px}
+.enter{animation:enter .38s cubic-bezier(.2,.7,.2,1)}
+@keyframes enter{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}
+.outcome{font-size:14px;color:var(--success-strong);margin:0 0 22px;display:flex;gap:8px;align-items:center}
+.page-h{font-size:26px;font-weight:600;letter-spacing:-.02em;margin:0 0 8px;line-height:1.2}
+.page-s{font-size:16px;color:var(--foreground);margin:0 0 26px}
+.back{display:inline-flex;align-items:center;gap:6px;border:0;background:transparent;color:var(--soft-foreground);cursor:pointer;font-size:13.5px;padding:4px 0;margin:0 0 22px}
+.back:hover{color:var(--foreground)}
+.story{font-size:16px;line-height:1.65;color:var(--muted-foreground);margin:0 0 20px}
+.work{margin:10px 0 0;display:flex;flex-direction:column}
+.step{display:grid;grid-template-columns:52px minmax(0,1fr);gap:12px;padding:9px 0;border-top:1px solid var(--border);font-size:14px}
+.step:first-child{border-top:0}
+.step .tm{color:var(--soft-foreground);font-variant-numeric:tabular-nums;font-size:13px;padding-top:1px}
+.step .why{display:block;font-size:13px;color:var(--soft-foreground);margin-top:3px}
+.links{display:flex;flex-wrap:wrap;gap:6px 18px;margin:14px 0 0;font-size:13.5px}
+.setting{font-size:14.5px;color:var(--muted-foreground);margin:26px 0 0}
+.setting b{color:var(--foreground);font-weight:500}
+
+/* rules */
+.radio{display:flex;flex-direction:column;gap:2px;margin:6px 0 0}
+.radio button{display:flex;align-items:center;gap:12px;border:0;background:transparent;text-align:left;padding:9px 12px;margin:0 -12px;border-radius:10px;cursor:pointer;font-size:15px;color:var(--muted-foreground)}
+.radio button:hover{background:var(--muted)}
+.radio button .dotr{width:16px;height:16px;border-radius:99px;border:1.5px solid var(--soft-foreground);flex:none;position:relative}
+.radio button[aria-checked="true"]{color:var(--foreground)}
+.radio button[aria-checked="true"] .dotr{border-color:var(--violet)}
+.radio button[aria-checked="true"] .dotr::after{content:"";position:absolute;inset:3px;border-radius:99px;background:var(--violet)}
+.rule{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:4px 16px;align-items:center;padding:12px 0;border-top:1px solid var(--border);font-size:15px}
+.rule .rk{grid-column:1;font-size:12.5px;color:var(--soft-foreground)}
+.rule.off .rt{color:var(--soft-foreground)}
+.lockline{display:flex;gap:10px;align-items:flex-start;font-size:14px;color:var(--muted-foreground);padding:12px 0;border-top:1px solid var(--border)}
+.switch{border:0;background:transparent;padding:0;cursor:pointer;display:inline-flex}
+.switch .track{width:36px;height:22px;border-radius:99px;background:var(--muted);position:relative;transition:background .15s}
+.switch .track::after{content:"";position:absolute;top:3px;left:3px;width:16px;height:16px;border-radius:99px;background:var(--soft-foreground);transition:transform .15s,background .15s}
+.switch[aria-checked="true"] .track{background:var(--primary)}
+.switch[aria-checked="true"] .track::after{transform:translateX(14px);background:#fff}
+.say{display:flex;gap:10px;align-items:center;border-bottom:1px solid var(--border);padding:12px 0}
+.say input{flex:1;min-width:0;border:0;background:transparent;font-size:15.5px;outline:none}
+.say input::placeholder{color:var(--soft-foreground)}
+.proposal{margin:16px 0 0;padding:0 0 0 16px;border-left:2px solid var(--violet)}
+.proposal p{font-size:16px;margin:0 0 14px}
+.pauses{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
+
+/* everything (power) */
+.wide{max-width:980px;margin:0 auto;padding:30px 26px 60px}
+.etabs{display:flex;gap:22px;border-bottom:1px solid var(--border);margin:0 0 6px;flex-wrap:wrap}
+.etabs button{border:0;background:transparent;padding:10px 0;font-size:14px;color:var(--soft-foreground);cursor:pointer;border-bottom:2px solid transparent;margin-bottom:-1px}
+.etabs button[aria-selected="true"]{color:var(--foreground);border-bottom-color:var(--foreground)}
+.etabs .n{color:var(--soft-foreground);font-size:12.5px;margin-left:4px}
+.filter{display:flex;align-items:center;gap:8px;margin:14px 0 6px;color:var(--soft-foreground)}
+.filter input{border:0;background:transparent;outline:none;font-size:14px;flex:1}
+table.e{width:100%;border-collapse:collapse;font-size:13.5px}
+table.e td,table.e th{padding:11px 14px 11px 0;border-bottom:1px solid var(--border);text-align:left;white-space:nowrap}
+table.e th{font-size:12px;color:var(--soft-foreground);font-weight:500}
+table.e td{color:var(--muted-foreground)}
+table.e td.first{color:var(--foreground);font-weight:500;white-space:normal}
+table.e tbody tr{cursor:pointer}
+table.e tbody tr:hover td{background:color-mix(in srgb,var(--muted) 45%,transparent)}
+.facts{display:grid;grid-template-columns:120px minmax(0,1fr);gap:9px 16px;font-size:14px;margin:6px 0 24px}
+.facts dt{color:var(--soft-foreground)}.facts dd{margin:0;color:var(--foreground)}
+.row-actions{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin:6px 0 0}
+
+/* overlays */
+.scrim{position:absolute;inset:0;background:rgba(0,0,0,.5);z-index:30;display:flex;justify-content:center;align-items:flex-start;padding-top:90px}
+.light .scrim{background:rgba(0,0,0,.2)}
+.palette{width:600px;max-width:calc(100% - 40px);background:var(--card-2);border:1px solid var(--border);border-radius:16px;box-shadow:var(--shadow-modal);overflow:hidden}
+.palette .pin{display:flex;align-items:center;gap:10px;padding:14px 16px;border-bottom:1px solid var(--border)}
+.palette .pin input{flex:1;border:0;background:transparent;outline:none;font-size:16px}
+.palette .res{max-height:420px;overflow:auto;padding:6px}
+.palette .grp{font-size:11.5px;color:var(--soft-foreground);padding:10px 10px 4px}
+.palette .it{display:flex;align-items:center;gap:12px;width:100%;border:0;background:transparent;text-align:left;padding:9px 10px;border-radius:9px;cursor:pointer;font-size:14px;color:var(--foreground)}
+.palette .it .d{margin-left:auto;font-size:12.5px;color:var(--soft-foreground);white-space:nowrap}
+.palette .it[aria-selected="true"]{background:var(--muted)}
+.palette .foot{display:flex;gap:16px;padding:9px 14px;border-top:1px solid var(--border);font-size:12px;color:var(--soft-foreground)}
+.sheet{width:520px;max-width:calc(100% - 40px);background:var(--card-2);border:1px solid var(--border);border-radius:16px;box-shadow:var(--shadow-modal);padding:22px 24px}
+.sheet h3{margin:0 0 14px;font-size:17px}
+.keys{display:grid;grid-template-columns:auto 1fr;gap:9px 16px;font-size:14px;align-items:center}
+.keys .kbd{justify-self:start}
+.toast{position:absolute;left:50%;transform:translateX(-50%);bottom:22px;display:flex;align-items:center;gap:14px;background:var(--card-2);border:1px solid var(--border);border-radius:12px;padding:10px 12px 10px 16px;font-size:14px;box-shadow:var(--shadow-pop);z-index:35;max-width:560px}
+
+/* concept: brief */
+.letter{max-width:600px;margin:0 auto;padding:46px 26px 70px}
+.letter .date{font-size:13px;color:var(--soft-foreground);margin:0 0 22px}
+.letter h2{font-size:26px;font-weight:600;letter-spacing:-.02em;line-height:1.3;margin:0 0 26px}
+.point{display:grid;grid-template-columns:28px minmax(0,1fr);gap:4px 6px;margin:0 0 26px}
+.point .n{font-size:15px;color:var(--soft-foreground);padding-top:1px}
+.point p{margin:0 0 12px;font-size:16px;line-height:1.6;color:var(--muted-foreground)}
+.point p b{color:var(--foreground);font-weight:600}
+.letter .rest{font-size:16px;line-height:1.65;color:var(--muted-foreground);margin:8px 0 0}
+.inline-link{border:0;background:transparent;padding:0;color:var(--foreground);text-decoration:underline;text-decoration-color:color-mix(in srgb,var(--foreground) 35%,transparent);text-underline-offset:3px;cursor:pointer;font-size:inherit}
+
+/* concept: quiet */
+.qline{margin:0 26px;padding:14px 0;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:14px;flex-wrap:wrap;font-size:15px}
+.qline .msg{flex:1;min-width:240px;color:var(--muted-foreground)}
+.qline .msg b{color:var(--foreground);font-weight:500}
+.qline.needs .msg{color:var(--foreground)}
+.qmore{margin:0 26px;padding:6px 0 16px;border-bottom:1px solid var(--border)}
+.chat{max-width:640px;margin:0 auto;padding:26px 26px 20px;display:flex;flex-direction:column;gap:18px}
+.bu{align-self:flex-end;background:var(--muted);border-radius:16px;padding:9px 14px;font-size:15px;max-width:440px}
+.ba{font-size:15px;line-height:1.6;max-width:560px}
+.ba .meta{display:block;font-size:12.5px;color:var(--soft-foreground);margin-bottom:3px}
+.composer{max-width:640px;width:100%;margin:0 auto;padding:8px 26px 18px;flex:none}
+.comp{display:flex;align-items:center;gap:10px;border:1px solid var(--border);border-radius:14px;padding:10px 12px;background:var(--card)}
+.comp input{flex:1;border:0;background:transparent;outline:none;font-size:15px}
+.flash{animation:flash 1.8s ease-out}
+@keyframes flash{0%{background:color-mix(in srgb,var(--violet) 18%,transparent)}100%{background:transparent}}
+
+/* phone */
+.phone-stage{display:grid;grid-template-columns:auto minmax(0,1fr);gap:40px;align-items:start}
+@media (max-width:980px){.phone-stage{grid-template-columns:1fr}}
+.phone{width:390px;height:820px;border-radius:50px;border:11px solid #050505;background:var(--background);overflow:hidden;display:flex;flex-direction:column;position:relative;box-shadow:var(--shadow-modal);outline:1px solid var(--border)}
+.light .phone{border-color:#1b1b1b}
+.ph-status{height:46px;display:flex;align-items:center;justify-content:space-between;padding:0 30px;font-size:13.5px;font-weight:600;flex:none}
+.ph-head{display:flex;align-items:center;gap:6px;padding:2px 12px 6px;flex:none;min-height:46px}
+.ph-head b{font-size:16px;font-weight:600}
+.ph-body{flex:1;overflow:auto;min-height:0;position:relative}
+.phone .calm{padding:18px 22px 40px}
+.phone .ask-q{font-size:25px}
+.phone .ask-why{font-size:15.5px}
+.phone .status{margin-bottom:30px}
+.phone .actions{flex-direction:column;align-items:stretch;gap:4px}
+.phone .actions .btn{height:52px;font-size:16px;width:100%}
+.phone .actions .tbtn{justify-content:center;min-height:44px}
+.phone .opt{min-height:52px;font-size:16px}
+.phone .goal{min-height:56px}
+.phone .letter{padding:18px 22px 40px}
+.phone .letter h2{font-size:23px}
+.phone .wide{padding:16px 16px 40px}
+.phone .qline{margin:0 16px}
+.phone .chat{padding:16px}
+.phone .composer{padding:6px 12px 10px}
+.phone .scrim{align-items:flex-end;padding:0}
+.phone .palette,.phone .sheet{width:100%;max-width:none;border-radius:20px 20px 0 0;border-bottom:0}
+.phone .toast{bottom:92px;width:calc(100% - 28px)}
+.phone .palette .it{flex-wrap:wrap;gap:2px 12px}
+.phone .palette .it .d{margin-left:0;width:100%;white-space:normal}
+.ph-bar{display:flex;border-top:1px solid var(--border);background:var(--background);flex:none;padding-bottom:22px}
+.ph-bar button{flex:1;display:flex;flex-direction:column;align-items:center;gap:3px;padding:9px 0 4px;font-size:10.5px;font-weight:500;color:var(--soft-foreground);border:0;background:transparent;position:relative;cursor:pointer}
+.ph-bar button.on{color:var(--foreground)}
+.ph-bar .pip{position:absolute;top:7px;left:calc(50% + 9px)}
+.phone .facts{grid-template-columns:100px minmax(0,1fr)}
+.phone table.e td:nth-child(n+3),.phone table.e th:nth-child(n+3){display:none}
+.notes{display:flex;flex-direction:column;gap:16px;max-width:520px;padding-top:6px}
+.notes h3{margin:0 0 6px;font-size:15px}
+.notes p,.notes li{color:var(--muted-foreground);font-size:14px}
+.notes ul{padding-left:18px;margin:6px 0}
+@media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+
+</style>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="i-check" viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></symbol>
+  <symbol id="i-repeat" viewBox="0 0 24 24"><path d="m17 2 4 4-4 4"/><path d="M3 11v-1a4 4 0 0 1 4-4h14"/><path d="m7 22-4-4 4-4"/><path d="M21 13v1a4 4 0 0 1-4 4H3"/></symbol>
+  <symbol id="i-plus" viewBox="0 0 24 24"><path d="M5 12h14M12 5v14"/></symbol>
+  <symbol id="i-back" viewBox="0 0 24 24"><path d="m15 18-6-6 6-6"/></symbol>
+  <symbol id="i-up" viewBox="0 0 24 24"><path d="m18 15-6-6-6 6"/></symbol>
+  <symbol id="i-down" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></symbol>
+  <symbol id="i-lock" viewBox="0 0 24 24"><rect width="18" height="11" x="3" y="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></symbol>
+  <symbol id="i-msg" viewBox="0 0 24 24"><path d="M7.9 20A9 9 0 1 0 4 16.1L2 22Z"/></symbol>
+  <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></symbol>
+  <symbol id="i-inbox" viewBox="0 0 24 24"><path d="M22 12h-6l-2 3h-4l-2-3H2"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/></symbol>
+  <symbol id="i-bot" viewBox="0 0 24 24"><path d="M12 8V4H8"/><rect width="16" height="12" x="4" y="8" rx="2"/><path d="M2 14h2M20 14h2M15 13v2M9 13v2"/></symbol>
+  <symbol id="i-list" viewBox="0 0 24 24"><path d="M3 12h.01M3 18h.01M3 6h.01M8 12h13M8 18h13M8 6h13"/></symbol>
+  <symbol id="i-more" viewBox="0 0 24 24"><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/><circle cx="5" cy="12" r="1"/></symbol>
+  <symbol id="i-phone" viewBox="0 0 24 24"><rect width="14" height="20" x="5" y="2" rx="2"/><path d="M12 18h.01"/></symbol>
+  <symbol id="i-monitor" viewBox="0 0 24 24"><rect width="20" height="14" x="2" y="3" rx="2"/><path d="M8 21h8M12 17v4"/></symbol>
+  <symbol id="i-send" viewBox="0 0 24 24"><path d="m5 12 7-7 7 7"/><path d="M12 19V5"/></symbol>
+  <symbol id="i-ext" viewBox="0 0 24 24"><path d="M7 7h10v10M7 17 17 7"/></symbol>
+  <symbol id="i-home" viewBox="0 0 24 24"><path d="M15 21v-8a1 1 0 0 0-1-1h-4a1 1 0 0 0-1 1v8"/><path d="M3 10a2 2 0 0 1 .709-1.528l7-5.999a2 2 0 0 1 2.582 0l7 5.999A2 2 0 0 1 21 10v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></symbol>
+</svg>
+<header class="doc-top"><a class="brand" href="index.html">Manager, calmly</a><nav aria-label="Pages"><a href="index.html" aria-current="page">Overview</a><a href="concept-1-today-recommended.html">Today ★</a><a href="concept-2-focus.html">Focus</a><a href="concept-3-goals.html">Goals</a><a href="concept-4-brief.html">Brief</a><a href="concept-5-quiet.html">Quiet</a></nav><span style="margin-left:auto" class="seg" role="group" aria-label="Theme"><button type="button" data-theme="dark" aria-pressed="true">Dark</button><button type="button" data-theme="light" aria-pressed="false">Light</button></span></header>
+<main class="doc">
+<h1>A calmer way to work with a manager</h1>
+<p class="lede">Start from the person, not the data. Three questions matter: <b>what do I need to decide</b>, <b>what is the manager doing for me</b>, and <b>is it going well</b>. Each concept answers them in a few calm sentences and keeps the machinery (tasks, pull requests, runs, automations) one deliberate step away, yet within reach for a power user.</p>
+<p class="lede" style="font-size:15px">Every concept is a clickable prototype on its own page, on desktop and on a phone. Start with <a href="concept-1-today-recommended.html">Today</a>, the recommendation, then compare.</p>
+
+<section id="rules"><h2><span class="num">01</span> What every screen holds to</h2>
+<div class="cols2"><div class="prose">
+<p>The current pages show everything at once: rows of chips, counts and states, and every question from every task. The person does not know where to look. These limits are the fix, and each screen was cut until it met them.</p>
+<ul><li>Lots of space. Typography instead of boxes; no cards around cards.</li><li>One primary action per screen.</li><li>At most five things visible by default.</li><li>No rows of chips, badges or counters, and no colour coding. One quiet dot means “something needs you”.</li><li>The machinery is one step away (<i>Show the work</i>, <i>Everything</i>, ⌘K), never on the first screen.</li><li>The three-second test: would a first-time user know where to look? If a screen needs explaining, it is too busy.</li></ul>
+</div><div class="prose">
+<h3 style="margin-top:0">Scope</h3><p>One manager, one new view next to its chat. Managers stay separate. The only cross-manager change is the Now page, because it is where the pile builds up. A wider overview and multi-manager setup come later.</p>
+<h3>The world in the prototypes</h3><p><b>Delivery lead</b> watches three projects: storefront, orders-api and mobile-app. It is 12:10 on a Wednesday. Fifteen things came up today: decisions, questions from tasks, approvals and failures. Names, people and PRs are invented.</p>
+</div></div></section>
+
+<section id="now"><h2><span class="num">02</span> Why Now piles up, and how it stops</h2>
+<div class="cols2"><div class="prose">
+<h3 style="margin-top:0">Today</h3>
+<ul><li>Every question, approval, failure and important message from every task and manager lands in one list, at equal weight.</li><li>Nobody owns the list. A question waits until you answer it or dismiss it; after seven days it just stops counting.</li><li>The same question arrives three times from three tasks.</li><li>Nothing has a default, so an unanswered question blocks its task forever.</li><li>Each row has its own ✕ and ⋯; Running and Finished today sit underneath. You manage the list instead of deciding.</li></ul>
+<h3>The fix: the manager triages before you do</h3>
+<ol><li><b>Answer what it safely can</b> from your rules, its memory and your earlier answers, and tell you after.</li><li><b>Fold related questions</b> into one decision. Three tasks asking about the payment sandbox become one question.</li><li><b>Retire what went stale</b>: the PR merged, the task stopped, the work moved on. Closed with a reason, never shown.</li><li><b>Decide small, undoable things by default</b> after a few hours, unless you object: “I will re-run last night’s tests at 17:00.” Never for merges, enabling automations or connector writes.</li><li><b>Rank the rest</b> by what each one unblocks, and show it <b>one at a time</b>.</li></ol>
+</div><div class="prose">
+<div class="funnel"><div><b>15</b><span>came up today</span></div><div><b>9</b><span>taken care of: answered, folded or retired</span></div><div><b>2</b><span>happen by default unless you object</span></div><div><b>4</b><span>need you, about three minutes</span></div></div>
+<h3>Getting to zero feels fast</h3>
+<ul><li>The count is stated as time: “Four things need you, about three minutes.”</li><li>One decision at a time, with one button. A thin progress line fills as you go; the next slides in.</li><li>Keyboard: <span class="kbd">↵</span>/<span class="kbd">Y</span>, <span class="kbd">N</span>, <span class="kbd">1</span>–<span class="kbd">3</span>, <span class="kbd">M</span>. Thumb: the full-width button sits where the thumb rests, “Not now” right under it.</li><li>At zero: “You’re clear. I took care of nine things for you today.” <i>See them</i> lists each one with its reason and a way to change it.</li></ul>
+<h3>What happens to Now</h3>
+<table class="t"><thead><tr><th>Now today</th><th>Now, reshaped</th></tr></thead><tbody>
+<tr><td>Everything from every source</td><td>Only real decisions, after each manager has answered, folded, retired or defaulted what it could</td></tr>
+<tr><td>A list to scroll, ✕ and ⋯ on every row</td><td>One decision at a time: ↵ takes it, N puts it off</td></tr>
+<tr><td>A count that only grows</td><td>A count in minutes, across managers</td></tr>
+<tr><td>Probably done, Older, Mark all read</td><td>“What your managers took care of” (with undo) and “by default unless you object”</td></tr>
+<tr><td>Running and Finished today</td><td>Gone from Now: in Everything › Tasks and ⌘K</td></tr>
+</tbody></table>
+<p>Try it: the <b>Now</b> link in each prototype’s sidebar (or the phone’s Now tab) opens the reshaped page with three managers’ decisions in one queue.</p>
+</div></div></section>
+
+<section id="concepts"><h2><span class="num">03</span> Five concepts</h2>
+<p class="sub">Each changes what you mainly do: decide in a calm column (Today), decide one thing at a time (Focus), follow outcomes (Goals), read (Brief), or barely look (Quiet). Each page has the prototype, the four flows, the power path and a critique.</p>
+<div class="cards">
+<a class="ccard rec" href="concept-1-today-recommended.html"><b>Today <span class="rec-pill">Recommended</span></b><span>One sentence, one decision, five goals. The calm column.</span><span class="verdict">Three-second test: pass</span></a>
+<a class="ccard" href="concept-2-focus.html"><b>Focus</b><span>One decision fills the screen. The next appears when you act.</span><span class="verdict">Pass for deciding, fails “what is it doing”</span></a>
+<a class="ccard" href="concept-3-goals.html"><b>Goals</b><span>Outcomes in plain lines. Tasks and PRs only inside.</span><span class="verdict">Pass, but decisions are scattered</span></a>
+<a class="ccard" href="concept-4-brief.html"><b>Brief</b><span>A chief of staff’s note: three points, one button each.</span><span class="verdict">Partial: about ten seconds of reading</span></a>
+<a class="ccard" href="concept-5-quiet.html"><b>Quiet</b><span>One line that grows only when needed. No new tab.</span><span class="verdict">Pass when needed, invisible otherwise</span></a>
+</div></section>
+
+<section id="compare"><h2><span class="num">04</span> Side by side</h2>
+<table class="t"><thead><tr><th>Concept</th><th>What do I decide?</th><th>What is it doing?</th><th>Is it going well?</th><th>Cost and risk</th></tr></thead><tbody>
+<tr><td>Today</td><td><b>First thing on screen</b></td><td><b>Five goals below</b></td><td><b>One sentence on top</b></td><td>Plain-language lines from the manager; goals need grouping</td></tr>
+<tr><td>Focus</td><td><b>The whole screen</b></td><td>One click</td><td>One sentence</td><td>Feels empty when nothing waits</td></tr>
+<tr><td>Goals</td><td>One inline, rest a click</td><td><b>The whole screen</b></td><td>One sentence</td><td>Needs a goal entity and strict filing</td></tr>
+<tr><td>Brief</td><td>Three points</td><td>A paragraph</td><td><b>The headline</b></td><td>A model call per rewrite</td></tr>
+<tr><td>Quiet</td><td>In the line</td><td>Behind ⌄</td><td><b>The line</b></td><td>Easy to miss; the chat stays the surface</td></tr>
+</tbody></table></section>
+
+<section id="recommendation"><h2><span class="num">05</span> Recommendation</h2>
+<div class="cols2"><div class="prose">
+<p><b>Build Today as the manager’s first screen, with the chat one tab away.</b> It is the only concept that answers all three questions at a glance, and its decision component is exactly what Now needs. Borrow the best of the others:</p>
+<ul><li><b>From Focus:</b> how decisions behave. One at a time, keyboard first, a count in minutes, and a proper “You’re clear”.</li><li><b>From Goals:</b> the five lines under the decision, recurring work as ongoing goals, and per-goal settings.</li><li><b>From Quiet:</b> the same status sentence everywhere else: the sidebar row, the notch, the phone push. It grows only when something needs you.</li><li><b>From Brief:</b> nothing on screen. Offer it as a rule (“write me a short summary every morning”), which already exists as a saved job.</li><li><b>Control:</b> plain rules with switches, one autonomy sentence, pause, and trust offered after your own yeses.</li></ul>
+<p>The tab is called <b>Today</b>, because “Workspace”, “Inbox” and “Now” already mean other things in cezar.</p>
+</div><div class="prose">
+<h3 style="margin-top:0">Desktop and phone differ on purpose</h3><p>On a desktop you steer: the decision, the goals and the footer fit in one column, and the keyboard runs the session. On a phone you decide: the decision and its full-width button come first, goals below, and every drill-down is its own page. Approvals ask once more in a sheet, as phones do today.</p>
+<h3>Power without clutter</h3>
+<table class="t"><thead><tr><th>To reach</th><th>Steps</th></tr></thead><tbody>
+<tr><td>Any automation</td><td>⌘K, type its name. Switch, Run now and Edit are on its page</td></tr>
+<tr><td>Every task or PR</td><td><span class="kbd">E</span> Everything › Tasks or Pull requests</td></tr>
+<tr><td>Why it did something</td><td>The goal › Show the work › the reason under each step</td></tr>
+<tr><td>Autonomy, rules, pause</td><td><span class="kbd">R</span> How it works</td></tr>
+<tr><td>The raw chat message</td><td>Show the work › In the chat</td></tr>
+</tbody></table>
+</div></div></section>
+
+<section id="plan"><h2><span class="num">06</span> Plan and data</h2>
+<div class="cols3">
+<div class="prose quiet-card v"><h3 style="margin-top:0">Phase 1 · Decide <span class="rec-pill">Ship first</span></h3><p>Rebuild Now and add Today’s top half on data that already exists:</p><ul><li>One decision at a time, ranked by the attention list’s tiers, with keys and the count in minutes.</li><li>Stale items never shown: the settle rules already exist.</li><li>“Not now” uses the existing snooze overrides.</li><li>Plain wording from what cards already carry: the question, the proposal’s reason, the task’s outcome.</li><li>Today’s goals derived from what tasks reference (PR, issue, automation).</li></ul></div>
+<div class="prose quiet-card"><h3 style="margin-top:0">Phase 2 · The manager triages</h3><ul><li>Answer from rules and memory: a new close reason, “answered by the manager”, with undo.</li><li>Fold duplicates: cards that declare the same <code>about</code> merge into one.</li><li>Defaults: <code>defaultAnswer</code> and <code>defaultAt</code> on a question, applied by the engine unless you object. Never on approvals. Opt in per manager.</li><li>The “What I took care of” ledger, built from those closes.</li><li>Plain fields on every card: question, why, main action.</li></ul></div>
+<div class="prose quiet-card"><h3 style="margin-top:0">Phase 3 · Goals and rules</h3><ul><li>A goal record: one-time or ongoing, a state line, the tasks, PRs and automations under it.</li><li>Rules as sentences, each mapped to a setting, a saved job or an automation.</li><li>Pause with an end time, built on deactivate.</li><li>Trust offers: “next time, should I just do it?”, based on your approvals.</li><li>Holding non-urgent decisions for set check-in times.</li></ul><p><b>Later:</b> a cross-manager overview, multi-manager setup, the brief as a rule.</p></div>
+</div>
+<p class="sub" style="margin-top:18px">Kept as is: merges and enabling automations go only through the decision route, watch turns stay read-only, “no new item, no model call” still holds, nothing needs configuring, and the plain-language fields are optional (each falls back to today’s card text).</p></section>
+
+<section id="rejected"><h2><span class="num">07</span> What we rejected, and why</h2>
+<p class="sub">A first pass put everything a manager touches on one screen: lanes of cards, job lists with trees of PRs and tasks, a control panel with every knob, and chips, counts and status dots on every row. It answered every question and none of them at a glance, and the machinery became the content. Its useful parts survive one step down: the job tree is <i>Show the work</i>, the control panel is <i>How it works</i>, and the inventory is <i>Everything</i>.</p></section>
+
+<section id="open"><h2><span class="num">08</span> Open questions</h2>
+<table class="t"><thead><tr><th>Question</th><th>My default</th></tr></thead><tbody>
+<tr><td>Should a manager open on Today or on the chat?</td><td>Today. The chat is one tab or one key (<span class="kbd">C</span>) away.</td></tr>
+<tr><td>Are defaults on for everyone?</td><td>No. Each manager offers them after it sees you answer the same kind of question the same way.</td></tr>
+<tr><td>Questions from tasks no manager follows</td><td>Shown in Now, ranked last, with an offer: “let Delivery lead handle questions like this”.</td></tr>
+<tr><td>Where do Running and Finished today go?</td><td>Everything › Tasks, and ⌘K. Not on Now.</td></tr>
+</tbody></table></section>
+</main>
+<script>
+document.addEventListener('click', function (ev) {
+  var t = ev.target.closest('[data-theme]');
+  if (!t) return;
+  document.documentElement.classList.toggle('light', t.dataset.theme === 'light');
+  document.querySelectorAll('[data-theme]').forEach(function (b) { b.setAttribute('aria-pressed', String(b === t)); });
+});
+</script>
+</body>
+</html>
