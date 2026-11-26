@@ -47,4 +47,4 @@ removed from cezar, and ending or cancelling that task never answers 500.
 
 ### Phase 2: End session on a deleted root
 
-- [ ] 2.1 finish survives a deleted worktree/root
+- [x] 2.1 finish survives a deleted worktree/root — 56e6ecf9
