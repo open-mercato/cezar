@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AgentEvent, AgentRunResult, AgentRunSpec } from '../core/agent-runner.ts';
-import { RunStore } from '../runs/store.ts';
+import { FRESH_PROMPT_MAX, RunStore } from '../runs/store.ts';
 import type { StepToolPolicy } from '@open-mercato/cezar-contract';
 import { FRESH_CONTEXT_NOTE, RunManager } from './run.ts';
 import { DEFAULT_ALLOWED_TOOLS, type WorkflowDef } from './types.ts';
@@ -355,6 +355,32 @@ describe('a resumed session keeps its workflow step tools', { timeout: 20_000 },
     expect(spec.userPrompt).not.toContain('Verdict: request changes.');
     expect(store.getRun(id)?.steps.find((step) => step.id === 'continue-1')?.freshPrompt).toBeUndefined();
     await settled(id);
+  });
+
+  it('a queued fresh Continue cancelled before it opens drops its instruction', async () => {
+    const id = terminalRun({
+      def: SINGLE_DEF,
+      steps: [{ id: 'work', sessionId: 'sess-1', backend: 'claude' }],
+    });
+    expect(manager!.continueRun(id, { text: 'Re-review PR 7', freshContext: true }, true)).toEqual({ ok: true });
+    expect(store.getRun(id)?.steps.find((candidate) => candidate.id === 'continue-1')?.freshPrompt).toBe('Re-review PR 7');
+    expect(manager!.cancel(id)).toBe(true);
+    expect(store.getRun(id)?.status).toBe('cancelled');
+    const step = store.getRun(id)?.steps.find((candidate) => candidate.id === 'continue-1');
+    expect(step?.freshContext).toBe(true);
+    expect(step?.freshPrompt).toBeUndefined();
+  });
+
+  it('a queued fresh Continue past the stored cap keeps no instruction rather than one the reload drops', async () => {
+    const id = terminalRun({
+      def: SINGLE_DEF,
+      steps: [{ id: 'work', sessionId: 'sess-1', backend: 'claude' }],
+    });
+    expect(manager!.continueRun(id, { text: 'x'.repeat(FRESH_PROMPT_MAX + 1), freshContext: true }, true)).toEqual({ ok: true });
+    const step = store.getRun(id)?.steps.find((candidate) => candidate.id === 'continue-1');
+    expect(step?.freshContext).toBe(true);
+    expect(step?.freshPrompt).toBeUndefined();
+    manager!.cancel(id);
   });
 
   it('a queued fresh Continue without a persisted instruction revives with a prompt that does not point at the handoff', async () => {

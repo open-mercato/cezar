@@ -110,7 +110,7 @@ import { getHeadCommit, getRepoInfo } from '../server/git.ts';
 import { loadWorkflows, newerCatalogWorkflow } from './load.ts';
 import type { QueuedMessage, RunRecord, RunStore, StepState } from '../runs/store.ts';
 import { switchedWorkflowAgent, taskAgentSelection, workflowAgentSwitch } from '../runs/agent-selection.ts';
-import { artifactsDir, authParkForAccount, isIdleParked } from '../runs/store.ts';
+import { artifactsDir, authParkForAccount, FRESH_PROMPT_MAX, isIdleParked } from '../runs/store.ts';
 import { artifactsPromptPart, scanArtifacts, watchArtifacts } from '../runs/artifacts.ts';
 import { backstopRender } from '../impact/publish.ts';
 // Task dispatch (spec 2026-09-10-dispatch). Every import below is inert unless the feature is
@@ -5266,6 +5266,13 @@ export class RunManager {
     return this.cancelOne(runId);
   }
 
+  /** A fresh Continue cancelled before it opened never needs its instruction again. */
+  private dropFreshPrompts(runId: string): void {
+    for (const step of this.store.getRun(runId)?.steps ?? []) {
+      if (step.freshPrompt !== undefined) this.store.updateStep(runId, step.id, { freshPrompt: undefined });
+    }
+  }
+
   /** One run's cancellation, with no regard for a hierarchy — what `cancel` has always done. */
   private cancelOne(runId: string): boolean {
     // Still waiting in the queue: just drop it there.
@@ -5276,6 +5283,7 @@ export class RunManager {
       this.pendingBranchNames.delete(runId);
       this.cancelPendingHandoff(runId);
       this.startNowRequested.delete(runId);
+      this.dropFreshPrompts(runId);
       this.store.updateRun(runId, { status: 'cancelled', finishedAt: new Date().toISOString() });
       this.store.appendEvent(runId, { type: 'lifecycle', message: 'cancelled while queued' });
       // A queued run never entered `active`, so it never reaches `dropActive` — the one terminal
@@ -5316,6 +5324,7 @@ export class RunManager {
       }
       this.cancelledStarting.add(runId);
       this.cancelPendingHandoff(runId);
+      this.dropFreshPrompts(runId);
       this.store.updateRun(runId, { status: 'cancelled', finishedAt: new Date().toISOString(), currentStepId: undefined });
       this.store.appendEvent(runId, { type: 'lifecycle', message: 'run cancelled' });
       return true;
@@ -6376,7 +6385,8 @@ export class RunManager {
         ...fresh,
       });
       // Only the step survives a restart; it carries the instruction until the session opens.
-      if (freshRequested && !previous) this.store.updateStep(runId, stepId, { freshPrompt: prompt });
+      // Past the schema's cap the reload would drop it; the revive then opens with FRESH_RESTART_PROMPT.
+      if (freshRequested && !previous && prompt.length <= FRESH_PROMPT_MAX) this.store.updateStep(runId, stepId, { freshPrompt: prompt });
       if (!agentSwitch || (!priorStep && !this.active.has(runId) && !this.starting.has(runId))) this.queue.push(runId);
       this.store.updateRun(runId, {
         status: 'queued',
