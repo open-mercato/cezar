@@ -16,7 +16,9 @@
  *
  *   1. **Isolation** — each run gets a hashed project directory under
  *      `<cezarHomeDir>/tmp/agent`, outside the repository and away from an
- *      inherited checkout-local `TMPDIR`, reaped when the run ends.
+ *      inherited checkout-local `TMPDIR`, reaped when the run ends. When that
+ *      path leaves no room for a tool's Unix socket (#1936), a shorter temp
+ *      root takes over.
  *      `buildChildEnv` applies the per-run env last, so these values win over
  *      the host's without any allowlist change. Isolation is from other *users*
  *      too: the tree is owner-only, and the platform-temp fallback root — a
@@ -104,12 +106,57 @@ function platformFallbackBase(): string {
   return join(platformTmpDir(), 'cez-agent');
 }
 
-/** Prefer CEZ_HOME, but never place agent scratch inside the checkout it protects. */
-function agentTmpBase(dataDir: string, env: NodeJS.ProcessEnv): string {
+/** A short POSIX root for when the others leave no room for a socket (#1936) —
+ *  macOS's `os.tmpdir()` is a ~50-byte `/var/folders/…` path. */
+function shortPosixBase(): string | undefined {
+  const uid = process.getuid?.();
+  return process.platform === 'win32' || uid === undefined ? undefined : `/tmp/cez-${uid}`;
+}
+
+/** Longest usable `sun_path` (its size less the NUL); Windows pipes have no such limit. */
+function socketPathMax(): number {
+  if (process.platform === 'win32') return Number.POSITIVE_INFINITY;
+  return process.platform === 'linux' ? 107 : 103;
+}
+
+/** Room a tool needs below `TMPDIR` for its socket (#1936): tsx's `/tsx-<uid>/<pid>.pipe`
+ *  is 28 bytes at its longest, the Claude Code Linux sandbox's `/claude-http-<16 hex>.sock`
+ *  is 35. 40 covers both with a margin. */
+export const SOCKET_HEADROOM = 40;
+
+/** The per-run leaf: a uuid's first 16 characters (its id8 plus ~52 random bits) keep
+ *  concurrent runs apart while sparing 20 bytes of socket budget (#1936). */
+function runLeaf(runId: string): string {
+  return runId.slice(0, 16);
+}
+
+/** Every root a project's scratch may live under, in order of preference. */
+function agentTmpBases(dataDir: string, env: NodeJS.ProcessEnv): string[] {
   const preferred = join(cezarHomeDir(env), 'tmp', 'agent');
   const checkout = containingCheckoutRoot(dataDir);
-  if (!isInside(checkout ?? dataDir, preferred)) return preferred;
-  return platformFallbackBase();
+  const bases = [
+    ...(isInside(checkout ?? dataDir, preferred) ? [] : [preferred]),
+    platformFallbackBase(),
+    ...(shortPosixBase() ? [shortPosixBase() as string] : []),
+  ];
+  return [...new Set(bases)];
+}
+
+/** Prefer CEZ_HOME outside the checkout, then the first root whose run directories
+ *  leave a tool room to bind a socket; the shortest when none does. */
+function agentTmpBase(dataDir: string, env: NodeJS.ProcessEnv): string {
+  return orderedBases(dataDir, env)[0] as string;
+}
+
+/** Candidates in the order to try them: bases with socket headroom first (preference
+ *  order), then the rest, shortest first. */
+function orderedBases(dataDir: string, env: NodeJS.ProcessEnv): string[] {
+  const bases = agentTmpBases(dataDir, env);
+  const fits = (base: string): boolean =>
+    Buffer.byteLength(join(base, projectTmpNamespace(dataDir), 'x'.repeat(16))) + SOCKET_HEADROOM
+      <= socketPathMax();
+  const rest = bases.filter((b) => !fits(b)).sort((a, b) => Buffer.byteLength(a) - Buffer.byteLength(b));
+  return [...bases.filter(fits), ...rest];
 }
 
 /**
@@ -146,12 +193,20 @@ export function securePrivateDir(base: string): void {
 }
 
 export function agentTmpDir(dataDir: string, runId: string, env: NodeJS.ProcessEnv = process.env): string {
-  return join(agentTmpBase(dataDir, effectiveEnv(env)), projectTmpNamespace(dataDir), runId);
+  return join(agentTmpBase(dataDir, effectiveEnv(env)), projectTmpNamespace(dataDir), runLeaf(runId));
 }
 
-/** The root every per-run directory hangs off — the only scratch tree this module removes. */
-function agentTmpRoot(dataDir: string, env: NodeJS.ProcessEnv = process.env): string {
-  return join(agentTmpBase(dataDir, effectiveEnv(env)), projectTmpNamespace(dataDir));
+/** Every root a per-run directory may hang off — the only scratch trees this module
+ *  removes. All candidates, so scratch minted under another root is still reaped. */
+export function agentTmpRoots(dataDir: string, env: NodeJS.ProcessEnv = process.env): string[] {
+  return agentTmpBases(dataDir, effectiveEnv(env)).map((base) => join(base, projectTmpNamespace(dataDir)));
+}
+
+/** Whether `path` is this run's scratch directory under ANY candidate root — `agentTmpEnv`
+ *  may have fallen past the preferred root (#1936), so `agentTmpDir` alone can disagree with it. */
+export function isAgentTmpDirOf(dataDir: string, runId: string, path: string, env: NodeJS.ProcessEnv = process.env): boolean {
+  if (!safeRunId(runId)) return false;
+  return agentTmpRoots(dataDir, env).some((root) => path === join(root, runLeaf(runId)));
 }
 
 /** `errno` → the phrasing a human recognises from their shell. */
@@ -240,17 +295,28 @@ export function agentTmpEnv(
   env: NodeJS.ProcessEnv = process.env,
 ): Record<string, string> {
   if (!agentTmpDirEnabled(env)) return {};
-  const dir = agentTmpDir(dataDir, runId, env);
-  // Only the shared fallback needs vetting; `~/.cezar` is already the user's own.
-  const fallback = platformFallbackBase();
-  if (isInside(fallback, dir)) securePrivateDir(fallback);
-  try {
-    mkdirSync(dir, { recursive: true, mode: PRIVATE_DIR_MODE });
-  } catch (err) {
-    throw new AgentTempDirError(dir, err);
+  const bases = orderedBases(dataDir, effectiveEnv(env));
+  const shared = (b: string): boolean => b === platformFallbackBase() || b === shortPosixBase();
+  let firstError: unknown;
+  for (const base of bases) {
+    const dir = join(base, projectTmpNamespace(dataDir), runLeaf(runId));
+    try {
+      // Only a shared temp root needs vetting; `~/.cezar` is already the user's own.
+      if (shared(base)) securePrivateDir(base);
+      try {
+        mkdirSync(dir, { recursive: true, mode: PRIVATE_DIR_MODE });
+      } catch (err) {
+        throw new AgentTempDirError(dir, err);
+      }
+      probeWritable(dir);
+      return { TMPDIR: dir, TEMP: dir, TMP: dir };
+    } catch (err) {
+      firstError ??= err;
+      // A broken home root stays loud (#785); an unusable shared root quietly yields to the next.
+      if (!shared(base)) throw err;
+    }
   }
-  probeWritable(dir);
-  return { TMPDIR: dir, TEMP: dir, TMP: dir };
+  throw firstError;
 }
 
 /**
@@ -260,39 +326,49 @@ export function agentTmpEnv(
  */
 export function removeAgentTmpDir(dataDir: string, runId: string): void {
   if (!safeRunId(runId)) return;
-  try {
-    rmSync(agentTmpDir(dataDir, runId), { recursive: true, force: true });
-  } catch {
-    // best-effort; the startup sweep picks up whatever survives.
+  // The full id too: a run live across the upgrade still has its pre-#1936 directory.
+  const names = new Set([runLeaf(runId), runId]);
+  for (const root of agentTmpRoots(dataDir)) {
+    for (const name of names) {
+      try {
+        rmSync(join(root, name), { recursive: true, force: true });
+      } catch {
+        // best-effort; the startup sweep picks up whatever survives.
+      }
+    }
   }
 }
 
 /**
  * Remove every per-run directory that is not in `keepRunIds` — the startup
  * sweep, so a crash (which never reaches the terminal-transition reap) cannot
- * accumulate them forever. Confined to this project's hashed scratch root;
- * project run state is never enumerated, let alone touched. Returns the ids reaped.
+ * accumulate them forever. Confined to this project's hashed namespace under each
+ * candidate root; project run state is never enumerated, let alone touched.
+ * Returns the directory names reaped.
  */
 export function sweepAgentTmpDirs(dataDir: string, keepRunIds: Iterable<string>, env: NodeJS.ProcessEnv = process.env): string[] {
-  const root = agentTmpRoot(dataDir, env);
-  if (!existsSync(root)) return [];
-  const keep = new Set(keepRunIds);
+  // A live run keeps its leaf and, if it predates #1936, its full-id directory.
+  const keep = new Set<string>();
+  for (const id of keepRunIds) keep.add(id).add(runLeaf(id));
   const reaped: string[] = [];
-  let entries: string[];
-  try {
-    entries = readdirSync(root, { withFileTypes: true })
-      .filter((e) => e.isDirectory())
-      .map((e) => e.name);
-  } catch {
-    return [];
-  }
-  for (const name of entries) {
-    if (keep.has(name) || !safeRunId(name)) continue;
+  for (const root of agentTmpRoots(dataDir, env)) {
+    if (!existsSync(root)) continue;
+    let entries: string[];
     try {
-      rmSync(join(root, name), { recursive: true, force: true });
-      reaped.push(name);
+      entries = readdirSync(root, { withFileTypes: true })
+        .filter((e) => e.isDirectory())
+        .map((e) => e.name);
     } catch {
-      // best-effort: a locked directory is retried on the next boot.
+      continue;
+    }
+    for (const name of entries) {
+      if (keep.has(name) || !safeRunId(name)) continue;
+      try {
+        rmSync(join(root, name), { recursive: true, force: true });
+        reaped.push(name);
+      } catch {
+        // best-effort: a locked directory is retried on the next boot.
+      }
     }
   }
   return reaped;

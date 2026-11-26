@@ -10,7 +10,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AgentEvent } from './agent-runner.ts';
 import type { UiEvent } from './ui-events.ts';
 import { parseUsageLimit } from './usage-limit.ts';
-import { agentTmpDir } from '../runs/agent-tmpdir.ts';
+import { agentTmpDir, agentTmpEnv } from '../runs/agent-tmpdir.ts';
 import { provisionSkills } from '../skills-provision.ts';
 import {
   KILL_GRACE_MS,
@@ -937,6 +937,32 @@ describe('permission prompts outside the worktree (c3d30076 hung 21 h on one)', 
     const legacy = '/repo/.ai/cezar/tmp/r1';
     expect(opencodePermissionReply(ask(`${legacy}/x`), { ...env, TMPDIR: legacy })).toBe('reject');
     expect(opencodePermissionReply(ask('/tmp/x'), { ...env, TMPDIR: '/tmp' })).toBe('reject');
+  });
+
+  // #1936: agentTmpEnv falls past an unusable preferred root; the check must follow it.
+  it('grants the scratch dir agentTmpEnv fell back to when the preferred root is unusable', () => {
+    const data = mkdtempSync(join(tmpdir(), 'cez-oc-fb-'));
+    const home = mkdtempSync(join(tmpdir(), 'cez-oc-fbh-'));
+    const cezEnv = { CEZ_HOME: join(home, 'h'.repeat(60), '.cezar') };
+    const dataDir = join(data, '.ai/cezar');
+    let minted: string | undefined;
+    try {
+      const preferred = agentTmpDir(dataDir, 'r1', cezEnv);
+      const ns = dirname(preferred);
+      mkdirSync(dirname(ns), { recursive: true });
+      writeFileSync(ns, 'x'); // the preferred root cannot mint a directory
+      const dir = agentTmpEnv(dataDir, 'r1', cezEnv).TMPDIR as string;
+      minted = dir;
+      expect(dir).not.toBe(preferred);
+      const e = { CEZ_HANDOFF_FILE: `${dataDir}/runs/r1.handoff.md`, CEZ_TASK_ID: 'r1', TMPDIR: dir };
+      expect(opencodePermissionReply(ask(`${dir}/x/out.log`), e)).toBe('once');
+      expect(opencodePermissionReply(ask(`${dirname(dir)}/other/x`), e)).toBe('reject');
+    } finally {
+      if (minted) rmSync(dirname(minted), { recursive: true, force: true });
+      rmSync(dirname(agentTmpDir(dataDir, 'r1', cezEnv)), { force: true });
+      rmSync(data, { recursive: true, force: true });
+      rmSync(home, { recursive: true, force: true });
+    }
   });
 
   it('compares paths after following symlinks', () => {
