@@ -79,7 +79,7 @@ export function reportAgentError(
   // Without consent there is nothing to send, so skip the masking work on the event path too.
   if (!telemetryEnabled() || INTERRUPTED_RE.test(event.message)) return;
   const failure = classifyAgentFailure(event.message);
-  if (failure === 'auth' || failure === 'billing' || failure === 'context_too_large' || failure === 'disk_full') return;
+  if (failure === 'auth' || failure === 'billing' || failure === 'context_too_large' || failure === 'disk_full' || failure === 'content_flagged') return;
   // A model the login cannot use: the thread already says which knob to turn (81bdc692).
   if (isCodexChatGptModelError(event.message)) return;
   // A limit auto-resume can schedule is the account's state (#1438), and so is one whose provider
