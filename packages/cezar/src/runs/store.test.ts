@@ -123,6 +123,22 @@ describe('RunStore — directional usage persistence', () => {
     rmSync(dataDir, { recursive: true, force: true });
   });
 
+  it('round-trips a fresh Continue step through runs.json, and drops an unreadable marker', () => {
+    const store = RunStore.open(dataDir);
+    const run = store.createRun({ title: 't', workflow: 'quick-task', task: 't', steps: [{ id: 'task', name: 'Task', kind: 'agent' }] });
+    store.addStep(run.id, { id: 'continue-1', name: 'Continue', kind: 'agent', freshContext: true });
+    store.updateStep(run.id, 'continue-1', { freshPrompt: 'Re-review PR 7' });
+    store.flush();
+
+    expect(RunStore.open(dataDir).getRun(run.id)?.steps[1]).toMatchObject({ freshContext: true, freshPrompt: 'Re-review PR 7' });
+
+    const file = join(dataDir, 'runs.json');
+    writeFileSync(file, readFileSync(file, 'utf8').replace('"freshContext":true', '"freshContext":"yes"'));
+    const salvaged = RunStore.open(dataDir).getRun(run.id);
+    expect(salvaged?.steps[1]?.freshContext).toBeUndefined();
+    expect(salvaged?.steps[1]?.freshPrompt).toBe('Re-review PR 7');
+  });
+
   it('round-trips step checkpoints and complete run aggregates through runs.json', () => {
     const store = RunStore.open(dataDir);
     const run = store.createRun({
