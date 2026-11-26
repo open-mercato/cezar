@@ -114,6 +114,39 @@ describe('a reclaimed review run', () => {
     expect(await (await apiRequest(app, `/api/v1/runs/${run.id}/diff`)).text()).toContain('+the switched work');
   });
 
+  async function reclaimedOnSwitchedBranch(): Promise<string> {
+    const run = store.createRun({ title: 'feature', workflow: 'w', task: 't', steps: [] });
+    const wt = await createWorktree(repo, run.id, 'main');
+    await exec('git', ['switch', '-q', '-c', 'agent/feature'], { cwd: wt.path });
+    writeFileSync(join(wt.path, 'feature.txt'), 'the switched work\n');
+    await exec('git', ['add', '-A'], { cwd: wt.path });
+    await exec('git', [...GIT_ID, 'commit', '-q', '-m', 'switched work'], { cwd: wt.path });
+    await removeWorktree(repo, wt.path);
+    store.updateRun(run.id, {
+      status: 'review', worktreePath: wt.path, branch: wt.branch, baseBranch: 'main',
+      worktreeReclaimedAt: new Date().toISOString(), worktreeReclaimedBranch: 'agent/feature',
+    });
+    return run.id;
+  }
+
+  it('the Changes fallback diffs the branch the agent switched to, not the empty task branch (af94e8b9)', async () => {
+    const id = await reclaimedOnSwitchedBranch();
+    const res = await apiRequest(app, `/api/v1/runs/${id}/changes`);
+    expect(res.status).toBe(200);
+    const payload = (await res.json()) as { files: Array<{ path: string }>; fromBranch?: { branch: string } };
+    expect(payload.fromBranch?.branch).toBe('agent/feature');
+    expect(payload.files.map((f) => f.path)).toEqual(['feature.txt']);
+  });
+
+  it('the Changes fallback falls back to the task branch once the recorded branch is gone', async () => {
+    const id = await reclaimedOnSwitchedBranch();
+    const own = store.getRun(id)!.branch!;
+    await exec('git', ['branch', '-D', 'agent/feature'], { cwd: repo });
+    const payload = (await (await apiRequest(app, `/api/v1/runs/${id}/changes`)).json()) as { files: unknown[]; fromBranch?: { branch: string } };
+    expect(payload.fromBranch?.branch).toBe(own);
+    expect(payload.files).toEqual([]);
+  });
+
   it('never recreates a branch deleted since: the PR is refused and no tree appears', async () => {
     const id = await reclaimedReview();
     await exec('git', ['branch', '-D', store.getRun(id)!.branch!], { cwd: repo });

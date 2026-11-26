@@ -4872,8 +4872,11 @@ export class RunManager {
         if (restored) this.store.appendEvent(runId, { type: 'note', message: 'worktree restored from its branch' });
         const now = this.store.getRun(runId);
         if (now?.worktreePath && existsSync(now.worktreePath)) return { ok: true, status: restored ? 'restored' : 'present' };
+        // Restore reattaches the branch the tree had checked out, else the task's own (af94e8b9).
         const branch = now?.branch ?? branchFor(runId);
-        if (!await localBranchExists(this.repoRoot, branch)) {
+        const candidates = [now?.worktreeReclaimedBranch, branch].filter((b): b is string => !!b);
+        const surviving = await Promise.all(candidates.map((b) => localBranchExists(this.repoRoot, b)));
+        if (!surviving.some(Boolean)) {
           return { ok: false, error: `this task's branch ${branch} no longer exists — there is nothing to restore` };
         }
         return { ok: false, error: restoreFailureReason(failure) };

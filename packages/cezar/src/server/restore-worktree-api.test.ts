@@ -79,6 +79,35 @@ describe('POST /runs/:id/restore-worktree', () => {
     expect(changes.files).toHaveLength(1);
   });
 
+  it('restores the branch the agent switched to, and the live Changes tab shows its work (af94e8b9)', async () => {
+    const run = store.createRun({ title: 'feature', workflow: 'w', task: 't', steps: [] });
+    const wt = await createWorktree(repo, run.id, 'main');
+    await exec('git', ['switch', '-q', '-c', 'agent/feature'], { cwd: wt.path });
+    writeFileSync(join(wt.path, 'feature.txt'), 'the switched work\n');
+    await exec('git', ['add', '-A'], { cwd: wt.path });
+    await exec('git', [...GIT_ID, 'commit', '-q', '-m', 'switched work'], { cwd: wt.path });
+    await removeWorktree(repo, wt.path);
+    store.updateRun(run.id, {
+      status: 'done', worktreePath: wt.path, branch: wt.branch, baseBranch: 'main',
+      // Before the switch, as for a real run: the live diff anchors a switched tree there (#751).
+      startedAt: new Date(Date.now() - 60_000).toISOString().replace(/\.\d{3}Z$/, 'Z'),
+      worktreeReclaimedAt: new Date().toISOString(), worktreeReclaimedBranch: 'agent/feature',
+    });
+    expect(await (await restore(run.id)).json()).toEqual({ status: 'restored' });
+    const head = await exec('git', ['symbolic-ref', '--short', 'HEAD'], { cwd: wt.path });
+    expect(head.stdout.trim()).toBe('agent/feature');
+    expect(store.getRun(run.id)?.worktreeReclaimedBranch).toBeUndefined();
+    const changes = (await (await apiRequest(app, `/api/v1/runs/${run.id}/changes`)).json()) as { files: Array<{ path: string }> };
+    expect(changes.files.map((f) => f.path)).toContain('feature.txt');
+  });
+
+  it('restores onto the task branch when the recorded branch was deleted', async () => {
+    const id = await reclaimed();
+    store.updateRun(id, { worktreeReclaimedBranch: 'agent/gone' });
+    expect(await (await restore(id)).json()).toEqual({ status: 'restored' });
+    expect(existsSync(join(store.getRun(id)!.worktreePath!, 'feature.txt'))).toBe(true);
+  });
+
   it('is idempotent: a tree already on disk answers present', async () => {
     const id = await reclaimed();
     await restore(id);
