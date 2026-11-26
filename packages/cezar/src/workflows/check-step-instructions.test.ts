@@ -22,10 +22,15 @@ describe('check steps under global instructions', () => {
   let store: RunStore;
   let manager: InstanceType<typeof RunManager>;
   const saved = process.env.CEZ_DRY_RUN;
+  const savedPath = process.env.PATH;
 
   beforeEach(() => {
     resolveCheckCommand.mockReset().mockResolvedValue({ command: 'echo REWRITTEN', changed: true, reason: 'related only' });
     repoRoot = mkdtempSync(join(tmpdir(), 'cez-check-instr-'));
+    // A stand-in test runner: `jest` is a direct runner, so the check may be narrowed (review B).
+    mkdirSync(join(repoRoot, 'bin'));
+    writeFileSync(join(repoRoot, 'bin', 'jest'), '#!/bin/sh\necho ORIGINAL\n', { mode: 0o755 });
+    process.env.PATH = `${join(repoRoot, 'bin')}:${savedPath}`;
     store = RunStore.open(join(repoRoot, '.ai/cezar'));
     manager = new RunManager(store, repoRoot);
     writeFileSync(workspaceConfigPath(), JSON.stringify({ version: 1, systemPrompt: RULE }));
@@ -36,6 +41,7 @@ describe('check steps under global instructions', () => {
     store.flush();
     rmSync(workspaceConfigPath(), { force: true });
     rmSync(repoRoot, { recursive: true, force: true });
+    process.env.PATH = savedPath;
     if (saved === undefined) delete process.env.CEZ_DRY_RUN;
     else process.env.CEZ_DRY_RUN = saved;
   });
@@ -62,9 +68,9 @@ describe('check steps under global instructions', () => {
   it('runs the rewritten command, says so first in the output, and reports no record it did not run', async () => {
     const r = newRun();
     record(r.id, 'echo RECORDED\n');
-    const { ok, output, recordedTests, notes } = await check(r.id, 'echo ORIGINAL');
+    const { ok, output, recordedTests, notes } = await check(r.id, 'jest');
     expect(ok).toBe(true);
-    expect(output).toMatch(/^cezar: the global instructions changed this check from `echo ORIGINAL` to `echo REWRITTEN` \(related only\)\.\nREWRITTEN$/);
+    expect(output).toMatch(/^cezar: the global instructions changed this check from `jest` to `echo REWRITTEN` \(related only\)\.\nREWRITTEN$/);
     expect(recordedTests).toBe('');
     expect(notes).toContain('$ echo REWRITTEN');
   }, 20_000);
@@ -82,24 +88,38 @@ describe('check steps under global instructions', () => {
   it('asks once per command, instructions and changed files in a run', async () => {
     const r = newRun();
     const state = { cwd: repoRoot };
-    await check(r.id, 'echo ORIGINAL', state);
-    await check(r.id, 'echo ORIGINAL', state);
+    await check(r.id, 'jest', state);
+    await check(r.id, 'jest', state);
     expect(resolveCheckCommand).toHaveBeenCalledTimes(1);
-    expect(resolveCheckCommand).toHaveBeenCalledWith(expect.objectContaining({ command: 'echo ORIGINAL', instructions: RULE, repoRoot }));
+    expect(resolveCheckCommand).toHaveBeenCalledWith(expect.objectContaining({ command: 'jest', instructions: RULE, repoRoot }));
+  }, 20_000);
+
+  it('asks again after a transient failure instead of caching it (review F)', async () => {
+    resolveCheckCommand.mockResolvedValueOnce({ command: 'jest', changed: false, note: 'offline', failed: true });
+    const r = newRun();
+    const state = { cwd: repoRoot };
+    expect((await check(r.id, 'jest', state)).output).toBe('ORIGINAL');
+    expect((await check(r.id, 'jest', state)).output).toContain('REWRITTEN');
+    expect(resolveCheckCommand).toHaveBeenCalledTimes(2);
+  }, 20_000);
+
+  it('never narrows a check that is not a direct test runner', async () => {
+    expect((await check(newRun().id, 'echo ORIGINAL')).output).toBe('ORIGINAL');
+    expect(resolveCheckCommand).not.toHaveBeenCalled();
   }, 20_000);
 
   it('never lets a fork head steer its own check: its file names are untrusted input', async () => {
     const r = newRun();
     store.updateRun(r.id, { untrustedHead: true });
-    expect((await check(r.id, 'echo ORIGINAL')).output).toBe('ORIGINAL');
+    expect((await check(r.id, 'jest')).output).toBe('ORIGINAL');
     expect(resolveCheckCommand).not.toHaveBeenCalled();
   }, 20_000);
 
   it('makes no call without instructions, or with instructions that never mention checks', async () => {
     rmSync(workspaceConfigPath(), { force: true });
-    expect((await check(newRun().id, 'echo ORIGINAL')).output).toBe('ORIGINAL');
+    expect((await check(newRun().id, 'jest')).output).toBe('ORIGINAL');
     writeFileSync(workspaceConfigPath(), JSON.stringify({ version: 1, systemPrompt: 'Write commit messages in Conventional Commits format.' }));
-    expect((await check(newRun().id, 'echo ORIGINAL')).output).toBe('ORIGINAL');
+    expect((await check(newRun().id, 'jest')).output).toBe('ORIGINAL');
     expect(resolveCheckCommand).not.toHaveBeenCalled();
   }, 20_000);
 

@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { FORMAT_BOUND_GLOBAL_HEADING, GLOBAL_INSTRUCTIONS_HEADING, instructSpec, readGlobalInstructions, withGlobalInstructions } from './global-instructions.ts';
+import { FORMAT_BOUND_GLOBAL_HEADING, GLOBAL_INSTRUCTIONS_HEADING, LEGACY_GLOBAL_HEADINGS, MANAGER_GLOBAL_INSTRUCTIONS_HEADING, instructSpec, readGlobalInstructions, withGlobalInstructions } from './global-instructions.ts';
 import { ClaudeCliRunner } from './claude-cli-runner.ts';
 import { CodexAppServerRunner } from './codex-app-server-runner.ts';
 import { createRunner } from './runner-factory.ts';
@@ -39,7 +39,7 @@ describe('global instructions for every model call', () => {
     expect(withGlobalInstructions(undefined, RULE)).toBe(`${GLOBAL_INSTRUCTIONS_HEADING}\n\n${RULE}`);
     expect(withGlobalInstructions('Write JSON.', RULE)).toBe(`${GLOBAL_INSTRUCTIONS_HEADING}\n\n${RULE}\n\n---\n\nWrite JSON.`);
     // A workflow step composes (and records) them itself: no second copy.
-    const composed = `## Global instructions\n\n${RULE}\n\n---\n\nStep prompt`;
+    const composed = `${GLOBAL_INSTRUCTIONS_HEADING}\n\n${RULE}\n\n---\n\nStep prompt`;
     expect(withGlobalInstructions(composed, RULE)).toBe(composed);
     expect(withGlobalInstructions('Write JSON.', undefined)).toBe('Write JSON.');
     expect(GLOBAL_INSTRUCTIONS_HEADING).toMatch(/subagent/);
@@ -48,10 +48,16 @@ describe('global instructions for every model call', () => {
   it('adds a block for a short rule quoted elsewhere, and never a second one beside a composed block', () => {
     expect(withGlobalInstructions('Answer as JSON. Be concise.', 'Be concise.')).toContain(`${GLOBAL_INSTRUCTIONS_HEADING}\n\nBe concise.`);
     // Settings saved between the step composer's read and this one: the older block stays alone.
-    const composedOld = `Skill body\n\n---\n\n## Global instructions\n\nThese user instructions apply…\n\nOld rule.`;
+    const composedOld = `Skill body\n\n---\n\n${LEGACY_GLOBAL_HEADINGS[0]}\n\nOld rule.`;
     expect(withGlobalInstructions(composedOld, 'New rule.')).toBe(composedOld);
-    const manager = `You are a manager.\n\nGlobal instructions from the user's cezar settings. They apply…\nRule.`;
+    const manager = `You are a manager.\n\n${MANAGER_GLOBAL_INSTRUCTIONS_HEADING}\nRule.`;
     expect(withGlobalInstructions(manager, 'Rule.')).toBe(manager);
+  });
+
+  // Review D: only cezar's own full headings count, never a bare title inside a skill or project prompt.
+  it('adds the block when a skill or project prompt merely contains a "## Global instructions" title', () => {
+    const skill = 'Skill body\n\n## Global instructions\n\nOur team rules: none.';
+    expect(withGlobalInstructions(skill, RULE)).toBe(`${GLOBAL_INSTRUCTIONS_HEADING}\n\n${RULE}\n\n---\n\n${skill}`);
   });
 
   it('keeps a parsed helper\'s answer format: format-bound specs get the softer heading', () => {
