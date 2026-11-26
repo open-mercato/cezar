@@ -708,8 +708,8 @@ export function TaskQuickListContainer() {
   )
   // The sidebar's chips are the same chips as the tables', so they get their status the same way:
   // one batched request for the whole list, mounted here where the list is.
-  const projectId = useReferenceProjectId()
-  const repoBase = useProjectRepoBase()
+  const projectId = useReferenceProjectId(activeProjectId)
+  const repoBase = useProjectRepoBase(activeProjectId)
   const referenceRequests = React.useMemo(
     () =>
       projectId === undefined

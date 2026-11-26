@@ -1320,10 +1320,13 @@ export function healthRecheckInterval(health: HealthResponse | undefined): numbe
  * over. Health stays the fallback, and stays boot-only, so an unregistered boot folder (or a
  * registry that has not loaded yet) keeps answering exactly as before.
  */
-export function useProjectRepoBase(): string | undefined {
+export function useProjectRepoBase(activeProjectId?: string | null): string | undefined {
   const health = useHealth().data
   const projects = useProjects().data?.projects
-  const { projectId } = useProjectScope()
+  const scope = useProjectScope()
+  // The shell chrome renders outside `ProjectScopeProvider`, so the sidebar passes the project it
+  // lists (`useActiveProjectId`) — the scope alone is always null there and named the boot repo.
+  const projectId = activeProjectId === undefined ? scope.projectId : activeProjectId
   const scopedId = projectId ?? health?.bootProject
   const registered = scopedId === undefined ? undefined : projects?.find((project) => project.id === scopedId)
   if (registered?.repoUrl) return registered.repoUrl
@@ -2757,10 +2760,12 @@ function scheduleRememberedSave(): void {
  * Health knows which project `default` actually is. Undefined until it answers, which leaves
  * chips neutral for that moment rather than writing an entry under a name nothing else uses.
  */
-export function useReferenceProjectId(): string | undefined {
+export function useReferenceProjectId(activeProjectId?: string | null): string | undefined {
   const scope = useProjectScope()
   const health = useHealth()
-  return scope.projectId ?? health.data?.bootProject
+  // Same override as `useProjectRepoBase`: the sidebar's chips belong to the project it lists.
+  const projectId = activeProjectId === undefined ? scope.projectId : activeProjectId
+  return projectId ?? health.data?.bootProject
 }
 
 /**
