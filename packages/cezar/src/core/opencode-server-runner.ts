@@ -1,4 +1,5 @@
 import { spawn as nodeSpawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
+import { installHintCommand } from './agent-install.ts';
 import { realpathSync } from 'node:fs';
 import { createServer } from 'node:net';
 import { basename, dirname, join, resolve, sep } from 'node:path';
@@ -608,7 +609,9 @@ class OpencodeSession implements AgentSession {
     const resumeId = this.spec.resume && this.apiVersion === 1 ? this.spec.sessionId : undefined;
     if (resumeId) await this.openSession(await this.reopenSession(resumeId));
     else await this.openSession(await this.createSession());
-    await this.prompt(resumeId ? this.spec.userPrompt : prependSystemPrompt(this.spec.systemPrompt, this.spec.userPrompt));
+    // A reopened session re-hears the current guidance too, as Codex does (#2257): global
+    // instructions edited in Settings must reach a Continue.
+    await this.prompt(prependSystemPrompt(this.spec.systemPrompt, this.spec.userPrompt));
   }
 
   private async createSession(): Promise<Record<string, unknown>> {
@@ -1336,7 +1339,7 @@ function wrapSpawnError(err: unknown, bin: string): Error {
   const code = (err as NodeJS.ErrnoException | undefined)?.code;
   if (code === 'ENOENT') {
     return new Error(
-      `\`${bin}\` not found on PATH — install OpenCode (https://opencode.ai) and run \`opencode\` once to configure a provider`,
+      `\`${bin}\` not found on PATH — install OpenCode (${installHintCommand('opencode')}) and run \`opencode\` once to configure a provider`,
     );
   }
   return err instanceof Error ? err : new Error(String(err));

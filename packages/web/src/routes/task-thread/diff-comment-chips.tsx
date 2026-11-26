@@ -1,10 +1,10 @@
-import { FileIcon, XIcon } from 'lucide-react'
+import { FileIcon, MousePointerClickIcon, XIcon } from 'lucide-react'
 
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import { Link } from '@/lib/project-router'
 
-import { linesLabel, sortDiffComments, type DiffComment } from './diff-comments'
-import { reviewTarget } from './review-comments-block'
+import { isAssetComment, linesLabel, sortReviewComments, type AssetComment, type DiffComment, type ReviewComment } from './diff-comments'
+import { assetCommentTarget, reviewTarget } from './review-comments-block'
 
 /**
  * The diff comments as draft items in the thread composer — one chip per comment, `file +line`,
@@ -18,10 +18,11 @@ export function DiffCommentChips({
   onOpen,
 }: {
   runId: string
-  comments: readonly DiffComment[]
+  comments: readonly ReviewComment[]
   onRemove: (id: string) => void
-  /** Given, the label is a button that calls this — the Changes tab, where a link to itself would
-   *  do nothing, scrolls the diff to the comment's file instead. Absent, it links to the tab. */
+  /** Given, a LINE comment's label is a button that calls this — the Changes tab, where a link to
+   *  itself would do nothing, scrolls the diff to the comment's file instead. Absent, it links to
+   *  the tab. An asset comment always links to its asset. */
   onOpen?: (comment: DiffComment) => void
 }) {
   if (comments.length === 0) return null
@@ -29,7 +30,8 @@ export function DiffCommentChips({
     // The cockpit's own tooltip, not the browser's `title`: themed, shown on keyboard focus as well
     // as hover, and able to lay out a multi-line comment instead of one run-on line.
     <TooltipProvider delayDuration={300}>
-      {sortDiffComments(comments).map((comment) => {
+      {sortReviewComments(comments).map((comment) => {
+        if (isAssetComment(comment)) return <AssetCommentChip key={comment.id} runId={runId} comment={comment} onRemove={onRemove} />
         const name = comment.path.split('/').at(-1) ?? comment.path
         const sign = (side: 'old' | 'new') => (side === 'old' ? '−' : '+')
         const span =
@@ -98,5 +100,62 @@ export function DiffCommentChips({
         )
       })}
     </TooltipProvider>
+  )
+}
+
+/** The element's short name: the selector's last step (`h2`, `button.primary`). */
+export function selectorTail(selector: string): string {
+  return selector.split(' > ').at(-1) ?? selector
+}
+
+/** An asset element comment's chip: `mockup.html · h2`, linking to the asset on the Assets tab. */
+function AssetCommentChip({
+  runId,
+  comment,
+  onRemove,
+}: {
+  runId: string
+  comment: AssetComment
+  onRemove: (id: string) => void
+}) {
+  const name = comment.asset.split('/').at(-1) ?? comment.asset
+  const element = comment.label || selectorTail(comment.selector)
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <span
+          data-slot="diff-comment-chip"
+          data-kind="asset"
+          className="flex h-8 max-w-[260px] items-center overflow-hidden rounded-md border border-border bg-muted/40 text-xs text-foreground"
+        >
+          <span aria-hidden="true" className="flex h-full items-center border-r border-border px-2 text-muted-foreground">
+            <MousePointerClickIcon className="size-3.5" />
+          </span>
+          <Link
+            to={assetCommentTarget(runId, comment.asset)}
+            className="min-w-0 truncate px-2 font-medium hover:underline"
+            aria-label={`Comment on ${comment.asset} element ${element}`}
+          >
+            {name} · {selectorTail(comment.selector)}
+          </Link>
+          <button
+            type="button"
+            aria-label={`Remove comment on ${name} element ${element}`}
+            onClick={() => onRemove(comment.id)}
+            className="flex h-full items-center px-1.5 text-soft-foreground hover:bg-muted hover:text-foreground"
+          >
+            <XIcon aria-hidden="true" className="size-3.5" />
+          </button>
+        </span>
+      </TooltipTrigger>
+      <TooltipContent side="top" sideOffset={6} className="max-w-[320px] text-left">
+        <div data-slot="diff-comment-tooltip" className="flex flex-col gap-1">
+          <span className="font-mono text-meta break-all text-contrast-foreground/80">
+            {comment.asset} · {comment.selector}
+          </span>
+          <span className="line-clamp-6 break-words whitespace-pre-wrap">{comment.body}</span>
+        </div>
+      </TooltipContent>
+    </Tooltip>
   )
 }

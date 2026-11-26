@@ -231,7 +231,7 @@ body[data-floating] .ear {
   font-variant-numeric: tabular-nums;
 }
 
-/* ---- faces: idle blinks, working looks about, needs-you bounces at you, error is crossed out ---- */
+/* ---- faces: idle blinks or breathes, working looks about or sways, needs-you bounces in a ring, error shudders ---- */
 
 .face {
   display: block;
@@ -245,6 +245,20 @@ body[data-floating] .ear {
   fill: none;
   stroke-width: 2;
   opacity: 0;
+}
+.badge {
+  display: none;
+}
+.badge circle {
+  fill: var(--error);
+  stroke: var(--ink);
+  stroke-width: 1.2;
+}
+.badge path {
+  fill: none;
+  stroke: #fff;
+  stroke-width: 1.6;
+  stroke-linecap: round;
 }
 .cross {
   display: none;
@@ -282,7 +296,8 @@ body[data-floating] .ear {
 .face[data-face='error'] .eyes {
   display: none;
 }
-.face[data-face='error'] .cross {
+.face[data-face='error'] .cross,
+.face[data-face='error'] .badge {
   display: block;
 }
 .face[data-face='error'] .skin {
@@ -294,6 +309,27 @@ body[data-floating] .ear {
 .face[data-face='error'] .halo {
   stroke: var(--error);
   opacity: 0.9;
+}
+
+/* A mascot has no eyes to move, so the portrait itself carries the persona's motion: it breathes
+   where a persona blinks, sways where one looks about, glows as it bounces, slumps when it fails. */
+.face[data-mascot] .portrait {
+  transform-origin: 50% 100%;
+}
+.face[data-mascot][data-face='idle'] .portrait {
+  animation: breathe 4s ease-in-out infinite;
+}
+.face[data-mascot][data-face='working'] .portrait {
+  animation: sway 2.6s ease-in-out infinite;
+}
+.face[data-mascot][data-face='needs-you'] .portrait {
+  animation: glow 1.1s ease-in-out infinite;
+}
+.face[data-mascot][data-face='error'] .portrait {
+  transform: translateY(1px) rotate(-6deg);
+}
+.face[data-face='error'] .badge {
+  animation: throb 1.6s ease-in-out infinite;
 }
 
 /* Nothing on screen, nothing running (spec: no battery cost while no manager is active). */
@@ -317,6 +353,23 @@ body[data-asleep] .face * {
 @keyframes bounce {
   0%, 55%, 100% { transform: translateY(0); }
   25% { transform: translateY(-3px); }
+}
+@keyframes breathe {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.04, 0.97); }
+}
+@keyframes sway {
+  0%, 18%, 100% { transform: rotate(0); }
+  30%, 46% { transform: rotate(6deg); }
+  62%, 78% { transform: rotate(-6deg); }
+}
+@keyframes glow {
+  0%, 55%, 100% { transform: scale(1); filter: drop-shadow(0 0 0 transparent); }
+  25% { transform: scale(1.08); filter: drop-shadow(0 0 1.5px var(--needs-you)); }
+}
+@keyframes throb {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.2); }
 }
 @keyframes ring {
   from { opacity: 0.9; transform: scale(0.92); }

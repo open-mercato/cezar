@@ -142,6 +142,10 @@ expect(nav("cezar://other") == .block, "other cezar")
 expect(nav("cezar://reconnect") == .reconnect, "the cockpit's Retry now")
 expect(nav("CEZAR://reconnect/") == .reconnect, "reconnect slash")
 expect(nav("cezar://reconnect", main: false) == .block, "reconnect in a frame")
+expect(nav("cezar://haptic") == .haptic, "a quick action's haptic")
+expect(nav("CEZAR://Haptic/") == .haptic, "haptic slash, any case")
+expect(nav("cezar://haptic", main: false) == .block, "haptic in a frame")
+expect(nav("cezar://haptic/x") == .block, "haptic with a path")
 
 // StartupLog: steps with offsets, capped, kept across a restart.
 do {

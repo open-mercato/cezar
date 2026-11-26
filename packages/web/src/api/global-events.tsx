@@ -955,6 +955,14 @@ export function useGlobalEvents(usage: UsageStore, url: string = SSE_URL): void 
         })
       }
 
+      // A snooze ending, a phone's dismissal, a PR closing: nothing else on the stream says so
+      // (spec 2026-11-23-needs-you-triage).
+      current.addEventListener('attention-change', () => {
+        if (disposed || source !== current) return
+        lastFrameAt = Date.now()
+        noteAttentionMaybeChanged(queryClient)
+      })
+
       current.addEventListener('provider-status', (event) => {
         if (disposed || source !== current) return
         lastFrameAt = Date.now()

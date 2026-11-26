@@ -32,7 +32,7 @@ jobs:
   nightly:
     name: Publish nightly to npm
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     # A scheduled run always uses the default branch; this also pins the manual
     # dispatch to main, so a nightly can never be cut from a feature branch.
     # Publishes are canonical to upstream: forks skip this job so scheduled runs

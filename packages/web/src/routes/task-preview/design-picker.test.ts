@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 // The picker is the SERVER's (it is what the design proxy injects), but it is a browser script
 // and this is the workspace with a DOM to run it in — a test-only reach across packages, by
 // relative path on purpose (AGENTS.md § Repository layout names exactly this exception).
-import { pickerScript } from '../../../../cezar/src/server/preview/picker-script.ts'
+import { artifactPickerScript, pickerScript } from '../../../../cezar/src/server/preview/picker-script.ts'
 
 /**
  * The Design Mode picker, run for real in a framed document (spec
@@ -242,5 +242,40 @@ describe('the Design Mode key', () => {
     expect(press({ code: 'KeyD', key: 'd', ctrlKey: true, altKey: true }).defaultPrevented).toBe(false)
     await settle()
     expect(posted.some((message) => message.type === 'toggle')).toBe(false)
+  })
+})
+
+describe('the artifact picker (several parent origins)', () => {
+  let second: HTMLIFrameElement
+  let framed: Window & typeof globalThis
+
+  beforeEach(() => {
+    second = document.createElement('iframe')
+    document.body.appendChild(second)
+    framed = second.contentWindow as Window & typeof globalThis
+    framed.document.body.innerHTML = '<p class="x">hi</p>'
+    framed.eval(artifactPickerScript(['https://a.example', HOST]))
+  })
+
+  afterEach(() => second.remove())
+
+  const from = (origin: string, active: boolean) =>
+    framed.dispatchEvent(
+      new framed.MessageEvent('message', {
+        data: { source: 'cezar-design-host', type: 'set-active', active },
+        origin,
+        source: framed.parent,
+      }),
+    )
+
+  it('obeys set-active from any listed origin and ignores any other', () => {
+    const el = framed.document.querySelector('.x')!
+    from('http://c.example', true)
+    el.dispatchEvent(new framed.MouseEvent('mousemove', { bubbles: true }))
+    expect(framed.document.querySelector('[data-cezar-design=box]')).toBeNull()
+
+    from(HOST, true)
+    el.dispatchEvent(new framed.MouseEvent('mousemove', { bubbles: true }))
+    expect(framed.document.querySelector<HTMLElement>('[data-cezar-design=box]')!.style.display).toBe('block')
   })
 })

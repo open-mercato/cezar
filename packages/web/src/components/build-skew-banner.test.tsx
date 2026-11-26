@@ -9,12 +9,19 @@ import { noteServerBuild, resetBuildIdentityForTest } from '@/lib/build-identity
 import * as buildIdentity from '@/lib/build-identity'
 
 const scheduleSelfUpdate = vi.hoisted(() => vi.fn())
+const applySelfUpdate = vi.hoisted(() => vi.fn())
+const cancelScheduledSelfUpdate = vi.hoisted(() => vi.fn())
 const getSelfUpdate = vi.hoisted(() => vi.fn())
 vi.mock('@/api/client', async (original) => ({
   ...(await original<typeof import('@/api/client')>()),
   scheduleSelfUpdate,
+  applySelfUpdate,
+  cancelScheduledSelfUpdate,
   getSelfUpdate,
 }))
+
+/** `n` tasks a restart would interrupt. */
+const working = (n: number) => [`${n} task${n === 1 ? '' : 's'}`]
 
 const status: SelfUpdateStatus = {
   version: '0.21.0',
@@ -31,6 +38,7 @@ const status: SelfUpdateStatus = {
   job: null,
   scheduled: null,
   activeRuns: 0,
+  restartBlockers: [],
 }
 
 async function skew(disk: string, page: string, server: string) {
@@ -69,13 +77,37 @@ describe('BuildSkewBanner', () => {
   })
 
   it('offers the self-update restart, held until idle', async () => {
-    scheduleSelfUpdate.mockResolvedValue({ ...status, activeRuns: 2, scheduled: { target: '0.21.0+local', requestedAt: 'now' } })
-    renderBanner({ ...status, activeRuns: 2 })
+    scheduleSelfUpdate.mockResolvedValue({ ...status, activeRuns: 2, restartBlockers: working(2), scheduled: { target: '0.21.0+local', requestedAt: 'now' } })
+    renderBanner({ ...status, activeRuns: 2, restartBlockers: working(2) })
     await skew('new', 'new', 'old')
     expect(screen.getByRole('status').textContent).toContain('cezar was updated, restart to finish')
     fireEvent.click(screen.getByRole('button', { name: 'Restart when idle' }))
     await waitFor(() => expect(scheduleSelfUpdate).toHaveBeenCalledWith('0.21.0+local'))
-    expect(await screen.findByText(/Restarts when running tasks finish/)).toBeTruthy()
+    expect((await screen.findByText(/Waiting for 2 tasks to finish/)).textContent).toContain('New tasks wait until then')
+  })
+
+  it('names what a pending restart waits for, and offers Restart now and Cancel', async () => {
+    const scheduled = { target: '0.21.0+local', requestedAt: 'now' }
+    const blockers = ['1 task (CI watcher)', '1 manager (Ops)']
+    applySelfUpdate.mockResolvedValue({ ...status, scheduled, job: { status: 'restarting', target: scheduled.target, startedAt: 'now', finishedAt: 'now', log: [] } })
+    cancelScheduledSelfUpdate.mockResolvedValue({ ...status, restartBlockers: blockers })
+    renderBanner({ ...status, activeRuns: 1, restartBlockers: blockers, scheduled })
+    await skew('new', 'new', 'old')
+    expect(screen.getByRole('status').textContent).toContain('Waiting for 1 task (CI watcher) and 1 manager (Ops) to finish')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Restart now' }))
+    await waitFor(() => expect(applySelfUpdate).toHaveBeenCalledWith('0.21.0+local'))
+  })
+
+  it('Cancel drops a pending restart', async () => {
+    const scheduled = { target: '0.21.0+local', requestedAt: 'now' }
+    const blockers = working(1)
+    cancelScheduledSelfUpdate.mockResolvedValue({ ...status, restartBlockers: blockers })
+    renderBanner({ ...status, activeRuns: 1, restartBlockers: blockers, scheduled })
+    await skew('new', 'new', 'old')
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+    await waitFor(() => expect(cancelScheduledSelfUpdate).toHaveBeenCalled())
+    expect(await screen.findByRole('button', { name: 'Restart when idle' })).toBeTruthy()
   })
 
   it('names the command when this install cannot restart itself', async () => {

@@ -6,6 +6,7 @@ import {
   unwrapJsonErrorEnvelope,
 } from '../core/agent-errors.ts';
 import { RUNNER_IDS } from '../core/agent-runner.ts';
+import { noteAgentErrorVersion } from '../core/agent-cli-versions.ts';
 import { parseUsageLimit } from '../core/usage-limit.ts';
 import { reportError, telemetryEnabled } from '../telemetry.ts';
 
@@ -72,6 +73,9 @@ export function reportAgentError(
   event: { type: string; message: string; fatal?: unknown },
   opts: { transientOutcome?: 'not_retried' | 'retries_exhausted' | 'resume_refused' } = {},
 ): void {
+  // Every agent error passes here, so this is where a vendor's "X or newer is required" is learned
+  // for the setup sheet's minimum-version flag — consent or not, nothing leaves the machine.
+  noteAgentErrorVersion(backend, event.message);
   // Without consent there is nothing to send, so skip the masking work on the event path too.
   if (!telemetryEnabled() || INTERRUPTED_RE.test(event.message)) return;
   const failure = classifyAgentFailure(event.message);

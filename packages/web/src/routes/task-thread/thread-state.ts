@@ -193,7 +193,10 @@ export function threadFilePaths(state: ThreadState): string[] {
   return deduped
 }
 
-const FAILURE_PREFIX = /^(?:continue failed|run stopped|step (?:"[^"]+"|\S+) failed)(?: — |: )/
+const FAILURE_PREFIX = /^(?:continue failed|run failed|run stopped|step (?:"[^"]+"|\S+) failed)(?: — |: )/
+
+/** `CodexToolPolicyError`'s refusal: it is decided before the model starts, so every step repeats it. */
+const PRE_TURN_REFUSAL = /no model turn was started/
 
 /** Engine failure summaries wrap the provider text; compare the detail, not its wrapper. */
 function failureText(text: string): string {
@@ -911,6 +914,12 @@ export function reduceThread(events: RunEvent[], options: ThreadReduceOptions = 
     draft.entries = draft.entries.filter(({ failure }) => !failure?.summary || !failures.some((source) =>
       source.message === failure.message && (failure.stepId === undefined || source.stepId === failure.stepId),
     ))
+    // Steps refused before any model turn say it once, not once per step (#2330 printed it 4×).
+    draft.entries = draft.entries.filter((entry, index, entries) => {
+      const previous = entries[index - 1]?.failure
+      return !entry.failure || entry.failure.summary || !PRE_TURN_REFUSAL.test(entry.failure.message)
+        || !previous || previous.summary || previous.message !== entry.failure.message
+    })
     if (!draft.v2Items) continue
     const v2Texts = new Set<string>()
     for (const { origin, entry } of draft.entries) {
