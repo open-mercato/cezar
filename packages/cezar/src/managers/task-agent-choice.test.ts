@@ -96,3 +96,49 @@ describe('chooseTaskAgent', () => {
     expect(() => chooseTaskAgent([], { explicitAccount: false, fromSettings: true, now: NOW })).toThrow();
   });
 });
+
+describe('chooseTaskAgent with roles (spec 2026-11-25-manager-task-routing)', () => {
+  const main1: AccountOption = { ...first, role: 'main', load: 2 };
+  const main2: AccountOption = { ...automatic, role: 'main', load: 0 };
+  const backup: AccountOption = { runner: 'opencode', account: 'default', label: 'default account', role: 'backup', load: 0 };
+  const opts = (roles: { maxRunning?: number } = {}) => ({ explicitAccount: false, fromSettings: true, now: NOW, roles });
+
+  it('Main accounts share: the fewest running wins, whatever the list order', () => {
+    expect(chooseTaskAgent([main1, main2, backup], opts()).chosen).toBe(main2);
+  });
+
+  it('ties go to lower five-hour usage, then list order; unknown usage is equal', () => {
+    const a = { ...main1, load: 1, usage: 70 };
+    const b = { ...main2, load: 1, usage: 20 };
+    expect(chooseTaskAgent([a, b], opts()).chosen).toBe(b);
+    expect(chooseTaskAgent([{ ...a, usage: undefined }, b], opts()).chosen.account).toBe('first');
+  });
+
+  it('out of limits only: a busy Main still beats Backup', () => {
+    expect(chooseTaskAgent([{ ...main1, load: 9 }, backup], opts()).chosen.account).toBe('first');
+  });
+
+  it('Backup steps in once every Main is out of limits', () => {
+    const choice = chooseTaskAgent([held(main1, LATER), held(main2, LATER), backup], opts())
+    expect(choice.chosen).toBe(backup);
+    expect(choice.reason).toBe('backup: every main account is out of limits, used opencode default account');
+  });
+
+  it('out of limits or busy: Backup also takes the overflow, and all busy waits on the least loaded', () => {
+    expect(chooseTaskAgent([main1, { ...main2, load: 2 }, backup], opts({ maxRunning: 2 })).chosen).toBe(backup);
+    const choice = chooseTaskAgent([main1, { ...main2, load: 2 }, { ...backup, load: 2 }], opts({ maxRunning: 2 }));
+    expect(choice.busy).toBe(true);
+    expect(choice.queuedUntil).toBeUndefined();
+  });
+
+  it('every account out of limits queues on the first to reset, as before', () => {
+    const choice = chooseTaskAgent([held(main1, LATER), held(backup, SOONER)], opts());
+    expect(choice).toMatchObject({ chosen: { runner: 'opencode' }, queuedUntil: SOONER });
+  });
+
+  it('an explicit --account wins and warns when it is busy', () => {
+    const choice = chooseTaskAgent([main1], { ...opts({ maxRunning: 2 }), explicitAccount: true, allowed: [main1, main2] });
+    expect(choice.chosen).toBe(main1);
+    expect(choice.warning).toContain('codex default account has room');
+  });
+});

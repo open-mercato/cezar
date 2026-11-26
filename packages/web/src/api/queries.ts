@@ -123,7 +123,7 @@ import {
   getRepoSync,
   runRepoSyncAction,
 } from './client'
-import { queryScope, REFERENCE_STATUS_MAX, runnerDiscoversModels } from '@open-mercato/cezar-api-client'
+import { queryScope, REFERENCE_STATUS_MAX, runnerDiscoversModels, type ModelDiscoveryRunner } from '@open-mercato/cezar-api-client'
 import { useProjectScope } from './project-scope-context'
 import { isReferenceStatus } from '@/lib/reference-status'
 import { githubRepoBase } from '@/lib/tasks-table'
@@ -551,6 +551,31 @@ export function useRunnerModels(runner: Runner, enabled = true) {
     staleTime: 5 * 60 * 1_000,
     enabled: enabled && runnerDiscoversModels(runner),
   })
+}
+
+/**
+ * Force an on-demand refresh of a runner's discovered host models, bypassing the in-memory cache.
+ */
+export function useRefreshRunnerModels() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (runner: ModelDiscoveryRunner) => getRunnerModels(runner, { refresh: true }),
+    onSuccess: (data, runner) => {
+      queryClient.setQueryData(workspaceQueryKeys.models(runner), data)
+    },
+  })
+}
+
+/** The model pill's "Refresh models…" action — `undefined` for a runner with no host catalog. */
+export function useModelRefreshAction(runner: Runner) {
+  const refresh = useRefreshRunnerModels()
+  if (!runnerDiscoversModels(runner)) return undefined
+  return {
+    label: refresh.isPending ? 'Refreshing models…' : 'Refresh models…',
+    slot: 'model-pill-refresh',
+    disabled: refresh.isPending,
+    onSelect: () => refresh.mutate(runner),
+  }
 }
 
 /**

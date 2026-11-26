@@ -1,7 +1,8 @@
 import { RefreshCwIcon } from 'lucide-react'
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
 
-import { useHealth, useScheduleSelfUpdate, useSelfUpdate } from '@/api/queries'
+import { useApplySelfUpdate, useCancelScheduledSelfUpdate, useHealth, useScheduleSelfUpdate, useSelfUpdate } from '@/api/queries'
+import { describeRestartBlockers } from '@/components/self-update-when-idle'
 import { Button } from '@/components/ui/button'
 import { buildReloadWarning, buildSkew, reloadUpdatedPage, subscribeBuildSkew } from '@/lib/build-identity'
 
@@ -70,23 +71,32 @@ function ReloadPage() {
 function RestartServer() {
   const status = useSelfUpdate()
   const schedule = useScheduleSelfUpdate()
+  const applyNow = useApplySelfUpdate()
+  const cancel = useCancelScheduledSelfUpdate()
   const capabilities = useHealth().data?.capabilities
   const data = status.data
   // The self-update service's own restart: re-applying the active install restarts into what is
-  // on disk, and `whenIdle` holds it until no task is running or queued. Local only — a hosted
-  // cockpit refuses any apply that is not forward (`forwardOnlyRefusal`), re-applying included,
-  // and the service has no plain restart, so an unconfirmed local gets no button that would fail.
+  // on disk, and `whenIdle` holds it until no task, manager turn or agent setup is working (new
+  // ones wait meanwhile). Local only — a hosted cockpit refuses any apply that is not forward
+  // (`forwardOnlyRefusal`), re-applying included, and the service has no plain restart, so an
+  // unconfirmed local gets no button that would fail.
   const local = capabilities?.localHandoff === true
   const active = local && data?.canSelfUpdate ? data.installed.find((v) => v.active) : undefined
-  const pending = schedule.isPending || !!data?.scheduled || data?.job?.status === 'restarting'
-  const busy = (data?.activeRuns ?? 0) > 0
+  const restarting = applyNow.isPending || (data?.job?.status === 'restarting' && !data.scheduled)
+  const scheduled = !!data?.scheduled
+  const pending = schedule.isPending || scheduled || restarting
+  const blockers = data?.restartBlockers ?? []
+  const busy = blockers.length > 0
+  const error = schedule.error ?? applyNow.error ?? cancel.error
   return (
     <>
       <span className="min-w-0">
         cezar was updated, restart to finish.
         {active ? (
           pending ? (
-            <span className="text-muted-foreground"> {busy ? 'Restarts when running tasks finish.' : 'Restarting…'}</span>
+            <span className="text-muted-foreground" data-slot="restart-pending">
+              {scheduled && busy ? ` Waiting for ${describeRestartBlockers(blockers)} to finish, then it restarts. New tasks wait until then.` : ' Restarting…'}
+            </span>
           ) : null
         ) : (
           <span className="text-muted-foreground">
@@ -99,12 +109,22 @@ function RestartServer() {
             )}
           </span>
         )}
-        {schedule.error ? <span className="text-destructive"> {schedule.error.message}</span> : null}
+        {error ? <span className="text-destructive"> {error.message}</span> : null}
       </span>
       {active && !pending ? (
         <Button size="sm" variant="outline" className="ml-auto" onClick={() => schedule.mutate(active.id)}>
           {busy ? 'Restart when idle' : 'Restart'}
         </Button>
+      ) : null}
+      {active && scheduled && busy && !restarting ? (
+        <span className="ml-auto flex gap-2">
+          <Button size="sm" variant="outline" disabled={applyNow.isPending} onClick={() => applyNow.mutate(data!.scheduled!.target)}>
+            Restart now
+          </Button>
+          <Button size="sm" variant="ghost" disabled={cancel.isPending} onClick={() => cancel.mutate()}>
+            Cancel
+          </Button>
+        </span>
       ) : null}
     </>
   )

@@ -114,7 +114,8 @@ import { homedir } from 'node:os';
 import { basename, dirname, join, posix, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Hono, type Context } from 'hono';
-import type { Next } from 'hono';
+import type { HonoBase } from 'hono/hono-base';
+import type { BlankEnv, MergeSchemaPath, Next, Schema } from 'hono/types';
 import { serve, type ServerType } from '@hono/node-server';
 import { bodyLimit } from 'hono/body-limit';
 import { HTTPException } from 'hono/http-exception';
@@ -224,7 +225,7 @@ import {
   sweepPendingAccounts,
 } from '../workspace/managed-accounts.ts';
 import { WORKFLOWS_DIR, loadWorkflows } from '../workflows/load.ts';
-import { workflowCapabilities } from '../workflows/capabilities.ts';
+import { readOnlyWorkflowRefusal, workflowCapabilities } from '../workflows/capabilities.ts';
 import {
   NODE_CATALOG,
   graphIssues,
@@ -438,7 +439,7 @@ import { onPrClosed, reportPrClosed } from './forge/pr-closed.ts';
 import { fetchGithub, fetchGithubChecks, fetchGithubComments, fetchGithubPrDiff, fetchGithubRefStatus, forgetRefStatus, readCachedPrEnds, readCachedRefStatuses, refNumberFromUrl, searchGithubItems, GithubPrNotFoundError, GH_CHECKS_MAX, GH_SEARCH_MAX, GH_REF_STATUS_MAX, forgetGithubListCache } from './github.ts';
 import { ensureLaunchKey } from './launch-key.ts';
 import { openInTerminal } from './open-in-terminal.ts';
-import { agentSetupRoutes } from './agent-setup-routes.ts';
+import { AGENT_SETUP_OWNER, agentSetupRoutes } from './agent-setup-routes.ts';
 import type { InstallEnv } from './agent-setup.ts';
 import {
   agentCliRunner,
@@ -1413,6 +1414,7 @@ const uiStateBody = uiStateSchema.superRefine(capUiStateKeys);
 const queryValue = z.union([z.string(), z.array(z.string()).transform((v) => v[0] as string)]).optional();
 
 const refreshQuery = z.object({ refresh: queryValue });
+const modelsRefreshQuery = queryValue.refine((v) => v === undefined || v === '1' || v === 'true');
 const waitQuery = z.object({ wait: queryValue });
 
 /**
@@ -1512,11 +1514,9 @@ async function probeWritableDir(dir: string, create: boolean): Promise<string | 
   }
 }
 
-// The return type is INFERRED on purpose: it is the chained app type built at the bottom of
-// this function, and `AppType` (src/server/app-type.ts) is `ReturnType<typeof createApp>`.
-// Annotating it `Hono` here would erase every route from the type and leave the typed client
-// with nothing to offer. See the `routed` assembly at the end of the function.
-export function createApp(deps: ServerDeps) {
+// Built separately from `createApp` so TypeScript serializes `v1` once instead of twice
+// (scoped + unscoped) when emitting declarations (`TS7056`), while `AppType` stays exact.
+export function createAppParts(deps: ServerDeps) {
   const { version, update, bindHost, bootProjectId } = deps;
   const runtimeId = deps.runtimeId ?? randomUUID();
   // Boot singletons keep DELIBERATELY distinct names (`boot*`): every
@@ -1715,6 +1715,12 @@ export function createApp(deps: ServerDeps) {
   const detectedUrls = new DetectedUrls();
   const terminalSessions = deps.terminalSessions ?? new TerminalSessions(undefined, detectedUrls);
   deps.onDispose?.(() => terminalSessions.closeAll());
+  // An agent install or sign-in still running is work a restart would cut off.
+  const offSetupGate = deps.semaphore?.restartGate.addSource(() => [{
+    kind: 'setup',
+    names: terminalSessions.listFor(AGENT_SETUP_OWNER).filter((session) => session.exitCode === null).map((session) => session.label),
+  }]);
+  if (offSetupGate) deps.onDispose?.(offSetupGate);
   /** Stop a task's shells, their process trees and the addresses they printed (archive + delete). */
   const stopTaskProcesses = (runId: string) => {
     for (const session of terminalSessions.listFor(runId)) terminalSessions.kill(session.id);
@@ -1764,7 +1770,15 @@ export function createApp(deps: ServerDeps) {
   // Workspace-level, shared by the managers family and the automation report link.
   const managerStore = new ManagerStore();
   // A manager task's fallback follows the manager's list as it is now (deleted or Automatic = withdrawn).
-  setManagerTaskAccountsLookup((managerId) => managerStore.get(managerId)?.taskAgents ?? null);
+  setManagerTaskAccountsLookup((managerId) => {
+    const manager = managerStore.get(managerId);
+    if (!manager?.taskAgents) return null;
+    return {
+      agents: manager.taskAgents,
+      ...(manager.taskLimitSwitch ? { limitSwitch: manager.taskLimitSwitch } : {}),
+      ...(manager.taskBusyAt !== undefined ? { maxRunning: manager.taskBusyAt } : {}),
+    };
+  });
   const contextProjects = async () => {
     const selector = capabilities().singleProject
       ? { projectId: await resolveBootProject() }
@@ -2337,10 +2351,25 @@ export function createApp(deps: ServerDeps) {
     // `modelDiscoveryRunnerSchema` is the contract's own list of the runners with an
     // authoritative host-local catalog (#794, #784), so the client compiles against exactly what
     // this validates. A runner absent from it has no discovery path and this 400s.
-    .get('/models', queryZodValidator(z.object({ runner: z.union([z.string(), z.array(z.string()).transform((v) => v[0] as string)]).pipe(modelDiscoveryRunnerSchema) }), { message: 'runner must be claude, codex, opencode, cursor, junie, antigravity, or kimi' }), async (c) => {
-      const query = { data: c.req.valid('query') };
-      return c.json(await modelCatalog.get(query.data.runner));
-    });
+    .get(
+      '/models',
+      // Two validators so each keeps its own message; the second one's output is what `valid` reads.
+      queryZodValidator(z.object({ refresh: modelsRefreshQuery }), { message: 'refresh must be 1 or true' }),
+      queryZodValidator(
+        z.object({
+          runner: z.union([z.string(), z.array(z.string()).transform((v) => v[0] as string)]).pipe(modelDiscoveryRunnerSchema),
+          refresh: modelsRefreshQuery,
+        }),
+        { message: 'runner must be claude, codex, opencode, cursor, junie, antigravity, or kimi' },
+      ),
+      async (c) => {
+        const query = { data: c.req.valid('query') };
+        if (query.data.refresh === '1' || query.data.refresh === 'true') {
+          return c.json(await modelCatalog.reprobe(query.data.runner));
+        }
+        return c.json(await modelCatalog.get(query.data.runner));
+      },
+    );
 
   /**
    * Resolve `profileId` (absent = the discovered default) into a concrete account for `provider`.
@@ -5561,6 +5590,7 @@ export function createApp(deps: ServerDeps) {
         return c.json({ error: AGENT_MODELS_LOCKED_ERROR }, 409);
       }
       let workflow: WorkflowDef | undefined;
+      let workflowCatalog: WorkflowDef[] = [];
       if (parsed.data.steps) {
         // Inline chain (spec 008): an approved plan runs as an ad-hoc workflow.
         const issue = stepsIssue(parsed.data.steps);
@@ -5572,11 +5602,22 @@ export function createApp(deps: ServerDeps) {
         };
       } else {
         const { workflows } = await loadWorkflows(repoRoot);
+        workflowCatalog = workflows;
         workflow = workflows.find((w) => w.name === parsed.data.workflow);
         if (!workflow) return c.json({ error: `unknown workflow: ${parsed.data.workflow}` }, 404);
       }
       const fallback = parsed.data.runner ?? (await loadConfig(repoRoot)).defaultRunner;
-      const blocked = await providerActionError(providersRequiredByWorkflow(workflow, fallback), {
+      const requiredProviders = providersRequiredByWorkflow(workflow, fallback);
+      if (!parsed.data.enforceReadOnly) {
+        const checked = workflow.graph?.nodes.some((n) => n.type === 'workflow')
+          ? [...new Set([...requiredProviders, fallback])]
+          : requiredProviders;
+        for (const provider of checked) {
+          const refusal = readOnlyWorkflowRefusal(workflow, provider, workflowCatalog);
+          if (refusal) return c.json({ error: refusal }, 400);
+        }
+      }
+      const blocked = await providerActionError(requiredProviders, {
         repoRoot,
         profileFor: (provider) => (provider === fallback ? parsed.data.agentProfile : undefined),
       });
@@ -9237,6 +9278,7 @@ export function createApp(deps: ServerDeps) {
     },
     // The same holds the queue enforces (spec 2026-08-03-auto-resume-after-usage-limit).
     accountLimit: (runner, agentProfile, repoRoot) => managerAccountLimit(() => deps.semaphore?.accountHolds(), runner, agentProfile, repoRoot),
+    accountLoad: () => deps.semaphore?.accountLoad() ?? new Map(),
     request: (path, init) => {
       if (!managerLoopback.request) throw new Error('the cockpit is not ready');
       const headers = new Headers(init?.headers);
@@ -9258,8 +9300,21 @@ export function createApp(deps: ServerDeps) {
     // An inactive manager's cards leave the Questions count (spec 2026-11-19-manager-deactivate).
     onActivityChange: () => refreshQuestions(),
     ...(deps.managerRunnerFor ? { runnerFor: deps.managerRunnerFor } : {}),
+    ...(deps.semaphore ? { restartGate: deps.semaphore.restartGate } : {}),
+    onAccountHoldsChanged: () => {
+      deps.semaphore?.notifyAccountHoldsChanged();
+      void deps.semaphore?.release();
+    },
   });
   deps.onManagerEngine?.(managerEngine);
+  // A manager's agent chain shares the usage limits it hits with the task queues (spec 2026-11-25-manager-agent-chain).
+  const unregisterManagerHolds = deps.semaphore?.register({
+    busySlots: () => 0,
+    pump: () => undefined,
+    oldestQueuedAt: () => null,
+    accountHolds: () => managerEngine.accountHolds(),
+  });
+  if (unregisterManagerHolds) deps.onDispose?.(unregisterManagerHolds);
   // A signed-in-again account resumes what was blocked on it (spec 2026-11-18-inline-account-reconnect).
   deps.onDispose?.(registerAuthResume({
     contexts,
@@ -9482,7 +9537,8 @@ export function createApp(deps: ServerDeps) {
     // manager's included), so the notch and the heads show what Now shows.
     .get('/workspace/managers', async (c) => {
       const [managers, list] = await Promise.all([managerEngine.list(), attention.list().catch(() => undefined)]);
-      return c.json({ managers: list ? managers.map((manager) => ({ ...manager, needsYou: managerNeedsYou(list.items, manager.id) })) : managers });
+      const items: typeof managers = list ? managers.map((manager) => ({ ...manager, needsYou: managerNeedsYou(list.items, manager.id) })) : managers;
+      return c.json({ managers: items });
     })
     // Deactivate or reactivate every manager (spec 2026-11-19-manager-deactivate). Cockpit-only: `cez manager` never calls it.
     .post('/workspace/managers/activity', jsonZodValidator(managerActivityInputSchema), async (c) =>
@@ -9857,28 +9913,56 @@ export function createApp(deps: ServerDeps) {
   // mounts its `use('*')` scope resolver over the whole prefix, and Hono runs matched middleware
   // in registration order. `/health` in particular answers for the workspace, has no project to
   // resolve, and is the CORS-open discovery route — it must not sit behind the resolver.
-  const routed = app
+  return {
+    app,
+    v1,
+    workspaceV1,
+    finish(routed: { get: (path: string, handler: (c: Context) => Response | Promise<Response>) => unknown; request: (path: string, init?: RequestInit) => Response | Promise<Response>; fetch: (request: Request) => Response | Promise<Response> }) {
+      // ---- SPA catch-all -------------------------------------------------------
+      // Last, so every route above still wins. Any other GET gets the cockpit shell:
+      // react-router owns the route map, including the 404, so `/tasks/:id/changes`
+      // cold-loads and survives a refresh instead of 404ing. `/api/*` and the static
+      // files above resolve to `passthrough` and fall through to Hono's own 404 —
+      // an unknown API path must never answer with HTML.
+      // Without a web/dist build this serves the built-in build-hint page (dev-only
+      // state — the published tarball ships web/dist), never a 404.
+      routed.get('*', (c) => serveShell(c) ?? c.notFound());
+      managerLoopback.request = (path, init) => routed.request(path, init);
+      phonePairing.attach(
+        (request) => Promise.resolve(routed.fetch(request)),
+        () => workspaceEvents.emit('phone-pairing', { pairing: phonePairing.list().pairing } satisfies PhonePairingEvent),
+      );
+    },
+  };
+}
 
+type SchemaOf<T> = T extends HonoBase<any, infer S, any> ? S : never;
+type PrefixSchema<S, P extends string> = S extends Schema ? MergeSchemaPath<S, P> : never;
+type AppParts = ReturnType<typeof createAppParts>;
+type ProjectV1Schema = SchemaOf<AppParts['v1']>;
+type WorkspaceV1Schema = SchemaOf<AppParts['workspaceV1']>;
+
+/**
+ * The mounted HTTP app type: `v1` under both `/api/v1/p/:projectId` and `/api/v1`, plus
+ * single-mount `workspaceV1` under `/api/v1`. Named explicitly so `createApp`'s declaration
+ * references `ProjectV1Schema` once instead of serializing it twice.
+ */
+export type ServerApp = Hono<
+  BlankEnv,
+  | PrefixSchema<ProjectV1Schema, typeof V1_SCOPED_PREFIX>
+  | PrefixSchema<ProjectV1Schema, typeof V1_PREFIX>
+  | PrefixSchema<WorkspaceV1Schema, typeof V1_PREFIX>,
+  '/'
+>;
+
+export function createApp(deps: ServerDeps): ServerApp {
+  const { app, v1, workspaceV1, finish } = createAppParts(deps);
+  const routed = app
     .route(V1_SCOPED_PREFIX, v1)
     .route(V1_PREFIX, v1)
     .route(V1_PREFIX, workspaceV1);
-
-  // ---- SPA catch-all -------------------------------------------------------
-  // Last, so every route above still wins. Any other GET gets the cockpit shell:
-  // react-router owns the route map, including the 404, so `/tasks/:id/changes`
-  // cold-loads and survives a refresh instead of 404ing. `/api/*` and the static
-  // files above resolve to `passthrough` and fall through to Hono's own 404 —
-  // an unknown API path must never answer with HTML.
-  // Without a web/dist build this serves the built-in build-hint page (dev-only
-  // state — the published tarball ships web/dist), never a 404.
-  routed.get('*', (c) => serveShell(c) ?? c.notFound());
-  managerLoopback.request = (path, init) => routed.request(path, init);
-  phonePairing.attach(
-    (request) => Promise.resolve(routed.fetch(request)),
-    () => workspaceEvents.emit('phone-pairing', { pairing: phonePairing.list().pairing } satisfies PhonePairingEvent),
-  );
-
-  return routed;
+  finish(routed);
+  return routed as unknown as ServerApp;
 }
 
 /** The status route's body: the configured thresholds (the guard's own copy is from its last pass). */
