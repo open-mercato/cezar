@@ -7061,9 +7061,14 @@ export function createAppParts(deps: ServerDeps) {
   const RECLAIMED_WORKTREE = 'this task\'s worktree was reclaimed to free disk — its branch is kept, and Continue restores it';
   /** A reclaimed task's kept branch, when its tree is gone and the branch still exists: the read
    *  routes answer from it without a checkout (spec 2026-11-19-worktree-disk-usage). */
-  const reclaimedBranchOf = async (run: RunRecord, repoRoot: string): Promise<string | null> =>
-    run.worktreeReclaimedAt && run.branch && !(run.worktreePath && existsSync(run.worktreePath))
-      && await localBranchExists(repoRoot, run.branch) ? run.branch : null;
+  const reclaimedBranchOf = async (run: RunRecord, repoRoot: string): Promise<string | null> => {
+    if (!run.worktreeReclaimedAt || (run.worktreePath && existsSync(run.worktreePath))) return null;
+    // The branch the tree had checked out holds the work when the agent switched off `branch` (af94e8b9).
+    for (const branch of [run.worktreeReclaimedBranch, run.branch]) {
+      if (branch && await localBranchExists(repoRoot, branch)) return branch;
+    }
+    return null;
+  };
   /** Only the PR path restores a reclaimed tree: publishing needs a checkout (autosave, push). */
   const withRestoredWorktree = async (project: { store: RunStore; manager: RunManager }, run: RunRecord | undefined): Promise<RunRecord | undefined> => {
     if (!run?.worktreeReclaimedAt || !run.worktreePath || existsSync(run.worktreePath) || project.manager.isActive(run.id)) return run;

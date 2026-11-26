@@ -14,7 +14,7 @@ import {
 import type { RunRecord, RunStore } from '../runs/store.ts';
 import { WorkspaceSemaphore } from '../workspace/semaphore.ts';
 import { isSafeGitRef } from '../git-refs.ts';
-import { createWorktree, createWorktreeWithOutcome, removeWorktree, worktreePathFor, branchFor } from '../git-worktree.ts';
+import { createWorktree, createWorktreeWithOutcome, removeWorktree, worktreePathFor, branchFor, localBranchExists, worktreeCheckedOutBranch } from '../git-worktree.ts';
 import { inUseRefusal, worktreeInUseAfterStop } from '../worktree-in-use.ts';
 import { seedAgentConfigLocalLayer } from '../agent-config/seed.ts';
 import { collectSecretValues, redactSecrets } from '../core/secret-redaction.ts';
@@ -219,9 +219,14 @@ export class WorktreeLifecycleCoordinator {
         if (signal?.aborted) throw new Error('Preparation cancelled before materialization');
         {
           // Dry run mocks agents and script execution only; git and the store stay real (#1358 review).
-          const wt = await this.materialize({...choice, branch: record.branch ?? choice.branch}, branch => createWorktreeWithOutcome(this.root, runId, base, {branch}));
-          record.worktreePath = wt.path; record.branch = wt.branch;
-          this.runs.updateRun(runId, {worktreePath: wt.path, branch: wt.branch, baseBranch: wt.baseBranch, worktreeReclaimedAt: undefined});
+          // A reclaimed tree comes back on the branch it had checked out (af94e8b9); the task's own
+          // branch stays the recorded one, as before the reclaim.
+          const kept = this.runs.getRun(runId)?.worktreeReclaimedBranch;
+          const attach = kept && await localBranchExists(this.root, kept) ? kept : undefined;
+          const wt = await this.materialize({...choice, branch: attach ?? record.branch ?? choice.branch}, branch => createWorktreeWithOutcome(this.root, runId, base, {branch}));
+          record.worktreePath = wt.path;
+          if (!attach) record.branch = wt.branch;
+          this.runs.updateRun(runId, {worktreePath: wt.path, ...(attach ? {} : {branch: wt.branch}), baseBranch: wt.baseBranch, worktreeReclaimedAt: undefined, worktreeReclaimedBranch: undefined});
           await seedAgentConfigLocalLayer(this.root, wt.path).catch(() => []);
           if (!prior && !wt.materialized && materialized) {
             // Enroll a legacy already-prepared directory for future teardown;
@@ -355,6 +360,8 @@ export class WorktreeLifecycleCoordinator {
         {
           const busy = existsSync(record.worktreePath) ? await worktreeInUseAfterStop(record.worktreePath) : null;
           if (busy) throw new LifecycleConflict(inUseRefusal(busy));
+          // A reclaim keeps the branch the agent left checked out, which may not be the task's (af94e8b9).
+          const checkedOut = operation.intent === 'reclaim' ? await worktreeCheckedOutBranch(record.worktreePath) : undefined;
           await removeWorktree(this.root, record.worktreePath, operation.intent === 'reclaim' ? undefined : record.branch);
           if (existsSync(record.worktreePath)) throw new Error('Scripts completed but the worktree directory could not be removed');
           if (operation.intent !== 'reclaim' && record.branch) {
@@ -366,7 +373,8 @@ export class WorktreeLifecycleCoordinator {
           }
           if (operation.intent === 'delete-task') { this.runs.deleteRun(record.runId); this.options.onTaskDeleted?.(record.runId); }
           else if (this.runs.getRun(record.runId)) this.runs.updateRun(record.runId, operation.intent === 'reclaim'
-            ? {worktreeReclaimedAt: now()} : {worktreePath: undefined, branch: undefined});
+            ? {worktreeReclaimedAt: now(), worktreeReclaimedBranch: checkedOut && checkedOut !== (this.runs.getRun(record.runId)?.branch ?? record.branch) ? checkedOut : undefined}
+            : {worktreePath: undefined, branch: undefined});
         }
         await this.options.onWorktreeRemoved?.();
         delete record.preparedBy;

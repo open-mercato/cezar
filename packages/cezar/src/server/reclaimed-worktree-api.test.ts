@@ -91,6 +91,21 @@ describe('a reclaimed review run', () => {
     expect(store.getRun(id)?.worktreeReclaimedAt).toBeDefined();
   });
 
+  it('shows the branch the agent switched to, not the empty task branch (af94e8b9)', async () => {
+    const run = store.createRun({ title: 'feature', workflow: 'w', task: 't', steps: [] });
+    const wt = await createWorktree(repo, run.id, 'main');
+    await exec('git', ['switch', '-q', '-c', 'agent/feature'], { cwd: wt.path });
+    writeFileSync(join(wt.path, 'feature.txt'), 'the switched work\n');
+    await exec('git', ['add', '-A'], { cwd: wt.path });
+    await exec('git', [...GIT_ID, 'commit', '-q', '-m', 'switched work'], { cwd: wt.path });
+    await removeWorktree(repo, wt.path);
+    store.updateRun(run.id, {
+      status: 'review', worktreePath: wt.path, branch: wt.branch, baseBranch: 'main',
+      worktreeReclaimedAt: new Date().toISOString(), worktreeReclaimedBranch: 'agent/feature',
+    });
+    expect(await (await apiRequest(app, `/api/v1/runs/${run.id}/diff`)).text()).toContain('+the switched work');
+  });
+
   it('never recreates a branch deleted since: the PR is refused and no tree appears', async () => {
     const id = await reclaimedReview();
     await exec('git', ['branch', '-D', store.getRun(id)!.branch!], { cwd: repo });
