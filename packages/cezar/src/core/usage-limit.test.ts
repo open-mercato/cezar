@@ -196,6 +196,9 @@ describe("Claude's out-of-usage-credits window (manager backup did not take over
     expect(parseUsageLimit("You're out of usage credits, try again at 2026-12-01T00:00:00Z", early)?.resetAt.toISOString())
       .toBe('2026-12-01T00:00:00.000Z');
     expect(parseUsageLimit('Usage limit reached, try again at 2026-12-01T00:00:00Z', early)).toBeNull();
+    // The relative shapes too: 20 days in hours.
+    expect(parseUsageLimit("You're out of usage credits, try again in 480 hours", early)?.evidence).toBe('delay');
+    expect(parseUsageLimit('Usage limit reached, try again in 480 hours', early)).toBeNull();
   });
 
   it('keeps a weekly reset at the edge of the window — padding is not counted against the cap', () => {

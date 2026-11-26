@@ -154,10 +154,10 @@ export function parseUsageLimit(message: string | undefined, now = Date.now()): 
   const relative = RESET_IN_RE.exec(message);
   if (relative) {
     const unit = UNIT_MS[relative[2]!.toLowerCase()];
-    if (unit !== undefined) return settle(now + Number(relative[1]) * unit, now, 'delay');
+    if (unit !== undefined) return settle(now + Number(relative[1]) * unit, now, 'delay', cap);
   }
   const header = RETRY_AFTER_HEADER_RE.exec(message);
-  if (header) return settle(now + Number(header[1]) * 1_000, now, 'delay');
+  if (header) return settle(now + Number(header[1]) * 1_000, now, 'delay', cap);
 
   return null;
 }

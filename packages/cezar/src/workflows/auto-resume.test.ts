@@ -565,6 +565,32 @@ describe('a run stopped by a usage limit resumes itself', () => {
     expect(after?.autoResumeAttempts).toBeUndefined();
     expect(Date.parse(after?.autoResumeAt ?? '')).toBe(deadline);
     expect(timers.mock.calls.filter(([, delay]) => delay === 2_147_483_647)).toHaveLength(2);
+    clearTimeout((manager as unknown as { autoResumeTimers: Map<string, ReturnType<typeof setTimeout>> }).autoResumeTimers.get(record.id));
+  }, 30_000);
+
+  it('re-arms a persisted reset weeks away across a restart, capped, without resuming early (#2517)', async () => {
+    const first = new RunManager(store, repoRoot);
+    const record = first.startRun(workflow, { task: 'mock:limit ship it', worktree: false });
+    await settle(record.id);
+    first.dispose();
+
+    const deadline = Date.now() + 28 * 24 * 60 * 60_000;
+    store.updateRun(record.id, { autoResumeAt: new Date(deadline).toISOString() });
+    const timers = vi.spyOn(globalThis, 'setTimeout');
+    manager = new RunManager(store, repoRoot);
+    await manager.recover();
+
+    const scheduler = manager as unknown as { autoResumeTimers: Map<string, ReturnType<typeof setTimeout>> };
+    const capped = timers.mock.calls.filter(([, delay]) => delay === 2_147_483_647);
+    expect(capped).toHaveLength(1);
+    expect(scheduler.autoResumeTimers.has(record.id)).toBe(true);
+    // Node fires a too-long delay early; the woken timer must wait, not resume.
+    (capped[0]![0] as () => void)();
+    const after = store.getRun(record.id);
+    expect(after?.status).toBe('failed');
+    expect(after?.autoResumeAttempts).toBeUndefined();
+    expect(Date.parse(after?.autoResumeAt ?? '')).toBe(deadline);
+    clearTimeout(scheduler.autoResumeTimers.get(record.id));
   }, 30_000);
 
   it('never leaves a deadline behind: a record with no armed timer heals on the next sweep', async () => {
