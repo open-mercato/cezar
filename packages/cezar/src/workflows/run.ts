@@ -2752,13 +2752,15 @@ export class RunManager {
       const sessionAccount = sessionStep?.profileId ?? DEFAULT_AGENT_ACCOUNT_ID;
       const accountMatches = run.agentProfile === undefined || run.agentProfile === sessionAccount;
       const switchedInput = switched ? run.agentSwitch?.continuationInput : undefined;
+      const fresh = !switched && queuedContinuation.freshContext === true;
       this.pendingContinuations.set(run.id, {
         stepId: queuedContinuation.id,
-        sessionId: !switched && sessionStep?.sessionId && sessionBackend === backend && accountMatches ? sessionStep.sessionId : undefined,
+        sessionId: !switched && !fresh && sessionStep?.sessionId && sessionBackend === backend && accountMatches ? sessionStep.sessionId : undefined,
         backend,
         prompt: switchedInput?.prompt ?? (switched ? SWITCH_AGENT_PROMPT : RESTART_CONTINUATION_PROMPT),
         images: [],
         attachmentUrls: switchedInput?.attachmentUrls,
+        ...(fresh ? { freshContext: true as const } : {}),
       });
       this.enqueue(run.id);
       this.store.appendEvent(run.id, {
@@ -6334,7 +6336,7 @@ export class RunManager {
     // A model picked in the composer is stamped on the turn's step so it outranks the pin of the
     // step that owns the session (#1488); '' is the explicit "auto".
     if (!priorStep) this.store.addStep(runId, {
-      id: stepId, name: 'Continue', kind: 'agent', ...(opts.model !== undefined ? { model: opts.model } : {}),
+      id: stepId, name: 'Continue', kind: 'agent', ...(opts.model !== undefined ? { model: opts.model } : {}), ...fresh,
     });
     const continuationReasoningEffort = agentModelsLocked(this.repoRoot)
       ? undefined
