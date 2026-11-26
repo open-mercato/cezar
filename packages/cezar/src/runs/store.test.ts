@@ -834,17 +834,18 @@ describe('RunStore — secret redaction before persistence (#427)', () => {
     expect(store.getRun(run.id)?.task).toBe('deploy the thing');
   });
 
-  /** A queued fresh Continue's `freshPrompt` is replayed to the agent like `task` (#2513). */
-  it('leaves a fresh Continue step\'s freshPrompt unredacted, in memory and in runs.json', () => {
+  /** A queued fresh Continue's `freshPrompt` is scrubbed on write like `error` (#2513 follow-up). */
+  it('redacts a secret in a fresh Continue step\'s freshPrompt, in memory, in runs.json and after a reopen', () => {
     process.env.GITHUB_TOKEN = 'gho_thisisarealsecrettoken123456';
     delete process.env.CEZ_REDACT_SECRETS;
     const store = RunStore.open(dataDir);
     const run = store.createRun({ title: 't', workflow: 'w', task: 't', steps: [] });
     store.addStep(run.id, { id: 'continue-1', name: 'Continue', kind: 'agent', freshContext: true });
     store.updateStep(run.id, 'continue-1', { freshPrompt: 'use gho_thisisarealsecrettoken123456 to re-review' });
-    expect(store.getRun(run.id)?.steps[0]?.freshPrompt).toBe('use gho_thisisarealsecrettoken123456 to re-review');
+    expect(store.getRun(run.id)?.steps[0]?.freshPrompt).toBe('use [REDACTED] to re-review');
     store.flush();
-    expect(RunStore.open(dataDir).getRun(run.id)?.steps[0]?.freshPrompt).toBe('use gho_thisisarealsecrettoken123456 to re-review');
+    expect(readFileSync(join(dataDir, 'runs.json'), 'utf8')).not.toContain('gho_thisisarealsecrettoken123456');
+    expect(RunStore.open(dataDir).getRun(run.id)?.steps[0]?.freshPrompt).toBe('use [REDACTED] to re-review');
   });
 
   it('CEZ_REDACT_SECRETS=0 opts runs.json out as well', () => {
