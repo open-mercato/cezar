@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { capped, runManagerCommand, SANDBOX_BLOCKED_HINT, sinceOf, taskModelLabel, type ManagerCliIo } from './manager-cli.ts';
+import { capped, readManagerFile, runManagerCommand, SANDBOX_BLOCKED_HINT, sinceOf, taskModelLabel, type ManagerCliIo } from './manager-cli.ts';
 import { recentTasks } from './snapshot.ts';
 
 const snapshot = {
@@ -24,9 +24,12 @@ function harness(env: Record<string, string> = {}, manager: Record<string, unkno
       if (String(url).endsWith('/managers/m1')) return Response.json({ id: 'm1', ...manager });
       if (String(url).includes('/messages?pending=1')) return Response.json({ messages: pending, hasMore: false });
       if (String(url).endsWith('/actions')) return Response.json({ actionId: 'a1', status: 'pending' }, { status: 201 });
-      if (String(url).endsWith('/tasks')) return Response.json({ projectId: 'alpha', runId: 'new', ...(body?.fromMessage ? { forwarded: { messageId: 'u1', chars: 20_000, attachments: 1, skipped: ['huge.mov'] } } : {}) }, { status: 201 });
+      if (String(url).endsWith('/tasks')) return Response.json({ projectId: 'alpha', runId: 'new', ...(body?.fromMessage ? { forwarded: { messageId: 'u1', chars: 20_000, attachments: 1, skipped: ['huge.mov'] } } : {}), ...(body?.dispatch ? { notice: 'dispatch ignored: alpha runs tasks in place' } : {}) }, { status: 201 });
       if (String(url).endsWith('/task-message')) return Response.json({ ok: true, ...(body?.fromMessage ? { forwarded: { messageId: 'u1', chars: 20_000, attachments: 0 } } : {}) });
       if (String(url).endsWith('/task-cancel')) return Response.json({ runId: body?.runId, cancelled: true, status: 'cancelled', children: ['c1', 'c2'] });
+      if (String(url).endsWith('/task-switch') || (String(url).endsWith('/task-retry') && body?.runner)) {
+        return Response.json({ projectId: 'alpha', runId: body.runId, notice: 'Switched from claude to codex by Release Manager' });
+      }
       if (String(url).endsWith('/task-retry')) return Response.json({ projectId: 'alpha', runId: 'retried' }, { status: 201 });
       if (String(url).endsWith('/workflows')) return Response.json(workflows);
       if (/\/automations\/[^/]+(\/report)?$/.test(String(url))) return Response.json({ automation: { id: 'a1', name: 'n', revision: 1, enabled: true } });
@@ -220,6 +223,71 @@ describe('cez manager', () => {
     expect(logs).toContain('[[task:alpha/new]]');
   });
 
+  it('task create names the chosen account, why, a queue wait and an out-of-limits warning; status lists account limits', async () => {
+    const reply = {
+      projectId: 'alpha', runId: 'new',
+      agent: { runner: 'claude', agentProfile: 'first', account: 'first', label: 'Work', reason: 'explicit --account; claude Work is out of limits', queuedUntil: '2099-01-01T05:00:00.000Z' },
+      warning: 'claude Work is out of usage limits until 2099-01-01T05:00:00.000Z; claude Home has capacity (--runner claude --account second)',
+    };
+    const accounts = [
+      { runner: 'claude', agentProfile: 'first', account: 'first', label: 'Work', outOfLimitsUntil: '2099-01-01T05:00:00.000Z' },
+      { runner: 'claude', agentProfile: 'second', account: 'second', label: 'Home' },
+    ];
+    const fetchStub = vi.fn(async (url: string | URL | Request) => String(url).endsWith('/tasks')
+      ? Response.json(reply, { status: 201 })
+      : Response.json({ ...snapshot, accounts })) as unknown as typeof fetch;
+    const { run, logs } = harness({}, {}, [], { fetch: fetchStub });
+    expect(await run('task', 'create', '--project', 'alpha', '--account', 'first', 'Do it')).toBe(0);
+    expect(logs).toEqual([
+      '[[task:alpha/new]]',
+      'agent: --runner claude --account first — Work; explicit --account; claude Work is out of limits',
+      'queued: Work is out of usage limits; the task starts when it resets at 2099-01-01T05:00:00.000Z',
+      `warning: ${reply.warning}`,
+    ]);
+    // Without a free alternative there is no warning, and the queue line says so.
+    const { warning: _warning, ...exhausted } = reply;
+    const allHeld = vi.fn(async (url: string | URL | Request) => String(url).endsWith('/tasks')
+      ? Response.json(exhausted, { status: 201 })
+      : Response.json(snapshot)) as unknown as typeof fetch;
+    const second = harness({}, {}, [], { fetch: allHeld });
+    expect(await second.run('task', 'create', '--project', 'alpha', 'Do it')).toBe(0);
+    expect(second.logs).toContain('queued: no allowed account has capacity; the task starts when Work resets at 2099-01-01T05:00:00.000Z');
+    expect(second.logs.some((line) => line.startsWith('warning:'))).toBe(false);
+    logs.length = 0;
+    expect(await run('status')).toBe(0);
+    expect(logs).toContain('account  --runner claude --account first  Work  out of usage limits until 2099-01-01T05:00:00.000Z');
+    expect(logs).toContain('account  --runner claude --account second  Home  has capacity');
+  });
+
+  it('task create with --runner narrowed to exhausted accounts never claims no allowed account has capacity', async () => {
+    // Exactly what the engine answers for this setup (engine.test.ts, "--runner narrowed to exhausted accounts").
+    const reply = {
+      projectId: 'alpha', runId: 'new-run',
+      agent: {
+        runner: 'codex', agentProfile: 'team', account: 'team', label: 'team login', queuedUntil: '2099-01-01T05:00:00.000Z',
+        reason: 'default from manager settings: every allowed account for --runner codex is out of limits (codex work login out of limits until 2099-01-01T05:01:00.000Z; codex team login out of limits until 2099-01-01T05:00:00.000Z); queued on codex team login, the first to reset',
+      },
+      warning: '--runner codex has no account with capacity until 2099-01-01T05:00:00.000Z; claude first login has capacity (--runner claude --account first)',
+    };
+    const fetchStub = vi.fn(async (url: string | URL | Request) => String(url).endsWith('/tasks')
+      ? Response.json(reply, { status: 201 })
+      : Response.json(snapshot)) as unknown as typeof fetch;
+    const { run, logs } = harness({}, {}, [], { fetch: fetchStub });
+    expect(await run('task', 'create', '--project', 'alpha', '--runner', 'codex', 'Do it')).toBe(0);
+    expect(logs).toEqual([
+      '[[task:alpha/new-run]]',
+      `agent: --runner codex --account team — team login; ${reply.agent.reason}`,
+      'queued: team login is out of usage limits; the task starts when it resets at 2099-01-01T05:00:00.000Z',
+      `warning: ${reply.warning}`,
+    ]);
+  });
+
+  it('task create says when the project ignored --dispatch', async () => {
+    const { run, logs } = harness();
+    expect(await run('task', 'create', '--dispatch', 'Do', 'it')).toBe(0);
+    expect(logs).toEqual(['[[task:alpha/new]]', 'dispatch ignored: alpha runs tasks in place']);
+  });
+
   describe('content that does not fit a command', () => {
     it('forwards the newest user message server-side: nothing but the flag crosses the shell', async () => {
       const { run, calls, logs } = harness();
@@ -323,6 +391,23 @@ describe('cez manager', () => {
       expect(logs.at(-1)).toBe('[[task:alpha/retried]]');
     });
 
+    it.each(['switch', 'retry'])('%s sends agent flags and prints the existing task card and switch', async (command) => {
+      const { run, calls, logs } = harness();
+      expect(await run('task', command, 'r1', '--runner', 'codex', '--account', 'work', '--model', 'gpt-6.2-sol', '--effort', 'high')).toBe(0);
+      expect(calls.at(-1)).toMatchObject({
+        url: `http://x/api/v1/workspace/managers/m1/task-${command}`,
+        body: { projectId: 'alpha', runId: 'r1', runner: 'codex', agentProfile: 'work', model: 'gpt-6.2-sol', effort: 'high' },
+      });
+      expect(logs).toEqual(['[[task:alpha/r1]]', 'Switched from claude to codex by Release Manager']);
+    });
+
+    it('refuses an empty switch before contacting the cockpit', async () => {
+      const { run, calls, errors } = harness();
+      expect(await run('task', 'switch', 'r1')).toBe(1);
+      expect(errors.at(-1)).toContain('choose at least one of --runner, --account, --model or --effort');
+      expect(calls).toEqual([]);
+    });
+
     it('sends --model and --effort, and refuses an effort it does not know', async () => {
       const { run, calls, errors } = harness();
       expect(await run('task', 'create', '--project', 'alpha', '--model', 'opus', '--effort', 'max', 'Review it')).toBe(0);
@@ -338,7 +423,7 @@ describe('cez manager', () => {
     it('an unknown subcommand fails instead of being read as a run id', async () => {
       const { run, calls, errors } = harness();
       expect(await run('task', 'foo')).toBe(1);
-      expect(errors.at(-1)).toContain("unknown subcommand 'foo' for 'task'. Valid: create, say, cancel, retry, follow, unfollow, or a run id");
+      expect(errors.at(-1)).toContain("unknown subcommand 'foo' for 'task'. Valid: create, say, switch, cancel, retry, follow, unfollow, or a run id");
       expect(await run('job', 'frob')).toBe(1);
       expect(errors.at(-1)).toContain("unknown subcommand 'frob' for 'job'. Valid: add, list, remove");
       expect(calls).toEqual([]);
@@ -361,7 +446,7 @@ describe('cez manager', () => {
 
     it('--help works on every command and subcommand, without a cockpit', async () => {
       const io = { fetch: vi.fn() as unknown as typeof fetch, log: vi.fn(), error: vi.fn() };
-      for (const args of [['status', '--help'], ['task', '--help'], ['task', 'cancel', '-h'], ['task', 'say', '--help'], ['task', 'retry', '--help'], ['workflows', '--help'], ['merge', '--help'], ['job', 'add', '--help'], ['rename', '--help'], ['automation', '--help'], ['help', 'task', 'cancel']]) {
+      for (const args of [['status', '--help'], ['task', '--help'], ['task', 'cancel', '-h'], ['task', 'say', '--help'], ['task', 'switch', '--help'], ['task', 'retry', '--help'], ['workflows', '--help'], ['merge', '--help'], ['job', 'add', '--help'], ['rename', '--help'], ['automation', '--help'], ['help', 'task', 'cancel']]) {
         io.log.mockClear();
         expect(await runManagerCommand(args, {}, io)).toBe(0);
         expect(String(io.log.mock.calls[0]?.[0])).toContain(`cez manager ${args[0] === 'help' ? 'task cancel' : args[0]}`);
@@ -519,5 +604,50 @@ describe('compact listings (spec 2026-11-21-manager-short-sessions-and-memory §
     expect(capped(['aaaa', 'bbbb', 'cccc'], 10)).toEqual(['aaaa', 'bbbb', '… 1 more line: narrow with --project, or use --all or --json']);
     expect(capped(['aaaa'], undefined)).toEqual(['aaaa']);
     expect(recentTasks([{ status: 'cancelled' }, { status: 'failed' }]).hidden).toBe(0);
+  });
+});
+
+describe('cez-manager --file stays inside the manager', () => {
+  it('reads files/ and attachments, and refuses anything else, symlinks included', async () => {
+    const { mkdtempSync, mkdirSync, writeFileSync, symlinkSync, rmSync } = await import('node:fs');
+    const { tmpdir } = await import('node:os');
+    const { join } = await import('node:path');
+    const home = mkdtempSync(join(tmpdir(), 'cez-manager-file-'));
+    const base = join(home, 'managers', 'm1');
+    const cwd = vi.spyOn(process, 'cwd').mockReturnValue(join(base, 'workdir'));
+    try {
+      mkdirSync(join(base, 'workdir', 'files'), { recursive: true });
+      mkdirSync(join(base, 'attachments'), { recursive: true });
+      writeFileSync(join(base, 'workdir', 'files', 'task.md'), 'objective');
+      writeFileSync(join(base, 'attachments', 'note.txt'), 'attached');
+      const secret = join(home, 'secret.txt');
+      writeFileSync(secret, 'do not read');
+      symlinkSync(secret, join(base, 'workdir', 'files', 'link.md'));
+      const otherWorkdir = join(home, 'managers', 'm2', 'workdir');
+      const siblingWorkdir = join(base, 'workdir-x');
+      for (const dir of [otherWorkdir, siblingWorkdir]) {
+        mkdirSync(dir, { recursive: true });
+        writeFileSync(join(dir, 'task.md'), 'out of scope');
+      }
+      const env = { CEZ_HOME: home, CEZ_MANAGER_ID: 'm1' };
+      expect(await readManagerFile(join(base, 'workdir', 'files', 'task.md'), env)).toBe('objective');
+      expect(await readManagerFile(join(base, 'attachments', 'note.txt'), env)).toBe('attached');
+      for (const path of [secret, join(base, 'workdir', 'files', 'link.md'), join(base, 'workdir', '..', '..', '..', 'secret.txt')]) {
+        await expect(readManagerFile(path, env)).rejects.toThrow("only files in the manager's workdir (files/) or its attachments can be read");
+      }
+      // Through the command: the default reader is the confined one.
+      const { run, errors, calls } = harness({ CEZ_HOME: home });
+      expect(await run('task', 'create', '--file', 'files/task.md', 'Summarize')).toBe(0);
+      expect(calls.at(-1)?.body).toMatchObject({ task: 'Summarize\n\nobjective' });
+      const before = calls.length;
+      for (const path of [secret, join(otherWorkdir, 'task.md'), join(siblingWorkdir, 'task.md')]) {
+        expect(await run('task', 'create', '--file', path, 'Summarize')).toBe(1);
+        expect(errors.at(-1)).toContain(`cannot read ${path}: only files in the manager's workdir`);
+      }
+      expect(calls.filter((call) => call.method === 'POST')).toHaveLength(calls.slice(0, before).filter((call) => call.method === 'POST').length);
+    } finally {
+      cwd.mockRestore();
+      rmSync(home, { recursive: true, force: true });
+    }
   });
 });

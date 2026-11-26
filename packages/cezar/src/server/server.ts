@@ -7,9 +7,11 @@ import { resolveDeferredReset, deferredHoldUntil } from '../automations/deferred
 import { deferredStartOptions, previewDeferredStart, digest, validateDeferredBinding } from '../automations/deferred-start.ts';
 import { deferredOptionsInputSchema, deferredPreviewInputSchema, deferredCreateInputSchema, deferredMutationQuerySchema } from '@open-mercato/cezar-contract';
 import { answerQuestionInputSchema, messageInputSchema, questionKeyParamSchema } from '@open-mercato/cezar-contract';
-import { DEFAULT_PHONE_PUSH_PREFS, phonePushPrefsSchema, phonePushSettingsSchema, type AttentionResponse } from '@open-mercato/cezar-contract';
-import { buildAttentionList, phoneBadgeCount } from '../attention/list.ts';
-import { createAttentionService } from '../attention/service.ts';
+import { DEFAULT_PHONE_PUSH_PREFS, attentionOverrideClearInputSchema, attentionOverrideInputSchema, phonePushPrefsSchema, phonePushSettingsSchema, type AttentionResponse, type GitStatusResponse } from '@open-mercato/cezar-contract';
+import { buildAttentionList, currentTaskPr, managerNeedsYou, phoneBadgeCount } from '../attention/list.ts';
+import { createAttentionOverrideStore, nextOverrideWake, type AttentionOverrideStore } from '../attention/overrides.ts';
+import { createPrEndMemory, prEndLookup, type PrEndMemory } from '../attention/pr-ends.ts';
+import { createAttentionAnnouncer, createAttentionService } from '../attention/service.ts';
 import { deleteExpiredArchivedInputSchema, reclaimWorktreesInputSchema } from '@open-mercato/cezar-contract';
 import { deleteExpiredArchivedTasks } from '../runs/archived-cleanup.ts';
 import {
@@ -50,6 +52,7 @@ import {
   managerFollowTaskInputSchema,
   managerCancelTaskInputSchema,
   managerRetryTaskInputSchema,
+  managerSwitchTaskInputSchema,
   runsListQuerySchema,
   managerAttachmentParamSchema,
   sendManagerMessageInputSchema,
@@ -111,7 +114,8 @@ import { homedir } from 'node:os';
 import { basename, dirname, join, posix, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Hono, type Context } from 'hono';
-import type { Next } from 'hono';
+import type { HonoBase } from 'hono/hono-base';
+import type { BlankEnv, MergeSchemaPath, Next, Schema } from 'hono/types';
 import { serve, type ServerType } from '@hono/node-server';
 import { bodyLimit } from 'hono/body-limit';
 import { HTTPException } from 'hono/http-exception';
@@ -149,6 +153,7 @@ import {
   type AttachmentEntry,
   type AttachmentInput,
   continueInputSchema,
+  switchRunAgentInputSchema,
   cancelRunInputSchema,
   createRunInputSchema,
   type ContinueResponse,
@@ -204,8 +209,23 @@ import { currentUsage, currentTimedUsage, onUsage } from '../core/process-usage.
 import { DashboardReader } from '../workspace/dashboard.ts';
 import { dashboardRoutes } from './dashboard.ts';
 import { planUsageRoutes } from './plan-usage.ts';
+import { managerAccountLimit } from '../managers/account-limit.ts';
+
+/** Authenticates the manager engine's in-process calls that assign or switch a task's agent. */
+const MANAGER_AGENT_HEADER = 'x-cezar-manager-agent';
+const MANAGER_AGENT_TOKEN = randomUUID();
+// Byte lengths, not string lengths: a non-ASCII header must be a 403, never a timingSafeEqual throw.
+const managerAgentTokenMatches = (value: string | undefined): boolean => matchesPrivateToken(value, MANAGER_AGENT_TOKEN);
+import {
+  createManagedAccountDir,
+  isManagedAccountDir,
+  logoutManagedAccount,
+  markAccountSignedIn,
+  removeManagedAccountDir,
+  sweepPendingAccounts,
+} from '../workspace/managed-accounts.ts';
 import { WORKFLOWS_DIR, loadWorkflows } from '../workflows/load.ts';
-import { workflowCapabilities } from '../workflows/capabilities.ts';
+import { readOnlyWorkflowRefusal, workflowCapabilities } from '../workflows/capabilities.ts';
 import {
   NODE_CATALOG,
   graphIssues,
@@ -237,7 +257,16 @@ import { markStarted, onTodosChanged, readTodos, removeTodo, todoTaskText, type 
 import type { RunEvent, RunRecord, RunStatus, RunStore } from '../runs/store.ts';
 import { artifactsDir, authParkForAccount, isIdleParked } from '../runs/store.ts';
 import { artifactsCdnEnabled, existingVersionDir, findArtifact, scanArtifacts } from '../runs/artifacts.ts';
-import { artifactHeaders, artifactsBaseUrl, artifactsFrame, openArtifact, type ArtifactsBusPayload } from './artifacts.ts';
+import {
+  appendToStream,
+  artifactHeaders,
+  artifactPickerOrigins,
+  artifactPickerTag,
+  artifactsBaseUrl,
+  artifactsFrame,
+  openArtifact,
+  type ArtifactsBusPayload,
+} from './artifacts.ts';
 import { newestSubjectRun, parseSubjectQuery, resolveImpactSubject, subjectStale } from '../impact/launch.ts';
 import { listProjectAssets } from '../runs/project-assets.ts';
 import type { RunArtifact } from '@open-mercato/cezar-contract';
@@ -319,6 +348,7 @@ import {
   readImageAtRev,
   pushCurrentBranch,
   worktreeGitStatus,
+  type GitStatusResult,
   readWorktreePath,
   repoIndexContains,
 } from './git-changes.ts';
@@ -379,6 +409,7 @@ import {
   FallbackPolicyInputError,
   getAgentFallbackPolicy,
   putAgentFallbackPolicy,
+  setManagerTaskAccountsLookup,
 } from '../workspace/agent-fallback.ts';
 import { mergeWriteWorkspaceUiState, readWorkspaceUiState } from '../workspace/ui-state.ts';
 import { checkoutRepo, type CloneRunner } from './checkout.ts';
@@ -405,10 +436,10 @@ import { parseRemote, resolveForge, type ForgeAvailability } from './forge/index
 import { isGithubHost } from '../github-hosts.ts';
 import { createGithubDriver } from './forge/github.ts';
 import { onPrClosed, reportPrClosed } from './forge/pr-closed.ts';
-import { fetchGithub, fetchGithubChecks, fetchGithubComments, fetchGithubPrDiff, fetchGithubRefStatus, forgetRefStatus, readCachedRefStatuses, refNumberFromUrl, searchGithubItems, GithubPrNotFoundError, GH_CHECKS_MAX, GH_SEARCH_MAX, GH_REF_STATUS_MAX, forgetGithubListCache } from './github.ts';
+import { fetchGithub, fetchGithubChecks, fetchGithubComments, fetchGithubPrDiff, fetchGithubRefStatus, forgetRefStatus, readCachedPrEnds, readCachedRefStatuses, refNumberFromUrl, searchGithubItems, GithubPrNotFoundError, GH_CHECKS_MAX, GH_SEARCH_MAX, GH_REF_STATUS_MAX, forgetGithubListCache } from './github.ts';
 import { ensureLaunchKey } from './launch-key.ts';
 import { openInTerminal } from './open-in-terminal.ts';
-import { agentSetupRoutes } from './agent-setup-routes.ts';
+import { AGENT_SETUP_OWNER, agentSetupRoutes } from './agent-setup-routes.ts';
 import type { InstallEnv } from './agent-setup.ts';
 import {
   agentCliRunner,
@@ -521,6 +552,10 @@ export interface ServerDeps {
   managerRunnerFor?: ManagerEngineDeps['runnerFor'];
   /** Test seam: the Questions inbox's providers (spec 2026-11-17-questions-inbox); default the real ones. */
   questionProviders?: { task?: QuestionProvider; manager?: QuestionProvider };
+  /** Tests inject one off disk; the default lives in `~/.cezar/attention-overrides.json`. */
+  attentionOverrides?: AttentionOverrideStore;
+  /** Tests inject one off disk; the default lives in `~/.cezar/attention-pr-ends.json`. */
+  prEnds?: PrEndMemory;
   /** How `POST /api/projects/checkout` (step 4.3) actually clones. Defaults to
    *  `gh repo clone` (or the `CEZ_DRY_RUN=1` fake) — injected by tests so the
    *  route's guards, cleanup and error surfacing are exercised for real
@@ -643,8 +678,13 @@ const projectIdSchema = z.union([z.literal('default'), z.string().regex(PROJECT_
 const createAgentProfileSchema = z.object({
   provider: z.enum(PROVIDER_IDS),
   label: z.string().trim().max(200).optional(),
-  configDir: z.string().trim().min(1).max(4096),
-}).strict();
+  configDir: z.string().trim().min(1).max(4096).optional(),
+  /** cezar makes the folder itself (spec 2026-11-24-add-account-in-cockpit); no `configDir`. */
+  managed: z.literal(true).optional(),
+}).strict().refine(
+  (value) => (value.configDir === undefined) === (value.managed === true),
+  'send configDir, or managed: true',
+);
 
 /** `POST …/agent-profiles/:id/open` — a catalog id (or `folder`) plus an optional open target. */
 const openAgentAccountFileSchema = z.object({
@@ -869,7 +909,9 @@ export type WorkspaceEventName =
   | 'manager-change'
   | 'manager-message'
   | 'manager-delta'
-  | 'phone-pairing';
+  | 'phone-pairing'
+  /** The attention list may have changed (spec 2026-11-23-needs-you-triage): payload `{}`, re-read it. */
+  | 'attention-change';
 
 /**
  * The in-process bus for workspace-level SSE events. The registry-mutating
@@ -1372,6 +1414,7 @@ const uiStateBody = uiStateSchema.superRefine(capUiStateKeys);
 const queryValue = z.union([z.string(), z.array(z.string()).transform((v) => v[0] as string)]).optional();
 
 const refreshQuery = z.object({ refresh: queryValue });
+const modelsRefreshQuery = queryValue.refine((v) => v === undefined || v === '1' || v === 'true');
 const waitQuery = z.object({ wait: queryValue });
 
 /**
@@ -1471,11 +1514,9 @@ async function probeWritableDir(dir: string, create: boolean): Promise<string | 
   }
 }
 
-// The return type is INFERRED on purpose: it is the chained app type built at the bottom of
-// this function, and `AppType` (src/server/app-type.ts) is `ReturnType<typeof createApp>`.
-// Annotating it `Hono` here would erase every route from the type and leave the typed client
-// with nothing to offer. See the `routed` assembly at the end of the function.
-export function createApp(deps: ServerDeps) {
+// Built separately from `createApp` so TypeScript serializes `v1` once instead of twice
+// (scoped + unscoped) when emitting declarations (`TS7056`), while `AppType` stays exact.
+export function createAppParts(deps: ServerDeps) {
   const { version, update, bindHost, bootProjectId } = deps;
   const runtimeId = deps.runtimeId ?? randomUUID();
   // Boot singletons keep DELIBERATELY distinct names (`boot*`): every
@@ -1661,13 +1702,25 @@ export function createApp(deps: ServerDeps) {
   const trackerWatches = new TrackerWatches(trackers, deps.socketHub);
   // The one place a relay request narrows (spec 2026-11-01-relay-qr-pairing § One new principal).
   const capabilities = () => narrowForRelay(resolveCapabilities(process.env, bindHost));
-  // Account management needs the machine, so no flag opens it to a phone.
-  const accountsEnabled = () => !inRelayScope() && agentAccountsEnabled(process.env, bindHost);
+  // Account management needs the machine; a phone gets only the managed subset below.
+  // One read of the boundary for both closures below (relay/authorization.test.ts counts them).
+  const accountsAllowed = () => agentAccountsEnabled(process.env, bindHost);
+  const accountsEnabled = () => !inRelayScope() && accountsAllowed();
+  /** A paired phone may list (without host paths), add and remove accounts cezar manages
+   *  (spec 2026-11-24-add-account-in-cockpit); folder paths never cross the relay. */
+  const phoneAccounts = () => inRelayScope() && accountsAllowed();
+  const accountsVisible = () => accountsEnabled() || phoneAccounts();
   // The task terminal's registry (spec `2026-10-07-task-workspace` §6): one per server, because a
   // shell outlives the request that opened it and belongs to the host, not to a project context.
   const detectedUrls = new DetectedUrls();
   const terminalSessions = deps.terminalSessions ?? new TerminalSessions(undefined, detectedUrls);
   deps.onDispose?.(() => terminalSessions.closeAll());
+  // An agent install or sign-in still running is work a restart would cut off.
+  const offSetupGate = deps.semaphore?.restartGate.addSource(() => [{
+    kind: 'setup',
+    names: terminalSessions.listFor(AGENT_SETUP_OWNER).filter((session) => session.exitCode === null).map((session) => session.label),
+  }]);
+  if (offSetupGate) deps.onDispose?.(offSetupGate);
   /** Stop a task's shells, their process trees and the addresses they printed (archive + delete). */
   const stopTaskProcesses = (runId: string) => {
     for (const session of terminalSessions.listFor(runId)) terminalSessions.kill(session.id);
@@ -1716,6 +1769,16 @@ export function createApp(deps: ServerDeps) {
   // count against the same workspace semaphore as the boot manager (step 2.5).
   // Workspace-level, shared by the managers family and the automation report link.
   const managerStore = new ManagerStore();
+  // A manager task's fallback follows the manager's list as it is now (deleted or Automatic = withdrawn).
+  setManagerTaskAccountsLookup((managerId) => {
+    const manager = managerStore.get(managerId);
+    if (!manager?.taskAgents) return null;
+    return {
+      agents: manager.taskAgents,
+      ...(manager.taskLimitSwitch ? { limitSwitch: manager.taskLimitSwitch } : {}),
+      ...(manager.taskBusyAt !== undefined ? { maxRunning: manager.taskBusyAt } : {}),
+    };
+  });
   const contextProjects = async () => {
     const selector = capabilities().singleProject
       ? { projectId: await resolveBootProject() }
@@ -2288,10 +2351,25 @@ export function createApp(deps: ServerDeps) {
     // `modelDiscoveryRunnerSchema` is the contract's own list of the runners with an
     // authoritative host-local catalog (#794, #784), so the client compiles against exactly what
     // this validates. A runner absent from it has no discovery path and this 400s.
-    .get('/models', queryZodValidator(z.object({ runner: z.union([z.string(), z.array(z.string()).transform((v) => v[0] as string)]).pipe(modelDiscoveryRunnerSchema) }), { message: 'runner must be claude, codex, opencode, cursor, junie, antigravity, or kimi' }), async (c) => {
-      const query = { data: c.req.valid('query') };
-      return c.json(await modelCatalog.get(query.data.runner));
-    });
+    .get(
+      '/models',
+      // Two validators so each keeps its own message; the second one's output is what `valid` reads.
+      queryZodValidator(z.object({ refresh: modelsRefreshQuery }), { message: 'refresh must be 1 or true' }),
+      queryZodValidator(
+        z.object({
+          runner: z.union([z.string(), z.array(z.string()).transform((v) => v[0] as string)]).pipe(modelDiscoveryRunnerSchema),
+          refresh: modelsRefreshQuery,
+        }),
+        { message: 'runner must be claude, codex, opencode, cursor, junie, antigravity, or kimi' },
+      ),
+      async (c) => {
+        const query = { data: c.req.valid('query') };
+        if (query.data.refresh === '1' || query.data.refresh === 'true') {
+          return c.json(await modelCatalog.reprobe(query.data.runner));
+        }
+        return c.json(await modelCatalog.get(query.data.runner));
+      },
+    );
 
   /**
    * Resolve `profileId` (absent = the discovered default) into a concrete account for `provider`.
@@ -2412,10 +2490,14 @@ export function createApp(deps: ServerDeps) {
     openTerminal: (command) => openTerminal(bootRoot, command),
     watchTerminal: (provider, profile) => watchOpenedLogin(provider, { id: profile.id, isDefault: profile.isDefault, path: profile.isDefault ? null : profile.path }),
     readIdentity: (provider, configDir) => readAccountIdentity(provider, configDir),
+    // The cockpit refetches accounts on the session's `connected` event.
+    markSignedIn: async (provider, profileId) => { await markAccountSignedIn(provider, profileId); },
     dryRun: () => process.env.CEZ_DRY_RUN === '1',
   });
 
   deps.onDispose?.(() => loginSessions.dispose());
+  // Accounts added from the cockpit whose sign-in never finished (spec 2026-11-24-add-account-in-cockpit).
+  void sweepPendingAccounts({ isLive: (provider, id) => loginSessions.isLive?.(provider, id) ?? false }).catch(() => []);
   const blockedOnAccount = async (provider: ProviderId, profileId: string): Promise<boolean> =>
     (capabilities().managers !== false && managerEngine.hasAuthFailed(provider, profileId))
     || (await workspaceProjectSources({ salvageColdRuns: true })).some((project) => project.available
@@ -2661,12 +2743,15 @@ export function createApp(deps: ServerDeps) {
   };
 
   /** Build the wire row for one resolved profile: its dir state plus whatever auth is cached. */
-  const agentProfileBody = async (profile: ResolvedAgentProfile) => ({
+  const agentProfileBody = async (profile: ResolvedAgentProfile, options: { hostPaths?: boolean } = {}) => ({
     id: profile.id,
     provider: profile.provider,
     label: profile.label,
-    configDir: profile.configDir,
-    path: profile.path,
+    // A phone never receives a host path (spec 2026-11-24-add-account-in-cockpit).
+    configDir: options.hostPaths === false ? '' : profile.configDir,
+    path: options.hostPaths === false ? '' : profile.path,
+    ...(profile.managed ? { managed: true as const } : {}),
+    ...(profile.pending ? { pending: true as const } : {}),
     ...(await profileDirState(profile.provider, profile.path)),
     isDefault: profile.isDefault,
     // CACHED auth only — this listing must never pay a CLI spawn.
@@ -2687,7 +2772,7 @@ export function createApp(deps: ServerDeps) {
         : providerAuth.peekProfileStatus(profile.provider, profile.id);
       return cached ? { status: cached } : {};
     })(),
-    files: await accountFiles(profile),
+    files: options.hostPaths === false ? [] : await accountFiles(profile),
   });
 
   /**
@@ -2815,7 +2900,8 @@ export function createApp(deps: ServerDeps) {
       return c.json(result);
     })
     .get('/workspace/agent-profiles', async (c) => {
-      const editable = accountsEnabled();
+      const hostPaths = !inRelayScope();
+      const editable = accountsVisible();
       // Hosted mode without the explicit permission withholds the listing entirely rather than
       // serving it read-only: the paths are the host disclosure, so an empty list is the only
       // honest answer.
@@ -2833,15 +2919,17 @@ export function createApp(deps: ServerDeps) {
         }
       }
       const profiles = editable
-        ? await Promise.all(listAgentProfiles(store, PROVIDER_IDS).map(agentProfileBody))
+        ? await Promise.all(listAgentProfiles(store, PROVIDER_IDS).map((profile) => agentProfileBody(profile, { hostPaths })))
         : [];
       return c.json({
         editable,
+        ...(hostPaths ? {} : { hostPaths: false as const }),
         profiles,
         profileCapableProviders: [...PROFILE_CAPABLE_PROVIDERS],
         // Which account each project uses, keyed by repo root. Served here rather than on the
         // project registry because it lives in the same file as the accounts it names.
-        selections: editable ? store.selections : {},
+        // Keyed by repo root, so a phone gets none.
+        selections: editable && hostPaths ? store.selections : {},
         /** The machine-wide fallback, for repos that have chosen nothing. Withheld in hosted mode
          *  on the same terms as the rest of this family. */
         defaults: editable ? store.defaults : {},
@@ -2849,8 +2937,53 @@ export function createApp(deps: ServerDeps) {
     })
 
     .post('/workspace/agent-profiles', jsonZodValidator(() => createAgentProfileSchema), async (c) => {
+      const body = c.req.valid('json');
+      if (body.managed) {
+        // cezar picks the folder, so no client path is ever involved: a paired phone may do this.
+        if (!accountsVisible()) return c.json(hostedProfileRefusal, 409);
+        if (!supportsProfiles(body.provider)) {
+          return c.json({ error: `${body.provider} cannot carry more than one account` }, 400);
+        }
+        let made: AgentAccount | undefined;
+        try {
+          const taken = (await loadAgentAccounts()).accounts.map((a) => a.id);
+          let id = allocateAgentProfileId(body.label || body.provider, taken);
+          let dir: string | undefined;
+          // A folder left behind under this id is never adopted: take the next id instead.
+          for (let attempt = 0; dir === undefined; attempt++) {
+            try {
+              dir = await createManagedAccountDir(body.provider, id);
+            } catch (err) {
+              if ((err as NodeJS.ErrnoException).code !== 'EEXIST' || attempt >= 20) throw err;
+              taken.push(id);
+              id = allocateAgentProfileId(body.label || body.provider, taken);
+            }
+          }
+          await mergeWriteAgentAccounts((store) => {
+            // Lost a race for this id: the folder stays empty and the boot sweep never sees it.
+            if (store.accounts.some((a) => a.id === id)) return;
+            made = {
+              id,
+              provider: body.provider,
+              configDir: dir,
+              label: body.label?.trim() || id,
+              addedAt: new Date().toISOString(),
+              managed: true,
+              pending: true,
+            };
+            store.accounts.push(made);
+          });
+        } catch (err) {
+          return c.json({ error: err instanceof Error ? err.message : String(err) }, 500);
+        }
+        if (!made) return c.json({ error: 'account could not be saved; try again' }, 409);
+        const fresh = await agentProfileBody(resolveStoredProfile(made), { hostPaths: !inRelayScope() });
+        return c.json({ profile: fresh }, 201);
+      }
       if (!accountsEnabled()) return c.json(hostedProfileRefusal, 409);
-      const { provider, configDir, label } = c.req.valid('json');
+      const { provider, label } = body;
+      const configDir = body.configDir;
+      if (configDir === undefined) return c.json({ error: 'send configDir, or managed: true' }, 400);
       if (!supportsProfiles(provider)) {
         return c.json({ error: `${provider} cannot carry more than one account` }, 400);
       }
@@ -2974,7 +3107,7 @@ export function createApp(deps: ServerDeps) {
         recheck: queryValue.refine((v) => v === undefined || v === '1'),
       }), { message: 'refresh and recheck must be 1 when provided' }),
       async (c) => {
-        if (!accountsEnabled()) return c.json(hostedProfileRefusal, 409);
+        if (!accountsVisible()) return c.json(hostedProfileRefusal, 409);
         const account = await accountById(c.req.param('id'));
         if (!account) return c.json({ error: `unknown account: ${c.req.param('id')}` }, 404);
         const query = c.req.valid('query');
@@ -3023,7 +3156,7 @@ export function createApp(deps: ServerDeps) {
       '/workspace/agent-profiles/:id/details',
       paramZodValidator(z.object({ id: z.string() })),
       async (c) => {
-        if (!accountsEnabled()) return c.json(hostedProfileRefusal, 409);
+        if (!accountsVisible()) return c.json(hostedProfileRefusal, 409);
         const account = await accountById(c.req.param('id'));
         if (!account) return c.json({ error: `unknown account: ${c.req.param('id')}` }, 404);
         return c.json(await readAccountIdentity(account.provider, account.path));
@@ -3146,8 +3279,23 @@ export function createApp(deps: ServerDeps) {
       '/workspace/agent-profiles/:id',
       paramZodValidator(z.object({ id: z.string() })),
       async (c) => {
-        if (!accountsEnabled()) return c.json(hostedProfileRefusal, 409);
+        if (!accountsVisible()) return c.json(hostedProfileRefusal, 409);
         const id = c.req.param('id');
+        let target: AgentAccount | undefined;
+        try {
+          target = (await loadAgentAccounts()).accounts.find((a) => a.id === id);
+        } catch {
+          // unreadable store: the merge-write below answers
+        }
+        // The flag alone is hand-editable: a managed row must also live under agent-homes/.
+        const managed = target?.managed === true && await isManagedAccountDir(target);
+        // A phone removes only accounts cezar made; anything else names a host folder.
+        if (!accountsEnabled() && !managed) return c.json(hostedProfileRefusal, 409);
+        // Log out first, so a Keychain item tied to the folder does not outlive it.
+        if (target && managed) {
+          loginSessions.cancelAccount?.(target.provider, target.id);
+          if (process.env.CEZ_DRY_RUN !== '1') await logoutManagedAccount(target);
+        }
         let removed = false;
         // Captured inside the mutator, because after the write there is nothing left to ask which
         // provider this account belonged to — and the eviction below is keyed by it.
@@ -3178,6 +3326,7 @@ export function createApp(deps: ServerDeps) {
         // re-added account with the same id read the deleted one's state — its incident included.
         if (removedProvider) providerAuth.forgetProfile(removedProvider, id);
         else providerAuth.forgetProfileStatus(removedProvider, id);
+        if (target && managed) await removeManagedAccountDir(target.configDir).catch(() => false);
         return c.json({ removed: true as const, id });
       },
     );
@@ -5303,7 +5452,7 @@ export function createApp(deps: ServerDeps) {
   };
 
   /** Both artifact-file routes: `name` is a listed name, flat or `<folder>/<file>`. */
-  const serveArtifact = async (c: Context<ProjectApiEnv>, id: string, name: string, v: string | undefined) => {
+  const serveArtifact = async (c: Context<ProjectApiEnv>, id: string, name: string, v: string | undefined, picker?: '1') => {
     const { dataDir, store } = c.get('project');
     if (!store.getRun(id)) return c.json({ error: 'not found' }, 404);
     const runDir = artifactsDir(dataDir, id);
@@ -5312,7 +5461,10 @@ export function createApp(deps: ServerDeps) {
     const artifact = await findArtifact(dir, name);
     const stream = artifact ? await openArtifact(dir, name) : null;
     if (!artifact || !stream) return c.json({ error: 'artifact not found' }, 404);
-    return c.body(stream, 200, artifactHeaders(artifact, artifactsCdnEnabled(), artifactsBaseUrl(c.req.url)));
+    // `?picker=1`: the Assets view's element picker, appended to HTML only; headers unchanged.
+    const origins = picker === '1' && artifact.kind === 'html' ? artifactPickerOrigins(c.req.url) : undefined;
+    const body = origins ? appendToStream(stream, artifactPickerTag(origins)) : stream;
+    return c.body(body, 200, artifactHeaders(artifact, artifactsCdnEnabled(), artifactsBaseUrl(c.req.url)));
   };
 
   // ---- chained family: runs lifecycle + artifacts (project-scoped) ----
@@ -5429,10 +5581,16 @@ export function createApp(deps: ServerDeps) {
     .post('/runs', jsonZodValidator(createRunInputSchema), async (c) => {
       const { root: repoRoot, dataDir, manager, store } = c.get('project');
       const parsed = { data: c.req.valid('json') };
+      // A manager fallback policy bypasses the project's Automatic fallback setting: only the
+      // manager engine's in-process request, which carries this process's token, may set one.
+      if (parsed.data.managerAgent && !managerAgentTokenMatches(c.req.header(MANAGER_AGENT_HEADER))) {
+        return c.json({ error: 'managerAgent is set only by a cezar manager' }, 403);
+      }
       if (agentModelsLocked(repoRoot) && (parsed.data.model?.trim() || parsed.data.reasoningEffort?.trim())) {
         return c.json({ error: AGENT_MODELS_LOCKED_ERROR }, 409);
       }
       let workflow: WorkflowDef | undefined;
+      let workflowCatalog: WorkflowDef[] = [];
       if (parsed.data.steps) {
         // Inline chain (spec 008): an approved plan runs as an ad-hoc workflow.
         const issue = stepsIssue(parsed.data.steps);
@@ -5444,11 +5602,22 @@ export function createApp(deps: ServerDeps) {
         };
       } else {
         const { workflows } = await loadWorkflows(repoRoot);
+        workflowCatalog = workflows;
         workflow = workflows.find((w) => w.name === parsed.data.workflow);
         if (!workflow) return c.json({ error: `unknown workflow: ${parsed.data.workflow}` }, 404);
       }
       const fallback = parsed.data.runner ?? (await loadConfig(repoRoot)).defaultRunner;
-      const blocked = await providerActionError(providersRequiredByWorkflow(workflow, fallback), {
+      const requiredProviders = providersRequiredByWorkflow(workflow, fallback);
+      if (!parsed.data.enforceReadOnly) {
+        const checked = workflow.graph?.nodes.some((n) => n.type === 'workflow')
+          ? [...new Set([...requiredProviders, fallback])]
+          : requiredProviders;
+        for (const provider of checked) {
+          const refusal = readOnlyWorkflowRefusal(workflow, provider, workflowCatalog);
+          if (refusal) return c.json({ error: refusal }, 400);
+        }
+      }
+      const blocked = await providerActionError(requiredProviders, {
         repoRoot,
         profileFor: (provider) => (provider === fallback ? parsed.data.agentProfile : undefined),
       });
@@ -5486,6 +5655,7 @@ export function createApp(deps: ServerDeps) {
         images,
         systemPrompt: parsed.data.systemPrompt,
         ...(parsed.data.startedByManager ? { startedByManager: parsed.data.startedByManager } : {}),
+        ...(parsed.data.startedByManager && parsed.data.managerAgent ? { managerAgent: parsed.data.managerAgent } : {}),
         worktree: parsed.data.worktree,
         newBranch: parsed.data.newBranch,
         branch: parsed.data.branch,
@@ -5781,6 +5951,26 @@ export function createApp(deps: ServerDeps) {
       if (!finished) return c.json({ error: 'no open session' }, 409);
       if (before.status === 'review') track('review_decided', { label: 'accepted' }, { sid: deviceSid(c.req.header('x-cezar-sid')) });
       return c.json({ finished: true });
+    })
+
+    .post('/runs/:id/switch-agent', paramZodValidator(runIdParamSchema), jsonZodValidator(switchRunAgentInputSchema), async (c) => {
+      if (!managerAgentTokenMatches(c.req.header(MANAGER_AGENT_HEADER))) {
+        return c.json({ error: 'switch-agent is available only to a cezar manager' }, 403);
+      }
+      const { root: repoRoot, store, manager } = c.get('project');
+      const { id } = c.req.valid('param');
+      const run = store.getRun(id);
+      if (!run) return c.json({ error: 'not found' }, 404);
+      const input = c.req.valid('json');
+      const account = input.agentProfile === undefined
+        ? await resolveProfileEnvForRoot(repoRoot, input.runner)
+        : await resolveWorkspaceProfile(input.runner, input.agentProfile);
+      if ('error' in account) return c.json({ error: account.error }, 400);
+      const blocked = await providerActionError([input.runner], { repoRoot, profileFor: () => account.profile.id });
+      if (blocked) return c.json({ error: blocked }, 409);
+      const defaultRunner = run.runner ?? (await loadConfig(repoRoot)).defaultRunner;
+      const switched = manager.switchAgent(id, { ...input, agentProfile: account.profile.id }, defaultRunner);
+      return 'error' in switched ? c.json({ error: switched.error }, 409) : c.json(switched);
     })
 
     // An in-place task's Commit to the base branch (spec 2026-10-20-trunk-based-projects).
@@ -6138,13 +6328,15 @@ export function createApp(deps: ServerDeps) {
     // `?v=<n>` serves kept revision n (spec R4) from `.versions/<n>/`, same guard, same headers.
     .get('/runs/:id/artifacts/:name', paramZodValidator(artifactNameParamSchema), queryZodValidator(artifactFileQuerySchema), async (c) => {
       const { id, name } = c.req.valid('param');
-      return serveArtifact(c, id, name, c.req.valid('query').v);
+      const { v, picker } = c.req.valid('query');
+      return serveArtifact(c, id, name, v, picker);
     })
 
     // A file one folder down, at the URL a page's relative `<img src="shots/a.png">` resolves to.
     .get('/runs/:id/artifacts/:dir/:name', paramZodValidator(artifactNestedParamSchema), queryZodValidator(artifactFileQuerySchema), async (c) => {
       const { id, dir, name } = c.req.valid('param');
-      return serveArtifact(c, id, `${dir}/${name}`, c.req.valid('query').v);
+      const { v, picker } = c.req.valid('query');
+      return serveArtifact(c, id, `${dir}/${name}`, v, picker);
     })
 
     // Assess Impact (spec 2026-10-22-html-artifacts-and-impact § Serving): the server resolves and
@@ -6370,11 +6562,19 @@ export function createApp(deps: ServerDeps) {
       // 2026-10-20-trunk-based-projects) — its git step is Commit to the base branch.
       const inPlace = !worktree && run.worktree === false && !run.readOnly;
       if (!worktree && !inPlace) return c.json({ error: NO_WORKTREE }, 409);
-      const result = worktree
+      const result: GitStatusResult = worktree
         ? await worktreeGitStatus(worktree, run.baseBranch)
         : await checkoutGitStatus(c.get('project').root);
       if (!result.ok) return c.json({ error: result.error }, 409);
-      return c.json({ uncommitted: result.uncommitted, unpushed: result.unpushed, behind: result.behind, ahead: result.ahead });
+      const { baseRemote, baseTracked } = result;
+      const body: GitStatusResponse = {
+        uncommitted: result.uncommitted,
+        unpushed: result.unpushed,
+        behind: result.behind,
+        ahead: result.ahead,
+        ...(baseRemote ? { baseRemote, baseTracked: baseTracked === true } : {}),
+      };
+      return c.json(body);
     })
 
     // Draft PR from the review gate (spec 009): final autosave → push →
@@ -9074,9 +9274,14 @@ export function createApp(deps: ServerDeps) {
       const account = await resolveWorkspaceProfile(runner, agentProfile);
       return 'error' in account ? account.error : null;
     },
+    // The same holds the queue enforces (spec 2026-08-03-auto-resume-after-usage-limit).
+    accountLimit: (runner, agentProfile, repoRoot) => managerAccountLimit(() => deps.semaphore?.accountHolds(), runner, agentProfile, repoRoot),
+    accountLoad: () => deps.semaphore?.accountLoad() ?? new Map(),
     request: (path, init) => {
       if (!managerLoopback.request) throw new Error('the cockpit is not ready');
-      return managerLoopback.request(path, init);
+      const headers = new Headers(init?.headers);
+      headers.set(MANAGER_AGENT_HEADER, MANAGER_AGENT_TOKEN);
+      return managerLoopback.request(path, { ...init, headers });
     },
     costVisible: () => capabilities().costMetrics,
     autoResume: () => deps.semaphore?.autoResumeOnUsageLimit() ?? true,
@@ -9093,8 +9298,21 @@ export function createApp(deps: ServerDeps) {
     // An inactive manager's cards leave the Questions count (spec 2026-11-19-manager-deactivate).
     onActivityChange: () => refreshQuestions(),
     ...(deps.managerRunnerFor ? { runnerFor: deps.managerRunnerFor } : {}),
+    ...(deps.semaphore ? { restartGate: deps.semaphore.restartGate } : {}),
+    onAccountHoldsChanged: () => {
+      deps.semaphore?.notifyAccountHoldsChanged();
+      void deps.semaphore?.release();
+    },
   });
   deps.onManagerEngine?.(managerEngine);
+  // A manager's agent chain shares the usage limits it hits with the task queues (spec 2026-11-25-manager-agent-chain).
+  const unregisterManagerHolds = deps.semaphore?.register({
+    busySlots: () => 0,
+    pump: () => undefined,
+    oldestQueuedAt: () => null,
+    accountHolds: () => managerEngine.accountHolds(),
+  });
+  if (unregisterManagerHolds) deps.onDispose?.(unregisterManagerHolds);
   // A signed-in-again account resumes what was blocked on it (spec 2026-11-18-inline-account-reconnect).
   deps.onDispose?.(registerAuthResume({
     contexts,
@@ -9135,14 +9353,71 @@ export function createApp(deps: ServerDeps) {
       ? managerEngine.messages(manager.id, { pending: '1' }).messages.flatMap((message) =>
         message.kind === 'action' ? [{ managerId: manager.id, message, title: describeAction(message.action) }] : [])
       : []);
-    const questions = (await questionInbox.list().catch(() => undefined))?.open ?? [];
+    const inbox = await questionInbox.list().catch(() => undefined);
     const sources = await workspaceProjectSources();
-    const projects = sources.filter((source) => source.available).map((source) => ({ id: source.id, runs: source.runs() }));
-    return buildAttentionList({ questions, managers, approvals, projects, now: Date.now() });
+    const available = sources.filter((source) => source.available);
+    const projects = available.map((source) => ({ id: source.id, runs: source.runs() }));
+    const roots = new Map(available.map((source) => [source.id, source.root]));
+    const overrides = await attentionOverrides.list().catch(() => []);
+    armSnoozeWake(overrides);
+    // Fresh forge answers first; what the cache has forgotten, from what cezar saw end (review 2, finding 1).
+    const ends = prEndLookup(await prEnds.load().catch(() => new Map()), {
+      end: (root, number) => readCachedPrEnds(root, [number])[number],
+      isOpen: (root, number) => {
+        const status = readCachedRefStatuses(root, [number]).prs[number];
+        return status !== undefined && status !== 'merged' && status !== 'closed';
+      },
+    });
+    const list = buildAttentionList({
+      questions: inbox?.open ?? [],
+      managers,
+      approvals,
+      projects,
+      now: Date.now(),
+      olderAfterDays: inbox?.olderAfterDays ?? 0,
+      overrides,
+      prState: (projectId, number) => {
+        const root = roots.get(projectId);
+        return root ? ends.lookup(root, number) : undefined;
+      },
+      // The task's CURRENT PR, as cezar already knows it: never a `gh` call. A superseded, closed PR
+      // says nothing about the one the task opened after it.
+      prEnded: (projectId, run) => {
+        const root = roots.get(projectId);
+        const number = root ? currentTaskPr(run) : undefined;
+        const ended = root && number !== undefined ? ends.lookup(root, number) : undefined;
+        return ended && number !== undefined ? { number, ...ended } : undefined;
+      },
+    });
+    await prEnds.note(ends.seen, ends.dropped).catch(() => {});
+    return list;
   };
+  // The list may have changed where no run, manager or question frame says so (a snooze ending, a
+  // dismissal from a phone, a PR closing): the cockpit re-reads on this, phones on the recount.
+  const announcer = createAttentionAnnouncer({
+    poke: () => attention.poke(),
+    announce: () => workspaceEvents.emit('attention-change', {}),
+  });
+  const attentionChanged = () => announcer.changed();
+  // A snooze end or a dismissal's TTL has no event of its own: one timer for the soonest, so the
+  // badge and a phone hear it.
+  let snoozeTimer: ReturnType<typeof setTimeout> | undefined;
+  const armSnoozeWake = (overrides: Parameters<typeof nextOverrideWake>[0]) => {
+    const soonest = nextOverrideWake(overrides);
+    if (snoozeTimer) clearTimeout(snoozeTimer);
+    snoozeTimer = undefined;
+    if (soonest === undefined) return;
+    // setTimeout overflows past ~24.8 days; a later wake just re-arms on the next read.
+    snoozeTimer = setTimeout(() => { snoozeTimer = undefined; attentionChanged(); }, Math.min(Math.max(0, soonest - Date.now()) + 1_000, 2 ** 31 - 1));
+    snoozeTimer.unref?.();
+  };
+  deps.onDispose?.(() => { if (snoozeTimer) clearTimeout(snoozeTimer); });
+  const attentionOverrides = deps.attentionOverrides ?? createAttentionOverrideStore();
+  const prEnds = deps.prEnds ?? createPrEndMemory();
   // Recounts only while a phone could hear a count push; health and GET read lazily through the cache.
   const attention = createAttentionService({ read: readAttention, wanted: () => phonePairing.wantsCounts() });
   deps.onDispose?.(() => attention.dispose());
+  // The recount is the phone's: a cockpit heard the change itself (`announcer`), or a run/manager frame.
   attention.onChange(() => phonePairing.noteAttentionChange());
   questionInbox.onChange(() => attention.poke());
   const offAttentionEvents = workspaceEvents.on((event) => {
@@ -9175,7 +9450,20 @@ export function createApp(deps: ServerDeps) {
 
   // ---- chained family: attention (workspace-level, single-mount) ----
   const attentionRoutes = new Hono()
-    .get('/workspace/attention', async (c) => c.json(await attention.list()));
+    .get('/workspace/attention', async (c) => c.json(await attention.list()))
+    // Spec 2026-11-23-needs-you-triage: dismiss, snooze, "Still needs me", and their undo.
+    .post('/workspace/attention/overrides', jsonZodValidator(attentionOverrideInputSchema), async (c) => {
+      const overrides = await attentionOverrides.set(c.req.valid('json'));
+      armSnoozeWake(overrides);
+      attentionChanged();
+      return c.json({ overrides });
+    })
+    .post('/workspace/attention/overrides/clear', jsonZodValidator(attentionOverrideClearInputSchema), async (c) => {
+      const overrides = await attentionOverrides.clear(c.req.valid('json').key);
+      armSnoozeWake(overrides);
+      attentionChanged();
+      return c.json({ overrides });
+    });
 
   // ---- chained family: Questions inbox (workspace-level, single-mount) ----
   // Spec 2026-11-17-questions-inbox. A manager copy folded into its task's item answers the task.
@@ -9194,6 +9482,8 @@ export function createApp(deps: ServerDeps) {
   // A GitHub read that sees a PR merged or closed closes its waiting merge cards (#2241 follow-up).
   const stopPrClosed = onPrClosed((root, number, state, verify) => {
     void managerEngine.pullRequestClosed(root, number, state, verify).catch(() => {});
+    // A paused task or a card on that PR moves to Probably done.
+    attentionChanged();
   });
   deps.onDispose?.(stopPrClosed);
 
@@ -9241,7 +9531,13 @@ export function createApp(deps: ServerDeps) {
   const managersRoutes = new Hono()
     .use('/workspace/managers', requireManagers)
     .use('/workspace/managers/*', requireManagers)
-    .get('/workspace/managers', async (c) => c.json({ managers: await managerEngine.list() }))
+    // `needsYou`: what Now still lists per manager (not dismissed, snoozed or probably done; a muted
+    // manager's included), so the notch and the heads show what Now shows.
+    .get('/workspace/managers', async (c) => {
+      const [managers, list] = await Promise.all([managerEngine.list(), attention.list().catch(() => undefined)]);
+      const items: typeof managers = list ? managers.map((manager) => ({ ...manager, needsYou: managerNeedsYou(list.items, manager.id) })) : managers;
+      return c.json({ managers: items });
+    })
     // Deactivate or reactivate every manager (spec 2026-11-19-manager-deactivate). Cockpit-only: `cez manager` never calls it.
     .post('/workspace/managers/activity', jsonZodValidator(managerActivityInputSchema), async (c) =>
       c.json({ ok: true as const, changed: await managerEngine.setActivity(c.req.valid('json').active) }))
@@ -9363,6 +9659,10 @@ export function createApp(deps: ServerDeps) {
     .post('/workspace/managers/:id/task-cancel', paramZodValidator(managerIdParamSchema), jsonZodValidator(managerCancelTaskInputSchema), async (c) => {
       const cancelled = await managerEngine.cancelTask(c.req.valid('param').id, c.req.valid('json'));
       return 'error' in cancelled ? c.json({ error: cancelled.error }, cancelled.status) : c.json(cancelled);
+    })
+    .post('/workspace/managers/:id/task-switch', paramZodValidator(managerIdParamSchema), jsonZodValidator(managerSwitchTaskInputSchema), async (c) => {
+      const switched = await managerEngine.switchTask(c.req.valid('param').id, c.req.valid('json'));
+      return 'error' in switched ? c.json({ error: switched.error }, switched.status) : c.json(switched);
     })
     .post('/workspace/managers/:id/task-retry', paramZodValidator(managerIdParamSchema), jsonZodValidator(managerRetryTaskInputSchema), async (c) => {
       const created = await managerEngine.retryTask(c.req.valid('param').id, c.req.valid('json'));
@@ -9611,28 +9911,56 @@ export function createApp(deps: ServerDeps) {
   // mounts its `use('*')` scope resolver over the whole prefix, and Hono runs matched middleware
   // in registration order. `/health` in particular answers for the workspace, has no project to
   // resolve, and is the CORS-open discovery route — it must not sit behind the resolver.
-  const routed = app
+  return {
+    app,
+    v1,
+    workspaceV1,
+    finish(routed: { get: (path: string, handler: (c: Context) => Response | Promise<Response>) => unknown; request: (path: string, init?: RequestInit) => Response | Promise<Response>; fetch: (request: Request) => Response | Promise<Response> }) {
+      // ---- SPA catch-all -------------------------------------------------------
+      // Last, so every route above still wins. Any other GET gets the cockpit shell:
+      // react-router owns the route map, including the 404, so `/tasks/:id/changes`
+      // cold-loads and survives a refresh instead of 404ing. `/api/*` and the static
+      // files above resolve to `passthrough` and fall through to Hono's own 404 —
+      // an unknown API path must never answer with HTML.
+      // Without a web/dist build this serves the built-in build-hint page (dev-only
+      // state — the published tarball ships web/dist), never a 404.
+      routed.get('*', (c) => serveShell(c) ?? c.notFound());
+      managerLoopback.request = (path, init) => routed.request(path, init);
+      phonePairing.attach(
+        (request) => Promise.resolve(routed.fetch(request)),
+        () => workspaceEvents.emit('phone-pairing', { pairing: phonePairing.list().pairing } satisfies PhonePairingEvent),
+      );
+    },
+  };
+}
 
+type SchemaOf<T> = T extends HonoBase<any, infer S, any> ? S : never;
+type PrefixSchema<S, P extends string> = S extends Schema ? MergeSchemaPath<S, P> : never;
+type AppParts = ReturnType<typeof createAppParts>;
+type ProjectV1Schema = SchemaOf<AppParts['v1']>;
+type WorkspaceV1Schema = SchemaOf<AppParts['workspaceV1']>;
+
+/**
+ * The mounted HTTP app type: `v1` under both `/api/v1/p/:projectId` and `/api/v1`, plus
+ * single-mount `workspaceV1` under `/api/v1`. Named explicitly so `createApp`'s declaration
+ * references `ProjectV1Schema` once instead of serializing it twice.
+ */
+export type ServerApp = Hono<
+  BlankEnv,
+  | PrefixSchema<ProjectV1Schema, typeof V1_SCOPED_PREFIX>
+  | PrefixSchema<ProjectV1Schema, typeof V1_PREFIX>
+  | PrefixSchema<WorkspaceV1Schema, typeof V1_PREFIX>,
+  '/'
+>;
+
+export function createApp(deps: ServerDeps): ServerApp {
+  const { app, v1, workspaceV1, finish } = createAppParts(deps);
+  const routed = app
     .route(V1_SCOPED_PREFIX, v1)
     .route(V1_PREFIX, v1)
     .route(V1_PREFIX, workspaceV1);
-
-  // ---- SPA catch-all -------------------------------------------------------
-  // Last, so every route above still wins. Any other GET gets the cockpit shell:
-  // react-router owns the route map, including the 404, so `/tasks/:id/changes`
-  // cold-loads and survives a refresh instead of 404ing. `/api/*` and the static
-  // files above resolve to `passthrough` and fall through to Hono's own 404 —
-  // an unknown API path must never answer with HTML.
-  // Without a web/dist build this serves the built-in build-hint page (dev-only
-  // state — the published tarball ships web/dist), never a 404.
-  routed.get('*', (c) => serveShell(c) ?? c.notFound());
-  managerLoopback.request = (path, init) => routed.request(path, init);
-  phonePairing.attach(
-    (request) => Promise.resolve(routed.fetch(request)),
-    () => workspaceEvents.emit('phone-pairing', { pairing: phonePairing.list().pairing } satisfies PhonePairingEvent),
-  );
-
-  return routed;
+  finish(routed);
+  return routed as unknown as ServerApp;
 }
 
 /** The status route's body: the configured thresholds (the guard's own copy is from its last pass). */

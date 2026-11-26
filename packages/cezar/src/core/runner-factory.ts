@@ -84,7 +84,7 @@ const READ_ONLY_ENFORCED: Record<AgentBackend, boolean> = {
   gemini: true,
   kimi: false,
   omp: false,
-  antigravity: false,
+  antigravity: true,
 };
 
 export function canEnforceReadOnly(backend: AgentBackend): boolean {

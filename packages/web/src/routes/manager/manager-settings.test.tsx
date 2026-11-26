@@ -137,6 +137,8 @@ describe('ManagerSettings', () => {
     render(<QueryClientProvider client={client}><ManagerSettings manager={managerFixture()} onPatch={vi.fn()} /></QueryClientProvider>)
     fireEvent.click(screen.getByRole('button', { name: 'Manager settings' }))
     const picker = await screen.findByRole('button', { name: 'Watch check cadence' })
+    expect(screen.getByRole('switch', { name: 'Cancel or switch any task' })).toBeTruthy()
+    expect(screen.getByText('Cancel or switch any task').title).toContain('another vendor or use another account’s quota')
     const rows = ['Persona…', 'Jobs…', 'Connectors…', 'Check now', 'Delete…'].map((name) => screen.getByRole('button', { name }))
     for (const row of rows) {
       expect(row.dataset.slot).toBe('manager-menu-row')

@@ -566,9 +566,11 @@ export async function putTelemetryConsent(input: SetTelemetryConsentInput): Prom
  *  Workspace-level: one CLI/account serves every project. */
 export async function getRunnerModels(
   runner: ModelDiscoveryRunner,
-  opts?: ReadOptions,
+  opts?: ReadOptions & { refresh?: boolean },
 ): Promise<RunnerModelCatalogResponse> {
-  return unwrap(await cez.api.v1.models.$get({ query: { runner } }, init(opts)), '/models')
+  const query: { runner: ModelDiscoveryRunner; refresh?: string } = { runner }
+  if (opts?.refresh) query.refresh = '1'
+  return unwrap(await cez.api.v1.models.$get({ query }, init(opts)), '/models')
 }
 
 /** Host-local authentication state shared by every project. */
@@ -1824,11 +1826,11 @@ export async function cancelAutoResume(id: string): Promise<CancelAutoResumeResp
 }
 
 /** Sweep every finished (done/failed/cancelled) active run into the archive in one call —
- *  the Tasks header's "Archive finished" button. */
-export async function archiveFinished(): Promise<ArchiveFinishedResponse> {
+ *  the Tasks header's "Archive finished" button. `projectId` pins it from outside a scope (the bottom bar). */
+export async function archiveFinished(projectId: string = queryScope()): Promise<ArchiveFinishedResponse> {
   return unwrap(
     await cez.api.v1.p[':projectId'].runs['archive-finished'].$post({
-      param: { projectId: queryScope() },
+      param: { projectId },
     }),
     '/runs/archive-finished',
   )

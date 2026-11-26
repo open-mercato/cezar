@@ -54,3 +54,22 @@ describe('a sent review in the transcript', () => {
     expect(screen.getByText('nothing to review here')).not.toBeNull()
   })
 })
+
+describe('a sent asset comment in the transcript', () => {
+  it('links to the asset on the Assets tab and shows the element markup apart from the note', () => {
+    renderBubble(
+      formatDiffComments([
+        COMMENT,
+        { kind: 'asset', id: 'e', asset: 'recipe.html', selector: 'main > h2', label: 'Ingredients', excerpt: '<h2>Ingredients</h2>', body: 'bigger' },
+      ]),
+    )
+    expect(screen.getByText('2 comments on the diff and assets')).not.toBeNull()
+    const cards = document.querySelectorAll('[data-slot="review-comment"]')
+    const link = cards[1]!.querySelector('a')!
+    expect(link.textContent).toBe('recipe.html')
+    expect(link.getAttribute('href')).toBe('/tasks/r1/assets/recipe.html')
+    expect(cards[1]!.querySelector('[data-slot="review-comment-code"]')?.textContent).toBe('<h2>Ingredients</h2>')
+    expect(cards[1]!.querySelector('[data-slot="review-comment-body"]')?.textContent).toBe('bigger')
+    expect(cards[1]!.querySelector('[data-slot="review-comment-element"]')?.textContent).toBe('· element main > h2')
+  })
+})

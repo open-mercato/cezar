@@ -17,6 +17,38 @@ import { taskAskRecordSchema } from './questions.ts';
 export const runsListQuerySchema = z.object({ full: z.enum(['1']).optional() });
 export type RunsListQuery = z.infer<typeof runsListQuerySchema>;
 
+const workflowAgentBaseSchema = z.object({
+  runner: runnerSchema,
+  agentProfile: z.string().optional(),
+  model: z.string().optional(),
+  reasoningEffort: z.string().optional(),
+});
+const workflowAgentOverrideSchema = z.object({
+  runner: runnerSchema,
+  agentProfile: z.string(),
+  // Omission keeps the original step selection. Null uses the new runner's default.
+  model: z.string().nullable().optional(),
+  reasoningEffort: z.string().nullable().optional(),
+});
+const workflowAgentSwitchSchema = z.object({
+  original: workflowAgentBaseSchema,
+  // Each slot represents the runner pinned in the workflow, or the absence of a pin.
+  overrides: z.partialRecord(z.union([runnerSchema, z.literal('unpinned')]), workflowAgentOverrideSchema),
+});
+export type WorkflowAgentSwitch = z.infer<typeof workflowAgentSwitchSchema>;
+
+export const runAgentSwitchSchema = z.object({
+  summary: z.string(),
+  /** Apply the selected agent to the unfinished workflow's agent steps. */
+  workflow: z.literal(true).optional(),
+  workflowSelection: workflowAgentSwitchSchema.optional(),
+  /** Run a fresh repair turn before resuming the walk at this failed check. */
+  checkRepair: z.object({ checkId: z.string(), stepId: z.string() }).optional(),
+  /** Fresh continuation to reconstruct if the server restarts before it launches. */
+  continuationStepId: z.string().optional(),
+  continuationInput: z.object({ prompt: z.string(), attachmentUrls: z.array(z.string()) }).optional(),
+});
+
 /** `GET /workspace/events` query: `slim=1` opts into the slim `run` frame (`workspaceRunEventSchema`). */
 export const workspaceEventsQuerySchema = z.object({ slim: z.enum(['1']).optional() });
 export type WorkspaceEventsQuery = z.infer<typeof workspaceEventsQuerySchema>;
@@ -55,6 +87,8 @@ export const runPrRefSchema = z.object({
   at: z.string(),
 });
 export type RunPrRef = z.infer<typeof runPrRefSchema>;
+/** Which of a task's PR associations speaks for it, best first: one it created, then one it declared. */
+export const RUN_PR_REF_RANK: Record<RunPrRef['origin'], number> = { created: 0, marker: 1, legacy: 2, derived: 3 };
 
 export const runStatusSchema = z.enum([
   'queued',
@@ -245,6 +279,10 @@ export const runRecordSchema = z.object({
     revision: z.number().int().nonnegative(),
     incarnation: z.string().nullable(),
     revocation: z.string().nullable(),
+    /** `manager`: the starting manager's allowed task accounts, whose settings are the consent. */
+    source: z.literal('manager').optional(),
+    /** The manager whose current list a `manager` policy is checked against at fallback time. */
+    managerId: z.string().optional(),
   }).optional(),
   /** Echo of the extra system prompt the run used (POST override or config default). */
   systemPrompt: z.string().optional(),
@@ -377,6 +415,7 @@ export const runRecordSchema = z.object({
   /** Why a `cancelled` run was stopped, and who stopped it, when the canceller said so. */
   cancelReason: z.string().optional(),
   cancelledBy: z.string().optional(),
+  agentSwitch: runAgentSwitchSchema.optional(),
   /** ISO-8601 instant the current wait on the user began. Kept past the session while
    *  `awaitingAnswerSince` holds the same question open; a manager's attention key is built on it. */
   waitingSince: z.string().optional(),
@@ -891,6 +930,12 @@ export const gitStatusResponseSchema = z.object({
   behind: z.number().nullable(),
   /** Commits the branch has that same base lacks — what a PR would propose; null alike. */
   ahead: z.number().nullable(),
+  /** The remote whose `<remote>/<base>` those counts read (the resolved PR target, #1383); absent
+   *  when they read a local branch. A land pushes here so `ahead` can reach 0. */
+  baseRemote: z.string().optional(),
+  /** Present with `baseRemote`: whether the local base branch tracks that remote — where
+   *  `landInPlace` pushes. A worktree land is offered only when the two agree. */
+  baseTracked: z.boolean().optional(),
 });
 export type GitStatusResponse = z.infer<typeof gitStatusResponseSchema>;
 
@@ -1345,6 +1390,18 @@ export const createRunInputBaseSchema = z
     /** The manager starting this task (spec 2026-10-31-managers): provenance for `task cancel`'s
      *  own-tasks rule and the manager's `startedBy`. Never an authorization by itself. */
     startedByManager: z.object({ id: z.string().min(1).max(64), name: z.string().min(1).max(80) }).optional(),
+    /** How the starting manager chose the agent: a timeline note, and the manager's other allowed
+     *  accounts a usage limit falls back to. Honored only with `startedByManager`. */
+    managerAgent: z.object({
+      note: z.string().min(1).max(500),
+      /** Chosen by the manager's roles: the queue may move it to an account that frees up. */
+      routed: z.literal(true).optional(),
+      fallback: z.array(z.object({
+        provider: runnerSchema,
+        profileId: z.string().min(1).max(64),
+        model: z.string().min(1).max(200).optional(),
+      })).max(10).optional(),
+    }).optional(),
   });
 
 /** A task may be attachments alone (a pasted screenshot is a brief), but never nothing at all. */
@@ -1409,6 +1466,17 @@ export const continueInputSchema = z.object({
   askRequestId: z.string().min(1).max(200).optional(),
 });
 export type ContinueInput = z.input<typeof continueInputSchema>;
+
+export const switchRunAgentInputSchema = z.object({
+  runner: runnerSchema,
+  agentProfile: z.string().min(1).max(64).optional(),
+  model: z.string().max(200).optional(),
+  reasoningEffort: reasoningEffortSchema.optional(),
+  changedBy: z.string().trim().min(1).max(200),
+});
+export type SwitchRunAgentInput = z.infer<typeof switchRunAgentInputSchema>;
+export const switchRunAgentResponseSchema = z.object({ summary: z.string() });
+export type SwitchRunAgentResponse = z.infer<typeof switchRunAgentResponseSchema>;
 
 /**
  * `PATCH /runs/:id` (#389). `title` is trimmed server-side, 1–300 chars, and the edit sets both

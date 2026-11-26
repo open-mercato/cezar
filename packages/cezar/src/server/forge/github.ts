@@ -1731,6 +1731,9 @@ function reviewerKey(ref: z.infer<typeof reviewerRefSchema>): string | null {
 const ghRefStatusPrSchema = z
   .object({
     state: z.string(),
+    /** When it merged or closed: Needs you settles an item only for a PR that ended after it began. */
+    mergedAt: z.string().nullish(),
+    closedAt: z.string().nullish(),
     isDraft: z.boolean().nullish(),
     reviewDecision: z.string().nullish(),
     /** `MERGEABLE` | `CONFLICTING` | `UNKNOWN` — GitHub computes it in the background, so
@@ -1848,7 +1851,7 @@ function refStatusQuery(numbers: number[]): string {
   const aliases = numbers
     .map(
       (n, i) =>
-        `    r${i}: issueOrPullRequest(number: ${n}) { __typename ... on PullRequest { state isDraft reviewDecision mergeable commits(last: 1) { nodes { commit { committedDate parents(first: 1) { totalCount nodes { committedDate } } statusCheckRollup { state } } } } reviews(last: 1, states: CHANGES_REQUESTED) { nodes { submittedAt } } reviewRequests(first: 20) { totalCount nodes { requestedReviewer { __typename ... on User { login } ... on Bot { login } ... on Team { slug } } } } timelineItems(last: 20, itemTypes: [REVIEW_REQUESTED_EVENT]) { nodes { ... on ReviewRequestedEvent { createdAt requestedReviewer { __typename ... on User { login } ... on Bot { login } ... on Team { slug } } } } } } ... on Issue { state stateReason } }`,
+        `    r${i}: issueOrPullRequest(number: ${n}) { __typename ... on PullRequest { state mergedAt closedAt isDraft reviewDecision mergeable commits(last: 1) { nodes { commit { committedDate parents(first: 1) { totalCount nodes { committedDate } } statusCheckRollup { state } } } } reviews(last: 1, states: CHANGES_REQUESTED) { nodes { submittedAt } } reviewRequests(first: 20) { totalCount nodes { requestedReviewer { __typename ... on User { login } ... on Bot { login } ... on Team { slug } } } } timelineItems(last: 20, itemTypes: [REVIEW_REQUESTED_EVENT]) { nodes { ... on ReviewRequestedEvent { createdAt requestedReviewer { __typename ... on User { login } ... on Bot { login } ... on Team { slug } } } } } } ... on Issue { state stateReason } }`,
     )
     .join('\n');
   return `query ($owner: String!, $name: String!) {\n  repository(owner: $owner, name: $name) {\n${aliases}\n  }\n}`;
@@ -2038,6 +2041,8 @@ export interface ResolvedReference {
    *  collapsed into "not conflicting", because it is the difference between an answer and a
    *  question GitHub has not finished answering. */
   mergeable?: Mergeability;
+  /** A merged or closed PR: when it ended (`mergedAt`, else `closedAt`). */
+  endedAt?: string;
 }
 
 /**
@@ -2118,6 +2123,7 @@ export async function fetchRefStatuses(
             // The tri-state, not a boolean: `unknown` has to survive as far as the cache, which
             // is what decides to ask again in seconds rather than in a minute.
             ...(mergeability ? { mergeable: mergeability } : {}),
+            ...((pr.mergedAt ?? pr.closedAt) ? { endedAt: (pr.mergedAt ?? pr.closedAt)! } : {}),
           };
         } else if (node.__typename === 'Issue') {
           const issue = ghRefStatusIssueSchema.parse(node);
@@ -2207,6 +2213,24 @@ export function readCachedRefStatuses(
     const hit = refStatusCache.get(refStatusKey(repoRoot, number));
     if (!hit || !hit.resolved || now - hit.at >= refStatusTtl(hit.resolved, hit.unknownSince, now)) continue;
     out[hit.resolved.kind === 'pr' ? 'prs' : 'issues'][number] = hit.resolved.status;
+  }
+  return out;
+}
+
+/** Pull requests the cache already knows have ended, with when. Like `readCachedRefStatuses`, never asks
+ *  the forge (spec 2026-11-23-needs-you-triage). */
+export function readCachedPrEnds(
+  repoRoot: string,
+  numbers: Iterable<number>,
+): Record<number, { state: 'merged' | 'closed'; endedAt?: string }> {
+  const out: Record<number, { state: 'merged' | 'closed'; endedAt?: string }> = {};
+  const now = Date.now();
+  for (const number of new Set(numbers)) {
+    const hit = refStatusCache.get(refStatusKey(repoRoot, number));
+    const resolved = hit?.resolved;
+    if (!hit || !resolved || resolved.kind !== 'pr' || now - hit.at >= refStatusTtl(resolved, hit.unknownSince, now)) continue;
+    if (resolved.status !== 'merged' && resolved.status !== 'closed') continue;
+    out[number] = { state: resolved.status, ...(resolved.endedAt ? { endedAt: resolved.endedAt } : {}) };
   }
   return out;
 }

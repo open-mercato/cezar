@@ -34,5 +34,7 @@ export type DeferredCreationRecord = z.infer<typeof deferredCreationRecordSchema
 export const queueWaitReasonSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('usage-reset'), until: z.string().datetime(), timeZone: z.string().optional() }),
   z.object({ kind: z.literal('account-resume') }),
+  /** Every account a manager may route this task to already runs as many tasks as it allows. */
+  z.object({ kind: z.literal('account-busy') }),
 ]);
 export type QueueWaitReason = z.infer<typeof queueWaitReasonSchema>;

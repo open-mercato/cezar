@@ -1,4 +1,5 @@
 import { useMemo } from 'react'
+import { hasWorkflowGraph } from '@/lib/has-workflow-graph'
 import { useParams } from 'react-router'
 
 import { useHealth, useRun, useRunArtifacts, useRunHandoff } from '@/api/queries'
@@ -42,8 +43,8 @@ function NotesHeader({ run }: { run: ApiRun }) {
   const navigate = useNavigate()
   const terminal = useHealth().data?.capabilities?.terminal === true
   const fixedViews = useMemo(
-    () => FIXED_VIEW_ORDER.filter((view) => (view !== 'graph' || Boolean(run.workflowDef)) && (view !== 'terminal' || terminal)),
-    [run.workflowDef, terminal],
+    () => FIXED_VIEW_ORDER.filter((view) => (view !== 'graph' || hasWorkflowGraph(run)) && (view !== 'terminal' || terminal)),
+    [run, terminal],
   )
   // Same numbering as the workspace's row (`strip.ts`). ⌘N works here too — the palette's `tab:N`
   // navigates to the view's page.

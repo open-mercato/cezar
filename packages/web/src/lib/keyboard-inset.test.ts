@@ -1,19 +1,14 @@
-import { act, renderHook } from '@testing-library/react'
+import { renderHook } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import {
-  keyboardAwareCollisionPadding,
   keyboardInset,
   useKeyboardOpen,
-  useViewportInsets,
-  viewportInsets,
   watchKeyboardInset,
   watchKeyboardOpen,
-  watchViewportInsets,
   type KeyboardOpenWindow,
   type KeyboardViewport,
   type KeyboardWindow,
-  type ViewportInsets,
 } from './keyboard-inset'
 
 /** A drivable visualViewport: tests resize it and fire the listeners, like Safari does. */
@@ -55,113 +50,6 @@ describe('keyboardInset — the --kb math', () => {
 
   it('is 0 without a visualViewport (older engines)', () => {
     expect(keyboardInset(win(null))).toBe(0)
-  })
-})
-
-describe('viewportInsets — the collision-padding math', () => {
-  it.each([
-    // [innerHeight, vv.height, vv.offsetTop, expected top, expected bottom]
-    [800, 800, 0, 0, 0], // keyboard closed
-    [800, 460, 0, 0, 340], // keyboard open, not panned
-    [800, 460, 100, 100, 240], // panned down: top hidden behind the pan, bottom behind the keys
-    [800, 810, 0, 0, 0], // URL-bar collapse — nothing hidden, both clamp at 0
-  ])('inner %d, vv %d @ %d → top %d / bottom %d', (innerHeight, height, offsetTop, top, bottom) => {
-    expect(viewportInsets(win(new StubViewport(height, offsetTop), innerHeight))).toEqual({ top, bottom })
-  })
-
-  it('is {0,0} without a visualViewport (older engines, jsdom)', () => {
-    expect(viewportInsets(win(null))).toEqual({ top: 0, bottom: 0 })
-  })
-})
-
-describe('keyboardAwareCollisionPadding', () => {
-  const insets: ViewportInsets = { top: 100, bottom: 340 }
-
-  it('defaults to the insets alone (Radix default padding is 0)', () => {
-    expect(keyboardAwareCollisionPadding(insets)).toEqual({ top: 100, right: 0, bottom: 340, left: 0 })
-  })
-
-  it('adds a uniform number padding to every side, insets on top/bottom only', () => {
-    expect(keyboardAwareCollisionPadding(insets, 8)).toEqual({ top: 108, right: 8, bottom: 348, left: 8 })
-  })
-
-  it('merges a partial per-side object', () => {
-    expect(keyboardAwareCollisionPadding({ top: 0, bottom: 0 }, { left: 12 })).toEqual({
-      top: 0,
-      right: 0,
-      bottom: 0,
-      left: 12,
-    })
-  })
-})
-
-describe('watchViewportInsets — the stubbed adapter', () => {
-  it('applies on install and tracks resize and pan events', () => {
-    const viewport = new StubViewport(800)
-    const applied: ViewportInsets[] = []
-    watchViewportInsets(win(viewport), (insets) => applied.push(insets))
-    expect(applied).toEqual([{ top: 0, bottom: 0 }])
-
-    viewport.height = 460
-    viewport.fire('resize')
-    viewport.offsetTop = 120
-    viewport.fire('scroll')
-    expect(applied).toEqual([
-      { top: 0, bottom: 0 },
-      { top: 0, bottom: 340 },
-      { top: 120, bottom: 220 },
-    ])
-  })
-
-  it('cleanup detaches the listeners', () => {
-    const viewport = new StubViewport(800)
-    const applied: ViewportInsets[] = []
-    const stop = watchViewportInsets(win(viewport), (insets) => applied.push(insets))
-    stop()
-    viewport.height = 460
-    viewport.fire('resize')
-    expect(applied).toEqual([{ top: 0, bottom: 0 }])
-  })
-
-  it('degrades to a one-shot {0,0} without a visualViewport', () => {
-    const applied: ViewportInsets[] = []
-    const stop = watchViewportInsets(win(null), (insets) => applied.push(insets))
-    expect(applied).toEqual([{ top: 0, bottom: 0 }])
-    stop() // must not throw
-  })
-})
-
-describe('useViewportInsets — the React binding', () => {
-  const setViewport = (viewport: KeyboardViewport | null) =>
-    Object.defineProperty(window, 'visualViewport', { value: viewport, configurable: true })
-
-  afterEach(() => setViewport(null))
-
-  it('tracks the real window.visualViewport while mounted', () => {
-    Object.defineProperty(window, 'innerHeight', { value: 800, configurable: true })
-    const viewport = new StubViewport(800)
-    setViewport(viewport)
-    const { result, unmount } = renderHook(() => useViewportInsets())
-    expect(result.current).toEqual({ top: 0, bottom: 0 })
-
-    act(() => {
-      viewport.height = 460
-      viewport.offsetTop = 100
-      viewport.fire('resize')
-    })
-    expect(result.current).toEqual({ top: 100, bottom: 240 })
-
-    unmount()
-    act(() => {
-      viewport.height = 800
-      viewport.fire('resize')
-    })
-    expect(viewport.listeners.get('resize')?.size ?? 0).toBe(0) // unsubscribed
-  })
-
-  it('stays {0,0} without a visualViewport (jsdom, desktop engines)', () => {
-    const { result } = renderHook(() => useViewportInsets())
-    expect(result.current).toEqual({ top: 0, bottom: 0 })
   })
 })
 

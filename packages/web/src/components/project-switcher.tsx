@@ -197,14 +197,14 @@ export function ProjectSwitcher({
           align="start"
           sideOffset={6}
           data-slot="project-switcher-popover"
-          className="w-[min(23rem,calc(100vw-2rem))] p-0"
+          className="flex w-[min(23rem,calc(100vw-2rem))] flex-col p-0"
         >
-          <Command shouldFilter={false} loop label="Switch project" defaultValue={activeId ?? undefined}>
+          <Command shouldFilter={false} loop label="Switch project" defaultValue={activeId ?? undefined} className="min-h-0">
             <div className="relative">
               <CommandInput placeholder="Search projects…" value={query} onValueChange={setQuery} className="pr-12" />
               <Kbd className="pointer-events-none absolute top-1/2 right-3 -translate-y-1/2">{chord}</Kbd>
             </div>
-            <CommandList label="Switch project" className="max-h-[min(24rem,60vh)]">
+            <CommandList label="Switch project" className="max-h-[min(24rem,60vh)] min-h-0">
               <CommandEmpty>No project matches.</CommandEmpty>
               <DndContext sensors={sensors} collisionDetection={closestCenter} accessibility={{ announcements }} onDragEnd={handleDragEnd}>
                 <SortableContext items={dndIds} strategy={verticalListSortingStrategy}>

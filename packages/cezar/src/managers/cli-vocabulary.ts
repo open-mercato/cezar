@@ -4,7 +4,7 @@
  */
 
 export const MANAGER_COMMANDS = ['status', 'attention', 'tasks', 'prs', 'task', 'workflows', 'merge', 'automation', 'job', 'propose-action', 'rename', 'memory', 'history'] as const;
-export const MANAGER_TASK_SUBCOMMANDS = ['create', 'say', 'cancel', 'retry', 'follow', 'unfollow'] as const;
+export const MANAGER_TASK_SUBCOMMANDS = ['create', 'say', 'switch', 'cancel', 'retry', 'follow', 'unfollow'] as const;
 export const MANAGER_JOB_SUBCOMMANDS = ['add', 'list', 'remove'] as const;
 export const MANAGER_MEMORY_SUBCOMMANDS = ['list', 'set', 'remove'] as const;
 /** `cez automation`'s own subcommands, which `cez-manager automation` passes through. */
@@ -26,7 +26,7 @@ export const MANAGER_ROUTES: Partial<Record<Command, true | ReadonlySet<string>>
   merge: true,
   'propose-action': true,
   rename: true,
-  task: new Set(['create', 'say', 'follow', 'unfollow', 'cancel', 'retry']),
+  task: new Set(['create', 'say', 'switch', 'follow', 'unfollow', 'cancel', 'retry']),
   job: new Set(['add', 'remove']),
   memory: new Set(['set', 'remove']),
   automation: new Set(['create', 'add', 'report', 'run', 'update', 'enable', 'pause', 'delete', 'import']),

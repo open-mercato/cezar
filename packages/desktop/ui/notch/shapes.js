@@ -10,7 +10,8 @@ function pill2Rect(layout, housing, island, minis, overflow) {
   if (minis === 0) return null
   const { placement, gap, inset, padding, mini, miniGap, countWidth, belowHeight } = layout.pill2
   const width = padding * 2 + minis * mini + (minis - 1) * miniGap + (overflow > 0 ? countWidth + miniGap : 0)
-  if (placement === 'below') {
+  // Floating, the pills live inside the menu bar: below it is the app's own toolbar.
+  if (placement === 'below' && housing.width > 0) {
     return { x: housing.centre - width / 2, y: housing.top + housing.height + gap, width, height: belowHeight }
   }
   const pad = housing.width > 0 ? inset : 0
