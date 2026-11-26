@@ -11,7 +11,10 @@
  *    `result.usage` is cumulative for the whole CONVERSATION (a `--conversation` resume included),
  *    so turn usage is the sum of the step usages, never the result's;
  *  - `tool` steps go ACTIVE → DONE | ERROR with `tool_info.{parameters, output, error.message}`;
- *  - `subagent` steps (`invoke_subagent`) carry `subagent_info.subagents[]`.
+ *  - `subagent` steps (`invoke_subagent`) carry `subagent_info.subagents[]`;
+ *  - `result.status`/`result.error` are sticky for the CONVERSATION too: once any step hit a
+ *    transient API error agy retried past, every later result says ERROR with that same message,
+ *    so a turn only fails when it made no progress or its last word was an error step.
  *
  * Unknown or malformed frames produce no events; the mapper never throws and never mutates the
  * state it is given.
@@ -29,6 +32,10 @@ export interface AntigravityUiState {
   /** The open turn, or null between a `result` and the next turn's first step. */
   readonly turnId: string | null;
   readonly turnHasText: boolean;
+  /** The turn produced text or finished a tool step — it did work after its opening. */
+  readonly turnProgressed: boolean;
+  /** An error step arrived with no progress after it: a `result` ERROR is this turn's own. */
+  readonly turnErrorOpen: boolean;
   /** Sum of this turn's per-step usage. */
   readonly turnUsage: TokenUsage | null;
   /** Sum of every turn this process has completed — `usage.updated` is cumulative for the session. */
@@ -54,6 +61,8 @@ export function createAntigravityUiState(sessionId?: string): AntigravityUiState
     turnSeq: 0,
     turnId: null,
     turnHasText: false,
+    turnProgressed: false,
+    turnErrorOpen: false,
     turnUsage: null,
     sessionUsage: null,
     tokensUsed: 0,
@@ -192,7 +201,7 @@ export function mapAntigravityMessage(raw: unknown, previous: AntigravityUiState
     const turnSeq = state.turnSeq + 1;
     const turnId = `turn_${turnSeq}`;
     events.push({ type: 'turn.started', turnId });
-    update({ turnSeq, turnId, turnHasText: false, turnUsage: null, stopReason: 'end_turn' });
+    update({ turnSeq, turnId, turnHasText: false, turnProgressed: false, turnErrorOpen: false, turnUsage: null, stopReason: 'end_turn' });
   }
 
   if (kind === 'step_update' && Number.isInteger(payload.step_index)) {
@@ -202,6 +211,9 @@ export function mapAntigravityMessage(raw: unknown, previous: AntigravityUiState
     const stepType = string(payload.step_type);
     const usage = stepUsage(payload.usage);
     if (usage && terminal) update({ turnUsage: addUsage(state.turnUsage, usage) });
+    if (stepType === 'error_message' || (payload.state === 'ERROR' && stepType !== 'tool' && stepType !== 'subagent')) {
+      update({ turnErrorOpen: true });
+    }
 
     if (stepType === 'agent_response') {
       const delta = string(payload.text_delta);
@@ -217,7 +229,7 @@ export function mapAntigravityMessage(raw: unknown, previous: AntigravityUiState
           // deltas must reach the run manager in one piece.
           if (text) agentEvents.push({ type: 'text', text });
         } else items.set(index, item);
-        if (text) update({ turnHasText: true });
+        if (text) update({ turnHasText: true, turnProgressed: true, turnErrorOpen: false });
       }
     } else if (stepType === 'tool' || stepType === 'subagent') {
       const info = record(payload.tool_info);
@@ -257,13 +269,22 @@ export function mapAntigravityMessage(raw: unknown, previous: AntigravityUiState
         events.push({ type: 'item.completed', item });
         agentEvents.push({ type: 'tool-result', toolCallId: item.id, result: failed ? error : output, isError: failed });
         items.delete(index);
+        update({ turnProgressed: true, turnErrorOpen: false });
       } else items.set(index, item);
     }
   }
 
   if (kind === 'result') {
     const status = string(payload.status);
-    const stopReason = stopReasonOf(status);
+    const response = string(payload.response);
+    const resultError = string(payload.error).trim();
+    let stopReason = stopReasonOf(status);
+    // A conversation-sticky error from an earlier, recovered step is not this turn's failure.
+    const stale = stopReason === 'error' && !state.turnErrorOpen && (state.turnProgressed || response !== '');
+    if (stale) {
+      stopReason = 'end_turn';
+      agentEvents.push({ type: 'note', message: `antigravity: ignored an earlier, recovered conversation error — ${resultError || status}` });
+    }
     for (const item of items.values()) {
       if (item.kind === 'tool') {
         events.push({ type: 'item.completed', item: { ...item, status: 'failed', error: 'Turn ended before the tool completed' } });
@@ -275,7 +296,6 @@ export function mapAntigravityMessage(raw: unknown, previous: AntigravityUiState
     }
     items.clear();
     // A turn whose text never streamed still has its final answer in `response`.
-    const response = string(payload.response);
     if (!state.turnHasText && response && stopReason !== 'error') {
       const item: UiMessageItem = { kind: 'message', id: `msg_result_${state.turnSeq}`, role: 'assistant', text: response };
       events.push({ type: 'item.started', item }, { type: 'item.completed', item });
@@ -293,7 +313,7 @@ export function mapAntigravityMessage(raw: unknown, previous: AntigravityUiState
       update({ sessionUsage, tokensUsed });
     }
     if (stopReason === 'error') {
-      const message = string(payload.error).trim() || `Antigravity turn failed (status: ${status || 'unknown'})`;
+      const message = resultError || `Antigravity turn failed (status: ${status || 'unknown'})`;
       agentEvents.push({ type: 'error', message });
       events.push({ type: 'session.error', message, fatal: false });
     }

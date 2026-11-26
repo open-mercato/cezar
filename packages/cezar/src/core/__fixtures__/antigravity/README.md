@@ -16,6 +16,7 @@ transcripts use. Conversation ids, step indexes, timings and token counts are ve
 | `subagent-turn` | `agy -p "… manage_task … replace_file_content … invoke_subagent …" --model gemini-3.8-flash-high` | `step_type: "subagent"` with `subagent_info.subagents[]`, `system_message` steps, `cache_read_tokens` |
 | `resumed-turn` | `agy -p "…" --conversation <tools-turn id>` | step indexes continue the old conversation; `result.usage` / `num_turns` are conversation-cumulative |
 | `two-turn-session` | `agy --input-format stream-json … -p=` fed two `{"event":"user","message":{"content":…}}` lines | one process, two turns, one `result` per turn, cumulative `result.usage` |
+| `sticky-error-resume` | stream-json `--conversation <id>` of a conversation that once hit a transient API error agy retried past (captured 2026-10-26, agy 1.4.x; the error's IP addresses redacted to documentation ranges) | `result` says `status: "ERROR"` with that OLD error although the turn answered — status/error are conversation-sticky like `usage` |
 | `bad-model` | `agy -p "x" --model bogus-model` | ERROR `result` with an empty `conversation_id` and no `init`; the process exits 1 |
 
 ## What the wire does not carry

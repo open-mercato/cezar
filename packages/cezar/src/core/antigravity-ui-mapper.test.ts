@@ -46,7 +46,16 @@ const expected = (fixture: string): UiEvent[] =>
 
 describe('Antigravity stream mapping (live agy 1.4.0 captures)', () => {
   it('has a golden expectation for every capture', () => {
-    expect(SCENARIOS).toEqual(['bad-model', 'resumed-turn', 'subagent-turn', 'text-turn', 'tool-error', 'tools-turn', 'two-turn-session']);
+    expect(SCENARIOS).toEqual([
+      'bad-model',
+      'resumed-turn',
+      'sticky-error-resume',
+      'subagent-turn',
+      'text-turn',
+      'tool-error',
+      'tools-turn',
+      'two-turn-session',
+    ]);
   });
 
   it.each(SCENARIOS)('replays %s into its golden UiEvents with immutable state', (fixture) => {
@@ -117,6 +126,51 @@ describe('Antigravity stream mapping (live agy 1.4.0 captures)', () => {
     expect(events).toContainEqual(expect.objectContaining({ type: 'turn.completed', stopReason: 'error' }));
     expect(events).toContainEqual(expect.objectContaining({ type: 'session.error', fatal: false }));
     expect(v1).toContainEqual(expect.objectContaining({ type: 'error', message: expect.stringContaining('bogus-model') }));
+  });
+
+  it('ends a resumed turn cleanly when result repeats an earlier, recovered conversation error', () => {
+    // Live capture: the conversation hit a transient API error turns ago; agy answered PONG and
+    // still reported `status: ERROR` with that old message — every Continue used to fail on it.
+    const { events, v1 } = replay('sticky-error-resume', createAntigravityUiState('3ab90c11-4466-4471-ba39-d186ca148373'));
+    expect(events).toContainEqual(expect.objectContaining({ type: 'turn.completed', stopReason: 'end_turn' }));
+    expect(events.some((e) => e.type === 'session.error')).toBe(false);
+    expect(v1.some((e) => e.type === 'error')).toBe(false);
+    expect(v1).toContainEqual({ type: 'text', text: 'PONG\n' });
+    expect(v1).toContainEqual(expect.objectContaining({ type: 'note', message: expect.stringContaining('recovered') }));
+  });
+
+  it('still fails a turn whose last step was an error, even after earlier progress', () => {
+    const step = (step_index: number, step_type: string, extra: Record<string, unknown> = {}) => ({
+      event: 'step_update',
+      step_update: { step_index, step_type, state: 'DONE', ...extra },
+    });
+    const frames = [
+      step(1, 'user_input'),
+      step(2, 'agent_response', { text_delta: 'working' }),
+      step(3, 'error_message'),
+      { event: 'result', result: { status: 'ERROR', response: 'working', error: 'API error: quota' } },
+    ];
+    let state = createAntigravityUiState();
+    const v1: AgentEvent[] = [];
+    for (const frame of frames) {
+      const mapped = mapAntigravityMessage(frame, state);
+      state = mapped.state;
+      v1.push(...mapped.agentEvents);
+    }
+    expect(state.stopReason).toBe('error');
+    expect(v1).toContainEqual({ type: 'error', message: 'API error: quota' });
+  });
+
+  it('treats progress after an error step as a recovery', () => {
+    const frames = [
+      { event: 'step_update', step_update: { step_index: 1, step_type: 'user_input', state: 'DONE' } },
+      { event: 'step_update', step_update: { step_index: 2, step_type: 'error_message', state: 'DONE' } },
+      { event: 'step_update', step_update: { step_index: 3, step_type: 'agent_response', state: 'DONE', text_delta: 'done' } },
+      { event: 'result', result: { status: 'ERROR', response: 'done', error: 'API error (attempt 1)' } },
+    ];
+    let state = createAntigravityUiState();
+    for (const frame of frames) state = mapAntigravityMessage(frame, state).state;
+    expect(state.stopReason).toBe('end_turn');
   });
 
   it('ignores malformed and unknown frames', () => {
