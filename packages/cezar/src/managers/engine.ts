@@ -131,6 +131,8 @@ import {
   type ObservedConnectors,
 } from './connectors.ts';
 import { taskModelIssue, type TaskModelCatalog } from './task-model.ts';
+import { closestAntigravityEffort, isAntigravityModel, resolveAntigravityEffort } from '../core/antigravity-effort.ts';
+import { readAgentModelSettings } from '../agent-config/models.ts';
 import { TurnStatsCollector } from './turn-stats.ts';
 import { chatPrompt, followupPrompt, jobPrompt, MANAGER_IMPORTANT, managerSystemPrompt, MANAGER_QUIET, sessionPreamble, watchPrompt } from './prompts.ts';
 import { claudeAutoMemory, memoryBytes, readMemory, removeMemoryEntry, renderMemory, setMemoryEntry, writeMemory, type MemoryFile } from './memory.ts';
@@ -3436,6 +3438,38 @@ export class ManagerEngine {
     // there; anywhere else a bad flag is refused with the valid choices, as before.
     const unpinned = (firstRunner !== undefined && !input.runner && firstRunner !== runner)
       || (retry?.runner !== undefined && retry.runner !== runner);
+    // Default models from Settings → Agents (when not locked) and per-row pins on `taskAgents`.
+    const modelsLocked = agentModelsLocked(root);
+    const projectConfig = !modelsLocked && root ? await loadConfig(root).catch(() => undefined) : undefined;
+    const defaultModelFor = (candidateRunner: RunnerId, candidateProfile?: string): string | undefined => {
+      if (modelsLocked) return undefined;
+      const row = agents?.find((agent) => agent.runner === candidateRunner && agent.agentProfile === candidateProfile);
+      if (row?.model) return row.model;
+      if (projectConfig?.defaultModelsAuto?.[candidateRunner]) return undefined;
+      return projectConfig?.defaultModels?.[candidateRunner];
+    };
+    // Antigravity's effort is a model variant: --effort becomes the matching model id. Asked for
+    // explicitly (--runner antigravity, an antigravity --model, the first listed agent) a missing
+    // variant is refused; reached by a limit fallback it takes the closest variant, or is dropped.
+    let effortNote: string | undefined;
+    // The flags as typed: fallback entries on other runners carry these, not antigravity's variant.
+    const requested = input;
+    if (runner === 'antigravity' && input.effort) {
+      const models = await this.antigravityModels();
+      const viaFallback = unpinned && input.runner !== 'antigravity' && !(input.model && isAntigravityModel(input.model, models ?? []));
+      if (viaFallback) {
+        const mapped = closestAntigravityEffort({ effort: input.effort, model: await this.antigravityDefault(defaultModelFor(runner, agentProfile), root), models });
+        effortNote = mapped.note;
+        input = { ...input, ...(mapped.model ? { model: mapped.model } : {}), effort: undefined };
+      } else {
+        const mapped = await this.antigravityEffort(input.model, input.effort, defaultModelFor(runner, agentProfile), root, models);
+        if ('error' in mapped && !retry) return mapped;
+        // A retry's flags are the old run's, so one that cannot apply here is dropped, as below.
+        effortNote = 'error' in mapped ? `--effort ${input.effort} dropped: ${mapped.error}` : mapped.note;
+        input = { ...input, ...('error' in mapped ? {} : { model: mapped.model }), effort: undefined };
+      }
+      choice = { ...choice, reason: `${choice.reason}; ${effortNote}` };
+    }
     let carried = input;
     if (input.model || input.effort) {
       const issue = await this.modelIssue(runner, input.model, input.effort);
@@ -3465,24 +3499,14 @@ export class ManagerEngine {
         choice = { ...choice, reason: `${choice.reason}; ${dropped} dropped: not valid on ${runner}` };
       }
     }
-    // Default models from Settings → Agents (when not locked) and per-row pins on `taskAgents`.
-    const modelsLocked = agentModelsLocked(root);
-    const projectConfig = !modelsLocked && root ? await loadConfig(root).catch(() => undefined) : undefined;
-    const defaultModelFor = (candidateRunner: RunnerId, candidateProfile?: string): string | undefined => {
-      if (modelsLocked) return undefined;
-      const row = agents?.find((agent) => agent.runner === candidateRunner && agent.agentProfile === candidateProfile);
-      if (row?.model) return row.model;
-      if (projectConfig?.defaultModelsAuto?.[candidateRunner]) return undefined;
-      return projectConfig?.defaultModels?.[candidateRunner];
-    };
     const effectiveModel = carried.model ?? defaultModelFor(runner, agentProfile);
     // A fallback entry carries the requested model only where that runner accepts it, else its row/settings default.
     const modelValidOn = new Map<string, boolean>();
     const fallback: Array<{ provider: RunnerId; profileId: string; model?: string }> | undefined = fallbackOptions && [];
     for (const option of fallbackOptions ?? []) {
-      if (input.model && !modelValidOn.has(option.runner)) modelValidOn.set(option.runner, !(await this.modelIssue(option.runner, input.model, undefined)));
-      const entryModel = input.model
-        ? (modelValidOn.get(option.runner) ? input.model : undefined)
+      if (requested.model && !modelValidOn.has(option.runner)) modelValidOn.set(option.runner, !(await this.modelIssue(option.runner, requested.model, undefined)));
+      const entryModel = requested.model
+        ? (modelValidOn.get(option.runner) ? requested.model : undefined)
         : defaultModelFor(option.runner, option.agentProfile);
       fallback!.push({ provider: option.runner, profileId: option.account, ...(entryModel ? { model: entryModel } : {}) });
     }
@@ -3530,7 +3554,7 @@ export class ManagerEngine {
       projectId: input.projectId,
       runId: run.id,
       ...(forward ? { forwarded: forward.forwarded } : {}),
-      ...(dispatchIgnored ? { notice: `dispatch ignored: ${input.projectId} runs tasks in place` } : {}),
+      ...(dispatchIgnored || effortNote ? { notice: [dispatchIgnored && `dispatch ignored: ${input.projectId} runs tasks in place`, effortNote].filter(Boolean).join('; ') } : {}),
       agent: {
         runner: choice.chosen.runner,
         ...(choice.chosen.agentProfile !== undefined ? { agentProfile: choice.chosen.agentProfile } : {}),
@@ -3602,24 +3626,50 @@ export class ManagerEngine {
         const flags = [input.model || input.effort ? '--model and --effort' : '', input.freshContext ? '--fresh' : ''].filter(Boolean).join(' and ');
         return { error: `task ${input.runId} is ${run.status}: ${flags} apply only when continuing a finished task. Send the message without them, or wait for it to finish`, status: 409 };
       }
-      const issue = input.model || input.effort ? await this.modelIssue(run.runner ?? 'claude', input.model, input.effort) : undefined;
+      let { model, effort } = input;
+      let notice: string | undefined;
+      if (effort && run.runner === 'antigravity') {
+        const mapped = await this.antigravityEffort(model, effort, model ? undefined : run.model, scope.source?.root);
+        if ('error' in mapped) return mapped;
+        ({ model, note: notice } = mapped);
+        effort = undefined;
+      }
+      const issue = model || effort ? await this.modelIssue(run.runner ?? 'claude', model, effort) : undefined;
       if (issue) return issue;
       const continued = await this.forward(`${path}/continue`, {
         method: 'POST',
         body: {
           ...body,
-          ...(input.model ? { model: input.model } : {}),
-          ...(input.effort ? { reasoningEffort: input.effort } : {}),
+          ...(model ? { model } : {}),
+          ...(effort ? { reasoningEffort: effort } : {}),
           ...(input.freshContext ? { freshContext: true } : {}),
         },
       });
-      return continued.ok ? sent() : ManagerEngine.refusalOf(continued);
+      return continued.ok ? { ...sent(), ...(notice ? { notice } : {}) } : ManagerEngine.refusalOf(continued);
     }
     const delivered = await this.forward(`${path}/messages`, { method: 'POST', body });
     if (delivered.ok) return sent();
     if (delivered.status !== 409) return ManagerEngine.refusalOf(delivered);
     const continued = await this.forward(`${path}/continue`, { method: 'POST', body });
     return continued.ok ? sent() : ManagerEngine.refusalOf(continued);
+  }
+
+  /** `--effort` on antigravity as the model variant that carries it (core/antigravity-effort.ts); a 400 naming the valid ones. */
+  private async antigravityEffort(model: string | undefined, effort: string, defaultModel: string | undefined, root: string | undefined, models?: string[]): Promise<{ model: string; note: string } | ManagerRefusal> {
+    models ??= await this.antigravityModels();
+    const resolved = resolveAntigravityEffort({ effort, model, defaultModel: model ? undefined : await this.antigravityDefault(defaultModel, root), models });
+    return 'error' in resolved ? { error: resolved.error, status: 400 } : resolved;
+  }
+
+  private async antigravityModels(): Promise<string[] | undefined> {
+    const response = await this.forward(`/models?${new URLSearchParams({ runner: 'antigravity' })}`).catch(() => undefined);
+    const catalog = response?.ok ? (await response.json().catch(() => undefined)) as TaskModelCatalog | undefined : undefined;
+    return catalog?.models.map((entry) => entry.id);
+  }
+
+  /** With no Settings default, the family is the one agy itself would run. */
+  private async antigravityDefault(defaultModel: string | undefined, root: string | undefined): Promise<string | undefined> {
+    return defaultModel ?? (root ? (await readAgentModelSettings('antigravity', root).catch(() => undefined))?.model : undefined);
   }
 
   /** `--model`/`--effort` against the runner and the host's model catalog; a 400 naming the valid ones. */
@@ -3708,7 +3758,15 @@ export class ManagerEngine {
     const accountIssue = await this.accountIssue(runner, agentProfile);
     if (accountIssue) return accountIssue;
     // Send only explicit pins. The workflow resolves inherited pins independently for each step.
-    const { model, effort } = input;
+    let { model, effort } = input;
+    let effortNote: string | undefined;
+    if (effort && runner === 'antigravity') {
+      // The family is the task's own model when it stays on antigravity.
+      const mapped = await this.antigravityEffort(model, effort, model || run.runner !== 'antigravity' ? undefined : run.model, repoRoot);
+      if ('error' in mapped) return mapped;
+      ({ model, note: effortNote } = mapped);
+      effort = undefined;
+    }
     const issue = model || effort ? await this.modelIssue(runner, model, effort) : undefined;
     if (issue) return issue;
     const response = await this.forward(`/p/${encodeURIComponent(projectId)}/runs/${encodeURIComponent(run.id)}/switch-agent`, {
@@ -3723,7 +3781,7 @@ export class ManagerEngine {
     const { summary } = (await response.json()) as SwitchRunAgentResponse;
     this.rememberTaskSource(manager.id, projectId, run.id);
     this.managerActed(manager.id, { tasks: [followKey(projectId, run.id)] }, 'you switched that task’s agent since');
-    return { projectId, runId: run.id, notice: summary };
+    return { projectId, runId: run.id, notice: effortNote ? `${summary} (${effortNote})` : summary };
   }
 
   /** With agent flags, reopen the same failed task. A plain retry repeats the workflow from scratch. */

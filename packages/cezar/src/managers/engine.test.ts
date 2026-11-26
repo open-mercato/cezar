@@ -3626,6 +3626,59 @@ describe('ManagerEngine', () => {
         expect(retried).not.toHaveProperty('warning');
       });
 
+      describe('antigravity effort: closest variant on a limit fallback, refusal when asked for', () => {
+        const agyModels = ['gemini-4-neon-low', 'gemini-4-neon-high', 'gemini-pro-orchestrator'];
+        const withAgy = (held: Record<string, number>) => makeEngine({
+          accountLimit: async (runner, agentProfile) => {
+            const account = agentProfile ?? 'default';
+            const until = held[`${runner}:${account}`];
+            return { account, label: `${account} login`, ...(until !== undefined ? { until } : {}) };
+          },
+          request: async (path, init) => {
+            requests.push({ path, method: init?.method ?? 'GET', ...(typeof init?.body === 'string' ? { body: JSON.parse(init.body) } : {}) });
+            if (path.startsWith('/api/v1/models')) {
+              return Response.json(path.includes('antigravity') ? { models: agyModels.map((id) => ({ id, label: id, description: '' })) } : { models: [] });
+            }
+            if (path.endsWith('/runs')) return Response.json({ id: 'new-run' }, { status: 201 });
+            return Response.json({ ok: true });
+          },
+        });
+        const claudesOut = { 'claude:first': RESET, 'claude:second': RESET };
+        const runsBody = () => requests.filter((request) => request.path.endsWith('/runs')).at(-1)?.body;
+
+        it('a fallback with no exact variant starts on the closest one and records why', async () => {
+          const engine = withAgy(claudesOut);
+          const id = await managerWith(engine, [...twoClaudes, { runner: 'antigravity', model: 'gemini-4-neon-high' }]);
+          const created = await engine.createTask(id, { projectId: 'alpha', task: 'Fix it', effort: 'medium' });
+          const note = 'effort medium: no exact variant on antigravity, using gemini-4-neon-low';
+          expect(created).toMatchObject({ notice: note, agent: { runner: 'antigravity', reason: expect.stringContaining(note) } });
+          expect(runsBody()).toMatchObject({ runner: 'antigravity', model: 'gemini-4-neon-low', managerAgent: { note: expect.stringContaining(note) } });
+          expect(runsBody()).not.toHaveProperty('reasoningEffort');
+        });
+
+        it('a fallback onto a model without variants drops the effort with a note', async () => {
+          const engine = withAgy(claudesOut);
+          const id = await managerWith(engine, [...twoClaudes, { runner: 'antigravity', model: 'gemini-pro-orchestrator' }]);
+          const created = await engine.createTask(id, { projectId: 'alpha', task: 'Fix it', effort: 'high' });
+          expect(created).toMatchObject({ notice: 'effort high dropped on antigravity: gemini-pro-orchestrator has no effort variants', agent: { runner: 'antigravity' } });
+          expect(runsBody()).toMatchObject({ runner: 'antigravity', model: 'gemini-pro-orchestrator' });
+          expect(runsBody()).not.toHaveProperty('reasoningEffort');
+        });
+
+        it('an explicit --runner antigravity or antigravity --model still refuses a missing variant', async () => {
+          const engine = withAgy({});
+          const id = await managerWith(engine, [...twoClaudes, { runner: 'antigravity', model: 'gemini-4-neon-high' }]);
+          expect(await engine.createTask(id, { projectId: 'alpha', task: 'x', runner: 'antigravity', effort: 'medium' }))
+            .toMatchObject({ status: 400, error: expect.stringContaining("no 'medium' variant of gemini-4-neon") });
+          // Reached by a fallback, but the --model names antigravity: explicit.
+          const out = withAgy(claudesOut);
+          const outId = await managerWith(out, [...twoClaudes, { runner: 'antigravity' }]);
+          expect(await out.createTask(outId, { projectId: 'alpha', task: 'x', model: 'gemini-4-neon', effort: 'medium' }))
+            .toMatchObject({ status: 400, error: expect.stringContaining("no 'medium' variant of gemini-4-neon") });
+          expect(requests.some((request) => request.path.endsWith('/runs'))).toBe(false);
+        });
+      });
+
       it('after a limit skip to another runner only what that runner refuses is dropped, never the task', async () => {
         const engine = limited({ 'claude:first': RESET, 'claude:second': RESET });
         const id = await managerWith(engine, [...twoClaudes, { runner: 'codex' as const, agentProfile: 'work' }]);
@@ -5380,5 +5433,70 @@ describe('ManagerEngine', () => {
       expect(store.state(id).chain?.active).toBeUndefined();
       expect(store.state(id).chain?.holds).toEqual({});
     });
+  });
+
+  describe('antigravity effort as a model variant', () => {
+    const agy = { runner: 'antigravity', source: 'live', stale: false, models: ['gemini-4-neon-low', 'gemini-4-neon-medium', 'gemini-4-neon-high', 'gemini-4-neon-xhigh', 'gemini-pro-orchestrator'].map((model) => ({ id: model, label: model, description: '' })) };
+    const withRuns = (runs: RunRecord[]) => makeEngine({
+      projects: async () => [{ ...connected, runs: () => runs }],
+      request: async (path, init) => {
+        requests.push({ path, method: init?.method ?? 'GET', ...(typeof init?.body === 'string' ? { body: JSON.parse(init.body) } : {}) });
+        if (path.startsWith('/api/v1/models')) return Response.json(path.includes('antigravity') ? agy : { models: [] });
+        if (path.endsWith('/runs')) return Response.json({ id: 'new-run' }, { status: 201 });
+        if (path.endsWith('/switch-agent')) return Response.json({ summary: 'Switched task agent' });
+        return Response.json({ ok: true });
+      },
+    });
+
+    it('task create maps --effort to the variant, max to the highest, and says so', async () => {
+      const engine = withRuns([]);
+      const id = await create(engine);
+      const created = await engine.createTask(id, { projectId: 'alpha', task: 'Fix it', runner: 'antigravity', model: 'gemini-4-neon', effort: 'max' });
+      expect(created).toMatchObject({ notice: 'effort max -> gemini-4-neon-xhigh', agent: { runner: 'antigravity' } });
+      const body = requests.find((request) => request.path.endsWith('/runs'))?.body;
+      expect(body).toMatchObject({ runner: 'antigravity', model: 'gemini-4-neon-xhigh' });
+      expect(body).not.toHaveProperty('reasoningEffort');
+    });
+
+    it('task create refuses a conflicting variant, a family without variants and an unknown family', async () => {
+      const engine = withRuns([]);
+      const id = await create(engine);
+      expect(await engine.createTask(id, { projectId: 'alpha', task: 'x', runner: 'antigravity', model: 'gemini-4-neon-high', effort: 'low' }))
+        .toMatchObject({ status: 400, error: expect.stringContaining('conflicts with --effort low') });
+      expect(await engine.createTask(id, { projectId: 'alpha', task: 'x', runner: 'antigravity', model: 'gemini-pro-orchestrator', effort: 'high' }))
+        .toMatchObject({ status: 400, error: expect.stringContaining('no effort variants') });
+      expect(requests.some((request) => request.path.endsWith('/runs'))).toBe(false);
+    });
+
+    it('task say continues on the task model family at the requested variant', async () => {
+      const engine = withRuns([run('done', { status: 'done', runner: 'antigravity', model: 'gemini-4-neon-medium' })]);
+      const id = await create(engine);
+      expect(await engine.taskMessage(id, { projectId: 'alpha', runId: 'done', text: 'again', effort: 'high' })).toMatchObject({ ok: true, notice: 'effort high -> gemini-4-neon-high' });
+      expect(requests.at(-1)).toMatchObject({ path: '/api/v1/p/alpha/runs/done/continue', body: { model: 'gemini-4-neon-high' } });
+      expect(requests.at(-1)?.body).not.toHaveProperty('reasoningEffort');
+    });
+
+    it('task switch to antigravity sends the variant, never the effort', async () => {
+      const engine = withRuns([run('old', { status: 'failed', runner: 'claude' })]);
+      const id = await create(engine);
+      store.update(id, (manager) => ({ ...manager, cancelAnyTask: true }));
+      const switched = await engine.switchTask(id, { projectId: 'alpha', runId: 'old', runner: 'antigravity', model: 'gemini-4-neon', effort: 'low' });
+      expect(switched).toMatchObject({ notice: 'Switched task agent (effort low -> gemini-4-neon-low)' });
+      expect(requests.at(-1)?.body).toMatchObject({ runner: 'antigravity', model: 'gemini-4-neon-low' });
+      expect(requests.at(-1)?.body).not.toHaveProperty('reasoningEffort');
+    });
+
+    it('a retry whose old effort has no variant drops it with a note instead of refusing', async () => {
+      const engine = withRuns([run('old', { status: 'failed', runner: 'antigravity', model: 'gemini-pro-orchestrator', reasoningEffort: 'high' })]);
+      const id = await create(engine);
+      const retried = await engine.retryTask(id, { projectId: 'alpha', runId: 'old' });
+      expect(retried).toMatchObject({ runId: 'new-run', notice: expect.stringContaining("--effort high dropped: antigravity model 'gemini-pro-orchestrator' has no effort variants") });
+      const body = requests.filter((request) => request.path.endsWith('/runs')).at(-1)?.body;
+      expect(body).toMatchObject({ runner: 'antigravity', model: 'gemini-pro-orchestrator' });
+      expect(body).not.toHaveProperty('reasoningEffort');
+    });
+
+    const run = (id: string, over: Record<string, unknown> = {}) =>
+      ({ id, title: id, task: `do ${id}`, workflow: 'quick-task', status: 'running', steps: [], ...over }) as unknown as RunRecord;
   });
 });

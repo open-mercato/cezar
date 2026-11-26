@@ -81,7 +81,8 @@ import { pausedAutomationHold } from '../automations/paused-work.ts';
 import { getTeamSkillsCached, materializeSkillDir, refreshTeamSkills, waitForTeamSkills } from '../skills-remote.ts';
 import { mentionsSkill, PROVISION_SKILL_DIRS, provisionSkills, skillClosure } from '../skills-provision.ts';
 import { seedAgentConfigLocalLayer } from '../agent-config/seed.ts';
-import { readAgentModelProvider } from '../agent-config/models.ts';
+import { readAgentModelProvider, readAgentModelSettings } from '../agent-config/models.ts';
+import { antigravityModelIds, closestAntigravityEffort, resolveAntigravityEffort } from '../core/antigravity-effort.ts';
 import { loadConfig, type CezConfig } from '../config.ts';
 import { bypassPermissionsBlocked } from '../bypass-permissions.ts';
 import { isLifecycleConfigTracked } from '../worktree-lifecycle/config.ts';
@@ -312,7 +313,8 @@ export function reasoningEffortIssue(
 ): string | undefined {
   const agentSteps = workflow.steps.filter((step) => stepKind(step) === 'agent');
   const invalidStep = agentSteps.find(
-    (step) => step.reasoningEffort !== undefined && !runnerSupportsReasoningEffort(step.runner ?? taskBackend),
+    // Antigravity takes a step's effort as a model variant, picked at spawn (core/antigravity-effort.ts).
+    (step) => step.reasoningEffort !== undefined && !runnerSupportsReasoningEffort(step.runner ?? taskBackend) && (step.runner ?? taskBackend) !== 'antigravity',
   );
   if (invalidStep) {
     return `step "${invalidStep.id}": ${REASONING_EFFORT_UNSUPPORTED_ERROR}`;
@@ -4403,23 +4405,43 @@ export class RunManager {
         this.store.appendEvent(runId, { type: 'note', message: `fallback skipped ${label(key)} — ${refusal}` });
         continue;
       }
+      // Antigravity has no effort flag: a handover carries the task's effort as the closest variant, or drops it.
+      let model = candidate.model;
+      let effortNote: string | undefined;
+      if (candidate.provider === 'antigravity' && run.reasoningEffort && !agentModelsLocked(this.repoRoot)) {
+        const mapped = closestAntigravityEffort({
+          effort: run.reasoningEffort,
+          model: model ?? (await readAgentModelSettings('antigravity', this.repoRoot).catch(() => undefined))?.model,
+          models: await antigravityModelIds(),
+        });
+        if (this.disposed || !this.stillAwaitingFallback(runId, failedStepId)) return;
+        // The lookup awaited: fallback may have been switched off meanwhile.
+        if (!fallbackConsentCurrent(snapshot, getAgentFallbackPolicySync(this.repoRoot))) {
+          this.finishFallbackAdmission(runId, 'automatic fallback was switched off before the next agent started');
+          return;
+        }
+        model = mapped.model ?? model;
+        effortNote = mapped.note;
+      }
       // The reservation: written before the continuation exists, so no restart can pick it twice.
       this.store.updateRun(runId, { fallbackEpisode: { pending: true, attempted: [...attempted], ...(run.fallbackEpisode?.current ? { current: run.fallbackEpisode.current } : {}) } });
       const switched = this.queueAgentHandoff(runId, {
         runner: candidate.provider as RunnerId,
-        model: candidate.model,
+        model,
         agentProfile: candidate.profileId,
       }, AGENT_FALLBACK_PROMPT);
       if (!switched.ok) {
         this.store.appendEvent(runId, { type: 'note', message: `fallback skipped ${label(key)} — ${switched.error ?? 'unknown error'}` });
         continue;
       }
+      // Only once the handoff is queued: a skipped candidate never ran on that variant.
+      if (effortNote) this.store.appendEvent(runId, { type: 'note', message: effortNote });
       const stepId = [...(this.store.getRun(runId)?.steps ?? [])].reverse().find((step) => step.id.startsWith('continue-'))?.id;
       this.store.updateRun(runId, { fallbackEpisode: { attempted: [...attempted], ...(stepId ? { current: { key, stepId } } : {}) } });
       this.store.appendEvent(runId, {
         type: 'lifecycle',
         tone: 'info',
-        message: `${label(fromKey)} ${startFailure !== undefined ? 'could not start' : 'reached its usage limit'} — ${label(key)} · ${candidate.model ?? 'auto model'} continues this task`,
+        message: `${label(fromKey)} ${startFailure !== undefined ? 'could not start' : 'reached its usage limit'} — ${label(key)} · ${model ?? 'auto model'} continues this task`,
       });
       void this.pump();
       return;
@@ -9753,11 +9775,25 @@ export class RunManager {
     // unresolvable model (e.g. a bare id on opencode) returns the step error
     // instead of letting the backend silently substitute its default.
     let backendModel: string | undefined;
+    // The task's model was picked for the task's runner; a step on another runner gets its own default.
+    let stepModel = agentModelsLocked(this.repoRoot) ? undefined : step.model ?? (stepBackend === taskBackend ? input.model : undefined);
+    if (stepBackend === 'antigravity' && step.reasoningEffort && !agentModelsLocked(this.repoRoot)) {
+      const models = await antigravityModelIds();
+      if (state.cancelled) return 'cancelled';
+      const mapped = resolveAntigravityEffort({
+        effort: step.reasoningEffort,
+        model: stepModel,
+        defaultModel: stepModel ? undefined : (await readAgentModelSettings('antigravity', state.cwd).catch(() => undefined))?.model,
+        models,
+      });
+      if ('error' in mapped) return `step "${step.id}": ${mapped.error}`;
+      stepModel = mapped.model;
+      emit({ type: 'note', stepId: step.id, message: mapped.note });
+    }
     try {
       const normalized = normalizeModelForBackend(
         stepBackend,
-        // The task's model was picked for the task's runner; a step on another runner gets its own default.
-        agentModelsLocked(this.repoRoot) ? undefined : step.model ?? (stepBackend === taskBackend ? input.model : undefined),
+        stepModel,
         { configuredProvider: await configuredModelProvider(stepBackend, state.cwd) },
       );
       if (state.cancelled) return 'cancelled';
