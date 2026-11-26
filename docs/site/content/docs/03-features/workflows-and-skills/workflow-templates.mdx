@@ -16,6 +16,12 @@ sources:
 ---
 Templates cover implementation with tests (implement-and-verify), implementation with review and a PR (implement-review-pr), review by several agents (review-council), a read-only review of a pull request (review-pr), and CI repair (fix-ci). Select a template, adapt its test commands and prompts, then save your own copy.
 
+## Run only the tests related to the change
+
+The Run tests step of implement-and-verify and implement-review-pr does not run the whole suite. The implement agent runs the tests related to its change and records that command in the file named by `$CEZ_TEST_COMMAND_FILE`, for example `npm test -- src/cart/total.test.ts`. The Run tests step then runs the recorded command again and uses its exit code, so a red result still sends the output to the fixer. That works with any test runner, because the agent already knows which one your repository uses. When the agent records nothing, the step runs `npm test` as before. The fixer and the agent that addresses review comments update the file when the related tests change. Its output starts by naming the command it ran.
+
+> **Good to know**: The record lives in the task's artifacts folder as a hidden file, so it never reaches the diff or the Assets view. To always run one fixed command, edit the Run tests step's command in your own copy of the workflow.
+
 ## Where to find it
 
 Workflows → built-in templates
@@ -23,7 +29,7 @@ Workflows → built-in templates
 ## How to use it
 
 1. Choose implement-and-verify, implement-review-pr, review-council, review-pr, or fix-ci.
-2. Adapt test commands and prompts.
+2. Adapt prompts, and the Run tests command if your repository needs a fixed one.
 3. Save your own copy of the workflow.
 
 ## Review a pull request without touching it

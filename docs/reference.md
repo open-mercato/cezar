@@ -415,6 +415,7 @@ and a value inherited from the server's own environment is replaced:
 | `CEZ_BASE` | the recorded fork point |
 | `CEZ_STEP_ID` | this check step's id |
 | `CEZ_ATTEMPT` | 1-based attempt number of this check within the run |
+| `CEZ_TEST_COMMAND_FILE` | the file an agent records its related-tests command in (`.ai/cezar/artifacts/<runId>/.test-command`, set for agents too); the built-in Run tests check runs it, else `npm test` |
 | `CEZ_SHARED_CACHE_DIR` | `~/.cezar/cache/<projectId>` (`0700`), shared by the project's tasks — e.g. an e2e replay cache |
 | `CEZ_GITHUB_REPO`, `CEZ_GITHUB_NUMBER`, `CEZ_GITHUB_EVENT` | runs a GitHub automation launched only |
 | `CEZ_PR_HEAD_SHA`, `CEZ_PR_HEAD_REF`, `CEZ_PR_BASE_REF` | runs a `checkout: "pr-head"` automation launched on a pull request's head only |
@@ -554,6 +555,9 @@ whose counter never resets within a run, so every run is finite.
 - **Built-in templates** — `implement-and-verify`, `implement-review-pr`, `review-council`
   (three fresh reviewers at once, then a judge that ships or sends it back), `fix-ci` — sit
   next to `quick-task` (still the default). Open one in the editor; it saves as your copy.
+  The Run tests check of the two implement templates runs only the tests related to the
+  change: the implement agent records the command it ran in `$CEZ_TEST_COMMAND_FILE`, and
+  the check re-runs it, or `npm test` when nothing was recorded.
 - **Human gates.** Choose **Approve** or **Reject**, or reply in the task composer or
   through `cez-manager task say`. Plain replies such as “approve” and “reject” take the
   corresponding path. “Request changes”, “stop here”, “not yet” and “don’t push” take the reject path. Other text, such as

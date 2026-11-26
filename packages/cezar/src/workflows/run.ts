@@ -110,7 +110,7 @@ import { getHeadCommit, getRepoInfo } from '../server/git.ts';
 import { loadWorkflows, newerCatalogWorkflow } from './load.ts';
 import type { QueuedMessage, RunRecord, RunStore, StepState } from '../runs/store.ts';
 import { switchedWorkflowAgent, taskAgentSelection, workflowAgentSwitch } from '../runs/agent-selection.ts';
-import { artifactsDir, authParkForAccount, isIdleParked, prCheckoutDir } from '../runs/store.ts';
+import { artifactsDir, authParkForAccount, isIdleParked, prCheckoutDir, testCommandFile } from '../runs/store.ts';
 import { checkoutPr, pickPr } from './pr-checkout.ts';
 import { artifactsPromptPart, scanArtifacts, watchArtifacts } from '../runs/artifacts.ts';
 import { backstopRender } from '../impact/publish.ts';
@@ -2069,6 +2069,8 @@ export class RunManager {
       CEZ_TASK_ID: runId,
       CEZ_TODOS_FILE: generateFollowups ? todosPath(this.dataDir) : '',
       CEZ_ARTIFACTS_DIR: artifactsDir(this.dataDir, runId),
+      // The built-in `Run tests` check runs what the agent records here (templates.ts).
+      CEZ_TEST_COMMAND_FILE: testCommandFile(this.dataDir, runId),
       ...agentTmpEnv(this.dataDir, runId),
       // Task dispatch (spec 2026-09-10-dispatch): where the `cez task` CLI reaches this server and
       // which project the run belongs to. Absent (not empty) while the feature is off, so the env
@@ -11434,6 +11436,7 @@ export class RunManager {
       CEZ_WORKTREE: state.cwd,
       CEZ_STEP_ID: stepId,
       CEZ_ATTEMPT: String(run?.steps.find((step) => step.id === stepId)?.iterations ?? 1),
+      CEZ_TEST_COMMAND_FILE: testCommandFile(this.dataDir, runId),
     };
     if (this.projectId) {
       context.CEZ_PROJECT_ID = this.projectId;
@@ -11543,6 +11546,7 @@ export const CHECK_CONTEXT_VARS = [
   'CEZ_BASE',
   'CEZ_STEP_ID',
   'CEZ_ATTEMPT',
+  'CEZ_TEST_COMMAND_FILE',
   'CEZ_SHARED_CACHE_DIR',
   'CEZ_GITHUB_REPO',
   'CEZ_GITHUB_NUMBER',
