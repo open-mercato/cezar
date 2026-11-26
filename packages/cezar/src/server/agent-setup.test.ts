@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import { installCommand, shellLine, type InstallEnv } from './agent-setup.ts';
 
-const linux: InstallEnv = { platform: 'linux', npm: true, npmGlobalWritable: true, curl: true, sudo: true };
+const linux: InstallEnv = { platform: 'linux', npm: true, npmGlobalWritable: true, curl: true, sudo: true, brew: false };
 
 describe('installCommand', () => {
   it('uses npm when its global folder is writable', () => {
@@ -12,6 +12,17 @@ describe('installCommand', () => {
 
   it('pins OpenCode to the major the runner can drive', () => {
     expect(installCommand('opencode', linux)).toBe('npm install -g opencode-ai@1');
+  });
+
+  it("installs Claude Code with its native installer first, as Anthropic's docs recommend", () => {
+    expect(installCommand('claude', linux)).toBe('curl -fsSL https://claude.ai/install.sh | bash');
+    expect(installCommand('claude', { ...linux, curl: false })).toBe('npm install -g @anthropic-ai/claude-code');
+  });
+
+  it('never runs an installer that is not verified, nor the third-party OMP tap', () => {
+    for (const provider of ['gemini', 'pi', 'junie', 'kimi', 'omp'] as const) {
+      expect(installCommand(provider, { ...linux, brew: true })).toBeNull();
+    }
   });
 
   it('prefers the vendor script over sudo when npm would need root', () => {
@@ -32,7 +43,7 @@ describe('installCommand', () => {
   });
 
   it('prefers a native installer on Windows and never uses sudo there', () => {
-    const windows: InstallEnv = { platform: 'win32', npm: true, npmGlobalWritable: false, curl: true, sudo: false };
+    const windows: InstallEnv = { platform: 'win32', npm: true, npmGlobalWritable: false, curl: true, sudo: false, brew: false };
     expect(installCommand('claude', windows)).toContain('install.ps1');
     expect(installCommand('codex', windows)).toBe('npm install -g @openai/codex');
     expect(installCommand('cursor', windows)).toBeNull();
@@ -40,6 +51,13 @@ describe('installCommand', () => {
 });
 
 describe('shellLine', () => {
+  it("installs Antigravity with Google's script, and its PowerShell line on Windows", () => {
+    expect(installCommand('antigravity', linux)).toBe('curl -fsSL https://antigravity.google/cli/install.sh | bash');
+    const windows: InstallEnv = { platform: 'win32', npm: false, npmGlobalWritable: false, curl: true, sudo: false, brew: false };
+    expect(installCommand('antigravity', windows)).toBe('irm https://antigravity.google/cli/install.ps1 | iex');
+    expect(shellLine('irm https://antigravity.google/cli/install.ps1 | iex', 'win32')).toMatch(/^powershell -NoProfile -EncodedCommand /);
+  });
+
   it('encodes a PowerShell one-liner on Windows, so no quote or pipe reaches cmd.exe', () => {
     const line = shellLine('irm https://claude.ai/install.ps1 | iex', 'win32');
     const encoded = line.split(' ').at(-1) ?? '';

@@ -12,6 +12,7 @@ import {
   deleteRun,
   deleteAutomation,
   finishRun,
+  getAgentSetup,
   getGithub,
   getGithubChecks,
   getGithubRefStatus,
@@ -889,5 +890,19 @@ describe('whether cezar still answers plain requests', () => {
     fetchMock.mockRejectedValueOnce(new TypeError('Load failed'))
     await expect(getHealth()).rejects.toBeInstanceOf(ApiError)
     expect(connectionStatus.answering()).toBe(false)
+  })
+})
+
+describe('getAgentSetup (spec 2026-11-25-agent-cli-install-and-update)', () => {
+  const STATE = { available: true, reason: null, interactive: true, session: null, agents: [] }
+
+  it('asks for the newest releases only with x-cezar-latest: 1', async () => {
+    reply(STATE)
+    await getAgentSetup({ latest: true })
+    expect(lastCall().path).toContain('/api/v1/providers/setup')
+    expect(lastCall().headers.get('x-cezar-latest')).toBe('1')
+    reply(STATE)
+    await getAgentSetup()
+    expect(lastCall().headers.get('x-cezar-latest')).toBeNull()
   })
 })

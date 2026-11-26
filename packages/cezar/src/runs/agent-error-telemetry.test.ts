@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { isOutdatedBackendError } from '../core/agent-errors.ts';
+import { forgetLearnedMinimums, minimumVersion } from '../core/agent-cli-versions.ts';
 import { reportAgentError, scrubAgentErrorMessage } from './agent-error-telemetry.ts';
 import { parseUsageLimit } from '../core/usage-limit.ts';
 import { RunStore } from './store.ts';
@@ -137,6 +138,18 @@ describe('reportAgentError', () => {
     vi.mocked(telemetryEnabled).mockReturnValueOnce(false);
     reportAgentError('claude', { type: 'error', message: 'boom' });
     expect(reported()).toEqual([]);
+  });
+
+  it('still records learned minimum versions before the telemetry consent guard', () => {
+    forgetLearnedMinimums();
+    try {
+      vi.mocked(telemetryEnabled).mockReturnValueOnce(false);
+      reportAgentError('opencode', { type: 'session.error', message: 'OpenCode 1.18.0 or newer is required to use the free tier' });
+      expect(reported()).toEqual([]);
+      expect(minimumVersion('opencode')).toBe('1.18.0');
+    } finally {
+      forgetLearnedMinimums();
+    }
   });
 
   it('skips restart bookkeeping', () => {

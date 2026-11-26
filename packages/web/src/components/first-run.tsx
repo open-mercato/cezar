@@ -834,10 +834,11 @@ export function SetupPill() {
 export function AgentStep() {
   const setup = useAgentSetup()
   if (setup.isPending) return null
-  return setup.data?.available ? <SetUpAgentHere setup={setup.data} /> : <SignInToAgent />
+  // A paired phone cannot type or sign in here: it keeps the sign-in card built for it.
+  return setup.data?.available && setup.data.interactive ? <SetUpAgentHere setup={setup.data} /> : <SignInToAgent />
 }
 
-function SetUpAgentHere({ setup }: { setup: Extract<AgentSetupState, { available: true }> }) {
+function SetUpAgentHere({ setup }: { setup: AgentSetupState }) {
   const providers = useProviderStatus()
   const refresh = useRefreshProviderStatus()
   const write = useOnboardingWrite()

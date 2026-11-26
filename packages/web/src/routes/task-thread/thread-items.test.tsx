@@ -153,57 +153,62 @@ describe('ProviderAuthRequiredCard', () => {
 })
 
 describe('AgentUpdateRequiredCard', () => {
-  const renderCard = () =>
+  const entry = (provider: string, update: { command: string; runnable: boolean; sudo: boolean }, method: string | null) => ({
+    provider,
+    loginCommand: null,
+    install: { command: null, runnable: false, sudo: false },
+    update: { command: update.command, runnable: update.runnable, sudo: update.sudo },
+    docsUrl: 'https://example.com/docs',
+    installed: true,
+    version: '1.17.0',
+    method,
+    minVersion: '1.18.0',
+    latestVersion: null,
+    activeRuns: 0,
+  })
+  const serve = (agents: unknown[]) => {
+    const calls: Array<{ url: string; method: string; body?: string }> = []
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      calls.push({ url, method: init?.method ?? 'GET', body: init?.body ? String(init.body) : undefined })
+      const body = url.includes('/providers/setup/sessions')
+        ? { id: 's1', runId: 'agent-setup', provider: 'opencode', action: 'update', command: "'opencode' upgrade", exitCode: null, topic: 't', cols: 80, rows: 24 }
+        : url.includes('/providers/setup')
+          ? { available: true, reason: null, interactive: true, session: null, agents }
+          : { providers: [{ provider: 'opencode', status: 'connected', enabled: true }, { provider: 'codex', status: 'connected', enabled: true }] }
+      return new Response(JSON.stringify(body), { status: url.includes('/sessions') ? 201 : 200, headers: { 'content-type': 'application/json' } })
+    }))
+    return calls
+  }
+  const renderCard = (provider: 'opencode' | 'gemini') =>
     render(
       <QueryClientProvider client={createQueryClient()}>
-        <AgentUpdateRequiredCard incident={{ kind: 'agent-update-required', id: 'v2:3:update', provider: 'opencode' }} />
+        <AgentUpdateRequiredCard incident={{ kind: 'agent-update-required', id: 'v2:3:update', provider }} />
       </QueryClientProvider>,
     )
+  afterEach(() => vi.unstubAllGlobals())
 
-  it('asks the server to open the CLI update', async () => {
-    const fetchMock = vi.fn(async () =>
-      new Response(JSON.stringify({ opened: true, command: "'opencode' upgrade" }), {
-        status: 200,
-        headers: { 'content-type': 'application/json' },
-      }),
-    )
-    vi.stubGlobal('fetch', fetchMock)
-    try {
-      renderCard()
-      expect(screen.getByRole('alert').textContent).toContain('OpenCode needs an update')
-      await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Update OpenCode' })))
-      expect(String((fetchMock.mock.calls[0] as unknown[])[0])).toContain('/providers/opencode/update')
-    } finally {
-      vi.unstubAllGlobals()
-    }
+  it('opens the setup sheet and runs the update for how the CLI was installed', async () => {
+    const calls = serve([entry('opencode', { command: "'opencode' upgrade", runnable: true, sudo: false }, 'npm')])
+    renderCard('opencode')
+    expect(screen.getByRole('alert').textContent).toContain('OpenCode needs an update')
+    await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Update OpenCode' })))
+    expect(await screen.findByText("'opencode' upgrade")).toBeTruthy()
+    expect(screen.getByText('1.18.0 or newer')).toBeTruthy()
+    await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Update' })))
+    await waitFor(() => expect(calls.some((call) => call.method === 'POST' && call.url.includes('/providers/setup/sessions'))).toBe(true))
+    const posted = calls.find((call) => call.method === 'POST')!
+    expect(JSON.parse(posted.body!)).toEqual({ provider: 'opencode', action: 'update' })
   })
 
-  it('shows the command to run when no terminal could be opened', async () => {
-    vi.stubGlobal('fetch', vi.fn(async () =>
-      new Response(JSON.stringify({
-        error: 'No terminal emulator could be opened. Run this command manually.',
-        command: "'opencode' upgrade",
-      }), { status: 409, headers: { 'content-type': 'application/json' } }),
-    ))
-    try {
-      renderCard()
-      await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Update OpenCode' })))
-      const manual = await screen.findByText("'opencode' upgrade")
-      expect(manual.tagName).toBe('CODE')
-      expect(screen.getByText(/No terminal emulator could be opened/)).toBeTruthy()
-    } finally {
-      vi.unstubAllGlobals()
-    }
-  })
-
-  it('offers no button for a CLI that cannot update itself', () => {
-    render(
-      <QueryClientProvider client={createQueryClient()}>
-        <AgentUpdateRequiredCard incident={{ kind: 'agent-update-required', id: 'v2:3:update', provider: 'codex' }} />
-      </QueryClientProvider>,
-    )
-    expect(screen.queryByRole('button')).toBeNull()
-    expect(screen.getByRole('alert').textContent).toContain('the way you installed it')
+  it('shows an update cezar does not run as a command to copy, with no run button (Gemini CLI from npm)', async () => {
+    serve([entry('gemini', { command: 'npm install -g @google/gemini-cli@latest', runnable: false, sudo: false }, 'npm')])
+    renderCard('gemini')
+    await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Update Gemini CLI' })))
+    expect(await screen.findByText('npm install -g @google/gemini-cli@latest')).toBeTruthy()
+    expect(screen.getByText(/does not run this command itself/)).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Update' })).toBeNull()
+    expect(screen.getByRole('button', { name: 'Copy' })).toBeTruthy()
   })
 })
 
