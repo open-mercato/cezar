@@ -314,7 +314,8 @@ On **GitHub** (this repository):
      maintainer can approve them), its tags and PRs start workflows, and its
      API commits are GitHub-signed.
 7. Branch ruleset **`release lines`** on `release/v*`: restrict creations and
-   deletions, block force pushes, require a PR (1 approval) and the CI checks
+   deletions, block force pushes, require a PR (1 approval) and the one status check
+   **`CI ok`** (the aggregate job in `ci.yml`; the `main` ruleset requires the same check)
    ("do not require status checks on creation" ✅), signed commits optional —
    with the **App** on its bypass list (*Always*): *Release* commits the bump
    straight to the line.
