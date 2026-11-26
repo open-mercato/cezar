@@ -14,6 +14,15 @@ import type { WorkflowDef } from './types.ts';
  * node leaves the runner to the task's own choice.
  */
 
+/**
+ * `npm test`, skipped with a visible warning when the worktree has no `package.json`. A repo
+ * without one (a monorepo with no root manifest, a non-Node repo) cannot answer `npm test`; run
+ * bare, it failed in 0.1 s and sent the fixer into retries that could never pass. The skip is a
+ * pass, not a silent one: the warning is the check's output on the rail.
+ */
+export const NPM_TEST_CHECK =
+  'if [ -f package.json ]; then npm test; else echo "warning: no package.json in the worktree root — skipping npm test. Edit this workflow\'s test command to run your tests."; fi';
+
 function builtIn(name: string, description: string, graph: WorkflowGraph): WorkflowDef {
   const issues = graphIssues(graph);
   if (issues.length) throw new Error(`built-in workflow "${name}" is invalid: ${issues.join('; ')}`);
@@ -27,7 +36,7 @@ export const IMPLEMENT_AND_VERIFY = builtIn(
     nodes: [
       { id: 'start', type: 'start' },
       { id: 'implement', type: 'agent', name: 'Implement', prompt: '{{task}}' },
-      { id: 'tests', type: 'check', name: 'Run tests', command: 'npm test' },
+      { id: 'tests', type: 'check', name: 'Run tests', command: NPM_TEST_CHECK },
       { id: 'retry', type: 'loop', name: 'Retry', max: 3 },
       {
         id: 'fix',
@@ -58,7 +67,7 @@ export const IMPLEMENT_REVIEW_PR = builtIn(
     nodes: [
       { id: 'start', type: 'start' },
       { id: 'implement', type: 'agent', name: 'Implement', prompt: '{{task}}' },
-      { id: 'tests', type: 'check', name: 'Run tests', command: 'npm test' },
+      { id: 'tests', type: 'check', name: 'Run tests', command: NPM_TEST_CHECK },
       { id: 'test-retry', type: 'loop', name: 'Test retry', max: 2 },
       {
         id: 'fix',

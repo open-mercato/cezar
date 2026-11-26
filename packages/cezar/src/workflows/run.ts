@@ -2,6 +2,7 @@ import type { StepToolPolicy, SwitchRunAgentInput } from '@open-mercato/cezar-co
 import { readOnlyEnv } from '../core/read-only-env.ts';
 import { AgentUsageHolds } from '../workspace/agent-usage-holds.ts';
 import { completionReason } from './completion-reason.ts';
+import { checkMisconfiguration } from './check-misconfigured.ts';
 import { WorktreeLifecycleCoordinator } from '../worktree-lifecycle/coordinator.ts';
 import type { RunParked, RunSubject, WebhookAttentionRequest, TrackerAssociation, UsageWindowsObservation } from '@open-mercato/cezar-contract';
 import { saveUsageWindows } from '../workspace/usage-windows.ts';
@@ -8108,7 +8109,7 @@ export class RunManager {
         state.autosaveCheckpointBlocked = !checkpointSafe;
         if (checkpointSafe) this.autosaveCheckpointBlockedRuns.delete(runId);
         else this.autosaveCheckpointBlockedRuns.add(runId);
-        let checkResult: { ok: boolean; output: string; exitCode: number };
+        let checkResult: { ok: boolean; output: string; exitCode: number; spawnError?: string };
         state.checkInProgress = true;
         try {
           checkResult = await this.runCheckStep(runId, state, rendered, emit);
@@ -8132,6 +8133,15 @@ export class RunManager {
           // secrets included) and token patterns. Strictly narrowing, for every workflow.
           checkFailure = this.store.redactRunText(runId, output);
           this.recordFailedPlanAttempt(runId);
+          // A command that could not run at all (not found, not executable, npm with no
+          // package.json) is no verdict on the diff: a fixer cannot change it, so it stops the
+          // run here with a `misconfigured` outcome instead of entering the fix/retry loop.
+          const misconfigured = checkMisconfiguration(rendered.command ?? '', checkResult);
+          if (misconfigured) {
+            emit({ type: 'note', stepId: node.id, message: `misconfigured: ${misconfigured} — not retried` });
+            this.finishStep(runId, node.id, 'failed', `misconfigured: ${misconfigured}`, emit);
+            return `check "${node.id}" is misconfigured: ${misconfigured}. Fix the check's command (or the workflow) — the fix agent was not run.`;
+          }
           if (node.retryOn?.length && !node.retryOn.includes(exitCode)) {
             const codes = node.retryOn.join(', ');
             const error = `check "${node.id}" exited ${exitCode}, which onFail.retryOn (${codes}) does not retry`;
@@ -11473,7 +11483,7 @@ export class RunManager {
     state: ActiveRun,
     step: WorkflowStepDef,
     emit: (event: { type: string; stepId?: string; [k: string]: unknown }) => void,
-  ): Promise<{ ok: boolean; output: string; exitCode: number }> {
+  ): Promise<{ ok: boolean; output: string; exitCode: number; spawnError?: string }> {
     const command = step.command as string;
     emit({ type: 'note', stepId: step.id, message: `$ ${command}` });
     const env = await this.checkStepEnv(runId, state, step, emit);
@@ -11497,7 +11507,7 @@ export class RunManager {
         state.interrupt = () => undefined;
         const message = `failed to spawn: ${err.message}`;
         emit({ type: 'check-output', stepId: step.id, command, text: message, exitCode: -1 });
-        resolve({ ok: false, output: message, exitCode: -1 });
+        resolve({ ok: false, output: message, exitCode: -1, spawnError: err.message });
       });
       child.on('close', (code) => {
         state.interrupt = () => undefined;

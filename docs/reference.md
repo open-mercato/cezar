@@ -438,6 +438,16 @@ naming the code. See [browser and mobile e2e as a verification
 step](e2e-verification.md) for the worked chains, including an independent QA
 exploration as the gate.
 
+A check whose command **could not run at all** never loops back, `retryOn` or
+not: exit 127 (command not found), exit 126 (not executable), a shell that
+could not be spawned, or npm reporting no `package.json` in the working
+directory. The step fails as `misconfigured: <command> could not run: <reason>`
+and the run stops there without starting the fix agent. A fixer cannot change
+the check's command, so retrying only spends money. The built-in
+`implement-and-verify` and `implement-review-pr` templates run `npm test` only
+when the worktree has a root `package.json`. Without one, the check passes and
+prints a warning that it skipped the tests.
+
 Prefer skills over steps? A workflow can also be written in the portable
 shorthand — an ordered list of skill names, each becoming one agent step:
 
