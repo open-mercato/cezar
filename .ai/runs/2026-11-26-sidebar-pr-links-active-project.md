@@ -12,9 +12,11 @@ Risks: none beyond the sidebar; hooks keep their old behavior when called withou
 
 ## Progress
 
+PR: #2530
+
 > Convention: `- [ ]` pending, `- [x]` done. Append ` — <commit sha>` when a step lands. Do not rename step titles.
 
 ### Phase 1: Fix
 
-- [ ] 1.1 Let the repo-base and reference-project hooks take an explicit project id
-- [ ] 1.2 Sidebar containers pass the active project; regression tests
+- [x] 1.1 Let the repo-base and reference-project hooks take an explicit project id — 9a46e6397
+- [x] 1.2 Sidebar containers pass the active project; regression tests — 9a46e6397
