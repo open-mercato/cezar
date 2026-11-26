@@ -113,7 +113,7 @@ import { switchedWorkflowAgent, taskAgentSelection, workflowAgentSwitch } from '
 import { GLOBAL_INSTRUCTIONS_HEADING, LEGACY_GLOBAL_HEADINGS, readGlobalInstructions } from '../core/global-instructions.ts';
 import { instructionsConcernChecks, packageScriptReader, resolveCheckCommand, rewritableCheck, type CheckCommandResolution } from './check-instructions.ts';
 import { artifactsDir, authParkForAccount, FRESH_PROMPT_MAX, isIdleParked, prCheckoutDir, testCommandFile } from '../runs/store.ts';
-import { checkoutPr, pickPr, prCheckoutPromptNote } from './pr-checkout.ts';
+import { checkoutPr, existingPrCheckout, parsePrUrls, pickPr, prCheckoutPromptNote, remotePrHead } from './pr-checkout.ts';
 import { artifactsPromptPart, scanArtifacts, watchArtifacts } from '../runs/artifacts.ts';
 import { backstopRender } from '../impact/publish.ts';
 // Task dispatch (spec 2026-09-10-dispatch). Every import below is inert unless the feature is
@@ -1645,7 +1645,7 @@ interface PreparedUserMessage {
   persisted: PersistedAttachment[];
   imageLibraryWrites: Array<() => void>;
   skills?: TaskSkillPreparation;
-  /** Empty string once checked/not applicable so re-entrant delivery does not re-fetch. */
+  /** The refreshed-checkout note; `''` once checked or not applicable — the sentinel `awaitingPrep` reads so re-entry does not re-fetch. */
   prCheckoutNote?: string;
 }
 
@@ -5931,7 +5931,7 @@ export class RunManager {
           }
           if (stillLive() && !this.disposed && message.prCheckoutNote === undefined) {
             const latest = this.store.getRun(runId);
-            message.prCheckoutNote = latest ? (await this.refreshPrCheckout(runId, state, latest, text)) ?? '' : '';
+            message.prCheckoutNote = latest ? (await this.refreshPrCheckout(runId, state, latest, text, true)) ?? '' : '';
           }
           if (stillLive() && !this.disposed && this.deliverMessage(runId, content, userAuthored, message, answering)) return;
         }
@@ -6489,30 +6489,51 @@ export class RunManager {
 
   /**
    * Re-export the PR head for a continuation or live follow-up of a PR-checkout workflow.
-   * Prefers a PR URL in `followUpText` (e.g. a follow-up PR) and falls back to `record.task`.
+   * Switches to a PR URL in `followUpText` only when it names exactly one PR, else uses `record.task`.
+   * An unchanged or unreadable head keeps the existing export: `checkoutPr` wipes the folder first,
+   * which would pull the tree from under a running review. `live` (a follow-up into an open
+   * session) returns nothing unless the head actually moved.
    */
   private async refreshPrCheckout(
     runId: string,
     state: ActiveRun,
     record: RunRecord,
     followUpText?: string,
+    live = false,
   ): Promise<string | undefined> {
     if (!workflowChecksOutPr(record.workflowDef)) return undefined;
-    const pr = (followUpText ? await pickPr(state.cwd, followUpText) : undefined)
+    const named = followUpText
+      ? new Set(parsePrUrls(followUpText).map((p) => `${p.host}/${p.owner}/${p.repo}/${p.number}`.toLowerCase()))
+      : new Set<string>();
+    const pr = (named.size === 1 ? await pickPr(state.cwd, followUpText!) : undefined)
       ?? await pickPr(state.cwd, record.task);
     const note = (message: string, tone?: 'danger') =>
       this.store.appendEvent(runId, { type: 'note', ...(tone ? { tone } : {}), message });
     if (!pr) {
+      if (live) return undefined;
       note('no GitHub pull request URL in the task to check out', 'danger');
       return prCheckoutPromptNote(undefined, undefined);
     }
+    const dir = prCheckoutDir(this.dataDir, runId);
+    const offline = process.env.CEZ_DRY_RUN === '1';
+    const existing = offline ? undefined : existingPrCheckout(dir, pr);
+    if (existing) {
+      const remoteHead = await remotePrHead(state.cwd, pr);
+      if (!remoteHead || remoteHead === existing.head) {
+        if (live) return undefined;
+        note(remoteHead
+          ? `PR #${pr.number} is still at ${existing.head.slice(0, 12)}; kept its checkout`
+          : `could not read PR #${pr.number}'s head; kept its checkout at ${existing.head.slice(0, 12)}`);
+        return prCheckoutPromptNote(pr, existing);
+      }
+    }
     const res = await checkoutPr({
       cwd: state.cwd,
-      dir: prCheckoutDir(this.dataDir, runId),
+      dir,
       copyTo: artifactsDir(this.dataDir, runId),
       pr,
       ...(record.baseBranch ? { baseBranch: record.baseBranch } : {}),
-      offline: process.env.CEZ_DRY_RUN === '1',
+      offline,
       refPrefix: `refs/cezar/pr-checkouts/${runId}`,
     });
     for (const problem of res.problems) note(problem, 'danger');

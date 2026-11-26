@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, sep } from 'node:path';
 import { promisify } from 'node:util';
@@ -480,6 +480,52 @@ describe('a read-only workflow', { timeout: 30_000 }, () => {
     expect(deliveredText).toContain(prTree);
     expect(deliveredText).toContain('Check the new commit');
 
+    captured.releaseHeld?.();
+    await terminal(id);
+  });
+
+  it('keeps an unchanged PR checkout on Continue and live follow-ups, and ignores a follow-up citing several PRs', async () => {
+    const { prSha } = await preparePr({ 'a.txt': 'one\nsame\n' });
+    await pushPrHead(join(fakeBin, 'origin.git'), { 'a.txt': 'one\nother pr\n' }, 2);
+    const id = manager!.startRun(REVIEW_PR, { task: 'https://github.com/o/r/pull/1', runner: 'claude' }).id;
+    await terminal(id);
+    const prDir = prCheckoutDir(join(repoRoot, '.ai/cezar'), id);
+    const metaPath = join(prDir, 'pr-1.json');
+    const exportedAt = statSync(metaPath).mtimeMs;
+
+    // No new push: Continue reuses the export (no wipe) but still names the head and paths.
+    captured.holdNext = true;
+    const before = captured.launches.length;
+    manager!.continueRun(id, { text: 'Compare with https://github.com/o/r/pull/2 and https://github.com/o/r/pull/1', runner: 'claude' });
+    await vi.waitFor(() => expect(captured.launches.length).toBeGreaterThan(before), { timeout: 15_000 });
+    await vi.waitFor(() => expect(store.getRun(id)?.status).toBe('waiting'), { timeout: 15_000 });
+    expect(statSync(metaPath).mtimeMs).toBe(exportedAt);
+    expect(existsSync(join(prDir, 'pr-2.json'))).toBe(false);
+    const continued = captured.launches[before]!.spec;
+    expect(continued.userPrompt).toContain(prSha);
+    expect(continued.userPrompt).toContain(join(prDir, 'tree'));
+
+    // A live follow-up with the head unchanged: no re-export and no checkout note.
+    expect(manager!.sendMessage(id, [{ type: 'text', text: 'Any more findings?' }])).toBe(true);
+    await vi.waitFor(() => expect(captured.sent.length).toBeGreaterThan(0), { timeout: 15_000 });
+    expect(statSync(metaPath).mtimeMs).toBe(exportedAt);
+    const delivered = captured.sent[0]!.map((b) => b.text ?? '').join('\n');
+    expect(delivered).toContain('Any more findings?');
+    expect(delivered).not.toContain('is checked out at');
+
+    captured.releaseHeld?.();
+    await terminal(id);
+  });
+
+  it('adds no PR checkout note to a live follow-up of a workflow without a PR checkout', async () => {
+    captured.holdNext = true;
+    const id = manager!.startRun(QUICK_TASK_WORKFLOW, { task: 'see https://github.com/o/r/pull/1', runner: 'claude' }).id;
+    await vi.waitFor(() => expect(store.getRun(id)?.status).toBe('waiting'), { timeout: 15_000 });
+    expect(manager!.sendMessage(id, [{ type: 'text', text: 'and https://github.com/o/r/pull/1 again' }])).toBe(true);
+    await vi.waitFor(() => expect(captured.sent.length).toBeGreaterThan(0), { timeout: 15_000 });
+    const delivered = captured.sent[0]!.map((b) => b.text ?? '').join('\n');
+    expect(delivered).not.toContain('The PR (#1)');
+    expect(existsSync(prCheckoutDir(join(repoRoot, '.ai/cezar'), id))).toBe(false);
     captured.releaseHeld?.();
     await terminal(id);
   });
