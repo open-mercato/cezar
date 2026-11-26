@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AgentEvent, AgentRunResult, AgentRunSpec } from '../core/agent-runner.ts';
 import { RunStore } from '../runs/store.ts';
 import type { StepToolPolicy } from '@open-mercato/cezar-contract';
-import { RunManager } from './run.ts';
+import { FRESH_CONTEXT_NOTE, RunManager } from './run.ts';
 import { DEFAULT_ALLOWED_TOOLS, type WorkflowDef } from './types.ts';
 
 const run = promisify(execFile);
@@ -294,6 +294,24 @@ describe('a resumed session keeps its workflow step tools', { timeout: 20_000 },
     expect(spec.userPrompt).toContain('User:\nfirst fix the API');
     expect(spec.userPrompt).toContain('Assistant:\nThe API is fixed; UI remains.');
     expect(spec.userPrompt).toContain('## New user instruction\nkeep going');
+    await settled(id);
+  });
+
+  it('freshContext opens a new session with no prior conversation on the same backend (#2474)', async () => {
+    const id = terminalRun({
+      def: SINGLE_DEF,
+      steps: [{ id: 'work', sessionId: 'sess-1', backend: 'claude' }],
+    });
+    store.appendEvent(id, { type: 'user-message', text: 'review PR 7' });
+    store.appendEvent(id, { type: 'text', text: 'Verdict: request changes.' });
+
+    expect(manager!.continueRun(id, { text: 'Re-review PR 7 at abc123', freshContext: true })).toEqual({ ok: true });
+    const spec = await specAt(0);
+    expect(spec.resume).toBe(false);
+    expect(spec.sessionId).toBeDefined();
+    expect(spec.sessionId).not.toBe('sess-1');
+    expect(spec.userPrompt).toBe(`${FRESH_CONTEXT_NOTE}\n\nRe-review PR 7 at abc123`);
+    expect(spec.userPrompt).not.toContain('Verdict: request changes.');
     await settled(id);
   });
 

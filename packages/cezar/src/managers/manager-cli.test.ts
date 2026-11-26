@@ -420,6 +420,15 @@ describe('cez manager', () => {
       expect(calls).toHaveLength(before);
     });
 
+    it('task say --fresh asks for a fresh session; without it nothing is sent', async () => {
+      const { run, calls, logs } = harness();
+      expect(await run('task', 'say', '--project', 'alpha', 'r1', '--fresh', 'Re-review PR 7')).toBe(0);
+      expect(calls.at(-1)).toMatchObject({ url: 'http://x/api/v1/workspace/managers/m1/task-message', body: { runId: 'r1', text: 'Re-review PR 7', freshContext: true } });
+      expect(logs.at(-1)).toBe('continued r1 in a fresh session');
+      expect(await run('task', 'say', '--project', 'alpha', 'r1', 'again')).toBe(0);
+      expect(calls.at(-1)?.body).not.toHaveProperty('freshContext');
+    });
+
     it('an unknown subcommand fails instead of being read as a run id', async () => {
       const { run, calls, errors } = harness();
       expect(await run('task', 'foo')).toBe(1);

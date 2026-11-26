@@ -1462,6 +1462,8 @@ export const continueInputSchema = z.object({
   idempotencyKey: z.string().uuid().optional(),
   /** Sent from an ask card: answers that card (Questions inbox spec), as on `messageInputSchema`. */
   askRequestId: z.string().min(1).max(200).optional(),
+  /** Open a new agent session with no prior conversation; same task, worktree, branch and PR. */
+  freshContext: z.boolean().optional(),
 });
 export type ContinueInput = z.input<typeof continueInputSchema>;
 

@@ -6051,6 +6051,7 @@ export function createAppParts(deps: ServerDeps) {
           model: parsed.data.model,
           reasoningEffort: parsed.data.reasoningEffort,
           agentProfile: parsed.data.agentProfile,
+          ...(parsed.data.freshContext ? { freshContext: true } : {}),
           // The user's own Continue: answers its card, or flags open cards as replied in chat.
           reply: parsed.data.askRequestId ? { askRequestId: parsed.data.askRequestId } : {},
         });
