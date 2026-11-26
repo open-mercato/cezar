@@ -4407,6 +4407,7 @@ export class RunManager {
       }
       // Antigravity has no effort flag: a handover carries the task's effort as the closest variant, or drops it.
       let model = candidate.model;
+      let effortNote: string | undefined;
       if (candidate.provider === 'antigravity' && run.reasoningEffort && !agentModelsLocked(this.repoRoot)) {
         const mapped = closestAntigravityEffort({
           effort: run.reasoningEffort,
@@ -4414,8 +4415,13 @@ export class RunManager {
           models: await antigravityModelIds(),
         });
         if (this.disposed || !this.stillAwaitingFallback(runId, failedStepId)) return;
+        // The lookup awaited: fallback may have been switched off meanwhile.
+        if (!fallbackConsentCurrent(snapshot, getAgentFallbackPolicySync(this.repoRoot))) {
+          this.finishFallbackAdmission(runId, 'automatic fallback was switched off before the next agent started');
+          return;
+        }
         model = mapped.model ?? model;
-        this.store.appendEvent(runId, { type: 'note', message: mapped.note });
+        effortNote = mapped.note;
       }
       // The reservation: written before the continuation exists, so no restart can pick it twice.
       this.store.updateRun(runId, { fallbackEpisode: { pending: true, attempted: [...attempted], ...(run.fallbackEpisode?.current ? { current: run.fallbackEpisode.current } : {}) } });
@@ -4428,6 +4434,8 @@ export class RunManager {
         this.store.appendEvent(runId, { type: 'note', message: `fallback skipped ${label(key)} — ${switched.error ?? 'unknown error'}` });
         continue;
       }
+      // Only once the handoff is queued: a skipped candidate never ran on that variant.
+      if (effortNote) this.store.appendEvent(runId, { type: 'note', message: effortNote });
       const stepId = [...(this.store.getRun(runId)?.steps ?? [])].reverse().find((step) => step.id.startsWith('continue-'))?.id;
       this.store.updateRun(runId, { fallbackEpisode: { attempted: [...attempted], ...(stepId ? { current: { key, stepId } } : {}) } });
       this.store.appendEvent(runId, {

@@ -5486,6 +5486,16 @@ describe('ManagerEngine', () => {
       expect(requests.at(-1)?.body).not.toHaveProperty('reasoningEffort');
     });
 
+    it('a retry whose old effort has no variant drops it with a note instead of refusing', async () => {
+      const engine = withRuns([run('old', { status: 'failed', runner: 'antigravity', model: 'gemini-pro-orchestrator', reasoningEffort: 'high' })]);
+      const id = await create(engine);
+      const retried = await engine.retryTask(id, { projectId: 'alpha', runId: 'old' });
+      expect(retried).toMatchObject({ runId: 'new-run', notice: expect.stringContaining("--effort high dropped: antigravity model 'gemini-pro-orchestrator' has no effort variants") });
+      const body = requests.filter((request) => request.path.endsWith('/runs')).at(-1)?.body;
+      expect(body).toMatchObject({ runner: 'antigravity', model: 'gemini-pro-orchestrator' });
+      expect(body).not.toHaveProperty('reasoningEffort');
+    });
+
     const run = (id: string, over: Record<string, unknown> = {}) =>
       ({ id, title: id, task: `do ${id}`, workflow: 'quick-task', status: 'running', steps: [], ...over }) as unknown as RunRecord;
   });

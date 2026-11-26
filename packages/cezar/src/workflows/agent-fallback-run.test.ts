@@ -141,6 +141,27 @@ describe('automatic agent fallback', () => {
     }
   }, 40_000);
 
+  it('re-checks fallback consent after the antigravity model lookup, and starts nothing once it is off', async () => {
+    const policy = await enable([{ provider: 'antigravity', profileId: 'default', model: 'gemini-4-neon-high' }]);
+    // The user switches fallback off while the model list is being read.
+    setAntigravityEffortCatalog({
+      get: async () => {
+        await putAgentFallbackPolicy(repoRoot, { expectedRevision: policy.revision, expectedIncarnation: policy.incarnation, enabled: false, candidates: policy.candidates });
+        return { runner: 'antigravity', source: 'live', stale: false, models: ['gemini-4-neon-low', 'gemini-4-neon-high'].map((id) => ({ id, label: id, description: '' })) };
+      },
+    });
+    try {
+      manager = new RunManager(store, repoRoot);
+      const started = manager.startRun(workflow, { task: 'fix the bug mock:limit', worktree: false });
+      store.updateRun(started.id, { reasoningEffort: 'medium' });
+      await until(() => messages(started.id).some((m) => m.includes('automatic fallback was switched off before the next agent started')), 'admission to stop');
+      expect(store.getRun(started.id)?.runner).not.toBe('antigravity');
+      expect(messages(started.id).some((m) => m.includes('continues this task') || m.includes('no exact variant'))).toBe(false);
+    } finally {
+      setAntigravityEffortCatalog(undefined);
+    }
+  }, 40_000);
+
   it('uses the project checkout default and retains it across fallback after the trunk-based merge', async () => {
     registerAccounts(['second']);
     await enable([{ provider: 'claude', profileId: 'second' }]);

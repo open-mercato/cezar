@@ -23,6 +23,19 @@ export function antigravityVariantOf(id: string): AntigravityVariant | undefined
 
 const rank = (variant: string): number => (VARIANTS as readonly string[]).indexOf(variant);
 
+/** A name that is itself a listed family stays one; otherwise its variant suffix is stripped. */
+function familyOf(id: string, models: readonly string[]): string {
+  return models.some((other) => antigravityVariantOf(other)?.family === id) ? id : antigravityVariantOf(id)?.family ?? id;
+}
+
+/** The family's listed variants, lowest effort first. */
+function variantsOf(family: string, models: readonly string[]): Array<{ id: string; parsed: AntigravityVariant }> {
+  return models
+    .map((id) => ({ id, parsed: antigravityVariantOf(id) }))
+    .filter((entry): entry is { id: string; parsed: AntigravityVariant } => entry.parsed?.family === family)
+    .sort((a, b) => rank(a.parsed.variant) - rank(b.parsed.variant));
+}
+
 export type AntigravityEffortResolution = { model: string; note: string } | { error: string };
 
 /**
@@ -39,19 +52,13 @@ export function resolveAntigravityEffort(input: {
 }): AntigravityEffortResolution {
   const { effort } = input;
   const models = input.models ?? [];
-  // A name that is itself a listed family stays one; otherwise a variant suffix is stripped.
-  const familyOf = (id: string): string =>
-    models.some((other) => antigravityVariantOf(other)?.family === id) ? id : antigravityVariantOf(id)?.family ?? id;
   const explicit = input.model;
   const base = explicit ?? input.defaultModel;
   if (!base) {
     return { error: `antigravity sets effort through the model id, and no model is chosen: pass --model <family> with --effort ${effort}${familyHint(models)}` };
   }
-  const family = familyOf(base);
-  const variants = models
-    .map((id) => ({ id, parsed: antigravityVariantOf(id) }))
-    .filter((entry): entry is { id: string; parsed: AntigravityVariant } => entry.parsed?.family === family)
-    .sort((a, b) => rank(a.parsed.variant) - rank(b.parsed.variant));
+  const family = familyOf(base, models);
+  const variants = variantsOf(family, models);
   const carried = explicit && family !== explicit ? antigravityVariantOf(explicit) : undefined;
   if (variants.length === 0) {
     // No list to pick from: a full id that already names this effort is still unambiguous.
@@ -92,11 +99,8 @@ export function closestAntigravityEffort(input: {
   const dropped = (why: string) => ({ note: `effort ${effort} dropped on antigravity: ${why}` });
   if (!input.model) return dropped('no model chosen to take a variant of');
   if (models.length === 0) return dropped('model list unavailable');
-  const family = models.some((id) => antigravityVariantOf(id)?.family === input.model) ? input.model : antigravityVariantOf(input.model)?.family ?? input.model;
-  const variants = models
-    .map((id) => ({ id, parsed: antigravityVariantOf(id) }))
-    .filter((entry): entry is { id: string; parsed: AntigravityVariant } => entry.parsed?.family === family)
-    .sort((a, b) => rank(a.parsed.variant) - rank(b.parsed.variant));
+  const family = familyOf(input.model, models);
+  const variants = variantsOf(family, models);
   if (variants.length === 0) return dropped(`${family} has no effort variants`);
   if (effort === 'max') {
     const top = variants[variants.length - 1]!;
