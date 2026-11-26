@@ -27,7 +27,7 @@ export const GEMINI_AUTH_HINT =
  *  `isRuntimeProviderAuthFailure` keys on, so the server raises `provider-auth-required`. */
 /** Label/hint only (#2439): the `gemini` runner id keeps working and no saved choice is rewritten. */
 export const GEMINI_DEPRECATION_HINT =
-  'Gemini CLI is deprecated — Google is moving to Antigravity (`antigravity` runner). Existing gemini tasks, workflows and automations still run.';
+  'Gemini CLI is deprecated in cezar — prefer the Antigravity (`antigravity`) runner. Existing gemini tasks, workflows and automations still run.';
 
 export const GEMINI_AUTH_FAILURE_MESSAGE = `Gemini CLI authentication failed — ${GEMINI_AUTH_HINT}`;
 

@@ -26,6 +26,6 @@ Specification: not yet available
 
 ## Migrating to Antigravity
 
-Google is moving Gemini CLI users to Antigravity (`agy`), so cezar labels the `gemini` runner "deprecated" in `cez doctor`, the runner pickers and Settings, and points to the `antigravity` runner. It is a label only: existing `gemini` tasks, workflow steps, automations and saved defaults keep running, and cezar never rewrites a saved choice.
+Antigravity (`agy`) is the runner cezar recommends for Google models, so cezar labels the `gemini` runner "deprecated" in `cez doctor`, the runner pickers and Settings, and points to the `antigravity` runner. It is a label only: existing `gemini` tasks, workflow steps, automations and saved defaults keep running, and cezar never rewrites a saved choice.
 
 Antigravity can keep a read-only task read-only (review and QA steps), as Gemini does, through a tool guard that denies write, shell and MCP tools. To migrate, install `agy`, sign in from Settings → Agents, then switch the runner on the tasks, workflows and defaults you want to move.
