@@ -38,6 +38,10 @@ export interface UsageLimitHit {
  */
 export const MAX_USAGE_LIMIT_WAIT_MS = 7 * 24 * 60 * 60_000;
 
+/** Claude's monthly usage-credit allowance names a reset date up to a month out (#2517). */
+export const MAX_MONTHLY_USAGE_LIMIT_WAIT_MS = 31 * 24 * 60 * 60_000;
+const MONTHLY_CREDITS_RE = /\bout\s+of\s+usage\s+(?:credits|quota)\b/i;
+
 // A clock-only message omits reset seconds. Pad before selecting its day (#1081).
 const CLOCK_RESET_BUFFER_MS = 60_000;
 
@@ -134,7 +138,8 @@ export function parseUsageLimit(message: string | undefined, now = Date.now()): 
   if (dated) {
     // A named day the parser cannot place is not a reason to guess the next clock instead.
     const parsed = parseDatedReset(dated, now);
-    return parsed === null ? null : settle(parsed, now, 'clock');
+    const cap = MONTHLY_CREDITS_RE.test(message) ? MAX_MONTHLY_USAGE_LIMIT_WAIT_MS : MAX_USAGE_LIMIT_WAIT_MS;
+    return parsed === null ? null : settle(parsed, now, 'clock', cap);
   }
 
   const clock = RESET_CLOCK_RE.exec(message);
@@ -206,8 +211,10 @@ function parseDatedReset(match: RegExpExecArray, now: number): number | null {
   const candidate = at(year);
   if (candidate === null) return null;
   // A day ago or more is last year's date read as this year's; minutes ago is a limit that lifted.
-  // A stale date rolled a year ahead fails `settle`'s one-week cap and reads as unparsed.
-  return now - candidate > 24 * 60 * 60_000 ? at(year + 1) : candidate;
+  // A stale date rolled a year ahead fails `settle`'s cap and reads as unparsed.
+  const reset = now - candidate > 24 * 60 * 60_000 ? at(year + 1) : candidate;
+  // Minute-truncated like the clock-only form: pad so the resume lands after the reset (#1081).
+  return reset === null ? null : reset + CLOCK_RESET_BUFFER_MS;
 }
 
 /**
@@ -244,8 +251,13 @@ function nextClockInTimeZone(hour: number, minute: number, timeZone: string, now
 }
 
 /** Bound a candidate instant: past → now (the limit already lifted), absurd → not believed. */
-function settle(epochMs: number, now: number, evidence: UsageLimitHit['evidence']): UsageLimitHit | null {
+function settle(
+  epochMs: number,
+  now: number,
+  evidence: UsageLimitHit['evidence'],
+  maxWaitMs = MAX_USAGE_LIMIT_WAIT_MS,
+): UsageLimitHit | null {
   if (!Number.isFinite(epochMs)) return null;
-  if (epochMs - now > MAX_USAGE_LIMIT_WAIT_MS) return null;
+  if (epochMs - now > maxWaitMs) return null;
   return { resetAt: new Date(Math.max(epochMs, now)), evidence };
 }

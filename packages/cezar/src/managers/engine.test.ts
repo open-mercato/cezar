@@ -5175,11 +5175,12 @@ describe('ManagerEngine', () => {
     });
 
     it('"out of usage credits" hands the turn to #2 and holds #1 until its named reset', async () => {
-      clock = Date.parse('2026-11-26T08:11:00Z');
+      // Weeks before a monthly reset: past the weekly cap, still the hold (#2517 review).
+      clock = Date.parse('2026-11-10T08:11:00Z');
       const engine = makeEngine({ now: () => clock });
       const id = await withBackup(engine);
       const credits = 'You\'re out of usage credits · resets Dec 1 at 1am (Europe/Warsaw)';
-      const until = '2026-12-01T00:00:00.000Z';
+      const until = '2026-12-01T00:01:00.000Z';
       backend.scripts.push({ fail: credits }, say('Answered on codex.'));
       engine.send(id, 'rc-7 home: keep it on both');
       await settled(engine);
