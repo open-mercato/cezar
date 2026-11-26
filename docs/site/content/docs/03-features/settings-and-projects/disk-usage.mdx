@@ -38,12 +38,12 @@ Freeing a worktree (reclaiming it) removes only the directory. The task's branch
 | `<repo>/.ai/cezar/worktrees/` | One checkout per task. Usually the largest part by far. | Count limit, age limit, archive, disk guard, `cez worktrees` |
 | `<repo>/.ai/cezar/artifacts/<runId>`, `dispatch/<runId>` | A task's reports and dispatch notes. | Deleted with the task |
 | `<repo>/.ai/cezar/attachments/` | A copy of every file you attached, under its own name. | Never deleted by Cezar |
-| `<repo>/.ai/cezar/runs.json`, `runs/*.ndjson` | The task index and event logs. Small. | Archived tasks are deleted after 90 days; old runs are pruned past the run-count cap |
+| `<repo>/.ai/cezar/runs.json`, `runs/*.ndjson` | The task index and event logs. Small. | Archived tasks are deleted after 90 days; old runs are pruned past the task history limits |
 | `~/.cezar/versions/` | Installed Cezar versions. | Old versions are pruned after an update and on startup |
 
 ## Where to find it
 
-- Settings → Behaviour: the age default and the archived-task lifetime for every project, and the disk guard thresholds.
+- Settings → Behaviour: the age default and the archived-task lifetime for every project, the task history limits, and the disk guard thresholds.
 - Project settings → Worktrees: this project's count limit, age limit and archived-task lifetime, and every worktree on disk with its size, last activity and whether it can be reclaimed.
 
 ## How to use it
@@ -81,6 +81,12 @@ An archived task is deleted for good after a number of days. The default is **90
 Deletion runs when Cezar starts and once an hour, and the server log says how many tasks it deleted and how many branches it kept. Change the lifetime in Settings → Behaviour (every project) or Project settings → Worktrees (this project, or **Workspace default** to inherit). Independently of the lifetime, a project keeps at most 500 archived tasks.
 
 To delete them from a terminal, run `cez worktrees prune --archived-older-than 90d`. Add `--dry-run` to list what would be deleted, with the branches that would be kept, and change nothing.
+
+## Task history
+
+Each project keeps a limited number of finished tasks. Past the limit, the oldest are deleted with their logs. Tasks you started and tasks an automation launched have separate limits, so a busy automation never pushes out your own tasks. A task that an automation's task dispatched counts as an automation task.
+
+Both limits default to **300** and apply to every project. Change them in Settings → Behaviour → Task history. Running and waiting tasks do not count, and pinned tasks are never deleted. Archived tasks have their own limit of 500.
 
 ## Disk guard
 

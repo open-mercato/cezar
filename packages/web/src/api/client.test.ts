@@ -403,7 +403,7 @@ describe('workspace branding logo client', () => {
       browseRoot: '~/source', projectsDir: '~/projects', skillsAutoUpdate: null,
       effectiveSkillsAutoUpdate: true,
       composerDefaults: { autonomous: null, worktree: null, inheritedAutonomous: 'source-dependent', inheritedWorktree: true },
-      resources: { maxParallel: 2, maxMonitoringSessions: 2, idleTimeoutMinutes: 15, monitoringWakeIntervalMinutes: 5, autoResumeOnUsageLimit: true, memoryLimitMb: null, worktreeRetentionDefault: 10, worktreeIdleDaysDefault: 7, archivedTaskDeleteDaysDefault: 90, diskGuard: { minFreePercent: 10, minFreeGb: 5, maxWorktreesGb: 20 }, },
+      resources: { maxParallel: 2, maxMonitoringSessions: 2, idleTimeoutMinutes: 15, monitoringWakeIntervalMinutes: 5, autoResumeOnUsageLimit: true, memoryLimitMb: null, worktreeRetentionDefault: 10, worktreeIdleDaysDefault: 7, archivedTaskDeleteDaysDefault: 90, runsKept: 300, automationRunsKept: 300, diskGuard: { minFreePercent: 10, minFreeGb: 5, maxWorktreesGb: 20 }, },
       agentDefaults: {},
     })
     const config = await getWorkspaceConfig()
@@ -467,7 +467,7 @@ describe('response parsing', () => {
       monitoringWakeIntervalMinutes: 5,
       autoResumeOnUsageLimit: true,
       memoryLimitMb: null,
-      worktreeRetentionDefault: 10, worktreeIdleDaysDefault: 7, archivedTaskDeleteDaysDefault: 90, diskGuard: { minFreePercent: 10, minFreeGb: 5, maxWorktreesGb: 20 },
+      worktreeRetentionDefault: 10, worktreeIdleDaysDefault: 7, archivedTaskDeleteDaysDefault: 90, runsKept: 300, automationRunsKept: 300, diskGuard: { minFreePercent: 10, minFreeGb: 5, maxWorktreesGb: 20 },
       ...resources,
     },
     agentDefaults: {},

@@ -115,7 +115,7 @@ describe('layouts and the run store', () => {
     // A live (`queued`) run is never pruned (telemetry 73c6e796) — only a finished one is.
     store.updateRun(first.id, { status: 'done' });
     writeRunLayouts(dataDir, first.id, ONE);
-    for (let n = 1; n <= 320; n++) store.createRun(input(n));
+    for (let n = 1; n <= 320; n++) store.updateRun(store.createRun(input(n)).id, { status: 'done' });
     store.flush();
     expect(store.getRun(first.id)).toBeUndefined();
     expect(existsSync(file(first.id))).toBe(false);
@@ -131,7 +131,7 @@ describe('layouts and the run store', () => {
     mkdirSync(receipts, { recursive: true });
     writeFileSync(context, '{}');
     writeFileSync(join(receipts, 'op.json'), '{}');
-    for (let n = 1; n <= 320; n++) store.createRun(input(n));
+    for (let n = 1; n <= 320; n++) store.updateRun(store.createRun(input(n)).id, { status: 'done' });
     store.flush();
     expect(store.getRun(first.id)).toBeUndefined();
     expect(existsSync(context)).toBe(false);

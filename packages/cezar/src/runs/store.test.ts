@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { currentTaskPr } from '../attention/list.ts';
 import { readRunIndexFromDisk } from './run-index.ts';
 import { reconcileLoadedRun, RunStore } from './store.ts';
+import { setConfiguredRunRetention } from './history-pools.ts';
 
 import type { RunRecord } from './store.ts';
 
@@ -2431,7 +2432,9 @@ describe('RunStore — per-record salvage of records this version cannot read (P
     ];
     write([...oldSalvaged, ...many]);
     const store = RunStore.open(dataDir);
-    store.createRun({ title: 'new', workflow: 'quick-task', task: 'new', steps: [] });
+    // Pools count settled runs, so the new run takes its slot when it settles.
+    const created = store.createRun({ title: 'new', workflow: 'quick-task', task: 'new', steps: [] });
+    store.updateRun(created.id, { status: 'done' });
     store.flush();
     const ids = onDisk().map((r) => r.id);
     expect(ids).not.toContain('future-old-a');
@@ -2780,7 +2783,7 @@ describe('RunStore — a save never drops another process’s runs', () => {
     // Live runs are pinned against retention; only a settled run can be pruned.
     store.getRun(oldest)!.status = 'done';
 
-    for (let index = 0; index < 301; index++) newRun(store, `retained-${index}`);
+    for (let index = 0; index < 301; index++) store.updateRun(newRun(store, `retained-${index}`), { status: 'done' });
 
     expect(store.getRun(oldest)).toBeUndefined();
     expect(deleted.filter((id) => id === oldest)).toEqual([oldest]);
@@ -3030,7 +3033,7 @@ describe('RunStore — pruning spares live runs (telemetry 73c6e796)', () => {
     store.updateRun(root.id, { status: 'review', dispatch: { rootRunId: root.id } });
     store.updateRun(parent.id, { status: 'running', dispatch: { rootRunId: root.id, parentRunId: root.id } });
     store.updateRun(stale.id, { status: 'done' });
-    for (let i = 0; i < 300; i++) create(`filler ${i}`);
+    for (let i = 0; i < 300; i++) store.updateRun(create(`filler ${i}`).id, { status: 'done' });
 
     expect(store.getRun(parent.id)).toBeDefined();
     expect(store.getRun(root.id)).toBeDefined();
@@ -3053,6 +3056,60 @@ describe('RunStore — pruning spares live runs (telemetry 73c6e796)', () => {
       expect(store.listRuns().length).toBe(5);
     } finally {
       delete process.env.CEZ_RUNS_KEEP;
+    }
+  });
+
+  it('keeps regular and automation tasks in separate pools', () => {
+    process.env.CEZ_RUNS_KEEP = '3';
+    process.env.CEZ_AUTOMATION_RUNS_KEEP = '2';
+    try {
+      const store = RunStore.open(dataDir);
+      let clock = Date.parse('2026-01-01T00:00:00.000Z');
+      const make = (title: string, automation: boolean) => {
+        vi.setSystemTime((clock += 1_000));
+        const run = store.createRun({ title, workflow: 'quick-task', task: 't', steps: [] });
+        // The automation launcher writes provenance right after `createRun`, before the run settles.
+        if (automation) {
+          store.updateRun(run.id, {
+            automationTrigger: { automationId: 'a1', automationRevision: 1, receiptId: `r-${title}`, trigger: 'schedule', occurrenceAt: '2026-01-01T00:00:00.000Z' },
+          });
+        }
+        store.updateRun(run.id, { status: 'done' });
+        return run.id;
+      };
+      const manual = [make('m0', false), make('m1', false), make('m2', false)];
+      const autos = Array.from({ length: 20 }, (_, i) => make(`a${i}`, true));
+      for (const id of manual) expect(store.getRun(id)).toBeDefined();
+      expect(autos.filter((id) => store.getRun(id)).length).toBe(2);
+      // A child an automation's task dispatched belongs to the automation pool too.
+      vi.setSystemTime((clock += 1_000));
+      const child = store.createRun({ title: 'child', workflow: 'quick-task', task: 't', steps: [] });
+      store.updateRun(child.id, { dispatch: { rootRunId: autos[19]! } });
+      store.updateRun(child.id, { status: 'done' });
+      for (const id of manual) expect(store.getRun(id)).toBeDefined();
+      const newRegular = make('m3', false);
+      expect(store.getRun(newRegular)).toBeDefined();
+      expect(store.getRun(manual[0]!)).toBeUndefined();
+    } finally {
+      delete process.env.CEZ_RUNS_KEEP;
+      delete process.env.CEZ_AUTOMATION_RUNS_KEEP;
+    }
+  });
+
+  it('workspace retention settings win over the env', () => {
+    process.env.CEZ_RUNS_KEEP = '50';
+    setConfiguredRunRetention({ regular: 4 });
+    try {
+      const store = RunStore.open(dataDir);
+      let clock = Date.parse('2026-01-01T00:00:00.000Z');
+      for (let i = 0; i < 10; i++) {
+        vi.setSystemTime((clock += 1_000));
+        store.updateRun(store.createRun({ title: `r${i}`, workflow: 'quick-task', task: 't', steps: [] }).id, { status: 'done' });
+      }
+      expect(store.listRuns().length).toBe(4);
+    } finally {
+      delete process.env.CEZ_RUNS_KEEP;
+      setConfiguredRunRetention({});
     }
   });
 

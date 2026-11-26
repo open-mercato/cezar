@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { diskGuardStatusSchema, hostUsageSchema, setWorkspaceConfigInputSchema, type WorkspaceConfigResponse } from '@open-mercato/cezar-contract';
 import { workspaceConfigPath, workspaceUiStatePath } from '../paths.ts';
 import { WorkspaceSemaphore } from '../workspace/semaphore.ts';
+import { runRetentionLimits, setConfiguredRunRetention } from '../runs/history-pools.ts';
 import { RunStore } from '../runs/store.ts';
 import type { RunManager } from '../workflows/run.ts';
 import { apiRequest } from './loopback-request.testkit.ts';
@@ -114,6 +115,8 @@ describe('the workspace settings API (step 2.7)', () => {
         worktreeRetentionDefault: 10,
         worktreeIdleDaysDefault: 7,
         archivedTaskDeleteDaysDefault: 90,
+        runsKept: 300,
+        automationRunsKept: 300,
         diskGuard: { minFreePercent: 10, minFreeGb: 5, maxWorktreesGb: 20 },
       },
       // Machine-wide agent defaults (spec 2026-07-29-agent-profiles). EMPTY, not populated: absent
@@ -325,6 +328,8 @@ describe('the workspace settings API (step 2.7)', () => {
         worktreeRetentionDefault: 10,
         worktreeIdleDaysDefault: 7,
         archivedTaskDeleteDaysDefault: 90,
+        runsKept: 300,
+        automationRunsKept: 300,
         diskGuard: { minFreePercent: 10, minFreeGb: 5, maxWorktreesGb: 20 },
       },
       // Untouched by a resources write, and still empty — the two live in the same file but answer
@@ -389,8 +394,21 @@ describe('the workspace settings API (step 2.7)', () => {
       worktreeRetentionDefault: 3,
       worktreeIdleDaysDefault: 7,
       archivedTaskDeleteDaysDefault: 90,
+      runsKept: 300,
+      automationRunsKept: 300,
       diskGuard: { minFreePercent: 10, minFreeGb: 5, maxWorktreesGb: 20 },
     });
+  });
+
+  it('PUT sets each task history pool and rejects a size below 1', async () => {
+    const res = await putConfig({ resources: { runsKept: 1200, automationRunsKept: 150 } });
+    expect(res.status).toBe(200);
+    const body = (await (await getConfig()).json()) as WorkspaceConfigResponse;
+    expect(body.resources).toMatchObject({ runsKept: 1200, automationRunsKept: 150 });
+    // Live, without a restart: the semaphore refresh hands the sizes to every project's store.
+    expect(runRetentionLimits()).toMatchObject({ regular: 1200, automation: 150 });
+    setConfiguredRunRetention({});
+    expect((await putConfig({ resources: { automationRunsKept: 0 } })).status).toBe(400);
   });
 
   it('PUT stores explicit auto-update values and null clears back to the inherited env value', async () => {

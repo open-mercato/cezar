@@ -29,6 +29,7 @@ import type { AgentUsageStatus } from '../core/agent-runner.ts';
 import { sweepOrphanTaskFiles } from './task-files.ts';
 import { deleteRunDrafts } from './drafts.ts';
 import { deleteRunLayouts, pruneOrphanLayouts } from './layouts.ts';
+import { runRetentionLimits } from './history-pools.ts';
 import { failureKind, taskFailedLabel } from './failure-kind.ts';
 import { track } from '../telemetry.ts';
 import { reportAgentError } from './agent-error-telemetry.ts';
@@ -611,13 +612,6 @@ export interface RunEvent {
 
 /** A layout file this young may belong to a run another process has not saved to the index yet. */
 const ORPHAN_LAYOUT_GRACE_MS = 10 * 60_000;
-const DEFAULT_RUNS_KEPT = 300;
-const DEFAULT_ARCHIVED_KEPT = 500;
-/** `CEZ_RUNS_KEEP` / `CEZ_ARCHIVED_RUNS_KEEP`: how many settled runs the index keeps (at least 1; live runs and active dispatch trees are never pruned). */
-function keepLimit(name: string, fallback: number): number {
-  const n = Number.parseInt(process.env[name] ?? '', 10);
-  return Number.isFinite(n) && n >= 1 ? n : fallback;
-}
 /** Every save rewrites the whole index, and a live run touches its record at event rate. */
 const SAVE_DEBOUNCE_MS = 1_000;
 /** Statuses the run manager still acts on — a record in one of them must outlive pruning. */
@@ -1573,6 +1567,7 @@ export class RunStore extends EventEmitter {
   updateRun(id: string, patch: Partial<Omit<RunRecord, 'id' | 'steps'>>): RunRecord | undefined {
     const run = this.runs.get(id);
     if (!run) return undefined;
+    const wasLive = LIVE_STATUSES.has(run.status);
     if (Object.prototype.hasOwnProperty.call(patch, 'issueNumber')) {
       delete run.referencedIssueNumberSeeded;
     }
@@ -1654,6 +1649,9 @@ export class RunStore extends EventEmitter {
       appendPrRefToRun(run, { number: normalized.prNumber, origin: 'derived' });
     }
     this.touch(run);
+    // A run joins its retention pool when it settles (provenance is written by then).
+    // Spared this pass: the settle path still writes to it.
+    if (wasLive && !LIVE_STATUSES.has(run.status)) this.pruneOldRuns(id);
     return run;
   }
 
@@ -2523,14 +2521,14 @@ export class RunStore extends EventEmitter {
 
   /** A live run, and the dispatch parent/root of one, is never pruned: the run manager still
    *  writes to it, and evicting a long-lived parent while it dispatched threw `unknown run`
-   *  (telemetry 73c6e796). The cap is a soft bound — live runs count toward it but never leave. */
-  private pruneOldRuns(): void {
+   *  (telemetry 73c6e796). Pools count settled runs only; pinned ones count but never leave. */
+  private pruneOldRuns(spare?: string): void {
     // Retention covers salvaged headers too, so records this version cannot read are bounded by
     // the same caps and cannot pile up across downgrade/upgrade cycles.
     const runs = this.listRuns();
     const all: Array<{ id: string; createdAt: string; archived: boolean }> = [...runs, ...this.salvaged.values()]
       .sort((a, b) => b.createdAt.localeCompare(a.createdAt) || a.id.localeCompare(b.id));
-    const pinned = new Set<string>();
+    const pinned = new Set<string>(spare ? [spare] : []);
     for (const run of runs) {
       // Pruning the record would also orphan a pinned task's worktree for the next sweep.
       if (run.pinned) pinned.add(run.id);
@@ -2539,9 +2537,16 @@ export class RunStore extends EventEmitter {
       if (run.dispatch?.parentRunId) pinned.add(run.dispatch.parentRunId);
       if (run.dispatch?.rootRunId) pinned.add(run.dispatch.rootRunId);
     }
+    // Automation tasks have their own pool so a busy automation never evicts hand-started ones.
+    const limits = runRetentionLimits();
+    // Pools hold SETTLED runs: a live one is never pruned, and its provenance may not be written yet.
+    const live = new Set(runs.filter((r) => LIVE_STATUSES.has(r.status)).map((r) => r.id));
+    const active = all.filter((r) => !r.archived && !live.has(r.id));
+    const fromAutomation = (r: { id: string }) => this.isAutomationRun(r.id);
     const stalePool = [
-      ...all.filter((r) => !r.archived).slice(keepLimit('CEZ_RUNS_KEEP', DEFAULT_RUNS_KEPT)),
-      ...all.filter((r) => r.archived).slice(keepLimit('CEZ_ARCHIVED_RUNS_KEEP', DEFAULT_ARCHIVED_KEPT)),
+      ...active.filter((r) => !fromAutomation(r)).slice(limits.regular),
+      ...active.filter(fromAutomation).slice(limits.automation),
+      ...all.filter((r) => r.archived).slice(limits.archived),
     ].filter((r) => !pinned.has(r.id));
     for (const stale of stalePool) {
       const root = this.runs.get(stale.id)?.dispatch?.rootRunId;
@@ -2549,6 +2554,17 @@ export class RunStore extends EventEmitter {
       this.salvaged.delete(stale.id);
       this.deleteRunFiles(stale.id, root);
     }
+  }
+
+  /** Launched by an automation, itself or through its dispatch root — the cockpit's
+   *  Regular/Automations split (`web/src/lib/task-origin.ts`). Salvaged records count as regular. */
+  private isAutomationRun(id: string): boolean {
+    const own = (run: RunRecord | undefined) =>
+      !!run && !run.deferredBinding && !!(run.automation ?? run.automationTrigger ?? run.automationTracker);
+    const run = this.runs.get(id);
+    if (own(run)) return true;
+    const root = run?.dispatch?.rootRunId;
+    return root !== undefined && root !== id && own(this.runs.get(root));
   }
 
   /** Startup sweep: artifacts and dispatch trees whose task is gone (spec

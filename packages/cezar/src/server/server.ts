@@ -14,6 +14,7 @@ import { createPrEndMemory, prEndLookup, type PrEndMemory } from '../attention/p
 import { createAttentionAnnouncer, createAttentionService } from '../attention/service.ts';
 import { deleteExpiredArchivedInputSchema, reclaimWorktreesInputSchema } from '@open-mercato/cezar-contract';
 import { deleteExpiredArchivedTasks } from '../runs/archived-cleanup.ts';
+import { effectiveHistoryPools } from '../runs/history-pools.ts';
 import {
   trackerWatchInputSchema, trackerWatchParamsSchema, trackerWatchQuerySchema,
   trackerCandidatesQuerySchema, trackerListQuerySchema, trackerSearchQuerySchema, trackerItemQuerySchema, trackerReadScope,
@@ -4105,6 +4106,7 @@ export function createAppParts(deps: ServerDeps) {
       worktreeRetentionDefault: config.resources.worktreeRetentionDefault,
       worktreeIdleDaysDefault: config.resources.worktreeIdleDaysDefault,
       archivedTaskDeleteDaysDefault: config.resources.archivedTaskDeleteDaysDefault,
+      ...effectiveHistoryPools(config.resources),
       diskGuard: {
         minFreePercent: config.resources.diskGuard.minFreePercent,
         minFreeGb: config.resources.diskGuard.minFreeGb,
@@ -4236,6 +4238,10 @@ export function createAppParts(deps: ServerDeps) {
           }
           if (resources?.archivedTaskDeleteDaysDefault !== undefined) {
             config.resources.archivedTaskDeleteDaysDefault = resources.archivedTaskDeleteDaysDefault;
+          }
+          if (resources?.runsKept !== undefined) config.resources.runsKept = resources.runsKept;
+          if (resources?.automationRunsKept !== undefined) {
+            config.resources.automationRunsKept = resources.automationRunsKept;
           }
           if (resources?.diskGuard) {
             for (const key of ['minFreePercent', 'minFreeGb', 'maxWorktreesGb'] as const) {

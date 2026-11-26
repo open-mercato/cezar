@@ -1,5 +1,6 @@
 import { realpathSync } from 'node:fs';
 import { resolve } from 'node:path';
+import { setConfiguredRunRetention } from '../runs/history-pools.ts';
 import { DEFAULT_IDLE_TIMEOUT_MINUTES, DEFAULT_MONITORING_WAKE_MINUTES, loadWorkspaceConfig } from './config.ts';
 import { RestartGate } from './restart-gate.ts';
 
@@ -148,6 +149,8 @@ const DEFAULT_LIMITS: WorkspaceResourceLimits = {
  *  the keys match `normalizeRootSync`'s output at lookup time. */
 async function loadResourceLimits(): Promise<WorkspaceResourceLimits> {
   const { resources, projects } = await loadWorkspaceConfig();
+  // The one workspace-resources cache refresh: boot and every Settings write land here.
+  setConfiguredRunRetention({ regular: resources.runsKept, automation: resources.automationRunsKept });
   const projectLimits = new Map<string, number>();
   for (const project of projects) {
     if (typeof project.maxParallel === 'number') projectLimits.set(project.root, project.maxParallel);

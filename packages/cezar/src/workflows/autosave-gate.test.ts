@@ -225,7 +225,9 @@ describe('periodic autosave gate (#471)', () => {
     seam.checkArtifactSnapshots.set(unarchived.id, new Map([['check-output.txt', 'snapshot']]));
     seam.autosaveCheckpointBlockedRuns.add(unarchived.id);
     for (let index = 0; index < 301; index++) {
-      store.createRun({ title: `unarchived-${index}`, workflow: 'quick-task', task: 'new', steps: [] });
+      // Pools count settled runs, so each filler settles.
+      const filler = store.createRun({ title: `unarchived-${index}`, workflow: 'quick-task', task: 'new', steps: [] });
+      store.updateRun(filler.id, { status: 'done' });
     }
     expect(store.getRun(unarchived.id)).toBeUndefined();
     expect(seam.checkArtifactSnapshots.has(unarchived.id)).toBe(false);
