@@ -1,4 +1,4 @@
-import { DEFAULT_ALLOWED_TOOLS, type AgentRunSpec } from './agent-runner.ts';
+import { DEFAULT_ALLOWED_TOOLS, type AgentRunSpec, type BrokeredShell } from './agent-runner.ts';
 import { CodexToolPolicyError } from './codex-tool-policy.ts';
 import { tokenizePlainShell } from './plain-shell.ts';
 
@@ -15,12 +15,20 @@ export interface CodexRestrictedPolicy {
   readonly mutation: 'read-only';
   readonly tools: ReadonlySet<string>;
   readonly bashPrefixes: readonly string[];
+  /** A manager's vetted shell: Bash goes through it instead of the git/GitHub read grant. */
+  readonly shell?: BrokeredShell;
 }
 
 /** Undefined is the historical unrestricted path. Unsupported grants never become unrestricted. */
 export function compileCodexRestrictedPolicy(spec: Pick<AgentRunSpec,
-  'allowedTools' | 'bashAllowlist' | 'bashHookCommand' | 'enforceReadOnly' | 'mcpServers'
+  'allowedTools' | 'bashAllowlist' | 'bashHookCommand' | 'enforceReadOnly' | 'mcpServers' | 'brokeredShell'
 >): CodexRestrictedPolicy | undefined {
+  if (spec.brokeredShell) {
+    // The shell's own verifier is the Bash grant; a read-only session never gets one.
+    const tools = spec.allowedTools ?? [];
+    if (spec.enforceReadOnly || spec.mcpServers?.length || spec.bashHookCommand !== undefined || !tools.includes('Bash') || tools.some(t => !READ_TOOLS.has(t))) throw new CodexToolPolicyError();
+    return { mutation: 'read-only', tools: new Set(tools), bashPrefixes: [], shell: spec.brokeredShell };
+  }
   const explicit = spec.allowedTools;
   const tools = explicit ?? (spec.enforceReadOnly ? ['Read', 'Grep', 'Glob'] : undefined);
   const legacy = tools === undefined || (tools.length === DEFAULT_ALLOWED_TOOLS.length && DEFAULT_ALLOWED_TOOLS.every(t => tools.includes(t)));

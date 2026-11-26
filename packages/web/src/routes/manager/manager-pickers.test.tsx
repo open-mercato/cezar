@@ -29,8 +29,8 @@ describe('manager agent and account selection', () => {
     fireEvent.pointerDown(screen.getByRole('button', { name: 'Manager agent' }))
     const opencode = await screen.findByRole('menuitemradio', { name: 'opencode' })
     expect(screen.queryByRole('menuitemradio', { name: 'pi' })).toBeNull()
-    // Codex cannot enforce the manager's cez-manager fence (#2330).
-    expect(screen.queryByRole('menuitemradio', { name: 'codex' })).toBeNull()
+    // Codex enforces the manager's fence through cezar's broker.
+    expect(screen.getByRole('menuitemradio', { name: 'codex' })).toBeTruthy()
     fireEvent.click(opencode)
     expect(onChange).toHaveBeenCalledWith({ runner: 'opencode', model: null, agentProfile: null })
   })

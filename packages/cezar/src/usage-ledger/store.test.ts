@@ -75,7 +75,7 @@ describe('the plan-usage ledger store', () => {
     task.ui({ type: 'turn.completed' });
     clock = t0 + 222_000;
     task.event({ type: 'cost', usd: 6.11 });
-    const records = readLedger(1);
+    const records = readLedger(1, t0 + 300_000);
     const samples = records.filter((r) => r.t === 'sample') as Array<Extract<ReturnType<typeof readLedger>[number], { t: 'sample' }>>;
     const end = records.find((r) => r.t === 'end')!;
     expect(samples.map((s) => [s.from - t0, s.to - t0])).toEqual([[0, 14_000], [14_000, 221_000]]);

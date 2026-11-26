@@ -200,6 +200,17 @@ export function inPlacePrPrompt(draft: boolean, base: string): string {
   return `${draft ? 'Create draft PR' : 'Create PR'} against ${base} instead of landing: move these changes to a new branch, commit and push it, open the PR, then switch the checkout back to ${base}`
 }
 
+/** Commit to the base from a worktree task in a trunk-based project: the server lands only in-place
+ *  tasks, so the agent does what `landInPlace` does — rebase, required checks, push. The remote is
+ *  the one `git/status` counted `ahead` against (`baseRemote`, the resolved PR target): pushing
+ *  anywhere else — a fork clone's `origin` — leaves the button offering the same land again. */
+export function landBranchPrompt(base: string, remote: string, requiredChecks: readonly string[] = []): string {
+  const checks = requiredChecks.length > 0
+    ? `run the required checks (${requiredChecks.map((check) => `\`${check}\``).join(', ')}) and stop without pushing if any fails`
+    : `run the project's checks and stop without pushing if any fails`
+  return `Commit to ${base}: commit what is left, fetch ${remote} and rebase this branch onto ${remote}/${base}, ${checks}, then push it with \`git push ${remote} HEAD:${base}\``
+}
+
 /** Update branch for an in-place task: bring the checkout up to date, keeping the task's changes. */
 export function inPlaceUpdatePrompt(base: string): string {
   return `Update branch: pull the latest ${base} into the checkout (rebase, keeping these uncommitted changes)`

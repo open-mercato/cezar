@@ -2,11 +2,13 @@ import { CheckIcon, ChevronDownIcon } from 'lucide-react'
 import { useState, type ReactNode } from 'react'
 
 import { useAgentProfiles, useHealth, useProjects, useProviderStatus, useRunnerModels } from '@/api/queries'
+import { useAddAccount } from '@/components/add-account/add-account-host'
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from '@/components/ui/command'
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuCheckboxItem,
+  DropdownMenuItem,
   DropdownMenuLabel,
   DropdownMenuRadioGroup,
   DropdownMenuRadioItem,
@@ -35,7 +37,7 @@ import {
 /** What a picker edits. `null` clears, as in the update route; the setup screen maps it to absent. */
 export type ManagerPatch = Pick<
   UpdateManagerInput,
-  'projects' | 'access' | 'projectAccess' | 'runner' | 'taskRunner' | 'taskAgents' | 'model' | 'effort' | 'agentProfile' | 'cronMinutes'
+  'projects' | 'access' | 'projectAccess' | 'runner' | 'taskRunner' | 'taskAgents' | 'model' | 'effort' | 'agentProfile' | 'cronMinutes' | 'backups' | 'failback' | 'taskBusyAt' | 'taskLimitSwitch'
 >
 
 export const PICKER_TRIGGER =
@@ -168,8 +170,8 @@ export function useManagerRunner(pinned: string | undefined): Runner {
 }
 
 function useManagerRunners() {
-  // Pi cannot grant the manager's restricted shell tools; Codex cannot enforce the cez-manager fence (#2330).
-  return usableRunners(useProviderStatus().data).filter((runner) => runner !== 'pi' && runner !== 'codex')
+  // Pi cannot grant the manager's restricted shell tools.
+  return usableRunners(useProviderStatus().data).filter((runner) => runner !== 'pi')
 }
 
 /** Radix re-fires on the checked item: only a different agent drops its model and account pins. */
@@ -321,17 +323,29 @@ export function AccountPicker({
 
 function AccountOptions({ runner, agentProfile, onChange }: { runner: Runner; agentProfile?: string; onChange: (patch: ManagerPatch) => void }) {
   const profiles = useAgentProfiles().data
-  const accounts = profiles?.profiles.filter((account) => account.provider === runner) ?? []
+  const accounts = profiles?.profiles.filter((account) => account.provider === runner && !account.pending) ?? []
+  const addAccount = useAddAccount()
   const defaultId = profiles?.defaults?.[runner] ?? DEFAULT_AGENT_ACCOUNT_ID
   const defaultLabel = accounts.find((account) => account.id === defaultId)?.label ?? 'Default'
   return (
-    <DropdownMenuRadioGroup value={agentProfile ?? ''} onValueChange={(next) => onChange({ agentProfile: next === '' ? null : next })}>
-      <DropdownMenuRadioItem value=""><span className="min-w-0 break-words whitespace-normal">Use workspace default ({defaultLabel})</span></DropdownMenuRadioItem>
-      <DropdownMenuRadioItem value={DEFAULT_AGENT_ACCOUNT_ID}>Default</DropdownMenuRadioItem>
-      {accounts.filter((account) => account.id !== DEFAULT_AGENT_ACCOUNT_ID).map((account) => (
-        <DropdownMenuRadioItem key={account.id} value={account.id}><span className="min-w-0 break-words whitespace-normal">{account.label}</span></DropdownMenuRadioItem>
-      ))}
-    </DropdownMenuRadioGroup>
+    <>
+      <DropdownMenuRadioGroup value={agentProfile ?? ''} onValueChange={(next) => onChange({ agentProfile: next === '' ? null : next })}>
+        <DropdownMenuRadioItem value=""><span className="min-w-0 break-words whitespace-normal">Use workspace default ({defaultLabel})</span></DropdownMenuRadioItem>
+        <DropdownMenuRadioItem value={DEFAULT_AGENT_ACCOUNT_ID}>Default</DropdownMenuRadioItem>
+        {accounts.filter((account) => account.id !== DEFAULT_AGENT_ACCOUNT_ID).map((account) => (
+          <DropdownMenuRadioItem key={account.id} value={account.id}><span className="min-w-0 break-words whitespace-normal">{account.label}</span></DropdownMenuRadioItem>
+        ))}
+      </DropdownMenuRadioGroup>
+      {addAccount?.capable.includes(runner) ? (
+        <DropdownMenuItem
+          data-action="manager-add-account"
+          className="border-t border-border"
+          onSelect={() => addAccount.open({ provider: runner, onAdded: (profile) => onChange({ agentProfile: profile.id }) })}
+        >
+          Add account…
+        </DropdownMenuItem>
+      ) : null}
+    </>
   )
 }
 
@@ -342,7 +356,7 @@ export function TaskRunnerPicker({ taskRunner, taskAgents, onChange, className }
   className?: string
 }) {
   const status = useProviderStatus().data
-  const profiles = useAgentProfiles().data?.profiles ?? []
+  const profiles = (useAgentProfiles().data?.profiles ?? []).filter((profile) => !profile.pending)
   const selected = taskAgents ?? (taskRunner ? [{ runner: taskRunner }] : [])
   const [open, setOpen] = useState(false)
   const [draft, setDraft] = useState<ManagerTaskAgent[]>(selected)

@@ -84,12 +84,34 @@ describe('Markdown Mermaid previews', { timeout: 40_000 }, () => {
 
     rerender(<Markdown>{fence('flowchart LR\n  A --> B')}</Markdown>)
     await screen.findByRole('img', { name: 'Mermaid chart' }, SLOW)
+    await waitFor(() => expect(renderDiagram.mock.calls.at(-1)?.[0]).toContain('A --> B'), SLOW)
     expect(screen.queryByText(/Invalid Mermaid syntax/)).toBeNull()
   })
 
   it('handles an incomplete streaming fence followed by a complete diagram', async () => {
     const { rerender } = render(<Markdown>{'```mermaid\nflowchart LR\n  A --> B'}</Markdown>)
     await screen.findByRole('img', { name: 'Mermaid chart' }, SLOW)
+    await waitFor(() => expect(renderDiagram.mock.calls.at(-1)?.[0]).toContain('A --> B'), SLOW)
+    rerender(<Markdown>{fence('flowchart LR\n  A --> B\n  B --> C')}</Markdown>)
+    await waitFor(() => expect(renderDiagram.mock.calls.at(-1)?.[0]).toContain('B --> C'), SLOW)
+  })
+
+  it('re-renders the completed diagram when updated in the same tick the chart first mounts', async () => {
+    const { container, rerender } = render(<Markdown>{'```mermaid\nflowchart LR\n  A --> B'}</Markdown>)
+    await new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        observer.disconnect()
+        reject(new Error('Timed out waiting for Mermaid chart mount'))
+      }, SLOW.timeout)
+      const observer = new MutationObserver(() => {
+        if (container.querySelector('[role="img"][aria-label="Mermaid chart"]')) {
+          clearTimeout(timer)
+          observer.disconnect()
+          resolve()
+        }
+      })
+      observer.observe(container, { childList: true, subtree: true })
+    })
     rerender(<Markdown>{fence('flowchart LR\n  A --> B\n  B --> C')}</Markdown>)
     await waitFor(() => expect(renderDiagram.mock.calls.at(-1)?.[0]).toContain('B --> C'), SLOW)
   })

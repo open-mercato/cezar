@@ -2,6 +2,7 @@ import { ChevronRightIcon } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState, type JSX, type Ref } from 'react'
 import { Link, useLocation } from 'react-router'
 
+import { useAttention } from '@/api/attention'
 import { useManagers } from '@/api/managers'
 import { useHealth, useProjects } from '@/api/queries'
 import { Kbd } from '@/components/kbd'
@@ -15,6 +16,7 @@ import {
   diffArrivals,
   headAnnouncement,
   headCount,
+  withLiveCounts,
   headLine,
   needsYou,
   readHeadMemory,
@@ -107,7 +109,10 @@ export function ManagerHeads(): JSX.Element | null {
   const available = useHealth().data?.capabilities.managers === true
   const enabled = useManagerHeadsEnabled()
   // The list the shell already fetches; the workspace stream keeps it current.
-  const managers = useManagers(false).data?.managers
+  const listed = useManagers(false).data?.managers
+  // Counted as Now counts them: a dismissed or snoozed card no longer raises a head.
+  const items = useAttention(available && enabled).data?.items
+  const managers = useMemo(() => (listed ? withLiveCounts(listed, items) : undefined), [listed, items])
   const active = available && enabled && managers !== undefined && !isManagerPathname(pathname)
   const placement = usePlacement(active)
   if (!active || placement.dialogOpen) return null

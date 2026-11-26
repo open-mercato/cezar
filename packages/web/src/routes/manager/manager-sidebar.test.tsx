@@ -221,29 +221,42 @@ describe('ManagerSidebar', () => {
     expect(document.querySelector('[data-slot="sidebar-approvals-count"]')?.className).toContain('bg-info')
   })
 
-  it('leads the Workspace group with Now, into the given project, with the project nav\'s needs-you badge', () => {
+  it('leads the Workspace group with Manager mode\'s own Now and its badge (spec 2026-11-23-needs-you-triage)', () => {
     const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } })
     client.setQueryData(queryKeys.health, { capabilities: { managers: true } })
     client.setQueryData(managerKeys.list, { managers: [managerFixture()] })
     const view = (count: number | null) => (
       <QueryClientProvider client={client}>
-        <MemoryRouter initialEntries={['/manager/global']}><ManagerSidebar nowTo="/p/shop/" nowCount={count} /></MemoryRouter>
+        <MemoryRouter initialEntries={['/manager/global']}><ManagerSidebar nowCount={count} /></MemoryRouter>
       </QueryClientProvider>
     )
     const { rerender } = render(view(2))
     const now = within(workspace()).getAllByRole('link')[0]!
     expect(now.textContent).toBe('Now2')
-    expect(now.getAttribute('href')).toBe('/p/shop/')
+    // Never a project's Now: Manager mode stays in Manager mode.
+    expect(now.getAttribute('href')).toBe('/manager/now')
     expect(now.querySelector('svg.lucide-circle-dot')).not.toBeNull()
     expect(now.getAttribute('aria-current')).toBeNull()
     const badge = now.querySelector('[data-slot="nav-needs-you-badge"]')!
-    expect(badge.getAttribute('title')).toBe('2 tasks need you')
+    expect(badge.getAttribute('title')).toBe('2 things from your managers need you')
     expect(badge.className).toContain('bg-violet')
     // Like the project nav: no badge at zero or while unknown.
     rerender(view(0))
     expect(now.querySelector('[data-slot="nav-needs-you-badge"]')).toBeNull()
     rerender(view(null))
     expect(now.textContent).toBe('Now')
+  })
+
+  it('marks its Now current on /manager/now (review of #2444)', () => {
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } })
+    client.setQueryData(queryKeys.health, { capabilities: { managers: true } })
+    client.setQueryData(managerKeys.list, { managers: [managerFixture()] })
+    render(
+      <QueryClientProvider client={client}>
+        <MemoryRouter initialEntries={['/manager/now']}><ManagerSidebar nowCount={1} /></MemoryRouter>
+      </QueryClientProvider>,
+    )
+    expect(document.querySelector('[data-slot="manager-sidebar-now"]')?.getAttribute('aria-current')).toBe('page')
   })
 
   it('keeps Approvals reachable with zero pending actions, and Jobs needs an open chat', () => {

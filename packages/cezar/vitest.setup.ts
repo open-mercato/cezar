@@ -3,6 +3,12 @@ import { homedir, tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { afterAll, afterEach, beforeEach } from 'vitest'
 import { RUN_SCOPED_ENV } from './src/workflows/run-env-keys.ts'
+import { guardChildProcessKill } from './src/core/child-kill-guard.ts'
+
+// Run as a cezar check step, the suite shares the cockpit's process group — and under the desktop
+// app, the app's. One case kills a stage that never started; unguarded, that is `kill(0, SIGKILL)`
+// (src/core/child-kill-guard.ts). The cockpit installs the same guard at boot.
+guardChildProcessKill()
 
 // Inside a cezar task TMP is `<repo>/.ai/cezar/tmp/<run>` — the user's own checkout. Cases that
 // take a fresh `tmpdir()` folder for "outside any repo" then ran git there: `commitAll` committed
@@ -85,6 +91,9 @@ for (const name of RUN_SCOPED_ENV) delete process.env[name]
 // Launcher tests opt in explicitly with their own environment and executable fixtures.
 delete process.env.CEZ_DESKTOP
 delete process.env.CEZ_DISCLAIM_EXEC
+// Nor may a case act as the desktop's supervised sidecar (restart via exit 75, watching the app's pid).
+delete process.env.CEZ_SUPERVISED
+delete process.env.CEZ_SUPERVISOR_PID
 
 // `gh`'s signed-in hosts decide which remotes count as GitHub Enterprise (`src/github-hosts.ts`);
 // a developer's own `hosts.yml` must not change what the suite classifies. A case that wants

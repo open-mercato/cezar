@@ -129,14 +129,49 @@ const TOOL_LIMITS_ENFORCED: Record<AgentBackend, boolean> = {
   gemini: false,
   kimi: false,
   omp: false,
-  antigravity: false,
+  antigravity: true,
 };
+
+const TOOL_LIMITS_ENFORCED_LABEL = 'Claude Code, Codex, Pi or Antigravity';
 
 /**
  * A read-only workflow's agent refuses a backend that would ignore its tool limits — the only
  * thing between it and a push. `undefined` when the step may run.
  */
-export function readOnlyWorkflowRefusal(def: WorkflowDef | undefined, backend: AgentBackend): string | undefined {
-  if (!def || TOOL_LIMITS_ENFORCED[backend] || !isReadOnlyWorkflow(def)) return undefined;
-  return `${backend} does not enforce a step's tool limits, so the read-only workflow "${def.name}" will not run on it — pick Claude Code, Codex or Pi for this task.`;
+export function readOnlyWorkflowRefusal(
+  def: WorkflowDef | undefined,
+  backend: AgentBackend,
+  catalog: readonly WorkflowDef[] = [],
+): string | undefined {
+  if (!def || TOOL_LIMITS_ENFORCED[backend] || !isReadOnlyWorkflow(def, catalog)) return undefined;
+  return `${backend} does not enforce a step's tool limits, so the read-only workflow "${def.name}" will not run on it — pick ${TOOL_LIMITS_ENFORCED_LABEL} for this task.`;
+}
+
+/**
+ * Whether `backend` can run `def` (enforces step tool limits whenever `def` is read-only).
+ * Delegates to `readOnlyWorkflowRefusal` so workflow compatibility has one source of truth.
+ */
+export function workflowSupportsBackend(
+  def: WorkflowDef | undefined,
+  backend: AgentBackend,
+  catalog: readonly WorkflowDef[] = [],
+): boolean {
+  return readOnlyWorkflowRefusal(def, backend, catalog) === undefined;
+}
+
+/**
+ * Refusal when none of a set of candidate backends can run `def`. Shares `TOOL_LIMITS_ENFORCED`
+ * and `TOOL_LIMITS_ENFORCED_LABEL` with `readOnlyWorkflowRefusal`; `undefined` when at least one fits.
+ */
+export function noCompatibleRunnerRefusal(
+  def: WorkflowDef | undefined,
+  backends: readonly AgentBackend[],
+  catalog: readonly WorkflowDef[] = [],
+): string | undefined {
+  if (!def || !isReadOnlyWorkflow(def, catalog)) return undefined;
+  if (backends.some((backend) => TOOL_LIMITS_ENFORCED[backend])) return undefined;
+  const listed = [...new Set(backends)];
+  if (listed.length === 1) return readOnlyWorkflowRefusal(def, listed[0]!, catalog);
+  const agentsText = listed.length > 0 ? ` (${listed.join(', ')})` : '';
+  return `None of the allowed agents${agentsText} enforce a step's tool limits, so the read-only workflow "${def.name}" will not run on them — pick ${TOOL_LIMITS_ENFORCED_LABEL} for this task.`;
 }

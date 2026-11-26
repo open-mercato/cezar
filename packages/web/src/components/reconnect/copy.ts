@@ -11,16 +11,14 @@ export const agentName = (provider: ProviderId): string => PROVIDER_LABELS[provi
 /** Per-agent sign-in traits, one row per runner so a new runner must decide its own.
  *  `terminal`: no headless login, the card hands off to a terminal and watches it.
  *  `key`: stores a pasted API key itself (decision 4), the only ones offered a key field.
- *  `tab`: the local sign-in opens a web page, so the card opens the tab inside the click and no
- *  popup blocker stands between it and the URL that arrives a moment later.
  *  `mono`/`ring`: the brand mark, as the design draws it; its colour is `--runner-mark-<id>`. */
-const RUNNER_TRAITS: Record<ProviderId, { terminal?: true; key?: true; tab?: true; mono: string; ring?: true }> = {
-  claude: { tab: true, mono: 'C' },
-  codex: { tab: true, key: true, mono: 'X', ring: true },
-  cursor: { tab: true, mono: 'Cu' },
-  copilot: { tab: true, mono: 'Co' },
+const RUNNER_TRAITS: Record<ProviderId, { terminal?: true; key?: true; mono: string; ring?: true }> = {
+  claude: { mono: 'C' },
+  codex: { key: true, mono: 'X', ring: true },
+  cursor: { mono: 'Cu' },
+  copilot: { mono: 'Co' },
   opencode: { key: true, mono: 'O' },
-  kimi: { tab: true, mono: 'K', ring: true },
+  kimi: { mono: 'K', ring: true },
   pi: { terminal: true, mono: 'π' },
   gemini: { terminal: true, mono: 'G' },
   antigravity: { terminal: true, mono: 'A' },
@@ -28,12 +26,11 @@ const RUNNER_TRAITS: Record<ProviderId, { terminal?: true; key?: true; tab?: tru
   omp: { terminal: true, mono: 'Ω' },
 }
 
-const runnersWith = (trait: 'terminal' | 'key' | 'tab'): ReadonlySet<ProviderId> =>
+const runnersWith = (trait: 'terminal' | 'key'): ReadonlySet<ProviderId> =>
   new Set((Object.keys(RUNNER_TRAITS) as ProviderId[]).filter((id) => RUNNER_TRAITS[id][trait]))
 
 export const TERMINAL_ONLY = runnersWith('terminal')
 export const KEY_CAPABLE = runnersWith('key')
-export const OPENS_A_TAB = runnersWith('tab')
 
 /** The agents' brand marks: monogram, an optional light ring, and the theme-stable colour token. */
 export function runnerMark(provider: ProviderId): { mono: string; color: string; ring: boolean } {

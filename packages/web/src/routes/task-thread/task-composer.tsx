@@ -66,7 +66,7 @@ export function TaskComposer({
   // a 409 refetches it and, when the truth names the other endpoint, delivers there instead.
   const deliverPrompt = useDeliverPrompt(run, continueAction.continueWith)
 
-  const hasDiffComments = diffComments.comments.length > 0
+  const hasDiffComments = diffComments.all.length > 0
   // Only to tell a registry skill from a backend's own slash command (`commentsRideWith`) —
   // fetched only while there are comments to protect.
   const skillCatalog = useSkills(hasDiffComments)
@@ -143,7 +143,7 @@ export function TaskComposer({
           hasDiffComments ?
             <DiffCommentChips
               runId={run.id}
-              comments={diffComments.comments}
+              comments={diffComments.all}
               onRemove={diffComments.remove}
               onOpen={onOpenComment}
             />

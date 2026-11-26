@@ -1,5 +1,5 @@
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
@@ -9,8 +9,10 @@ import {
   type ProviderId,
   type RunProviderCommand,
 } from '../core/provider-auth.ts';
+import type { InstallEnv, InstalledCli } from '../core/agent-install.ts';
 import { RUNNER_IDS } from '../core/agent-runner.ts';
 import { RunStore } from '../runs/store.ts';
+import { runInRelayScope } from '../relay/scope.ts';
 import { defaultWorkspaceConfig, type WorkspaceConfig } from '../workspace/config.ts';
 import { RunManager } from '../workflows/run.ts';
 import { ProjectContexts } from './project-context.ts';
@@ -158,13 +160,18 @@ describe('workspace provider API', () => {
     else process.env.GEMINI_API_KEY = savedGeminiKey;
   });
 
+  /** No install found: an update test names its install method itself, never this machine's. */
+  const nowhere = (executable: string): InstalledCli => ({ executable, path: null, method: null });
   const service = (
     states: Partial<Record<ProviderId, ProviderConnectionState>> = {},
     onRun?: RunProviderCommand,
     createAuthFailureId?: () => string,
+    locateCli: (executable: string) => InstalledCli = nowhere,
+    platform: NodeJS.Platform = 'linux',
   ) => new ProviderAuthService({
-    platform: 'linux',
+    platform,
     createAuthFailureId,
+    locateCli,
     runCommand: onRun ?? (async (executable) => {
       const provider = providerForExecutable(executable);
       const state = states[provider] ?? 'connected';
@@ -190,6 +197,7 @@ describe('workspace provider API', () => {
     workspaceConfig?: ReturnType<typeof memoryWorkspaceConfig>;
     contexts?: ProjectContexts;
     loginWatchOffsetsMs?: readonly number[];
+    installEnv?: InstallEnv;
   } = {}) => createApp({
     repoRoot: root,
     store,
@@ -202,6 +210,8 @@ describe('workspace provider API', () => {
     workspaceConfig: options.workspaceConfig,
     contexts: options.contexts,
     loginWatchOffsetsMs: options.loginWatchOffsetsMs ?? [],
+    // A fixed machine: the developer's own npm prefix must not change an update's command.
+    agentSetupProbeEnv: async () => options.installEnv ?? { platform: 'linux', npm: true, npmGlobalWritable: true, curl: true, sudo: false, brew: true },
   });
 
   const connect = (server: ReturnType<typeof app>, provider: unknown) => apiRequest(
@@ -239,7 +249,7 @@ describe('workspace provider API', () => {
         {
           provider: 'opencode',
           status: 'not-installed',
-          hint: 'Install OpenCode, then run `opencode auth login`.',
+          hint: 'Install OpenCode (npm install -g opencode-ai@1), then run `opencode auth login`.',
           enabled: true,
         },
         { provider: 'cursor', status: 'connected', enabled: true },
@@ -684,7 +694,7 @@ describe('workspace provider API', () => {
 
     expect(response.status).toBe(409);
     expect(await response.json()).toEqual({
-      error: 'Install OpenCode, then run `opencode auth login`.',
+      error: 'Install OpenCode (npm install -g opencode-ai@1), then run `opencode auth login`.',
       command: "'opencode' auth login",
     });
     expect(openTerminal).not.toHaveBeenCalled();
@@ -788,17 +798,82 @@ describe('workspace provider API', () => {
 
       expect(response.status).toBe(200);
       expect(await response.json()).toEqual({ opened: true, command: "'opencode' upgrade" });
-      expect(openTerminal).toHaveBeenCalledWith(root, "'opencode' upgrade");
+      expect(openTerminal).toHaveBeenCalledWith(homedir(), "'opencode' upgrade");
     });
 
     it('answers 409 without a command for a CLI that cannot update itself', async () => {
       const openTerminal = vi.fn(async () => true);
-      const response = await update(app({ openTerminal }), 'codex');
+      // With no install found, Kimi has neither a method's update nor one of its own.
+      const response = await update(app({ openTerminal }), 'kimi');
 
       expect(response.status).toBe(409);
       expect(await response.json()).toEqual({
         error: 'This agent has no update command of its own. Update it the way you installed it.',
       });
+      expect(openTerminal).not.toHaveBeenCalled();
+    });
+
+    it('shows, and does not run, an update cezar has not verified (spec 2026-11-25)', async () => {
+      const openTerminal = vi.fn(async () => true);
+      // An npm install of Gemini CLI: its upgrade is not verified yet, so it is copy-only.
+      const npm = (executable: string): InstalledCli => ({ executable, path: '/usr/lib/node_modules/@google/gemini-cli/dist/index.js', method: 'npm' });
+      const response = await update(app({ openTerminal, providerAuth: service({}, undefined, undefined, npm) }), 'gemini');
+
+      expect(response.status).toBe(409);
+      expect(await response.json()).toEqual({
+        error: 'cezar does not run this update itself. Run it in a terminal.',
+        command: 'npm install -g @google/gemini-cli@latest',
+      });
+      expect(openTerminal).not.toHaveBeenCalled();
+    });
+
+    it('updates a Homebrew cask Codex with brew on a Mac', async () => {
+      const openTerminal = vi.fn(async () => true);
+      const brew = (executable: string): InstalledCli => ({ executable, path: '/opt/homebrew/bin/codex', method: 'brew', brewKind: 'cask' });
+      const response = await update(app({ openTerminal, providerAuth: service({}, undefined, undefined, brew, 'darwin') }), 'codex');
+
+      expect(response.status).toBe(200);
+      expect(await response.json()).toEqual({ opened: true, command: 'brew upgrade --cask codex' });
+      expect(openTerminal).toHaveBeenCalledWith(homedir(), 'brew upgrade --cask codex');
+    });
+
+    it('shows a Linuxbrew formula Codex its upgrade to copy, never the macOS-only cask', async () => {
+      const openTerminal = vi.fn(async () => true);
+      const formula = (executable: string): InstalledCli => ({ executable, path: '/home/linuxbrew/.linuxbrew/bin/codex', method: 'brew', brewKind: 'formula' });
+      const response = await update(app({ openTerminal, providerAuth: service({}, undefined, undefined, formula) }), 'codex');
+
+      expect(response.status).toBe(409);
+      expect(await response.json()).toMatchObject({ command: 'brew upgrade codex' });
+      expect(openTerminal).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ['native', 'linux', "'claude' update"],
+      ['npm', 'linux', 'npm install -g @anthropic-ai/claude-code@latest'],
+      ['brew', 'darwin', 'brew upgrade claude-code'],
+      // No cask on Linux: a Linuxbrew Claude Code updates itself.
+      ['brew', 'linux', "'claude' update"],
+    ] as const)('updates a %s Claude Code install on %s the way it was installed', async (method, platform, command) => {
+      const openTerminal = vi.fn(async () => true);
+      const found = (executable: string): InstalledCli => ({ executable, path: '/x/claude', method, ...(method === 'brew' ? { brewKind: platform === 'darwin' ? 'cask' as const : 'formula' as const } : {}) });
+      const response = await update(app({ openTerminal, providerAuth: service({}, undefined, undefined, found, platform) }), 'claude');
+
+      expect(response.status).toBe(200);
+      expect(await response.json()).toEqual({ opened: true, command });
+      expect(openTerminal).toHaveBeenCalledWith(homedir(), command);
+    });
+
+    it('never runs sudo npm for Claude Code, even when npm needs root', async () => {
+      const openTerminal = vi.fn(async () => true);
+      const npm = (executable: string): InstalledCli => ({ executable, path: '/usr/lib/node_modules/@anthropic-ai/claude-code/cli.js', method: 'npm' });
+      const response = await update(app({
+        openTerminal,
+        providerAuth: service({}, undefined, undefined, npm),
+        installEnv: { platform: 'linux', npm: true, npmGlobalWritable: false, curl: true, sudo: true, brew: false },
+      }), 'claude');
+
+      expect(response.status).toBe(409);
+      expect(await response.json()).toMatchObject({ command: 'npm install -g @anthropic-ai/claude-code@latest' });
       expect(openTerminal).not.toHaveBeenCalled();
     });
 
@@ -812,6 +887,48 @@ describe('workspace provider API', () => {
         command: "'opencode' upgrade",
       });
       expect(openTerminal).not.toHaveBeenCalled();
+    });
+
+    it('strips host binary paths from the 409 command for hosted clients as well as paired phones', async () => {
+      const prev = process.env.CEZ_CLAUDE_BIN;
+      process.env.CEZ_CLAUDE_BIN = '/Users/someone/.local/bin/claude';
+      try {
+        const openTerminal = vi.fn(async () => true);
+        const found = (executable: string): InstalledCli => ({ executable, path: executable, method: 'native' });
+        const hosted = app({ openTerminal, bindHost: '0.0.0.0', providerAuth: service({}, undefined, undefined, found) });
+        const response = await update(hosted, 'claude');
+
+        expect(response.status).toBe(409);
+        expect(await response.json()).toEqual({
+          error: 'Run this command on the machine hosting cezar.',
+          command: "'claude' update",
+        });
+        expect(openTerminal).not.toHaveBeenCalled();
+      } finally {
+        if (prev === undefined) delete process.env.CEZ_CLAUDE_BIN;
+        else process.env.CEZ_CLAUDE_BIN = prev;
+      }
+    });
+
+    it('strips host binary paths from the 409 command for a paired phone', async () => {
+      const prev = process.env.CEZ_CLAUDE_BIN;
+      process.env.CEZ_CLAUDE_BIN = '/Users/someone/.local/bin/claude';
+      try {
+        const openTerminal = vi.fn(async () => true);
+        const found = (executable: string): InstalledCli => ({ executable, path: executable, method: 'native' });
+        const instance = app({ openTerminal, providerAuth: service({}, undefined, undefined, found) });
+        const response = await runInRelayScope({ deviceId: 'phone-1' }, () => update(instance, 'claude'));
+
+        expect(response.status).toBe(409);
+        expect(await response.json()).toEqual({
+          error: 'Run this command on the machine hosting cezar.',
+          command: "'claude' update",
+        });
+        expect(openTerminal).not.toHaveBeenCalled();
+      } finally {
+        if (prev === undefined) delete process.env.CEZ_CLAUDE_BIN;
+        else process.env.CEZ_CLAUDE_BIN = prev;
+      }
     });
 
     it('answers 409 plus command when no terminal opens', async () => {
