@@ -1,3 +1,5 @@
+import { mkdtempSync, readFileSync, existsSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -114,5 +116,54 @@ describe('OpenCode V1 + V2 runner compatibility', () => {
     await session.result;
     expect(session.open).toBe(false);
     expect(events.filter((e) => e.type === 'turn-end').length).toBeLessThanOrEqual(1);
+  });
+
+  describe('session tree teardown (#2468)', () => {
+    function treeLog(): { file: string; read: () => string[] } {
+      const dir = mkdtempSync(join(tmpdir(), 'oc-tree-'));
+      const file = join(dir, 'calls.log');
+      return { file, read: () => (existsSync(file) ? readFileSync(file, 'utf8').split('\n').filter(Boolean) : []) };
+    }
+
+    it('aborts the root and every descendant on interrupt, and never touches a foreign session', async () => {
+      const log = treeLog();
+      const { session, events } = start('#quiet', false, { MOCK_TREE_LOG: log.file });
+      await expect.poll(() => events.some((e) => e.type === 'session')).toBe(true);
+      session.interrupt();
+      await session.result;
+      const calls = log.read();
+      expect(calls).toEqual(expect.arrayContaining(['ses_v2_mock', 'ses_child_1', 'ses_grandchild']));
+      expect(calls).not.toContain('ses_user_same_dir');
+      expect(calls).not.toContain('ses_other_dir');
+      rmSync(dirname(log.file), { recursive: true, force: true });
+    });
+
+    it('aborts the tree on a normal end() too, before the server is killed', async () => {
+      const log = treeLog();
+      const { session } = start('hello', true, { MOCK_TREE_LOG: log.file });
+      await session.result;
+      expect(log.read()).toEqual(expect.arrayContaining(['ses_child_1', 'ses_grandchild']));
+      rmSync(dirname(log.file), { recursive: true, force: true });
+    });
+
+    it('interrupts only this task\'s own earlier cezar roots at startup — not foreign sessions', async () => {
+      const log = treeLog();
+      const { session, events } = start('#quiet', false, { MOCK_TREE_LOG: log.file });
+      await expect.poll(() => events.some((e) => e.type === 'session')).toBe(true);
+      const calls = log.read();
+      expect(calls).toContain('ses_old_same_dir');
+      expect(calls).not.toContain('ses_user_same_dir');
+      expect(calls).not.toContain('ses_other_dir');
+      session.end();
+      await session.result;
+      rmSync(dirname(log.file), { recursive: true, force: true });
+    });
+
+    it('degrades quietly when the server has no session listing', async () => {
+      const { session, events } = start('hello', true, { MOCK_NO_TREE: '1' });
+      const result = await session.result;
+      expect(events.filter((e) => e.type === 'error')).toEqual([]);
+      expect(result.text).toContain('hello');
+    });
   });
 });
