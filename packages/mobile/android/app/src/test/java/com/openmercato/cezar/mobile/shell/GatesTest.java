@@ -59,6 +59,10 @@ public class GatesTest {
         assertEquals(NavigationPolicy.Action.RECONNECT, NavigationPolicy.decide(origin(), "cezar://reconnect", PAGE, true, false));
         assertEquals(NavigationPolicy.Action.RECONNECT, NavigationPolicy.decide(origin(), "CEZAR://reconnect/", PAGE, true, false));
         assertEquals(BLOCK, NavigationPolicy.decide(origin(), "cezar://reconnect", PAGE, false, false));
+        assertEquals(NavigationPolicy.Action.HAPTIC, NavigationPolicy.decide(origin(), "cezar://haptic", PAGE, true, false));
+        assertEquals(NavigationPolicy.Action.HAPTIC, NavigationPolicy.decide(origin(), "CEZAR://Haptic/", PAGE, true, false));
+        assertEquals(BLOCK, NavigationPolicy.decide(origin(), "cezar://haptic", PAGE, false, false));
+        assertEquals(BLOCK, NavigationPolicy.decide(origin(), "cezar://haptic/x", PAGE, true, false));
         assertEquals(BLOCK, NavigationPolicy.decide(origin(), "cezar://other", PAGE, true, false));
     }
 

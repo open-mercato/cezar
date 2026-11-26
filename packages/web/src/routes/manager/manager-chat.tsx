@@ -60,6 +60,7 @@ import { ManagerCompanion } from './manager-companion'
 import { cameFromManagerList, FOCUS_COMPOSER, opensManagerSettings, shouldFocusComposer } from './manager-focus'
 import { useManagerActivityActions } from './manager-activity'
 import { ManagerAvatar } from './manager-avatar'
+import { ActiveAgentInfo } from './manager-agent-chain'
 import { ManagerChatLoading, useHideShellTopBar } from './manager-loading'
 import { ReconnectSurfaceContext, type ReconnectSurface } from '@/components/reconnect/surface'
 import { answersShownOnCard, ManagerChatActionsContext, ManagerMessageRow, PrTitlesContext, usePrTitles, type ManagerChatActions } from './manager-message'
@@ -703,6 +704,7 @@ function ManagerChat({ manager }: { manager: ManagerSummary }) {
         <div className="min-w-0 flex-1">
           <div className="flex min-w-0 items-center gap-1.5">
             <h1 className="truncate text-body font-semibold md:text-base">{manager.name}</h1>
+            <ActiveAgentInfo manager={manager} onOpenSettings={() => settings.current?.openAgent()} />
             {working ? <WorkingSpinner label={turnKindLabel(streamingReply(chat.messages))} /> : null}
           </div>
           <p data-slot="manager-watching-line" className="truncate text-xs text-muted-foreground max-md:hidden">{inactive ? inactiveLine(manager) : subline}</p>

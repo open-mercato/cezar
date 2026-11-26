@@ -499,7 +499,7 @@ describe('a relay request is a hosted request', () => {
       'automations/builtin-skill.ts': 1,
       'workflows/run.ts': 1, // `dispatch`
       'server/capabilities.ts': 8, // the definitions and their internal callers
-      'server/server.ts': 7, // the closure, the accounts closure, startServer's flags and RunManagers' `hosted`, verifyWsUpgrade
+      'server/server.ts': 7, // the closure, the shared accounts boundary read, startServer's flags and RunManagers' `hosted`, verifyWsUpgrade
     };
 
     it('a new direct read of the boundary in a request path fails here', () => {
@@ -534,7 +534,11 @@ describe('a relay request is a hosted request', () => {
     it('every run start leaves the scope', () => {
       const run = readFileSync(join(root, 'workflows/run.ts'), 'utf8');
       const starts = run.match(/.*this\.(?:execute|runContinuation)\(.*/g) ?? [];
-      expect(starts.length).toBe(3);
+      // Immediate and queued continuations both launch through the same helper.
+      expect(starts).toEqual(expect.arrayContaining([
+        expect.stringContaining('outsideRelayScope(() => this.execute('),
+        expect.stringContaining('outsideRelayScope(() => this.runContinuation('),
+      ]));
       for (const line of starts) expect(line).toContain('outsideRelayScope(');
     });
   });

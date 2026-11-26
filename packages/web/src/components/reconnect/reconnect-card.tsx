@@ -6,6 +6,7 @@ import type { AgentProfile, LoginMethod, LoginSession, ProviderId, ReconnectResu
 
 import { sendLoginSessionInput } from '@/api/client'
 import { useAgentProfiles, writeLoginSession } from '@/api/queries'
+import { useAddAccount } from '@/components/add-account/add-account-host'
 import { Button } from '@/components/ui/button'
 import {
   DropdownMenu,
@@ -259,7 +260,15 @@ export function useAccountLabel(provider: ProviderId | undefined, profileId: str
 
 // ---- signing in ------------------------------------------------------------------------------
 
-function SigningBody({ session, who, remote, compact }: { session: LoginSession; who: string; remote: boolean; compact: boolean }) {
+/** The sign-in body, shared by the reconnect card and Add account (spec 2026-11-24). */
+export function SigningBody({ session, who, remote, compact, stepsLabel = 'resume' }: {
+  session: LoginSession
+  who: string
+  remote: boolean
+  compact: boolean
+  /** `verify` in Add account: there is nothing to resume. */
+  stepsLabel?: 'resume' | 'verify'
+}) {
   const name = agentName(session.provider)
   const host = urlHost(session.url)
   const queryClient = useQueryClient()
@@ -267,16 +276,18 @@ function SigningBody({ session, who, remote, compact }: { session: LoginSession;
     return <p className={SUB}>Starting {name}'s sign-in…</p>
   }
   if (session.phase === 'verifying') {
-    return <Steps steps={[['done', 'Sign-in finished'], ['now', 'Verifying the account'], ['todo', 'Resume']]} />
+    return <Steps steps={[['done', 'Sign-in finished'], ['now', 'Verifying the account'], ['todo', stepsLabel === 'resume' ? 'Resume' : 'Ready']]} />
   }
   switch (session.method) {
     case 'browser':
+      // Never opened for the user: they paste it into the browser profile the account lives in.
       return (
         <>
           <p className={SUB}>
-            We opened <b className="font-semibold text-foreground">{host ?? 'the sign-in page'}</b> in a new tab. Approve access there and this card updates by itself.
+            Open this link in the browser and profile you sign in to {name} with, then approve access. {stepsLabel === 'resume' ? 'This card' : 'This dialog'} updates by itself.
           </p>
-          <Steps steps={[['done', 'Sign-in started'], ['now', 'Approve in the browser'], ['todo', 'Verify & resume']]} />
+          {session.url ? <CommandLine command={session.url} copyLabel="Copy link" /> : null}
+          <Steps steps={[['done', 'Sign-in started'], ['now', 'Approve in your browser'], ['todo', stepsLabel === 'resume' ? 'Verify & resume' : 'Verify']]} />
         </>
       )
     case 'link':
@@ -348,7 +359,7 @@ function SigningBody({ session, who, remote, compact }: { session: LoginSession;
   return <p className={SUB}>Signing in to {who}…</p>
 }
 
-function SigningActions({ session, remote, stacked, checking, onCheck, onRestart, onCancel }: {
+export function SigningActions({ session, remote, stacked, checking, onCheck, onRestart, onCancel }: {
   session: LoginSession
   remote: boolean
   stacked: boolean
@@ -361,7 +372,7 @@ function SigningActions({ session, remote, stacked, checking, onCheck, onRestart
   const open = session.url ? () => openUrl(session.url!) : undefined
   const size = stacked ? 'default' : 'sm'
   let primary: ReactNode = null
-  if (session.method === 'browser' && open) primary = <Button type="button" variant="outline" size={size} onClick={open}>Reopen sign-in page <ExternalLinkIcon aria-hidden="true" className="size-3" /></Button>
+  if (session.method === 'browser' && open) primary = <Button type="button" variant="outline" size={size} onClick={open}>Open in default browser <ExternalLinkIcon aria-hidden="true" className="size-3" /></Button>
   else if (session.method === 'link' && open) primary = <Button type="button" variant={stacked ? 'contrast' : 'outline'} size={size} onClick={open}>Open {agentName(session.provider)} sign-in <ExternalLinkIcon aria-hidden="true" className="size-3" /></Button>
   else if (session.method === 'device' && open) {
     const code = session.userCode
@@ -554,9 +565,11 @@ function SwitchAccount({ provider, profileId, profiles, kind, onSwitch }: {
   onSwitch: (profileId: string) => Promise<unknown>
 }) {
   const [busy, setBusy] = useState(false)
-  const mine = profiles.filter((row) => row.provider === provider)
+  const addAccount = useAddAccount()
+  const mine = profiles.filter((row) => row.provider === provider && !row.pending)
   const others = mine.filter((row) => row.id !== profileId)
-  if (others.length === 0) return null
+  const canAdd = addAccount?.capable.includes(provider) ?? false
+  if (others.length === 0 && !canAdd) return null
   const usable = (row: AgentProfile) => row.status?.status !== 'disconnected' && row.status?.status !== 'not-installed'
   const healthy = others.find((row) => row.status?.status === 'connected') ?? others.find(usable)
   const go = (id: string) => {
@@ -593,6 +606,11 @@ function SwitchAccount({ provider, profileId, profiles, kind, onSwitch }: {
               </DropdownMenuItem>
             )
           })}
+          {canAdd && addAccount ? (
+            <DropdownMenuItem data-action="reconnect-add-account" onSelect={() => addAccount.open({ provider, onAdded: (profile) => go(profile.id) })}>
+              Add an account…
+            </DropdownMenuItem>
+          ) : null}
           <p className="px-2 py-1.5 text-micro text-soft-foreground">
             {kind === 'task'
               ? 'Switching account starts a fresh session; the task keeps its worktree and changes.'

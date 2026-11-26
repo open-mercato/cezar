@@ -706,7 +706,11 @@ describe('a run stopped by a usage limit resumes itself', () => {
     const first = new RunManager(store, repoRoot, { semaphore });
     const runs = [1, 2].map((n) => first.startRun(workflow, { task: `mock:limit pair ${n}` }));
     for (const run of runs) await settle(run.id);
-    expect(runs.every((r) => store.getRun(r.id)?.autoResumeAt !== undefined)).toBe(true);
+    // A run reads `failed` a moment before its terminal cleanup arms the resume; under a loaded
+    // suite that gap is observable, so wait for the schedule as the other pair tests do.
+    await expect
+      .poll(() => runs.filter((r) => store.getRun(r.id)?.autoResumeAt !== undefined).length, { timeout: 20_000 })
+      .toBe(2);
     first.dispose();
 
     // Both windows reopen together — the exact state the live deadlock started from. The task

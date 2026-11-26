@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest'
 
 import {
+  cleanAssetLabel,
+  isAssetComment,
+  REVIEW_ASSETS_HEADING,
+  REVIEW_MIXED_HEADING,
+  sortReviewComments,
+  type AssetComment,
   capExcerpt,
   commentsRideWith,
   EXCERPT_MAX,
@@ -216,5 +222,56 @@ describe('diff comments', () => {
     const huge: DiffComment = { ...A, body: 'x'.repeat(4000) }
     expect(() => messageWithReview('y'.repeat(MESSAGE_TEXT_MAX - 100), [huge])).toThrow(/Too long with the diff comment attached/)
     expect(messageWithReview('fits', [A])).toBe(withDiffComments('fits', [A]))
+  })
+})
+
+describe('asset element comments', () => {
+  const E: AssetComment = {
+    kind: 'asset',
+    id: 'e',
+    asset: 'recipe.html',
+    selector: 'section#ingredients > h2',
+    label: 'Ingredients',
+    excerpt: '<h2>Ingredients</h2>',
+    body: 'Make this bigger',
+  }
+
+  it('round-trips through the same stored list as line comments, and drops a malformed one', () => {
+    const text = JSON.stringify([A, E, { ...E, id: 'x', selector: '' }, { ...E, id: 'y', selector: 'a`b' }])
+    const parsed = parseDiffComments(text)
+    expect(parsed).toEqual([A, E])
+    expect(parsed.filter(isAssetComment)).toEqual([E])
+  })
+
+  it('tells the agent the asset file and the element selector, after the line comments', () => {
+    const review = formatDiffComments([E, A])
+    expect(review.startsWith(`${REVIEW_MIXED_HEADING}\n\n- \`src/b.ts\` line 12:`)).toBe(true)
+    expect(review).toContain('- `recipe.html` (HTML asset) element `section#ingredients > h2` — "Ingredients":\n\n  ```\n  <h2>Ingredients</h2>\n  ```\n\n  Make this bigger')
+    expect(formatDiffComments([E]).startsWith(`${REVIEW_ASSETS_HEADING}\n\n`)).toBe(true)
+    // Line comments alone keep the exact heading they always had.
+    expect(formatDiffComments([A]).startsWith(`${REVIEW_HEADING}\n\n`)).toBe(true)
+  })
+
+  it('reads a sent asset comment back as an asset item, not a line of a file', () => {
+    const parsed = parseReviewMessage(messageWithReview('please', [A, E]))
+    expect(parsed?.lead).toBe('please')
+    expect(parsed?.items[1]).toMatchObject({
+      path: 'recipe.html',
+      asset: { selector: 'section#ingredients > h2' },
+      excerpt: '<h2>Ingredients</h2>',
+      body: 'Make this bigger',
+    })
+    expect(parsed?.items[1]?.line).toBeUndefined()
+    expect(parsed?.items[0]?.asset).toBeUndefined()
+  })
+
+  it('keeps the label to one short line without backticks', () => {
+    expect(cleanAssetLabel('a `b`\n  c')).toBe('a b c')
+    expect(cleanAssetLabel('x'.repeat(200))).toHaveLength(81)
+  })
+
+  it('orders comments of one asset as they were left — the number their marker wears', () => {
+    const F = { ...E, id: 'f', selector: 'button' }
+    expect(sortReviewComments([F, E, A]).map((c) => c.id)).toEqual(['a', 'f', 'e'])
   })
 })

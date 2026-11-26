@@ -1,6 +1,7 @@
 import { spawn } from 'node:child_process';
 import { randomInt } from 'node:crypto';
 import { isRunnerId } from '../core/agent-runner.ts';
+import { AGENT_RECIPES } from '../core/agent-install.ts';
 import { detectEnvironment, type BackendCheck } from '../core/backend-detect.ts';
 import {
   CANCEL,
@@ -340,11 +341,10 @@ export function depCheckStep(opts: DepStepOpts = {}): InstallStep {
   };
 }
 
-const NPM_GLOBAL: Record<string, string> = {
-  claude: '@anthropic-ai/claude-code',
-  codex: '@openai/codex',
-  gemini: '@google/gemini-cli',
-};
+/** The agents this wizard installs with `npm -g`; the package names come from the one recipe table. */
+const NPM_GLOBAL: Record<string, string> = Object.fromEntries(
+  Object.values(AGENT_RECIPES).flatMap((recipe) => (recipe.serverInstall && recipe.npmPackage ? [[recipe.provider, recipe.npmPackage]] : [])),
+);
 
 /** Ubuntu/Debian installer: apt for gh, sudo npm -g for the agent CLIs (system node). */
 export const aptInstallTool: ToolInstaller = async (ctx, name) => {
@@ -398,20 +398,14 @@ async function installViaNpmOrNote(ctx: InstallContext, name: string, sudo: bool
 }
 
 function removeHintFor(name: string): string {
-  const npm: Record<string, string> = {
-    claude: 'npm rm -g @anthropic-ai/claude-code',
-    codex: 'npm rm -g @openai/codex',
-  };
+  const npm = NPM_GLOBAL[name] ? `npm rm -g ${NPM_GLOBAL[name]}` : undefined;
   if (name === 'gh') return 'sudo apt-get remove -y gh';
-  return npm[name] ?? `# remove ${name} manually`;
+  return npm ?? `# remove ${name} manually`;
 }
 
 /** macOS-flavored removal hints (brew instead of apt). */
 export function brewRemoveHint(name: string): string {
-  const npm: Record<string, string> = {
-    claude: 'npm rm -g @anthropic-ai/claude-code',
-    codex: 'npm rm -g @openai/codex',
-  };
+  const npm = NPM_GLOBAL[name] ? `npm rm -g ${NPM_GLOBAL[name]}` : undefined;
   if (name === 'gh') return 'brew uninstall gh';
-  return npm[name] ?? `# remove ${name} manually`;
+  return npm ?? `# remove ${name} manually`;
 }

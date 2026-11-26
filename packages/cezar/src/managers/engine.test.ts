@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { delimiter, join } from 'node:path';
 import lockfile from 'proper-lockfile';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mergeWriteAgentAccounts } from '../workspace/agent-accounts.ts';
@@ -9,12 +9,16 @@ import type { AgentEvent, AgentRunner, AgentRunSpec, AgentSession, RunnerId } fr
 import { inRelayScope, runInRelayScope } from '../relay/scope.ts';
 import { buildClaudeArgs, ClaudeCliRunner } from '../core/claude-cli-runner.ts';
 import { fileURLToPath } from 'node:url';
-import { MANAGER_TEXT_IN_FILES } from './bash-policy.ts';
+import { MANAGER_BASH_FILTERS, MANAGER_TEXT_IN_FILES } from './bash-policy.ts';
+import { compileCodexRestrictedPolicy } from '../core/codex-restricted-policy.ts';
+import { CodexReadBroker } from '../core/codex-restricted-tools.ts';
 import { ManagerEngine, managerWriteRules, type AutomationRunReport, type ManagerEngineDeps } from './engine.ts';
-import { followupPrompt, MANAGER_QUIET, managerSystemPrompt, watchPrompt } from './prompts.ts';
+import { followupPrompt, MANAGER_GLOBAL_INSTRUCTIONS_HEADING, MANAGER_QUIET, managerSystemPrompt, watchPrompt } from './prompts.ts';
+import { mergeWriteWorkspaceConfig } from '../workspace/config.ts';
 import { readColdRuns, type ManagerProjectSource } from './snapshot.ts';
 import type { RunRecord } from '../runs/store.ts';
 import { ManagerStore } from './store.ts';
+import { RestartGate } from '../workspace/restart-gate.ts';
 import { createManagerQuestionProvider } from './questions.ts';
 
 interface Script {
@@ -250,6 +254,39 @@ describe('ManagerEngine', () => {
       expect(await engine.update(id, { bashAllow: [] })).not.toHaveProperty('bashAllow');
     });
 
+    it('carries the current global instructions into chat, watch and job turns, re-read on every turn', async () => {
+      try {
+        await mergeWriteWorkspaceConfig((config) => { config.systemPrompt = 'Never run the full test suite.'; });
+        const engine = makeEngine();
+        const id = await create(engine);
+        engine.send(id, 'hi');
+        await settled(engine);
+        engine.check(id);
+        await settled(engine);
+        await engine.update(id, { jobs: [{ name: 'Sweep', prompt: 'p', everyMinutes: 5, enabled: true }] });
+        store.update(id, (manager) => ({ ...manager, jobs: manager.jobs.map((job) => ({ ...job, lastRunAt: '2000-01-01T00:00:00.000Z' })) }));
+        engine.tick();
+        await settled(engine);
+        expect(backend.specs.map((spec) => spec.env?.CEZ_MANAGER_TURN)).toEqual(['chat', 'watch', 'job']);
+        for (const spec of backend.specs) {
+          expect(spec.systemPrompt).toContain(MANAGER_GLOBAL_INSTRUCTIONS_HEADING);
+          expect(spec.systemPrompt).toContain('Never run the full test suite.');
+        }
+        await mergeWriteWorkspaceConfig((config) => { config.systemPrompt = 'Run only focused tests.'; });
+        engine.send(id, 'again');
+        await settled(engine);
+        const resumed = backend.specs.at(-1)!;
+        expect(resumed.systemPrompt).toContain('Run only focused tests.');
+        expect(resumed.systemPrompt).not.toContain('Never run the full test suite.');
+        await mergeWriteWorkspaceConfig((config) => { delete config.systemPrompt; });
+        engine.send(id, 'once more');
+        await settled(engine);
+        expect(backend.specs.at(-1)?.systemPrompt).not.toContain(MANAGER_GLOBAL_INSTRUCTIONS_HEADING);
+      } finally {
+        await mergeWriteWorkspaceConfig((config) => { delete config.systemPrompt; });
+      }
+    });
+
     it('lets Claude write only under files/: never .claude/ in its cwd, never a bare Write, Edit or Bash', async () => {
       const engine = makeEngine();
       const id = await create(engine);
@@ -290,6 +327,38 @@ describe('ManagerEngine', () => {
       engine.send(created.id, 'b');
       await settled(engine);
       expect(backend.specs.map((spec) => [spec.model, spec.reasoningEffort])).toEqual([['opus', 'high'], ['opus', 'high']]);
+    });
+
+    it('a turn in flight blocks "restart when idle"; while one is pending only chat starts a turn', async () => {
+      const gate = new RestartGate();
+      const engine = makeEngine({ restartGate: gate });
+      const id = await create(engine);
+      const name = store.get(id)!.name;
+      backend.scripts.push({ hold: true }, say('ok'));
+      engine.send(id, 'long one');
+      await vi.waitFor(() => expect(backend.open).toHaveLength(1));
+      expect(gate.blockers()).toEqual([{ kind: 'manager', count: 1, names: [name] }]);
+      backend.open[0]?.finish();
+      await settled(engine);
+      expect(gate.idle()).toBe(true);
+
+      // Pending: a timed or forced check waits; it would otherwise start a turn mid-restart.
+      gate.hold();
+      const checkedBefore = store.state(id).lastCheckAt;
+      engine.check(id);
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(engine.inFlight()).toBe(0);
+      expect(store.state(id).lastCheckAt).toBe(checkedBefore);
+      // What the user types still runs — and the restart waits for it.
+      engine.send(id, 'quick question');
+      await settled(engine);
+      expect(assistants(id).at(-1)?.text).toBe('ok');
+      expect(store.state(id).lastCheckAt).toBe(checkedBefore);
+
+      // Cancelled: the held check runs.
+      gate.release();
+      await vi.waitFor(() => expect(store.state(id).lastCheckAt).not.toBe(checkedBefore));
+      await settled(engine);
     });
 
     it('queues during a turn and folds what piled up into one', async () => {
@@ -352,14 +421,14 @@ describe('ManagerEngine', () => {
       expect(backend.specs[1]?.resume).toBeUndefined();
     });
 
-    it('refuses Codex after switching agent and account before opening another session', async () => {
+    it('switches a manager to Codex and its account in a fresh session', async () => {
       const configDir = join(home, 'codex-work');
       mkdirSync(configDir);
       await mergeWriteAgentAccounts((accounts) => ({
         ...accounts,
         accounts: [{ id: 'work', provider: 'codex', label: 'Work', configDir, addedAt: '' }],
       }));
-      const runnerFor = vi.fn(() => backend.runner);
+      const runnerFor = vi.fn((_runner: RunnerId) => backend.runner);
       const engine = makeEngine({ runnerFor });
       const id = await create(engine, 0);
       engine.send(id, 'one');
@@ -367,9 +436,12 @@ describe('ManagerEngine', () => {
       await engine.update(id, { runner: 'codex', agentProfile: 'work' });
       engine.send(id, 'two');
       await settled(engine);
-      expect(runnerFor).toHaveBeenCalledTimes(1);
-      expect(backend.specs).toHaveLength(1);
-      expect(assistants(id).at(-1)?.error).toContain('tool-policy enforcement unavailable');
+      expect(runnerFor.mock.calls.map(([runner]) => runner)).toEqual(['claude', 'codex']);
+      expect(backend.specs).toHaveLength(2);
+      expect(backend.specs[1]?.resume).toBeUndefined();
+      expect(backend.specs[1]?.brokeredShell).toBeDefined();
+      expect(backend.specs[1]?.env?.CODEX_HOME).toBe(configDir);
+      expect(assistants(id).at(-1)?.error).toBeUndefined();
     });
 
     it('a turn that throws before its agent starts closes its message', async () => {
@@ -920,20 +992,61 @@ describe('ManagerEngine', () => {
       expect(chat?.enforceReadOnly).toBeUndefined();
     });
 
-    it('refuses Codex watches and chats before opening an executor', async () => {
+    it('runs Codex watches and chats behind the brokered cez-manager fence (#2330)', async () => {
       const engine = makeEngine({ github: readyPrGithub, defaultRunner: async (): Promise<RunnerId> => 'codex' });
       const id = await create(engine);
+      await engine.update(id, { bashAllow: ['gh label list'] });
+      backend.scripts.push(say('PR 7 is ready'), say('ok'));
       due(id);
       engine.tick();
       await settled(engine);
-      expect(backend.specs).toEqual([]);
-      expect(store.state(id).lastFailure?.cause).toContain('tool-policy enforcement unavailable');
-      expect(store.state(id).lastFailure?.cause).toContain('Pick Claude Code for this manager.');
-      expect(store.state(id).lastFailure?.cause).not.toMatch(/\bPi\b/);
       engine.send(id, 'hi');
       await settled(engine);
-      expect(backend.specs).toEqual([]);
-      expect(assistants(id).at(-1)?.error).toContain('tool-policy enforcement unavailable');
+      expect(backend.specs).toHaveLength(2);
+      expect(assistants(id).at(-1)?.error).toBeUndefined();
+      for (const spec of backend.specs) {
+        // The same fence as Claude's hook, in Codex's isolated session: no Write, no hook, no MCP.
+        expect(spec.enforceReadOnly).toBeUndefined();
+        expect(spec.allowedTools).toEqual(['Read', 'Grep', 'Glob', 'Bash']);
+        expect(spec.bashHookCommand).toBeUndefined();
+        const shell = spec.brokeredShell!;
+        expect(shell.verify('cez-manager tasks --json')).toEqual({ ok: true, pipeline: [['cez-manager', 'tasks', '--json']] });
+        expect(shell.verify('gh label list')).toMatchObject({ ok: true });
+        for (const command of ['gh pr merge 7', 'git push', 'rm -rf /', 'cez-manager tasks; touch x']) expect(shell.verify(command).ok).toBe(false);
+        expect(shell.env.CEZ_MANAGER_ID).toBe(id);
+        expect(shell.env.PATH?.split(delimiter)[0]).toMatch(/bin$/);
+      }
+      expect(backend.specs.map((spec) => spec.env?.CEZ_MANAGER_TURN)).toEqual(['watch', 'chat']);
+    });
+
+    it.skipIf(process.platform === 'win32')('a Codex manager\'s production shell, network off: cez-manager and its filters run, every gh is refused', async () => {
+      const engine = makeEngine({ defaultRunner: async (): Promise<RunnerId> => 'codex' });
+      const id = await create(engine, 0);
+      await engine.update(id, { bashAllow: ['gh label list'] });
+      engine.send(id, 'hi');
+      await settled(engine);
+      const shell = backend.specs[0]!.brokeredShell!;
+      expect(shell.offlinePrograms).toEqual(['cez-manager', ...MANAGER_BASH_FILTERS]);
+      expect(shell.offlinePrograms).not.toContain('gh');
+      // The production verifier and offline list; only PATH points at stubs instead of the cockpit.
+      const stubs = join(home, 'stub-bin');
+      mkdirSync(stubs);
+      writeFileSync(join(stubs, 'cez-manager'), '#!/bin/sh\necho \'{"tasks":[{"id":"t1"}]}\'\n', { mode: 0o755 });
+      writeFileSync(join(stubs, 'gh'), '#!/bin/sh\necho "stub gh: $*"\n', { mode: 0o755 });
+      const offline = new CodexReadBroker(
+        compileCodexRestrictedPolicy({ ...backend.specs[0]!, brokeredShell: { ...shell, env: { PATH: `${stubs}${delimiter}${process.env.PATH}` } } })!,
+        { cwd: home }, {}, false,
+      );
+      try {
+        const run = async (command: string) => (await offline.call({ tool: 'cezar_read', arguments: { tool: 'Bash', command } })).contentItems[0]!.text;
+        // `grep` is on every POSIX runner; `jq` is not.
+        expect(await run('cez-manager tasks --json | grep -o t1')).toBe('t1\n');
+        for (const command of ['gh pr view 7', 'gh label list', 'gh pr view 7 --json title | grep -i title']) {
+          expect(await run(command)).toContain('network commands are disabled by CEZ_CODEX_NETWORK=0 (`gh` may reach the network)');
+        }
+      } finally {
+        offline.close();
+      }
     });
 
     it('a Claude watch keeps its allowlist instead of read-only', async () => {
@@ -1035,6 +1148,7 @@ describe('ManagerEngine', () => {
       await settled(engine);
       const prompt = backend.specs[0]?.userPrompt ?? '';
       expect(prompt).toContain('New attention items: 150');
+      expect(prompt).toContain('it takes precedence over the default role of watching pull requests and proposing merges:\nWatch\n');
       expect(prompt).toContain('"newItemsNotShown":50');
       expect(prompt).toContain('Nightly 149');
       expect(prompt).not.toContain('Nightly 10"');
@@ -3171,7 +3285,7 @@ describe('ManagerEngine', () => {
     it('tasks go through POST /runs, the one implementation', async () => {
       const engine = makeEngine();
       const id = await create(engine);
-      expect(await engine.createTask(id, { projectId: 'alpha', task: 'Fix it', title: 'Fix' })).toEqual({ projectId: 'alpha', runId: 'new-run' });
+      expect(await engine.createTask(id, { projectId: 'alpha', task: 'Fix it', title: 'Fix' })).toMatchObject({ projectId: 'alpha', runId: 'new-run', agent: { runner: 'claude' } });
       expect(requests[0]).toMatchObject({ path: '/api/v1/p/alpha/runs', method: 'POST', body: { workflow: 'quick-task', task: 'Fix it' } });
       expect(requests[0]?.body).not.toHaveProperty('systemPrompt');
       expect(requests[1]).toMatchObject({ path: '/api/v1/p/alpha/runs/new-run', method: 'PATCH', body: { title: 'Fix' } });
@@ -3259,6 +3373,386 @@ describe('ManagerEngine', () => {
       expect(requests.at(-1)?.body).toMatchObject({ runner: 'claude' });
     });
 
+    describe('default from manager settings, limit-aware (#manager-task-agents)', () => {
+      const RESET = Date.parse('2099-01-01T05:00:00.000Z');
+      const twoClaudes = [{ runner: 'claude' as const, agentProfile: 'first' }, { runner: 'claude' as const, agentProfile: 'second' }];
+      const limited = (held: Record<string, number>) => makeEngine({
+        accountLimit: async (runner, agentProfile) => {
+          const account = agentProfile ?? 'default';
+          const until = held[`${runner}:${account}`];
+          return { account, label: `${account} login`, ...(until !== undefined ? { until } : {}) };
+        },
+      });
+      const managerWith = async (engine: ReturnType<typeof makeEngine>, taskAgents: Array<{ runner: 'claude' | 'codex' | 'antigravity' | 'opencode' | 'cursor'; agentProfile?: string; model?: string; role?: 'main' | 'backup' }> = twoClaudes) => {
+        const created = await engine.create({ instructions: '', projects: 'all', runner: 'claude', taskAgents, cronMinutes: 0 });
+        if ('error' in created) throw created;
+        return created.id;
+      };
+
+      describe('read-only workflow compatibility', () => {
+        const mixedRoles = [
+          { runner: 'claude' as const, agentProfile: 'first', role: 'main' as const },
+          { runner: 'claude' as const, agentProfile: 'second', role: 'main' as const },
+          { runner: 'opencode' as const, agentProfile: 'default', role: 'main' as const },
+        ];
+
+        it('allows antigravity for review-pr when Claude accounts are out of limits and forwards its configured model', async () => {
+          const engine = makeEngine({
+            accountLimit: async (runner, agentProfile) => {
+              const account = agentProfile ?? 'default';
+              const held: Record<string, number> = {
+                'claude:first': RESET + 60_000,
+                'claude:second': RESET,
+              };
+              const until = held[`${runner}:${account}`];
+              return { account, label: `${account} login`, ...(until !== undefined ? { until } : {}) };
+            },
+            accountLoad: () => new Map([['antigravity:default', 0]]),
+          });
+          const id = await managerWith(engine, [
+            { runner: 'claude', agentProfile: 'first', role: 'main' },
+            { runner: 'claude', agentProfile: 'second', role: 'main' },
+            { runner: 'antigravity', agentProfile: 'default', model: 'gemini-4-neon-high', role: 'main' },
+          ]);
+          const created = await engine.createTask(id, { projectId: 'alpha', task: 'Review PR #1', workflow: 'review-pr' });
+          expect(created).not.toHaveProperty('status');
+          expect(created).toMatchObject({ agent: { runner: 'antigravity', agentProfile: 'default' } });
+          const body = requests.at(-1)?.body as { runner: string; model?: string; managerAgent: { fallback: Array<{ provider: string; model?: string }> } };
+          expect(body).toMatchObject({ runner: 'antigravity', model: 'gemini-4-neon-high' });
+          expect(body.managerAgent.fallback.find((entry) => entry.provider === 'antigravity')?.model).toBe('gemini-4-neon-high');
+        });
+
+        it('skips incompatible runners for review-pr and queues on the earliest-reset compatible account when all compatible accounts are out of limits', async () => {
+          const engine = makeEngine({
+            accountLimit: async (runner, agentProfile) => {
+              const account = agentProfile ?? 'default';
+              const held: Record<string, number> = {
+                'claude:first': RESET + 60_000,
+                'claude:second': RESET,
+              };
+              const until = held[`${runner}:${account}`];
+              return { account, label: `${account} login`, ...(until !== undefined ? { until } : {}) };
+            },
+            accountLoad: () => new Map([['opencode:default', 0]]),
+          });
+          const id = await managerWith(engine, mixedRoles);
+          const created = await engine.createTask(id, { projectId: 'alpha', task: 'Review PR #1', workflow: 'review-pr' });
+          expect(created).not.toHaveProperty('status');
+          expect(created).toMatchObject({
+            agent: {
+              runner: 'claude',
+              agentProfile: 'second',
+              queuedUntil: '2099-01-01T05:00:00.000Z',
+            },
+          });
+          const body = requests.at(-1)?.body as { runner: string; agentProfile: string; managerAgent: { fallback: Array<{ provider: string }> } };
+          expect(body).toMatchObject({ runner: 'claude', agentProfile: 'second' });
+          expect(body.managerAgent.fallback.map((c) => c.provider)).toEqual(['claude', 'claude']);
+
+          // Guard: a non-read-only workflow still picks the open opencode account.
+          const writeTask = await engine.createTask(id, { projectId: 'alpha', task: 'Fix bug', workflow: 'quick-task' });
+          expect(writeTask).toMatchObject({ agent: { runner: 'opencode' } });
+        });
+
+        it('refuses up front without calling POST /runs when no allowed account supports a read-only workflow', async () => {
+          const engine = limited({});
+          const id = await managerWith(engine, [
+            { runner: 'opencode', agentProfile: 'default', role: 'main' },
+            { runner: 'cursor', agentProfile: 'default', role: 'backup' },
+          ]);
+          const result = await engine.createTask(id, { projectId: 'alpha', task: 'Review PR #1', workflow: 'review-pr' });
+          expect(result).toMatchObject({
+            status: 400,
+            error: expect.stringContaining('review-pr'),
+          });
+          expect((result as { error: string }).error).toContain('Claude Code, Codex, Pi or Antigravity');
+          expect(requests.filter((r) => r.path.endsWith('/runs'))).toEqual([]);
+        });
+
+        it('refuses an explicit incompatible --runner up front without calling POST /runs', async () => {
+          const engine = limited({});
+          const id = await managerWith(engine, mixedRoles);
+          const fromList = await engine.createTask(id, { projectId: 'alpha', task: 'Review PR #1', workflow: 'review-pr', runner: 'opencode' });
+          expect(fromList).toMatchObject({
+            status: 400,
+            error: expect.stringContaining('opencode does not enforce'),
+          });
+
+          // Also when taskAgents is unset (automatic selection) and --runner is incompatible.
+          const autoId = await create(engine, 0);
+          const fromAuto = await engine.createTask(autoId, { projectId: 'alpha', task: 'Review PR #1', workflow: 'review-pr', runner: 'opencode' });
+          expect(fromAuto).toMatchObject({
+            status: 400,
+            error: expect.stringContaining('opencode does not enforce'),
+          });
+          expect(requests.filter((r) => r.path.endsWith('/runs'))).toEqual([]);
+        });
+      });
+
+      describe('with roles (spec 2026-11-25-manager-task-routing)', () => {
+        const routed = (load: Record<string, number>, held: Record<string, number> = {}) => makeEngine({
+          accountLimit: async (runner, agentProfile) => {
+            const account = agentProfile ?? 'default';
+            const until = held[`${runner}:${account}`];
+            return { account, label: `${account} login`, ...(until !== undefined ? { until } : {}) };
+          },
+          accountLoad: () => new Map(Object.entries(load)),
+        });
+        const roles = [
+          { runner: 'claude' as const, agentProfile: 'first', role: 'main' as const },
+          { runner: 'claude' as const, agentProfile: 'second', role: 'main' as const },
+          { runner: 'codex' as const, agentProfile: 'default', role: 'backup' as const },
+        ];
+
+        it('a list without roles keeps the original order, and no routed flag rides the run', async () => {
+          const engine = routed({ 'claude:first': 5 });
+          const id = await managerWith(engine);
+          await engine.createTask(id, { projectId: 'alpha', task: 'Fix it' });
+          expect(requests.at(-1)?.body).toMatchObject({ agentProfile: 'first' });
+          expect((requests.at(-1)?.body as { managerAgent: object }).managerAgent).not.toHaveProperty('routed');
+        });
+
+        it('spreads over Main accounts by running tasks and marks the run routed', async () => {
+          const engine = routed({ 'claude:first': 2, 'claude:second': 0 });
+          const id = await managerWith(engine, roles);
+          const created = await engine.createTask(id, { projectId: 'alpha', task: 'Fix it' });
+          expect(created).toMatchObject({ agent: { agentProfile: 'second', reason: expect.stringMatching(/^main: claude second login had 0 running/) } });
+          expect(requests.at(-1)?.body).toMatchObject({ agentProfile: 'second', managerAgent: { routed: true } });
+        });
+
+        it('Backup only once every Main is out of limits (the default), or also busy when set', async () => {
+          const engine = routed({ 'claude:first': 2, 'claude:second': 2 });
+          const id = await managerWith(engine, roles);
+          await engine.createTask(id, { projectId: 'alpha', task: 'One' });
+          expect(requests.at(-1)?.body).toMatchObject({ runner: 'claude' });
+          await engine.update(id, { taskBusyAt: 2 });
+          await engine.createTask(id, { projectId: 'alpha', task: 'Two' });
+          expect(requests.at(-1)?.body).toMatchObject({ runner: 'codex', agentProfile: 'default' });
+        });
+
+        it('"wait for the reset" hands no fallback; "same agent only" keeps it on the runner', async () => {
+          const engine = routed({});
+          const id = await managerWith(engine, roles);
+          await engine.update(id, { taskLimitSwitch: 'wait' });
+          await engine.createTask(id, { projectId: 'alpha', task: 'One' });
+          expect(requests.at(-1)?.body).toMatchObject({ managerAgent: { fallback: [] } });
+          await engine.update(id, { taskLimitSwitch: 'same-agent' });
+          await engine.createTask(id, { projectId: 'alpha', task: 'Two' });
+          const fallback = (requests.at(-1)?.body as { managerAgent: { fallback: Array<{ provider: string }> } }).managerAgent.fallback;
+          expect(fallback.every((entry) => entry.provider === 'claude')).toBe(true);
+        });
+
+        it('an explicit --account is never routed', async () => {
+          const engine = routed({ 'claude:first': 9 });
+          const id = await managerWith(engine, roles);
+          await engine.createTask(id, { projectId: 'alpha', task: 'Fix it', runner: 'claude', agentProfile: 'first' });
+          expect(requests.at(-1)?.body).toMatchObject({ agentProfile: 'first' });
+          expect((requests.at(-1)?.body as { managerAgent: object }).managerAgent).not.toHaveProperty('routed');
+        });
+
+        it('--runner picks by role among that agent but is never routed: the queue would cross agents', async () => {
+          const engine = routed({ 'claude:first': 2, 'claude:second': 0 });
+          const id = await managerWith(engine, roles);
+          await engine.createTask(id, { projectId: 'alpha', task: 'Fix it', runner: 'claude' });
+          expect(requests.at(-1)?.body).toMatchObject({ runner: 'claude', agentProfile: 'second' });
+          expect((requests.at(-1)?.body as { managerAgent: object }).managerAgent).not.toHaveProperty('routed');
+        });
+      });
+
+      it('takes the first allowed account with no flags, says why and hands the rest to fallback', async () => {
+        const engine = limited({});
+        const id = await managerWith(engine);
+        const created = await engine.createTask(id, { projectId: 'alpha', task: 'Fix it' });
+        expect(created).toMatchObject({ agent: { runner: 'claude', agentProfile: 'first', reason: 'default from manager settings: claude first login' } });
+        expect(created).not.toHaveProperty('warning');
+        expect(requests.at(-1)?.body).toMatchObject({
+          runner: 'claude', agentProfile: 'first',
+          managerAgent: { note: expect.stringContaining('default from manager settings'), fallback: [{ provider: 'claude', profileId: 'first' }, { provider: 'claude', profileId: 'second' }] },
+        });
+      });
+
+      it('skips an account that is out of limits for the next one with capacity', async () => {
+        const engine = limited({ 'claude:first': RESET });
+        const id = await managerWith(engine);
+        const created = await engine.createTask(id, { projectId: 'alpha', task: 'Fix it' });
+        expect(created).toMatchObject({ agent: { agentProfile: 'second', reason: 'default from manager settings: claude first login out of limits until 2099-01-01T05:00:00.000Z, used claude second login' } });
+        expect(created).not.toHaveProperty('agent.queuedUntil');
+        expect(requests.at(-1)?.body).toMatchObject({ agentProfile: 'second', managerAgent: { fallback: [{ provider: 'claude', profileId: 'first' }, { provider: 'claude', profileId: 'second' }] } });
+      });
+
+      it('an explicit --account wins, with a warning naming an allowed account with capacity', async () => {
+        const engine = limited({ 'claude:first': RESET });
+        const id = await managerWith(engine);
+        const created = await engine.createTask(id, { projectId: 'alpha', task: 'Fix it', runner: 'claude', agentProfile: 'first' });
+        expect(requests.at(-1)?.body).toMatchObject({ runner: 'claude', agentProfile: 'first' });
+        expect(created).toMatchObject({
+          agent: { agentProfile: 'first', queuedUntil: '2099-01-01T05:00:00.000Z' },
+          warning: 'claude first login is out of usage limits until 2099-01-01T05:00:00.000Z; claude second login has capacity (--runner claude --account second)',
+        });
+        // Still only the allowed list: an explicit account outside it is refused.
+        expect(await engine.createTask(id, { projectId: 'alpha', task: 'Other', runner: 'claude', agentProfile: 'stranger' })).toMatchObject({ status: 403 });
+      });
+
+      it('with every allowed account exhausted, queues on the one that resets first and tells the manager', async () => {
+        const engine = limited({ 'claude:first': RESET + 60_000, 'claude:second': RESET });
+        const id = await managerWith(engine);
+        const created = await engine.createTask(id, { projectId: 'alpha', task: 'Fix it' });
+        expect(created).not.toHaveProperty('status');
+        expect(created).toMatchObject({ agent: { agentProfile: 'second', queuedUntil: '2099-01-01T05:00:00.000Z', reason: expect.stringContaining('every allowed account is out of limits') } });
+        expect(requests.at(-1)?.body).toMatchObject({ agentProfile: 'second' });
+      });
+
+      it('a retry takes the default too, its old account first while it has capacity', async () => {
+        const old = { id: 'old', task: 'Retry this', workflow: 'quick-task', status: 'failed', runner: 'claude', agentProfile: 'second', model: 'opus', steps: [] } as unknown as RunRecord;
+        let held: Record<string, number> = {};
+        const engine = makeEngine({
+          projects: async () => [{ ...connected, runs: () => [old] }],
+          accountLimit: async (_runner, agentProfile) => ({ account: agentProfile ?? 'default', label: agentProfile ?? 'default', ...(held[agentProfile ?? ''] ? { until: held[agentProfile ?? ''] } : {}) }),
+        });
+        const id = await managerWith(engine);
+        await engine.retryTask(id, { projectId: 'alpha', runId: 'old' });
+        expect(requests.at(-1)?.body).toMatchObject({ runner: 'claude', agentProfile: 'second' });
+        held = { second: RESET };
+        const retried = await engine.retryTask(id, { projectId: 'alpha', runId: 'old' });
+        expect(retried).toMatchObject({ agent: { agentProfile: 'first' } });
+        expect(retried).not.toHaveProperty('warning');
+      });
+
+      it('after a limit skip to another runner only what that runner refuses is dropped, never the task', async () => {
+        const engine = limited({ 'claude:first': RESET, 'claude:second': RESET });
+        const id = await managerWith(engine, [...twoClaudes, { runner: 'codex' as const, agentProfile: 'work' }]);
+        const created = await engine.createTask(id, { projectId: 'alpha', task: 'Fix it', model: 'opus', effort: 'high' });
+        expect(created).toMatchObject({ runId: 'new-run', agent: { runner: 'codex', agentProfile: 'work', reason: expect.stringContaining('--model opus dropped: not valid on codex') } });
+        expect(requests.at(-1)?.body).toMatchObject({ runner: 'codex', agentProfile: 'work', reasoningEffort: 'high' });
+        expect(requests.at(-1)?.body).not.toHaveProperty('model');
+        // A bad flag where nothing moved (capacity on the first runner) is still refused with the valid choices.
+        const free = limited({});
+        expect(await free.createTask(await managerWith(free), { projectId: 'alpha', task: 'Fix it', model: 'gpt-5.1-codex' })).toMatchObject({ status: 400 });
+        // On the runner it was meant for, with capacity there, the model stays.
+        const own = limited({});
+        expect(await own.createTask(await managerWith(own), { projectId: 'alpha', task: 'Fix it', model: 'opus' })).toMatchObject({ agent: { runner: 'claude', agentProfile: 'first' } });
+        expect(requests.at(-1)?.body).toMatchObject({ runner: 'claude', agentProfile: 'first', model: 'opus' });
+        expect((requests.at(-1)?.body as { managerAgent: { note: string } }).managerAgent.note).not.toContain('out of limits');
+      });
+
+      it('after a limit skip, a --model or --effort no allowed runner accepts is still a 400', async () => {
+        // Each runner's live catalog, as the cockpit's /models answers it.
+        const catalogs: Record<string, unknown> = {
+          claude: { runner: 'claude', source: 'live', stale: false, models: [{ id: 'opus', reasoningEfforts: [{ id: 'low' }, { id: 'high' }] }] },
+          codex: { runner: 'codex', source: 'live', stale: false, models: [{ id: 'gpt-5.1-codex', reasoningEfforts: [{ id: 'low' }, { id: 'high' }] }] },
+        };
+        const engine = makeEngine({
+          accountLimit: async (runner, agentProfile) => ({ account: agentProfile ?? 'default', label: agentProfile ?? 'default', ...(runner === 'claude' ? { until: RESET } : {}) }),
+          request: async (path, init) => {
+            requests.push({ path, method: init?.method ?? 'GET', ...(typeof init?.body === 'string' ? { body: JSON.parse(init.body) } : {}) });
+            const runner = /[?&]runner=([^&]+)/.exec(path)?.[1];
+            if (path.startsWith('/api/v1/models') && runner) return Response.json(catalogs[runner]);
+            return Response.json({ id: 'new-run' });
+          },
+        });
+        const id = await managerWith(engine, [...twoClaudes, { runner: 'codex' as const, agentProfile: 'work' }]);
+        const posts = () => requests.filter((request) => request.method === 'POST').length;
+        const before = posts();
+        const typo = await engine.createTask(id, { projectId: 'alpha', task: 'Fix it', model: 'opus-typo' });
+        const effort = await engine.createTask(id, { projectId: 'alpha', task: 'Fix it', effort: 'ultra' as 'high' });
+        // The first listed runner's choices, as when nothing moved — never the landed codex runner's.
+        expect(typo).toEqual({ status: 400, error: "unknown model 'opus-typo' for claude. Valid: fable, opus, sonnet, haiku" });
+        expect(effort).toEqual({ status: 400, error: "effort 'ultra' is not available for claude. Valid: low, high" });
+        expect(posts()).toBe(before);
+      });
+
+      it('--runner narrowed to exhausted accounts while another allowed account is free: queued with a warning', async () => {
+        const engine = limited({ 'codex:work': RESET + 60_000, 'codex:team': RESET });
+        const id = await managerWith(engine, [...twoClaudes, { runner: 'codex' as const, agentProfile: 'work' }, { runner: 'codex' as const, agentProfile: 'team' }]);
+        const created = await engine.createTask(id, { projectId: 'alpha', task: 'Fix it', runner: 'codex' });
+        // The exact reply the manager-cli test replays.
+        expect(created).toEqual({
+          projectId: 'alpha', runId: 'new-run',
+          agent: {
+            runner: 'codex', agentProfile: 'team', account: 'team', label: 'team login', queuedUntil: '2099-01-01T05:00:00.000Z',
+            reason: 'default from manager settings: every allowed account for --runner codex is out of limits (codex work login out of limits until 2099-01-01T05:01:00.000Z; codex team login out of limits until 2099-01-01T05:00:00.000Z); queued on codex team login, the first to reset',
+          },
+          warning: '--runner codex has no account with capacity until 2099-01-01T05:00:00.000Z; claude first login has capacity (--runner claude --account first)',
+        });
+      });
+
+      it('after a limit skip to another runner, fallbacks on the runner --model was meant for keep it', async () => {
+        const engine = limited({ 'claude:first': RESET, 'claude:second': RESET });
+        const id = await managerWith(engine, [...twoClaudes, { runner: 'codex' as const, agentProfile: 'work' }]);
+        await engine.createTask(id, { projectId: 'alpha', task: 'Fix it', model: 'opus' });
+        expect(requests.at(-1)?.body).toMatchObject({
+          runner: 'codex',
+          managerAgent: { fallback: [{ provider: 'claude', profileId: 'first', model: 'opus' }, { provider: 'claude', profileId: 'second', model: 'opus' }, { provider: 'codex', profileId: 'work' }] },
+        });
+        expect(requests.at(-1)?.body).not.toHaveProperty('model');
+      });
+
+      it('a same-runner fallback keeps the requested model; another runner starts on its own default', async () => {
+        const engine = limited({});
+        const id = await managerWith(engine, [...twoClaudes, { runner: 'codex' as const, agentProfile: 'work' }]);
+        await engine.createTask(id, { projectId: 'alpha', task: 'Fix it', model: 'opus' });
+        expect(requests.at(-1)?.body).toMatchObject({ model: 'opus', managerAgent: { fallback: [{ provider: 'claude', profileId: 'first', model: 'opus' }, { provider: 'claude', profileId: 'second', model: 'opus' }, { provider: 'codex', profileId: 'work' }] } });
+        expect((requests.at(-1)?.body as { managerAgent: { fallback: object[] } }).managerAgent.fallback[2]).not.toHaveProperty('model');
+      });
+
+      it('a manager with one allowed account lists only that account, so the task never falls back outside the list', async () => {
+        const engine = limited({});
+        const id = await managerWith(engine, [{ runner: 'claude' as const, agentProfile: 'first' }]);
+        await engine.createTask(id, { projectId: 'alpha', task: 'Fix it' });
+        expect(requests.at(-1)?.body).toMatchObject({ agentProfile: 'first', managerAgent: { fallback: [{ provider: 'claude', profileId: 'first' }] } });
+      });
+
+      it('an explicit --runner or --account keeps fallback on that runner', async () => {
+        const engine = limited({});
+        const id = await managerWith(engine, [...twoClaudes, { runner: 'codex' as const, agentProfile: 'work' }]);
+        await engine.createTask(id, { projectId: 'alpha', task: 'No flags' });
+        expect(requests.at(-1)?.body).toMatchObject({ agentProfile: 'first', managerAgent: { fallback: [{ provider: 'claude', profileId: 'first' }, { provider: 'claude', profileId: 'second' }, { provider: 'codex', profileId: 'work' }] } });
+        await engine.createTask(id, { projectId: 'alpha', task: 'Codex only', runner: 'codex' });
+        expect(requests.at(-1)?.body).toMatchObject({ runner: 'codex', agentProfile: 'work', managerAgent: { fallback: [{ provider: 'codex', profileId: 'work' }] } });
+        await engine.createTask(id, { projectId: 'alpha', task: 'This Claude', agentProfile: 'second' });
+        expect(requests.at(-1)?.body).toMatchObject({ runner: 'claude', agentProfile: 'second', managerAgent: { fallback: [{ provider: 'claude', profileId: 'first' }, { provider: 'claude', profileId: 'second' }] } });
+        await engine.createTask(id, { projectId: 'alpha', task: 'Claude', runner: 'claude' });
+        expect(requests.at(-1)?.body).toMatchObject({ agentProfile: 'first', managerAgent: { fallback: [{ provider: 'claude', profileId: 'first' }, { provider: 'claude', profileId: 'second' }] } });
+      });
+
+      it('a retry whose old account was deselected drops what the new runner refuses', async () => {
+        const old = { id: 'old', task: 'Retry this', workflow: 'quick-task', status: 'failed', runner: 'claude', agentProfile: 'gone', model: 'opus', reasoningEffort: 'high', steps: [] } as unknown as RunRecord;
+        const engine = makeEngine({ projects: async () => [{ ...connected, runs: () => [old] }] });
+        const id = await managerWith(engine, [{ runner: 'codex' as const, agentProfile: 'work' }]);
+        expect(await engine.retryTask(id, { projectId: 'alpha', runId: 'old' })).toMatchObject({ runId: 'new-run', agent: { runner: 'codex', agentProfile: 'work' } });
+        // opus is not a codex model; high is a valid codex effort, so it stays.
+        expect(requests.at(-1)?.body).toMatchObject({ runner: 'codex', agentProfile: 'work', reasoningEffort: 'high' });
+        expect(requests.at(-1)?.body).not.toHaveProperty('model');
+      });
+
+      it('a codex model with claude first at its limit keeps the model on codex and off the claude fallback', async () => {
+        const engine = limited({ 'claude:first': RESET });
+        const id = await managerWith(engine, [{ runner: 'claude' as const, agentProfile: 'first' }, { runner: 'codex' as const, agentProfile: 'work' }]);
+        const created = await engine.createTask(id, { projectId: 'alpha', task: 'Fix it', model: 'gpt-5.1-codex' });
+        expect(created).toMatchObject({ agent: { runner: 'codex', agentProfile: 'work' } });
+        expect(created).not.toHaveProperty('agent.reason', expect.stringContaining('dropped'));
+        expect(requests.at(-1)?.body).toMatchObject({ runner: 'codex', model: 'gpt-5.1-codex', managerAgent: { fallback: [{ provider: 'claude', profileId: 'first' }, { provider: 'codex', profileId: 'work', model: 'gpt-5.1-codex' }] } });
+        expect((requests.at(-1)?.body as { managerAgent: { fallback: object[] } }).managerAgent.fallback[0]).not.toHaveProperty('model');
+      });
+
+      it('status lists the allowed accounts and which are out of limits', async () => {
+        const engine = limited({ 'claude:second': RESET });
+        const id = await managerWith(engine);
+        expect((await engine.snapshot(id))?.accounts).toEqual([
+          { runner: 'claude', agentProfile: 'first', account: 'first', label: 'first login' },
+          { runner: 'claude', agentProfile: 'second', account: 'second', label: 'second login', outOfLimitsUntil: '2099-01-01T05:00:00.000Z' },
+        ]);
+      });
+
+      it('Automatic selection keeps the project fallback policy (no manager list to fall back within)', async () => {
+        const engine = limited({});
+        const id = await create(engine, 0);
+        expect(await engine.createTask(id, { projectId: 'alpha', task: 'Fix it' })).toMatchObject({ agent: { reason: expect.stringContaining('automatic selection') } });
+        expect(requests.at(-1)?.body).toHaveProperty('managerAgent.note');
+        expect(requests.at(-1)?.body).not.toHaveProperty('managerAgent.fallback');
+      });
+    });
+
     it('validates a model against the enforced task agent', async () => {
       const engine = makeEngine();
       const id = await create(engine, 0);
@@ -3270,12 +3764,13 @@ describe('ManagerEngine', () => {
 
   describe('task lifecycle (cancel, model, retry)', () => {
     const run = (id: string, over: Record<string, unknown> = {}) =>
-      ({ id, title: id, task: `do ${id}`, workflow: 'quick-task', status: 'running', ...over }) as unknown as RunRecord;
+      ({ id, title: id, task: `do ${id}`, workflow: 'quick-task', status: 'running', steps: [], ...over }) as unknown as RunRecord;
     const catalog = { runner: 'claude', source: 'live', stale: false, models: [{ id: 'opus', reasoningEfforts: [{ id: 'low' }, { id: 'high' }, { id: 'max' }] }, { id: 'claude-sonnet-5' }] };
 
     /** A project holding `runs`; `/cancel` marks the subtree cancelled the way `RunManager.cancel` does. */
-    const withRuns = (runs: RunRecord[]) => makeEngine({
+    const withRuns = (runs: RunRecord[], accountLimit?: ManagerEngineDeps['accountLimit']) => makeEngine({
       projects: async () => [{ ...connected, runs: () => runs }],
+      accountLimit,
       request: async (path, init) => {
         requests.push({ path, method: init?.method ?? 'GET', ...(typeof init?.body === 'string' ? { body: JSON.parse(init.body) } : {}) });
         if (path.startsWith('/api/v1/models')) return Response.json(catalog);
@@ -3291,6 +3786,7 @@ describe('ManagerEngine', () => {
           return Response.json({ cancelled: live });
         }
         if (path.endsWith('/runs')) return Response.json({ id: 'new-run' }, { status: 201 });
+        if (path.endsWith('/switch-agent')) return Response.json({ summary: 'Switched task agent' });
         return Response.json({ ok: true });
       },
     });
@@ -3341,6 +3837,71 @@ describe('ManagerEngine', () => {
       expect(await scoped.cancelTask(id, { projectId: 'alpha', runId: 'users-task' })).toMatchObject({ cancelled: true });
     });
 
+    it('validates the selected account pair and model before handing over the existing task', async () => {
+      const id = await create(withRuns([]), 0);
+      const engine = withRuns([run('owned', { runner: 'claude', startedByManager: { id, name: 'Manager' } })]);
+      await engine.update(id, { taskAgents: [{ runner: 'claude', agentProfile: 'default' }, { runner: 'codex', agentProfile: 'default' }] });
+      const input = { projectId: 'alpha', runId: 'owned' };
+      expect(await engine.switchTask(id, { ...input, runner: 'codex', agentProfile: 'work' })).toMatchObject({ status: 403 });
+      expect(await engine.switchTask(id, { ...input, runner: 'opencode' })).toMatchObject({ status: 403 });
+      expect(await engine.switchTask(id, { ...input, runner: 'claude', model: 'unlisted' })).toMatchObject({ status: 400, error: expect.stringContaining('Valid:') });
+      expect(requests.some((request) => request.method === 'POST')).toBe(false);
+      expect(await engine.switchTask(id, { ...input, runner: 'codex' })).toEqual({ ...input, notice: 'Switched task agent' });
+      expect(requests.at(-1)).toMatchObject({
+        path: '/api/v1/p/alpha/runs/owned/switch-agent',
+        method: 'POST',
+        body: { runner: 'codex', agentProfile: 'default', changedBy: store.get(id)?.name },
+      });
+    });
+
+    it('allows only the resolved default for a bare account entry and reads edits to the list', async () => {
+      const id = await create(withRuns([]), 0);
+      const engine = withRuns([run('owned', { runner: 'claude', startedByManager: { id, name: 'Manager' } })],
+        async () => ({ account: 'project-work', label: 'Work' }));
+      await engine.update(id, { taskAgents: [{ runner: 'codex' }] });
+      const input = { projectId: 'alpha', runId: 'owned', runner: 'codex' };
+      expect(await engine.switchTask(id, { ...input, agentProfile: 'default' })).toMatchObject({ status: 403 });
+      expect(await engine.switchTask(id, input)).toMatchObject({ runId: 'owned' });
+      expect(requests.at(-1)?.body).toMatchObject({ runner: 'codex', agentProfile: 'project-work' });
+      expect(await engine.switchTask(id, { ...input, agentProfile: 'project-work' })).toMatchObject({ runId: 'owned' });
+      await engine.update(id, { taskAgents: [{ runner: 'codex', agentProfile: 'default' }] });
+      expect(await engine.switchTask(id, { ...input, agentProfile: 'project-work' })).toMatchObject({ status: 403 });
+    });
+
+    it('forwards only explicit model and effort pins so an account switch preserves per-step settings', async () => {
+      const id = await create(withRuns([]), 0);
+      const engine = withRuns([run('owned', { runner: 'claude', model: 'opus', reasoningEffort: 'high', startedByManager: { id, name: 'Manager' } })]);
+      const input = { projectId: 'alpha', runId: 'owned' };
+      await engine.switchTask(id, { ...input, agentProfile: 'default' });
+      expect(requests.at(-1)?.body).toMatchObject({ runner: 'claude', agentProfile: 'default' });
+      expect(requests.at(-1)?.body).not.toHaveProperty('model');
+      expect(requests.at(-1)?.body).not.toHaveProperty('reasoningEffort');
+      await engine.switchTask(id, { ...input, agentProfile: 'default', effort: 'low' });
+      expect(requests.at(-1)?.body).toMatchObject({ reasoningEffort: 'low' });
+      await engine.switchTask(id, { ...input, model: 'claude-sonnet-5' });
+      expect(requests.at(-1)?.body).toMatchObject({ model: 'claude-sonnet-5' });
+      expect(requests.at(-1)?.body).not.toHaveProperty('reasoningEffort');
+      await engine.switchTask(id, { ...input, runner: 'codex' });
+      expect(requests.at(-1)?.body).toMatchObject({ runner: 'codex' });
+      expect(requests.at(-1)?.body).not.toHaveProperty('model');
+      expect(requests.at(-1)?.body).not.toHaveProperty('reasoningEffort');
+    });
+
+    it('uses cancel ownership for a switch and a retry with agent flags', async () => {
+      const id = await create(withRuns([]), 0);
+      const engine = withRuns([run('user-task', { status: 'failed', runner: 'claude', model: 'opus' })]);
+      const input = { projectId: 'alpha', runId: 'user-task', runner: 'codex' };
+      expect(await engine.switchTask(id, input)).toMatchObject({ status: 403 });
+      expect(await engine.retryTask(id, input)).toMatchObject({ status: 403 });
+      expect(requests).toEqual([]);
+      await engine.update(id, { cancelAnyTask: true });
+      expect(await engine.retryTask(id, input)).toEqual({ projectId: 'alpha', runId: 'user-task', notice: 'Switched task agent' });
+      expect(requests.at(-1)?.path).toBe('/api/v1/p/alpha/runs/user-task/switch-agent');
+      expect(requests.at(-1)?.body).not.toHaveProperty('model');
+      await engine.update(id, { access: 'read' });
+      expect(await engine.switchTask(id, input)).toMatchObject({ status: 403 });
+    });
+
     it('refuses in a read-only project, outside its projects and in a watch turn', async () => {
       const engine = withRuns([]);
       const readOnly = await engine.create({ instructions: '', projects: ['alpha'], access: 'read' });
@@ -3358,6 +3919,7 @@ describe('ManagerEngine', () => {
       await vi.waitFor(() => expect(backend.open).toHaveLength(1));
       expect(await watched.cancelTask(id, { projectId: 'alpha', runId: 'r' })).toMatchObject({ status: 409 });
       expect(await watched.retryTask(id, { projectId: 'alpha', runId: 'r' })).toMatchObject({ status: 409 });
+      expect(await watched.switchTask(id, { projectId: 'alpha', runId: 'r', runner: 'codex' })).toMatchObject({ status: 409 });
       expect(requests).toEqual([]);
     });
 
@@ -3366,6 +3928,57 @@ describe('ManagerEngine', () => {
       const id = await create(engine);
       expect(await engine.createTask(id, { projectId: 'alpha', task: 'x', model: 'opus', effort: 'max' })).toMatchObject({ runId: 'new-run' });
       expect(requests.find((request) => request.path.endsWith('/runs'))?.body).toMatchObject({ model: 'opus', reasoningEffort: 'max' });
+    });
+
+    // A dispatch root always gets a worktree, so in a trunk-based project --dispatch cost the task its
+    // Commit to main and its auto-land (the header offered Create PR instead).
+    it('drops --dispatch in an in-place project and keeps it elsewhere', async () => {
+      const startIn = async (taskWorkspace: string | null) => {
+        requests.length = 0;
+        const engine = makeEngine({
+          request: async (path, init) => {
+            requests.push({ path, method: init?.method ?? 'GET', ...(typeof init?.body === 'string' ? { body: JSON.parse(init.body) } : {}) });
+            if (path.endsWith('/config')) return Response.json({ taskWorkspace });
+            if (path.endsWith('/runs')) return Response.json({ id: 'new-run' }, { status: 201 });
+            return Response.json({ ok: true });
+          },
+        });
+        const id = await create(engine);
+        const created = await engine.createTask(id, { projectId: 'alpha', task: 'x', dispatch: true });
+        expect(created).toMatchObject({ runId: 'new-run' });
+        const notice = 'notice' in created ? created.notice : undefined;
+        return { body: requests.find((request) => request.path.endsWith('/runs'))?.body as Record<string, unknown>, notice };
+      };
+      const inPlace = await startIn('in-place');
+      expect(inPlace.body).not.toHaveProperty('dispatch');
+      expect(inPlace.notice).toBe('dispatch ignored: alpha runs tasks in place');
+      for (const workspace of ['worktree', null]) {
+        const kept = await startIn(workspace);
+        expect(kept.body).toMatchObject({ dispatch: {} });
+        expect(kept.notice).toBeUndefined();
+      }
+    });
+
+    // Fail open: an unreadable project config never silently drops what the manager asked for.
+    it.each([
+      ['answers an error', async () => Response.json({ error: 'boom' }, { status: 500 })],
+      ['throws', async (): Promise<Response> => { throw new Error('connection refused'); }],
+    ])('keeps --dispatch, with no notice, when reading /config %s', async (_label, configResponse) => {
+      requests.length = 0;
+      const engine = makeEngine({
+        request: async (path, init) => {
+          requests.push({ path, method: init?.method ?? 'GET', ...(typeof init?.body === 'string' ? { body: JSON.parse(init.body) } : {}) });
+          if (path.endsWith('/config')) return configResponse();
+          if (path.endsWith('/runs')) return Response.json({ id: 'new-run' }, { status: 201 });
+          return Response.json({ ok: true });
+        },
+      });
+      const id = await create(engine);
+      const created = await engine.createTask(id, { projectId: 'alpha', task: 'x', dispatch: true });
+      expect(created).toMatchObject({ runId: 'new-run' });
+      expect(created).not.toHaveProperty('notice');
+      expect(requests.some((request) => request.path.endsWith('/config'))).toBe(true);
+      expect(requests.find((request) => request.path.endsWith('/runs'))?.body).toMatchObject({ dispatch: {} });
     });
 
     it('refuses a model or effort the runner cannot use, listing the valid ones', async () => {
@@ -3857,7 +4470,8 @@ describe('ManagerEngine', () => {
       const id = await started(engine);
       expect(store.state(id).follows['alpha/new-run']).toMatchObject({ created: true });
       finalMessage('new-run', '# Impact\nLow risk: two call sites.\nNothing else changes.');
-      const done = run({ id: 'new-run', title: 'Assess impact', status: 'review', finishedAt: later(1) });
+      const summary = 'Switched from claude (opus, default) to codex (auto, default) by Manager';
+      const done = run({ id: 'new-run', title: 'Assess impact', status: 'review', finishedAt: later(1), agentSwitch: { summary } });
       runs = [done];
       backend.scripts.push(say('The assessment is in: low risk. I will open the follow-up task next.'));
       engine.taskChanged('alpha', dataDir(), done, () => undefined);
@@ -3865,7 +4479,7 @@ describe('ManagerEngine', () => {
       // The card needs no model call.
       expect(cards(id)).toEqual([expect.objectContaining({
         turn: 'watch',
-        text: '[[task:alpha/new-run]]\n\n**Finished, ready for review.**\n\n# Impact\nLow risk: two call sites.\nNothing else changes.',
+        text: `[[task:alpha/new-run]]\n\n**Finished, ready for review.**\n\n${summary}\n\n# Impact\nLow risk: two call sites.\nNothing else changes.`,
         taskReport: { projectId: 'alpha', runId: 'new-run', state: 'review' },
       })]);
       expect(cards(id)[0]).not.toHaveProperty('important');
@@ -4451,6 +5065,264 @@ describe('ManagerEngine', () => {
       expect(await engine.setActivity(false)).toEqual([]);
       expect((await engine.setActivity(true)).sort()).toEqual([one, two].sort());
       expect(notices(two).map((message) => message.activity?.change)).toEqual(['deactivated', 'reactivated']);
+    });
+  });
+
+  describe('agent chain (spec 2026-11-25-manager-agent-chain)', () => {
+    let clock = Date.parse('2026-11-10T14:00:00Z');
+    const limited: Script = {
+      play: (emit) => emit({ type: 'text', text: 'You’ve hit your session limit · resets 4:10pm (Europe/Warsaw)' }),
+      fail: 'claude CLI exited with code 1',
+    };
+    const resetAt = '2026-11-10T15:11:00.000Z';
+    const notices = (id: string) => store.messages(id).filter((message): message is Extract<ManagerMessage, { kind: 'notice' }> => message.kind === 'notice');
+    const switches = (id: string) => notices(id).flatMap((notice) => (notice.agentSwitch ? [notice.agentSwitch] : []));
+    beforeEach(() => { clock = Date.parse('2026-11-10T14:00:00Z'); });
+
+    const withBackup = async (engine: ManagerEngine, extra: Parameters<ManagerEngine['update']>[1] = {}) => {
+      const id = await create(engine, 0);
+      const updated = await engine.update(id, { backups: [{ runner: 'codex', model: 'gpt-5.5', effort: 'medium' }], ...extra });
+      if ('error' in updated) throw new Error(updated.error);
+      return id;
+    };
+
+    it('a manager without backups behaves exactly as before: same reply, no chain state, no shared hold', async () => {
+      const engine = makeEngine({ now: () => clock });
+      const id = await create(engine, 0);
+      backend.scripts.push(limited);
+      engine.send(id, 'rebase the stack');
+      await settled(engine);
+      expect(backend.specs).toHaveLength(1);
+      expect(assistants(id)[0]).toMatchObject({ resumeAt: resetAt, streaming: false });
+      expect(assistants(id)[0]).not.toHaveProperty('agent');
+      expect(assistants(id)[0]).not.toHaveProperty('cutOff');
+      expect(switches(id)).toEqual([]);
+      expect(store.state(id).chain).toBeUndefined();
+      expect(store.state(id).parkedSessions).toBeUndefined();
+      expect((await engine.summary(id))).not.toHaveProperty('activeAgent');
+      expect([...engine.accountHolds().deadlines]).toEqual([]);
+      expect(store.get(id)).not.toHaveProperty('backups');
+      expect(store.get(id)).not.toHaveProperty('failback');
+    });
+
+    it('an emptied chain is stored as none, and a duplicate row is refused', async () => {
+      const engine = makeEngine();
+      const id = await withBackup(engine);
+      expect(store.get(id)?.backups).toEqual([{ runner: 'codex', model: 'gpt-5.5', effort: 'medium' }]);
+      const duplicate = await engine.update(id, { backups: [{ runner: 'codex' }, { runner: 'codex' }] });
+      expect(duplicate).toMatchObject({ status: 400 });
+      const sameAsFirst = await engine.update(id, { backups: [{ runner: 'claude' }] });
+      expect(sameAsFirst).toMatchObject({ status: 400 });
+      await engine.update(id, { backups: [] });
+      expect(store.get(id)).not.toHaveProperty('backups');
+    });
+
+    it('a usage limit on #1 hands the same message to #2, says so, and shares the limit with tasks', async () => {
+      const engine = makeEngine({ now: () => clock });
+      const id = await withBackup(engine);
+      backend.scripts.push(limited, say('Rebased on codex.'));
+      engine.send(id, 'rebase the stack');
+      await settled(engine);
+      expect(backend.specs).toHaveLength(2);
+      expect(backend.specs[1]).toMatchObject({ model: 'gpt-5.5' });
+      expect(backend.specs[1]?.userPrompt).toContain('rebase the stack');
+      expect(switches(id)).toEqual([expect.objectContaining({
+        from: expect.objectContaining({ slot: 0, runner: 'claude' }),
+        to: expect.objectContaining({ slot: 1, runner: 'codex' }),
+        reason: 'usage-limit',
+        until: resetAt,
+      })]);
+      const replies = assistants(id);
+      expect(replies).toHaveLength(1);
+      expect(replies[0]).toMatchObject({ text: 'Rebased on codex.', agent: { slot: 1, runner: 'codex' } });
+      expect(replies[0]).not.toHaveProperty('resumeAt');
+      expect(replies[0]).not.toHaveProperty('error');
+      // The notice reads above the answer it explains.
+      const notice = notices(id).find((message) => message.agentSwitch)!;
+      expect(notice.seq).toBeLessThan(replies[0]!.seq);
+      const summary = await engine.summary(id);
+      expect(summary?.activeAgent).toMatchObject({ agent: { slot: 1 }, reason: 'usage-limit', primaryBackAt: resetAt });
+      expect(engine.accountHolds().deadlines.get('claude:default')).toBe(Date.parse(resetAt));
+    });
+
+    it('goes back to #1 on the first turn after its reset, in a fresh session that hears what the backup said', async () => {
+      // Close enough to the reset that #1's transcript would still be warm, but it missed #2's replies.
+      clock = Date.parse('2026-11-10T14:40:00Z');
+      const engine = makeEngine({ now: () => clock });
+      const id = await withBackup(engine);
+      backend.scripts.push(say('first'), limited, say('on codex'));
+      engine.send(id, 'one');
+      await settled(engine);
+      const firstSession = backend.specs[0]?.sessionId;
+      engine.send(id, 'two');
+      await settled(engine);
+      expect(backend.specs).toHaveLength(3);
+
+      // Still before the reset: #2 keeps answering, no new notice.
+      clock = Date.parse('2026-11-10T14:50:00Z');
+      backend.scripts.push(say('still codex'));
+      engine.send(id, 'three');
+      await settled(engine);
+      expect(backend.specs[3]).toMatchObject({ model: 'gpt-5.5' });
+      expect(switches(id)).toHaveLength(1);
+
+      clock = Date.parse(resetAt) + 60_000;
+      backend.scripts.push(say('back on claude'));
+      engine.send(id, 'four');
+      await settled(engine);
+      expect(backend.specs[4]).not.toHaveProperty('model');
+      expect(backend.specs[4]?.sessionId).not.toBe(firstSession);
+      expect(backend.specs[4]).not.toMatchObject({ resume: true });
+      expect(backend.specs[4]?.userPrompt).toContain('still codex');
+      expect(switches(id).at(-1)).toMatchObject({ reason: 'back', to: { slot: 0 } });
+      expect(assistants(id).at(-1)).toMatchObject({ text: 'back on claude', agent: { slot: 0 } });
+      expect((await engine.summary(id))).not.toHaveProperty('activeAgent');
+      expect([...engine.accountHolds().deadlines]).toEqual([]);
+    });
+
+    it('with every row held, a turn tries #1 without a false "Back on #1" notice', async () => {
+      const engine = makeEngine({ now: () => clock, autoResume: () => false });
+      const id = await withBackup(engine);
+      backend.scripts.push(limited, say('on codex'));
+      engine.send(id, 'one');
+      await settled(engine);
+      backend.scripts.push({ ...limited, fail: 'You’ve hit your usage limit · resets 4:10pm (Europe/Warsaw)' });
+      engine.send(id, 'two');
+      await settled(engine);
+      expect(switches(id)).toHaveLength(1);
+      clock += 60_000;
+      backend.scripts.push(limited);
+      engine.send(id, 'three');
+      await settled(engine);
+      expect(backend.specs.at(-1)).not.toHaveProperty('model');
+      expect(switches(id)).toHaveLength(1);
+      expect(store.state(id).chain?.active).toMatchObject({ slot: 1 });
+    });
+
+    it('with "only when I switch" it stays on the backup until Switch back now', async () => {
+      const engine = makeEngine({ now: () => clock });
+      const id = await withBackup(engine, { failback: 'manual' });
+      backend.scripts.push(limited, say('on codex'));
+      engine.send(id, 'one');
+      await settled(engine);
+      clock = Date.parse(resetAt) + 60_000;
+      backend.scripts.push(say('still codex'));
+      engine.send(id, 'two');
+      await settled(engine);
+      expect(backend.specs[2]).toMatchObject({ model: 'gpt-5.5' });
+
+      await engine.update(id, { switchToPrimary: true });
+      await vi.waitFor(() => expect(switches(id).at(-1)).toMatchObject({ reason: 'manual', to: { slot: 0 } }));
+      backend.scripts.push(say('claude again'));
+      engine.send(id, 'three');
+      await settled(engine);
+      expect(backend.specs[3]).not.toHaveProperty('model');
+    });
+
+    it('every row out of limits waits for the first reset, as a single agent does', async () => {
+      const engine = makeEngine({ now: () => clock });
+      const id = await withBackup(engine);
+      const codexLimited: Script = {
+        play: (emit) => emit({ type: 'text', text: 'You’ve hit your usage limit · resets 5:30pm (Europe/Warsaw)' }),
+        fail: 'codex exited with code 1',
+      };
+      backend.scripts.push(limited, codexLimited);
+      engine.send(id, 'rebase the stack');
+      await settled(engine);
+      expect(backend.specs).toHaveLength(2);
+      const reply = assistants(id).at(-1);
+      expect(reply).toMatchObject({ resumeAt: resetAt });
+      expect(reply).not.toHaveProperty('error');
+      expect(store.state(id).resume?.at).toBe(resetAt);
+    });
+
+    it('a reply cut off after it acted stays, and the backup is told what already ran', async () => {
+      const engine = makeEngine({ now: () => clock });
+      const id = await withBackup(engine);
+      backend.scripts.push({
+        play: (emit) => {
+          emit({ type: 'text', text: 'Starting the task.' });
+          emit({ type: 'tool-call', id: 't1', tool: 'Bash', input: { command: 'cez-manager task create alpha "fix it"' } });
+          emit({ type: 'tool-result', toolCallId: 't1', result: 'run 1a2b3c4d', isError: false });
+          emit({ type: 'error', message: 'You’ve hit your session limit · resets 4:10pm (Europe/Warsaw)' });
+        },
+        fail: 'claude CLI exited with code 1',
+      }, say('The task is already running.'));
+      engine.send(id, 'start a task');
+      await settled(engine);
+      const replies = assistants(id);
+      expect(replies).toHaveLength(2);
+      expect(replies[0]).toMatchObject({ text: 'Starting the task.', cutOff: true, agent: { slot: 0 } });
+      expect(replies[1]).toMatchObject({ text: 'The task is already running.', agent: { slot: 1 } });
+      expect(backend.specs[1]?.userPrompt).toContain('Do not repeat them');
+      expect(backend.specs[1]?.userPrompt).toContain('cez-manager task create alpha');
+    });
+
+    it('a rejected login fails over with the reconnect attached, and a reconnect reopens #1', async () => {
+      const engine = makeEngine({ now: () => clock });
+      const id = await withBackup(engine);
+      backend.scripts.push({ fail: SIGNED_OUT }, say('on codex'));
+      engine.send(id, 'hello');
+      await settled(engine);
+      expect(switches(id)[0]).toMatchObject({ reason: 'auth', reconnect: { provider: 'claude', profileId: 'default' } });
+      expect(assistants(id).at(-1)).not.toHaveProperty('authFailure');
+      expect(store.state(id).chain?.holds['claude|default']).toMatchObject({ reason: 'auth', streak: 1 });
+      // Auth holds are not usage limits: tasks keep the account.
+      expect([...engine.accountHolds().deadlines]).toEqual([]);
+      engine.resumeAuthFailed('claude', 'default');
+      expect(store.state(id).chain?.holds['claude|default']).toBeUndefined();
+    });
+
+    it('a passing failure stays on #1: no switch for a busy server', async () => {
+      const engine = makeEngine({ now: () => clock });
+      const id = await withBackup(engine);
+      backend.scripts.push({ fail: 'API Error: 529 Overloaded' }, { fail: 'API Error: 529 Overloaded' });
+      engine.send(id, 'hello');
+      await settled(engine);
+      expect(switches(id)).toEqual([]);
+      expect(backend.specs.every((spec) => spec.model === undefined)).toBe(true);
+    });
+
+    it('a watch check fails over too', async () => {
+      const engine = makeEngine({ github: readyPrGithub, now: () => clock });
+      const id = await create(engine);
+      await engine.update(id, { backups: [{ runner: 'codex', model: 'gpt-5.5' }] });
+      store.updateState(id, (state) => ({ ...state, lastCheckAt: '2026-01-01T00:00:00.000Z' }));
+      backend.scripts.push(limited, say('PR 7 is ready'));
+      engine.tick();
+      await settled(engine);
+      expect(backend.specs).toHaveLength(2);
+      expect(assistants(id).at(-1)).toMatchObject({ turn: 'watch', text: 'PR 7 is ready', agent: { slot: 1 } });
+      expect(switches(id)).toHaveLength(1);
+    });
+
+    it('a row its account is already held for is skipped before any call', async () => {
+      const engine = makeEngine({
+        now: () => clock,
+        accountLimit: async (runner, agentProfile) => ({
+          account: agentProfile ?? 'default', label: 'Main',
+          ...(runner === 'claude' ? { until: Date.parse(resetAt) } : {}),
+        }),
+      });
+      const id = await withBackup(engine);
+      backend.scripts.push(say('on codex'));
+      engine.send(id, 'hello');
+      await settled(engine);
+      expect(backend.specs).toHaveLength(1);
+      expect(backend.specs[0]).toMatchObject({ model: 'gpt-5.5' });
+      expect(switches(id)[0]).toMatchObject({ reason: 'held', until: resetAt, from: { label: 'Main' } });
+    });
+
+    it('editing the chain answers with #1 again', async () => {
+      const engine = makeEngine({ now: () => clock });
+      const id = await withBackup(engine);
+      backend.scripts.push({ fail: SIGNED_OUT }, say('on codex'));
+      engine.send(id, 'hello');
+      await settled(engine);
+      expect(store.state(id).chain?.active?.slot).toBe(1);
+      await engine.update(id, { backups: [{ runner: 'codex', model: 'gpt-5.4' }] });
+      expect(store.state(id).chain?.active).toBeUndefined();
+      expect(store.state(id).chain?.holds).toEqual({});
     });
   });
 });

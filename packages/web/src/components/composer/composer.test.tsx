@@ -719,8 +719,8 @@ describe('/ skills autocomplete (#380)', () => {
     type(textarea, '/')
     await screen.findByText('om-fix')
     const menu = document.querySelector('[data-slot="composer-menu"]')!
-    // The clamp keeps the list inside the visual viewport once PopoverContent's
-    // keyboard-aware collisionPadding has shrunk the popper's available space.
+    // The clamp keeps the list inside the room Radix measures within the visual viewport,
+    // which the open keyboard shrinks.
     expect(menu.className).toContain('--radix-popover-content-available-height')
   })
 

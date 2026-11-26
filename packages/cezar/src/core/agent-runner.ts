@@ -53,6 +53,20 @@ export function isRunnerId(value: string): value is RunnerId {
 /** Historical default: unrestricted shell access, not a capability boundary. */
 export const DEFAULT_ALLOWED_TOOLS = ['Read', 'Edit', 'Write', 'Grep', 'Glob', 'Bash'];
 
+/** A shell command a restricted Codex broker may run: one argv per pipe stage, plus a heredoc body. */
+export type BrokeredShellPlan = { ok: true; pipeline: string[][]; stdin?: string } | { ok: false; reason: string };
+
+export interface BrokeredShell {
+  verify(command: string): BrokeredShellPlan;
+  /** The environment approved commands run in; the broker adds nothing to it. */
+  env: Record<string, string | undefined>;
+  /** What the model is told the shell is for, appended to the tool description. */
+  describe: string;
+  /** Programs that reach nothing beyond the loopback cockpit. Under `CEZ_CODEX_NETWORK=0` a
+   *  pipeline runs only when every stage is one of these; absent, every command is refused then. */
+  offlinePrograms?: readonly string[];
+}
+
 export interface AgentRunSpec {
   /** Optional account usage metadata from ordinary activity. Bind to the resolved step account. */
   onUsageWindows?: (observation: UsageWindowsObservation) => void;
@@ -74,6 +88,10 @@ export interface AgentRunSpec {
   /** Claude only: a PreToolUse hook command that allows or denies each Bash call. `bashAllowlist`
    *  stays the floor when the hook gives no answer or cannot run. Other backends ignore it. */
   bashHookCommand?: string;
+  /** Codex only: the shell a restricted session's broker may run on the host — a manager's
+   *  `cez-manager` and read-only `gh` (the fence Claude enforces through `bashHookCommand`).
+   *  `verify` is the whole policy: it returns the argv pipeline to spawn, never a shell string. */
+  brokeredShell?: BrokeredShell;
   /** Claude only: skip every permission prompt (`--permission-mode bypassPermissions`), the
    *  project's opt-in `bypassPermissions`. `enforceReadOnly` wins. Other backends ignore it. */
   bypassPermissions?: boolean;
@@ -82,6 +100,15 @@ export interface AgentRunSpec {
   sandboxExcludedCommands?: string[];
   /** Extra directories the agent may read/write besides `cwd`. */
   additionalDirectories?: string[];
+  /** Claude only: the run's own artifacts directory, writable even when `allowedTools` grants no
+   *  Write — a read-only reviewer still saves its findings there. `enforceReadOnly` wins. */
+  artifactsWriteDir?: string;
+  /** Claude only: always `--permission-mode dontAsk` — never `acceptEdits` (`CEZ_APPROVAL_GATE`),
+   *  which would let edits reach every added directory, nor `bypassPermissions`. Read-only workflows. */
+  strictPermissions?: boolean;
+  /** Claude only: absolute paths or globs no file-writing tool may touch, as `--disallowedTools`
+   *  `Edit(//…)` deny rules, which outrank every allow rule and permission mode (a PR export). */
+  readOnlyPaths?: string[];
   /** Must not change the repository or publish anything, enforced by each backend's own control
    *  (AGENT_PROTOCOL.md); a runner that cannot has to fail the run. Set only for a manager's
    *  read-only work: an Ask task's read-only tools are not this (spec 2026-10-31-managers). */
@@ -305,6 +332,9 @@ export interface AgentSession {
   interrupt(): void;
   /** Escalate a cancellation to a bounded process kill when graceful interrupt is ignored. */
   hardStop?(): void;
+  /** Resolves once the spawned backend process has exited, even when `result` cannot settle
+   *  because a surviving descendant still holds its stdout (#1929). */
+  readonly processExited?: Promise<void>;
   /** True while the session still accepts messages. */
   readonly open: boolean;
 }

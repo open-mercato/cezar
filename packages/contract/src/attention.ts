@@ -10,6 +10,16 @@ export const attentionKindSchema = z.enum(['question', 'approval', 'task', 'revi
 export type AttentionKind = z.infer<typeof attentionKindSchema>;
 export const ATTENTION_KINDS = attentionKindSchema.options;
 
+/** Why an item probably no longer needs the user. */
+export const attentionSettledReasonSchema = z.enum(['pr-merged', 'pr-closed', 'work-ended', 'overtaken', 'quiet']);
+export type AttentionSettledReason = z.infer<typeof attentionSettledReasonSchema>;
+export const attentionSettledSchema = z.object({
+  why: attentionSettledReasonSchema,
+  /** One line: "PR #2428 merged", "Quiet for 3 days". */
+  detail: z.string().max(300),
+});
+export type AttentionSettled = z.infer<typeof attentionSettledSchema>;
+
 export const attentionItemSchema = z.object({
   /** Stable per item: a re-raised wait gets a new key. */
   key: z.string(),
@@ -17,7 +27,7 @@ export const attentionItemSchema = z.object({
   title: z.string(),
   detail: z.string().optional(),
   since: z.string(),
-  /** In the Now count. False for failed tasks and for managers whose Notify is off. */
+  /** In the Now count, unless `settled`. False for failed tasks and for managers whose Notify is off. */
   counted: z.boolean(),
   projectId: z.string().optional(),
   runId: z.string().optional(),
@@ -31,8 +41,43 @@ export const attentionItemSchema = z.object({
   header: z.string().optional(),
   /** `approval`: the action message id, for the decision route. */
   actionId: z.string().optional(),
+  /** Probably no longer needs the user (spec 2026-11-23-needs-you-triage): listed apart, never counted. */
+  settled: attentionSettledSchema.optional(),
 });
 export type AttentionItem = z.infer<typeof attentionItemSchema>;
+
+/** The user's own word on an item: `dismiss` hides it (until `until`, a snooze), `keep` overrides `settled`.
+ *  Keyed by item key, so a re-raised wait (a new key) shows again. */
+export const attentionOverrideModeSchema = z.enum(['dismiss', 'keep']);
+export const attentionOverrideSchema = z.object({
+  key: z.string().min(1).max(400),
+  mode: attentionOverrideModeSchema,
+  at: z.string(),
+  until: z.string().optional(),
+  /** The task a dismissal is about. It also covers that run's items that began before it (a closed
+   *  question's wait), so the row the user dismissed never comes back under another key. */
+  projectId: z.string().optional(),
+  runId: z.string().optional(),
+});
+export type AttentionOverride = z.infer<typeof attentionOverrideSchema>;
+
+/** `POST /workspace/attention/overrides`. */
+export const attentionOverrideInputSchema = z.strictObject({
+  key: z.string().min(1).max(400),
+  mode: attentionOverrideModeSchema,
+  /** A snooze's end; absent dismisses until the item changes. */
+  until: z.string().datetime({ offset: true }).optional(),
+  /** The item's task, when it has one. */
+  projectId: z.string().min(1).max(300).optional(),
+  runId: z.string().min(1).max(300).optional(),
+});
+export type AttentionOverrideInput = z.infer<typeof attentionOverrideInputSchema>;
+
+/** `POST /workspace/attention/overrides/clear`: undo, or "Still needs me" on a dismissed item. */
+export const attentionOverrideClearInputSchema = z.strictObject({ key: z.string().min(1).max(400) });
+
+export const attentionOverridesResponseSchema = z.object({ overrides: z.array(attentionOverrideSchema) });
+export type AttentionOverridesResponse = z.infer<typeof attentionOverridesResponseSchema>;
 
 export const attentionCountsSchema = z.object({
   /** Counted items: the Now tab's badge. */
@@ -52,6 +97,10 @@ export const attentionResponseSchema = z.object({
   counts: attentionCountsSchema,
   /** A digest of the item keys: changes whenever the list does. */
   revision: z.string(),
+  /** Active overrides; Now hides its own task rows by them too. Dismissed items are already left out of `items`. */
+  overrides: z.array(attentionOverrideSchema),
+  /** The Questions page's Older days (`0` = off): past it an item is quiet, past half it sorts below fresh ones. */
+  olderAfterDays: z.number().int().min(0),
 });
 export type AttentionResponse = z.infer<typeof attentionResponseSchema>;
 

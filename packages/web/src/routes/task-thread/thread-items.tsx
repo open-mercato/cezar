@@ -20,11 +20,10 @@ import {
 } from 'lucide-react'
 import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'react'
 
-import { useMutation } from '@tanstack/react-query'
 import { Link as GlobalLink } from 'react-router'
-import { ApiError, updateProvider } from '@/api/client'
 import { useAgentProfiles, useRefreshSkillCatalog } from '@/api/queries'
 import { ReconnectCard, ReconnectedLine } from '@/components/reconnect/reconnect-card'
+import { AgentSetupSheet } from '@/components/agent-setup-sheet'
 import { Button } from '@/components/ui/button'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import { IconTooltip } from '@/components/ui/icon-tooltip'
@@ -501,34 +500,12 @@ export function ProviderAuthRequiredCard({
   )
 }
 
-/** The CLIs with a self-update cezar can run (`updateArgs` in `provider-auth.ts`); the rest
- *  update the way they were installed, so the card says so instead of offering a 409. */
-const SELF_UPDATING: Record<ThreadProviderAuthRequired['provider'], boolean> = {
-  claude: true, codex: false, junie: false, opencode: true, cursor: true, pi: false, copilot: false, omp: false, antigravity: false, gemini: false, kimi: false,
-}
-
-/** Follows an agent error saying its CLI is too old: hands the CLI's own update to a terminal,
- *  or shows the command to run when no terminal can be opened. */
+/** Follows an agent error saying its CLI is too old: opens the setup sheet's update, which runs the
+ *  update for the way this CLI was installed, or shows the command when cezar does not run it
+ *  (spec 2026-11-25-agent-cli-install-and-update). */
 export function AgentUpdateRequiredCard({ incident }: { incident: ThreadAgentUpdateRequired }) {
   const label = PROVIDER_LABEL[incident.provider]
-  const [manual, setManual] = useState<{ message: string; command?: string } | null>(null)
-  const update = useMutation({
-    mutationFn: () => updateProvider(incident.provider),
-    onSuccess: () => {
-      setManual(null)
-      toast(`Updating ${label} in a terminal. Continue the task once it finishes.`)
-    },
-    onError: (error: Error) =>
-      setManual({ message: error.message, command: error instanceof ApiError ? error.command : undefined }),
-  })
-  const copy = async (command: string) => {
-    try {
-      await writeClipboard(command)
-      toast('Command copied')
-    } catch {
-      toast('Could not copy the command', { tone: 'danger' })
-    }
-  }
+  const [open, setOpen] = useState(false)
   return (
     <div
       role="alert"
@@ -536,40 +513,11 @@ export function AgentUpdateRequiredCard({ incident }: { incident: ThreadAgentUpd
       className="rounded-md border border-danger/30 bg-danger/5 px-3.5 py-3"
     >
       <p className="text-ui font-semibold text-foreground">{label} needs an update</p>
-      {SELF_UPDATING[incident.provider] ? (
-        <>
-          <p className="mt-1 text-xs text-muted-foreground">
-            Update it, then continue the task.
-          </p>
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            className="mt-2"
-            disabled={update.isPending}
-            onClick={() => update.mutate()}
-          >
-            Update {label}
-          </Button>
-        </>
-      ) : (
-        <p className="mt-1 text-xs text-muted-foreground">
-          Update it the way you installed it, then continue the task.
-        </p>
-      )}
-      {manual ? (
-        <div data-slot="agent-update-manual" className="mt-2 text-xs text-muted-foreground">
-          <p>{manual.message}</p>
-          {manual.command ? (
-            <div className="mt-1 flex items-center gap-2">
-              <code className="rounded bg-muted px-1.5 py-0.5 font-mono text-foreground">{manual.command}</code>
-              <Button type="button" variant="ghost" size="sm" onClick={() => void copy(manual.command!)}>
-                Copy
-              </Button>
-            </div>
-          ) : null}
-        </div>
-      ) : null}
+      <p className="mt-1 text-xs text-muted-foreground">Update it, then continue the task.</p>
+      <Button type="button" variant="outline" size="sm" className="mt-2" onClick={() => setOpen(true)}>
+        Update {label}
+      </Button>
+      {open ? <AgentSetupSheet provider={incident.provider} action="update" open onOpenChange={setOpen} /> : null}
     </div>
   )
 }

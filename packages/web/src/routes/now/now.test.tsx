@@ -1,6 +1,6 @@
 import { QueryClientProvider } from '@tanstack/react-query'
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
-import type { ComponentProps } from 'react'
+import type { ComponentProps, ReactNode } from 'react'
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
@@ -10,6 +10,7 @@ import { deriveAttention } from '@/lib/attention'
 import { resetScheduledTasksGate } from '@/lib/scheduled-tasks-gate'
 
 import { NowRoute, NowView } from './now'
+import { NOW_SCOPE_KEY } from './now-attention-model'
 
 const NOW = Date.parse('2026-11-11T14:00:00.000Z')
 const ago = (ms: number) => new Date(NOW - ms).toISOString()
@@ -389,7 +390,11 @@ describe('NowRoute', () => {
   })
 
   // The route reads Manager availability from health (now.tsx's `managersAvailable` prop).
-  function renderRouteWith(capabilities: Record<string, unknown>) {
+  function renderRouteWith(
+    capabilities: Record<string, unknown>,
+    entry: string | { pathname: string; state: unknown } = '/p/cezar/',
+    probe: ReactNode = null,
+  ) {
     const health = {
       version: 't', repoRoot: '/r', repo: null, checks: [], defaultRunner: 'claude', forge: null,
       capabilities, projects: [{ id: 'cezar', name: 'cezar' }], bootProject: 'cezar',
@@ -408,14 +413,27 @@ describe('NowRoute', () => {
     )
     render(
       <QueryClientProvider client={createQueryClient()}>
-        <MemoryRouter initialEntries={['/p/cezar/']}>
+        <MemoryRouter initialEntries={[entry]}>
           <Routes>
-            <Route path="/p/:projectId/" element={<NowRoute />} />
+            <Route path="/p/:projectId/" element={<><NowRoute />{probe}</>} />
           </Routes>
         </MemoryRouter>
       </QueryClientProvider>,
     )
   }
+
+  it('takes the scope a navigation hands over, and remembers it (bottom bar quick actions)', async () => {
+    let seen: { pathname: string; state: unknown } | undefined
+    function StateProbe() {
+      const location = useLocation()
+      seen = { pathname: location.pathname, state: location.state }
+      return null
+    }
+    renderRouteWith({}, { pathname: '/p/cezar/', state: { nowScope: 'all' } }, <StateProbe />)
+    await waitFor(() => expect(localStorage.getItem(NOW_SCOPE_KEY)).toBe('all'))
+    // Consumed once: Back or a reload to this entry must not override a later manual choice.
+    await waitFor(() => expect(seen).toEqual({ pathname: '/p/cezar/', state: null }))
+  })
 
   it('hides the New task button when health says Manager is available', async () => {
     renderRouteWith({ managers: true })

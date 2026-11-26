@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { isOutdatedBackendError } from '../core/agent-errors.ts';
+import { forgetLearnedMinimums, minimumVersion } from '../core/agent-cli-versions.ts';
 import { reportAgentError, scrubAgentErrorMessage } from './agent-error-telemetry.ts';
 import { parseUsageLimit } from '../core/usage-limit.ts';
 import { RunStore } from './store.ts';
@@ -137,6 +138,18 @@ describe('reportAgentError', () => {
     vi.mocked(telemetryEnabled).mockReturnValueOnce(false);
     reportAgentError('claude', { type: 'error', message: 'boom' });
     expect(reported()).toEqual([]);
+  });
+
+  it('still records learned minimum versions before the telemetry consent guard', () => {
+    forgetLearnedMinimums();
+    try {
+      vi.mocked(telemetryEnabled).mockReturnValueOnce(false);
+      reportAgentError('opencode', { type: 'session.error', message: 'OpenCode 1.18.0 or newer is required to use the free tier' });
+      expect(reported()).toEqual([]);
+      expect(minimumVersion('opencode')).toBe('1.18.0');
+    } finally {
+      forgetLearnedMinimums();
+    }
   });
 
   it('skips restart bookkeeping', () => {
@@ -275,5 +288,17 @@ describe('RunStore.appendEvent → agent error reports', () => {
     store.appendEvent(run.id, { type: 'step-start', stepId: 'next' });
     store.appendEvent(run.id, { type: 'error', stepId: 'next', message: 'boom' });
     expect(reported()[0]?.context).toMatchObject({ 'agent.backend': 'opencode' });
+  });
+});
+
+describe('reportAgentError — expected provider outcomes (0fa28a3b, 83c98049, 96174abb, 0399e0f1)', () => {
+  it.each([
+    ['claude', 'API Error: Usage credits ran out before the response was finished.'],
+    ['codex', 'This content was flagged for possible cybersecurity risk. If this seems wrong, try rephrasing your request. [cyberPolicy]'],
+    ['opencode', 'Model user RPM limit exceeded for glm/glm-5 maximum 3 requests per minute per account'],
+    ['opencode', 'Model glm/glm-5 is temporarily unavailable'],
+  ] as const)('does not report %s: %s', (backend, message) => {
+    reportAgentError(backend, { type: 'error', message });
+    expect(reported()).toEqual([]);
   });
 });

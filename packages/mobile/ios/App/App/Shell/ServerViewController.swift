@@ -108,6 +108,8 @@ final class ServerViewController: UIViewController, WKNavigationDelegate, WKUIDe
         webView.navigationDelegate = self
         webView.uiDelegate = self
         webView.allowsBackForwardNavigationGestures = true
+        // A long press on an in-app link shows the cockpit's own actions, not a loopback URL preview.
+        webView.allowsLinkPreview = false
         webView.scrollView.contentInsetAdjustmentBehavior = .never
         view = webView
     }
@@ -808,6 +810,10 @@ final class ServerViewController: UIViewController, WKNavigationDelegate, WKUIDe
             startLog.step("page asked to reconnect")
             link?.start(reason: "page")
             if let proxy { checkProxy(proxy, "page") }
+        case .haptic:
+            // A long-press quick action: one tap of feedback, no load, no UI, no history.
+            decisionHandler(.cancel)
+            DispatchQueue.main.async { UIImpactFeedbackGenerator(style: .medium).impactOccurred() }
         case .block:
             decisionHandler(.cancel)
         }
