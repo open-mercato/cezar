@@ -65,6 +65,10 @@ export const SERVER_PORT_ATTEMPTS = 3;
 
 /** Grace between the teardown SIGTERM and the SIGKILL that follows it. */
 export const KILL_GRACE_MS = 4_000;
+/** Bounds for aborting a task's session tree on teardown (#2468). */
+const TREE_ABORT_MS = 3_000;
+const TREE_MAX_DEPTH = 4;
+const TREE_MAX_SESSIONS = 50;
 
 /**
  * How long a turn waits for a `session.idle` that never comes, once the prompt
@@ -232,6 +236,8 @@ class OpencodeSession implements AgentSession {
    *  they answer "does the event bus still show a live session?" — the
    *  question that decides whether a dropped prompt POST means anything. */
   private sseConnected = false;
+  /** In-flight teardown of this task's session tree; `terminate()` waits for it (#2468). */
+  private drain: Promise<void> | undefined;
   private sseClosed = false;
   /** Protocol v2 emission — additive alongside v1 (`onEvent` keeps flowing
    *  byte-identical); the channel is `opts.onUiEvent` (RunManager wiring
@@ -358,6 +364,7 @@ class OpencodeSession implements AgentSession {
     if (!this.serverOpen) return;
     this.serverOpen = false;
     this.finishTurn();
+    this.drainSessionTree();
     this.sse.abort();
     this.terminate();
   }
@@ -365,11 +372,8 @@ class OpencodeSession implements AgentSession {
   interrupt(): void {
     this.stopped = true;
     this.serverOpen = false;
-    if (this.baseUrl && this.sessionId) {
-      const path = this.apiVersion === 2 ? `/api/session/${this.sessionId}/interrupt` : `/session/${this.sessionId}/abort`;
-      void this.http('POST', path, undefined).catch(() => undefined);
-    }
     this.finishTurn();
+    this.drainSessionTree();
     this.sse.abort();
     this.terminate();
   }
@@ -399,12 +403,116 @@ class OpencodeSession implements AgentSession {
    */
   private terminate(): void {
     if (this.signalled || this.hasExited()) return;
+    // Abort requests need the server alive: killing it first leaves the execution claims unreleased,
+    // which the next server start resumes (#2468).
+    if (this.drain) {
+      const drain = this.drain;
+      this.drain = undefined;
+      void drain.then(() => this.terminate());
+      return;
+    }
     this.signalled = true;
     signalServer(this.child, 'SIGTERM');
     setTimeout(() => {
       if (this.hasExited()) return;
       signalServer(this.child, 'SIGKILL');
     }, KILL_GRACE_MS).unref?.();
+  }
+
+
+  // ---- session tree (#2468) -------------------------------------------------
+
+  /**
+   * Abort the root session and every descendant before the server dies. OpenCode 2.x resumes any
+   * session whose execution claim was never released when a server starts, so a subagent left running
+   * here comes back on the next spawn. Own signal, not `sse`: that one is aborted right after.
+   * Best effort — a server without the endpoints, or one that is slow, is simply killed as before.
+   */
+  private drainSessionTree(): void {
+    if (this.drain || !this.baseUrl || !this.sessionId || this.hasExited()) return;
+    const root = this.sessionId;
+    const signal = AbortSignal.timeout(TREE_ABORT_MS);
+    this.drain = (async () => {
+      const ids = await this.listDescendants(root, signal);
+      // Children first: aborting a parent can make it spawn or notify its children again.
+      await Promise.all([...ids.reverse(), root].map((id) => this.abortSession(id, signal)));
+    })().catch(() => undefined);
+  }
+
+  private async abortSession(id: string, signal: AbortSignal): Promise<void> {
+    const path = this.apiVersion === 2 ? `/api/session/${encodeURIComponent(id)}/interrupt` : `/session/${encodeURIComponent(id)}/abort`;
+    await this.http('POST', path, undefined, signal).catch(() => undefined);
+  }
+
+  /** Children of `root`, breadth first, depth and count bounded; a failing listing yields what was found. */
+  private async listDescendants(root: string, signal: AbortSignal): Promise<string[]> {
+    const found: string[] = [];
+    const seen = new Set([root]);
+    let level = [root];
+    for (let depth = 0; depth < TREE_MAX_DEPTH && level.length > 0 && found.length < TREE_MAX_SESSIONS; depth += 1) {
+      const next: string[] = [];
+      for (const parent of level) {
+        for (const child of await this.listChildren(parent, signal)) {
+          if (seen.has(child) || found.length >= TREE_MAX_SESSIONS) continue;
+          seen.add(child);
+          found.push(child);
+          next.push(child);
+        }
+      }
+      level = next;
+    }
+    return found;
+  }
+
+  private async listChildren(parent: string, signal: AbortSignal): Promise<string[]> {
+    try {
+      const path = this.apiVersion === 2
+        ? `/api/session?parentID=${encodeURIComponent(parent)}&limit=100`
+        : `/session/${encodeURIComponent(parent)}/children`;
+      const res = await this.httpRaw(path, signal);
+      const list = Array.isArray(res) ? res : isRecord(res) && Array.isArray(res.data) ? res.data : [];
+      return list.flatMap((item) => (isRecord(item) && stringField(item, 'id') ? [stringField(item, 'id') as string] : []));
+    } catch {
+      return [];
+    }
+  }
+
+  /** GET that tolerates a bare-array body (v1) as well as the `{ data }` envelope (v2). */
+  private async httpRaw(path: string, signal: AbortSignal): Promise<unknown> {
+    if (!this.baseUrl) return undefined;
+    const res = await opencodeRequest(`${this.baseUrl}${path}`, { method: 'GET', headers: this.headers, signal });
+    if (res.status < 200 || res.status >= 300) return undefined;
+    return JSON.parse(res.body) as unknown;
+  }
+
+  /**
+   * A 2.x server resumes sessions with an unreleased claim at start (#2468) — including this task's
+   * own earlier cezar sessions, left by a server that died. Before opening ours, interrupt the root
+   * sessions titled `cezar task` that live in THIS task's directory: provably this task's, since a
+   * worktree belongs to one task. Anything else in the shared store is left alone.
+   */
+  private async settlePriorSessions(): Promise<void> {
+    if (this.apiVersion !== 2) return;
+    const signal = AbortSignal.timeout(TREE_ABORT_MS);
+    try {
+      const cwd = this.spec.cwd;
+      if (!cwd) return;
+      const own = canonicalPath(cwd);
+      const res = await this.httpRaw(`/api/session?parentID=null&directory=${encodeURIComponent(own)}&limit=100`, signal);
+      const list = isRecord(res) && Array.isArray(res.data) ? res.data : [];
+      for (const item of list) {
+        if (!isRecord(item)) continue;
+        const id = stringField(item, 'id');
+        const location = isRecord(item.location) ? item.location : {};
+        const dir = stringField(location, 'directory') ?? stringField(item, 'directory');
+        // The server may ignore a filter it does not know: re-check each field ourselves.
+        if (!id || item.parentID || stringField(item, 'title') !== 'cezar task' || !dir || canonicalPath(dir) !== own) continue;
+        const kids = await this.listDescendants(id, signal);
+        await Promise.all([...kids.reverse(), id].map((sid) => this.abortSession(sid, signal)));
+      }
+    } catch {
+      // Best effort: a server that cannot list sessions behaves as before.
+    }
   }
 
   // ---- server lifecycle ---------------------------------------------------
@@ -607,7 +715,10 @@ class OpencodeSession implements AgentSession {
     // Only 1.x is reopened: a 2.x resume still starts a new session, as before.
     const resumeId = this.spec.resume && this.apiVersion === 1 ? this.spec.sessionId : undefined;
     if (resumeId) await this.openSession(await this.reopenSession(resumeId));
-    else await this.openSession(await this.createSession());
+    else {
+      await this.settlePriorSessions();
+      await this.openSession(await this.createSession());
+    }
     // A reopened session re-hears the current guidance too, as Codex does (#2257): global
     // instructions edited in Settings must reach a Continue.
     await this.prompt(prependSystemPrompt(this.spec.systemPrompt, this.spec.userPrompt));
@@ -1126,9 +1237,10 @@ class OpencodeSession implements AgentSession {
     method: string,
     path: string,
     body: unknown,
+    signal: AbortSignal = this.sse.signal,
   ): Promise<Record<string, unknown>> {
     if (!this.baseUrl) throw new Error('opencode server not ready');
-    const res = await opencodeRequest(`${this.baseUrl}${path}`, { method, body, headers: this.headers, signal: this.sse.signal });
+    const res = await opencodeRequest(`${this.baseUrl}${path}`, { method, body, headers: this.headers, signal });
     if (res.status < 200 || res.status >= 300) {
       const envelope = parseRecord(res.body);
       const data = isRecord(envelope.data) ? envelope.data : {};

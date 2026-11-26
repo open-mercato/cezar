@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Strict, offline OpenCode 2.0.19 API fixture. No provider or model is contacted.
 import { createServer } from 'node:http';
-import { realpathSync } from 'node:fs';
+import { realpathSync, appendFileSync } from 'node:fs';
 
 const args = process.argv.slice(2);
 const port = Number(args[args.indexOf('--port') + 1]);
@@ -25,6 +25,14 @@ const idle = (sendIdle = true) => {
   if (sendIdle) emit('session.idle', {});
   for (const res of waiters.splice(0)) { res.writeHead(204); res.end(); }
 };
+// MOCK_TREE_LOG: append every interrupt, so a test can prove which sessions were aborted.
+const logCall = (line) => { if (process.env.MOCK_TREE_LOG) appendFileSync(process.env.MOCK_TREE_LOG, `${line}\n`); };
+const children = { [sessionID]: ['ses_child_1'], ses_child_1: ['ses_grandchild'] };
+const foreign = [
+  { id: 'ses_old_same_dir', title: 'cezar task', location: { directory: process.cwd() } },
+  { id: 'ses_user_same_dir', title: 'my own work', location: { directory: process.cwd() } },
+  { id: 'ses_other_dir', title: 'cezar task', location: { directory: '/somewhere/else' } },
+];
 const server = createServer((req, res) => {
   if (!password || req.headers.authorization !== authorization) return json(res, { error: 'Unauthorized' }, 401);
   const path = req.url;
@@ -39,6 +47,12 @@ const server = createServer((req, res) => {
     stream = res;
     emit('server.connected', {});
     return;
+  }
+  if (req.method === 'GET' && path.startsWith('/api/session?') && process.env.MOCK_NO_TREE !== '1') {
+    const q = new URL(path, 'http://x').searchParams;
+    const parent = q.get('parentID');
+    if (parent === 'null') return json(res, { data: foreign.map((s) => ({ ...s, parentID: null })) });
+    return json(res, { data: (children[parent] ?? []).map((id) => ({ id, parentID: parent })) });
   }
   let body = '';
   req.on('data', (chunk) => { body += chunk; });
@@ -60,8 +74,10 @@ const server = createServer((req, res) => {
       else { res.writeHead(204); res.end(); }
       return;
     }
-    if (req.method === 'POST' && path === `/api/session/${sessionID}/interrupt`) {
-      idle();
+    if (req.method === 'POST' && /^\/api\/session\/[^/]+\/interrupt$/.test(path)) {
+      const id = path.split('/')[3];
+      logCall(id);
+      if (id === sessionID) idle();
       return json(res, { interrupted: true });
     }
     if (req.method === 'POST' && path === `/api/session/${sessionID}/prompt`) {
