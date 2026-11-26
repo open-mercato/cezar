@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { mkdirSync, mkdtempSync, readFileSync, statSync, utimesSync, writeFileSync, existsSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -8,10 +8,14 @@ import {
   fallbackConsentCurrent,
   getAgentFallbackPolicy,
   getAgentFallbackPolicySync,
+  managerFallbackPolicy,
   putAgentFallbackPolicy,
+  setManagerTaskAccountsLookup,
   type AgentFallbackPolicy,
 } from './agent-fallback.ts';
-import type { AgentAccountStore } from './agent-accounts.ts';
+import { defaultAgentAccountStore, type AgentAccountStore } from './agent-accounts.ts';
+import { REVIEW_PR } from '../workflows/templates.ts';
+import { QUICK_TASK_WORKFLOW } from '../workflows/types.ts';
 
 let home: string;
 let repo: string;
@@ -212,5 +216,87 @@ describe('usage exhaustion classifier', () => {
     expect(isUsageExhaustion('gh: API rate limit exceeded for user')).toBe(false);
     expect(isUsageExhaustion('session limit of 200 turns reached')).toBe(false);
     expect(isUsageExhaustion(undefined)).toBe(false);
+  });
+});
+
+describe('a manager fallback policy', () => {
+  const policy = managerFallbackPolicy([{ provider: 'claude', profileId: 'second', model: 'opus' }], 'm1');
+  afterEach(() => setManagerTaskAccountsLookup(undefined));
+
+  it('carries its own consent and its manager, and an empty list records a disabled policy', () => {
+    expect(policy).toMatchObject({ enabled: true, source: 'manager', managerId: 'm1', candidates: [{ provider: 'claude', profileId: 'second', model: 'opus' }] });
+    expect(fallbackConsentCurrent(policy, { enabled: false, candidates: [], revision: 0, incarnation: null, revocation: null })).toBe(true);
+    expect(managerFallbackPolicy([], 'm1')).toMatchObject({ enabled: false, source: 'manager' });
+  });
+
+  it('is withdrawn with its manager and follows the manager’s current list', () => {
+    const live = { enabled: false, candidates: [], revision: 0, incarnation: null, revocation: null };
+    setManagerTaskAccountsLookup(() => null);
+    expect(fallbackConsentCurrent(policy, live)).toBe(false);
+    const accounts = { accounts: [{ id: 'second', provider: 'claude' }] } as unknown as Parameters<typeof eligibleFallbackCandidates>[3];
+    setManagerTaskAccountsLookup(() => [{ runner: 'codex' }]);
+    expect(eligibleFallbackCandidates(policy, new Set(), new Set(), accounts)).toEqual({
+      eligible: [], skipped: [{ candidate: policy.candidates[0], reason: 'no longer in the manager’s settings for new tasks' }],
+    });
+    setManagerTaskAccountsLookup(() => [{ runner: 'claude', agentProfile: 'second' }]);
+    expect(eligibleFallbackCandidates(policy, new Set(), new Set(), accounts).eligible).toHaveLength(1);
+  });
+
+  it('a bare { runner } entry is that runner’s resolved default account, not every account on it', () => {
+    const store = { ...defaultAgentAccountStore(), accounts: [{ id: 'second', provider: 'claude', configDir: '/x', label: 'Second', addedAt: '' }] } as AgentAccountStore;
+    setManagerTaskAccountsLookup(() => [{ runner: 'claude' }]);
+    expect(eligibleFallbackCandidates(policy, new Set(), new Set(), store, '/repo')).toEqual({
+      eligible: [], skipped: [{ candidate: policy.candidates[0], reason: 'no longer in the manager’s settings for new tasks' }],
+    });
+    const toDefault = managerFallbackPolicy([{ provider: 'claude', profileId: 'default' }], 'm1');
+    expect(eligibleFallbackCandidates(toDefault, new Set(), new Set(), store, '/repo').eligible).toHaveLength(1);
+    // The project's selection makes `second` the default: then the bare entry is `second`.
+    const selected = { ...store, selections: { '/repo': { claude: 'second' } } } as unknown as AgentAccountStore;
+    expect(eligibleFallbackCandidates(policy, new Set(), new Set(), selected, '/repo').eligible).toHaveLength(1);
+  });
+
+  it('follows the manager’s mid-task setting live: same agent only, or wait for the reset', () => {
+    const mixed = managerFallbackPolicy([{ provider: 'claude', profileId: 'default' }, { provider: 'codex', profileId: 'default' }], 'm1');
+    const agents = [{ runner: 'claude' }, { runner: 'codex' }];
+    setManagerTaskAccountsLookup(() => ({ agents, limitSwitch: 'same-agent' }));
+    expect(eligibleFallbackCandidates(mixed, new Set(), new Set(), null, undefined, 'claude').eligible.map((c) => c.provider)).toEqual(['claude']);
+    setManagerTaskAccountsLookup(() => ({ agents, limitSwitch: 'wait' }));
+    expect(eligibleFallbackCandidates(mixed, new Set(), new Set(), null, undefined, 'claude').eligible).toEqual([]);
+    // An older lookup shape (a bare list) still works: any listed account.
+    setManagerTaskAccountsLookup(() => agents);
+    expect(eligibleFallbackCandidates(mixed, new Set(), new Set(), null, undefined, 'claude').eligible).toHaveLength(2);
+  });
+
+  it('with roles, orders Main by load, then Backup, with a busy account last', () => {
+    const list = managerFallbackPolicy([
+      { provider: 'opencode', profileId: 'default' }, { provider: 'claude', profileId: 'default' }, { provider: 'codex', profileId: 'default' },
+    ], 'm1');
+    setManagerTaskAccountsLookup(() => ({
+      agents: [{ runner: 'opencode', role: 'backup' }, { runner: 'claude', role: 'main' }, { runner: 'codex', role: 'main' }],
+      maxRunning: 2,
+    }));
+    const load = new Map([['claude:default', 1], ['codex:default', 0]]);
+    expect(eligibleFallbackCandidates(list, new Set(), new Set(), null, undefined, 'x', load).eligible.map((c) => c.provider)).toEqual(['codex', 'claude', 'opencode']);
+    load.set('codex:default', 2);
+    expect(eligibleFallbackCandidates(list, new Set(), new Set(), null, undefined, 'x', load).eligible.map((c) => c.provider)).toEqual(['claude', 'opencode', 'codex']);
+  });
+
+  it('skips runners incompatible with a read-only workflow, while keeping compatible runners (including antigravity) and all runners for write workflows', () => {
+    const list = managerFallbackPolicy([
+      { provider: 'antigravity', profileId: 'default' },
+      { provider: 'opencode', profileId: 'default' },
+      { provider: 'cursor', profileId: 'default' },
+      { provider: 'codex', profileId: 'default' },
+      { provider: 'claude', profileId: 'default' },
+    ], 'm1');
+    const readOnlyResult = eligibleFallbackCandidates(list, new Set(), new Set(), null, undefined, 'claude', undefined, REVIEW_PR);
+    expect(readOnlyResult.eligible.map((c) => c.provider)).toEqual(['antigravity', 'codex', 'claude']);
+    expect(readOnlyResult.skipped).toEqual([
+      { candidate: { provider: 'opencode', profileId: 'default' }, reason: expect.stringContaining('opencode does not enforce') },
+      { candidate: { provider: 'cursor', profileId: 'default' }, reason: expect.stringContaining('cursor does not enforce') },
+    ]);
+    const writeResult = eligibleFallbackCandidates(list, new Set(), new Set(), null, undefined, 'claude', undefined, QUICK_TASK_WORKFLOW);
+    expect(writeResult.eligible.map((c) => c.provider)).toEqual(['antigravity', 'opencode', 'cursor', 'codex', 'claude']);
+    expect(writeResult.skipped).toEqual([]);
   });
 });

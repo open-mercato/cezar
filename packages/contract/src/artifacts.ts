@@ -65,9 +65,13 @@ export const artifactNestedParamSchema = z.object({
 });
 export type ArtifactNestedParam = z.infer<typeof artifactNestedParamSchema>;
 
-/** `GET /runs/:id/artifacts/:name?v=<n>` — serve kept revision `n` (spec R4), same headers. */
+/**
+ * `GET /runs/:id/artifacts/:name?v=<n>` — serve kept revision `n` (spec R4), same headers.
+ * `picker=1` appends the Design Mode picker to an HTML artifact (other kinds are unchanged).
+ */
 export const artifactFileQuerySchema = z.object({
   v: z.string().regex(/^[1-9][0-9]{0,5}$/).optional(),
+  picker: z.literal('1').optional(),
 });
 export type ArtifactFileQuery = z.infer<typeof artifactFileQuerySchema>;
 

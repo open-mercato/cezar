@@ -153,6 +153,8 @@ A check reads the task stores and the same GitHub data the GitHub tab uses, then
 
 **A quiet check costs nothing.** With no new attention item, Cezar makes no model call and leaves no message. A new item starts one model turn. The manager then tells you what deserves your attention, or decides that nothing does and stays silent. You pay for that turn in both cases.
 
+The manager's instructions decide what a check raises. A manager whose instructions are about something else, such as reviewing your own work, mentions only what serves them and stays silent about unrelated pull requests and failed tasks. A manager with no instructions raises every attention item. To widen or narrow what a manager watches, change its instructions in **Persona…**.
+
 Cezar reports each item once. The same task failing again is a new item, and so is a pull request problem that cleared and came back.
 
 **Check now** in the gear menu and `/check` skip that gate, so they always run a model turn. When nothing needs you, the chat shows *Checked: nothing needs you right now.*
@@ -261,26 +263,53 @@ A write produces an approval card, like a merge. The card shows the connector, t
 > - A grant applies from the manager's next turn, and so does a revoke. A card that waits when you revoke its tool fails on approval.
 > - Only Claude managers can use connectors. Other agents have their own MCP configuration.
 > - Watch checks never get connector tools, because they read text anyone can write.
+> - A manager with no connector granted does not load any, so their tool lists never take up its context. The Connectors dialog looks them up when you open it.
 > - Connectors disconnect and reconnect on their own. When one is down, the manager tells you it is temporarily unavailable, and a write card for it fails with the same message.
 > - Cezar does not pass connector grants to tasks the manager starts.
 
+## Memory and sessions
+
+A manager does not keep one endless conversation. A chat continues the same session only while it is active: within 55 minutes of the last turn, under 100,000 tokens of context, and less than 12 hours after the session started. Otherwise the next turn starts a new session. Scheduled checks and jobs always start a new one. Your chat stays one thread; only what the model carries changes.
+
+A new session starts from:
+
+- **Memory**: what you asked the manager to remember, such as "open full PRs, not drafts" or "HTML design before UI work".
+- The open question cards, the notes since its last turn, and the tasks it follows with their status.
+- The last few messages between you and the manager.
+
+The manager can read older messages with `cez-manager history` and a task's details with `cez-manager task`.
+
+Open the manager's gear menu and select **Memory…** to see, edit, add or delete entries. The manager saves an entry when you tell it something it should keep. Memory holds at most 40 entries and 6 KB. A Claude manager's earlier Claude Code memory is imported once, and Claude Code's own memory is then switched off for it, so there is one memory, the same on every agent.
+
+> **Good to know**: Memory is for lasting preferences and decisions, not task results. Tasks keep their own reports, and the manager looks them up when it needs them.
+
 ## Agents, accounts, model and cancelling
 
-Open the chat's settings gear → **Manager agent** to change the manager's agent, account, model and effort in one dialog. The account field lists accounts for the selected agent. Changing agents clears the previous model and account. **Use workspace default** follows your workspace's account setting; **Default** explicitly selects the agent's discovered account. During setup, **Model and effort** also offers agent and account choices.
+Open the chat's settings gear → **Manager agent** to change the manager's agent, account, model and effort in one dialog. **This Manager** is a numbered list: #1 answers whenever it can, and **Add backup agent** adds up to three backups, each with its own agent, account, model and effort. When #1 runs out of usage limits, can't sign in, runs out of credits or its CLI fails to start, the same message goes to the next backup, and a notice in the chat says so. Backups also take watch checks and jobs. While a backup answers, an **(i)** next to the Manager's name says which one and when #1 is back, with **Switch back now**. **After a switch, go back to #1** chooses **When it's available** (the first message after its reset) or **Only when I switch**. Drag a row, or use **Move up** and **Make primary**, to reorder. A busy or unreachable server never switches.
 
-> **Good to know**: Codex is not offered as the manager's own agent. A manager's tools are limited to a `cez-manager` shell allowlist, and Codex cannot enforce that limit, so a manager already set to Codex, or one with no agent set on a machine whose default is Codex, shows an error in its chat instead of running. Choose Claude Code for the manager. Tasks the manager starts can still run on Codex.
+Under **For new tasks**, once you choose accounts they are listed with a **Main / Backup** switch. Main accounts share new tasks: each goes to the Main with the fewest running tasks. Backup accounts are used top to bottom (drag to reorder). **Start new tasks on Backup accounts when every Main account is…** chooses **Out of limits** (the default) or **Out of limits or busy**, where busy is a number of running tasks you set. A queued task moves to an account that frees up, and waits labelled *Waiting for a free account* while every account is busy. **If a task runs out of limits mid-way…** chooses to finish it on another account from the list (the default), on the same agent only, or to wait for the reset. An explicit `--account` from the manager always wins, and `--runner` keeps the choice on that agent. To keep an account free for the Manager itself, leave it out of this list. The account field lists accounts for the selected agent. Changing agents clears the previous model and account. **Use workspace default** follows your workspace's account setting; **Default** explicitly selects the agent's discovered account. During setup, **Model and effort** also offers agent and account choices.
+
+> **Good to know**: A manager's shell is limited to `cez-manager` and read-only `gh` commands. Claude Code enforces that with a hook. On Codex, the manager runs in Codex's isolated read-only mode and cezar runs each command itself, only after the same check, so Codex needs 0.169.0 or newer. A Codex manager cannot write files and cannot use connectors. Its `gh` commands run directly on your machine, outside any Claude Code Bash sandbox, and `CEZ_CODEX_NETWORK=0` blocks them (user-allowed `gh` patterns included) while `cez-manager` keeps working.
 
 Use **Agent for new tasks** during setup or in the dialog's **For new tasks** section to check the agent accounts available for tasks the manager starts. You can select several, including two Claude accounts and one Codex account. The manager chooses from those pairs for each new task; requests for an unselected runner or account are refused. Your choices stay saved for later messages. The manager itself keeps its own agent and account.
 
 **Automatic** clears the account selection and lets the manager choose an agent and account for each task, including when you ask it to use a particular one. If the manager makes no choice, the task uses the manager's own agent. For example, a Claude Code manager's task runs on Claude Code even when the project's default is Codex. Existing tasks keep their agent. A workflow with agents selected for individual steps keeps those step choices.
 
-The manager passes an account with `cez-manager task create --runner claude --account <id>`. The task records the requested account and the account that actually ran; open its agent badge to see the account label. If a selected account was deleted, task creation is refused instead of using another account.
+When the manager names no account, the task takes your selection as its default: the first selected account with usage capacity. An account waiting out a usage limit is skipped for the next one, and the task's timeline records which account was picked and why, for example "claude Work out of limits until …, used claude Home". If every selected account is out of limits, the task waits in the queue and starts when the first one resets. The manager is told in the command's output. A task that reaches a usage limit while it works moves to another selected account with capacity, keeping the same task, history and branch. This works even when Settings → Agents → Automatic fallback is off, and the task never moves to an account you did not select. `cez-manager status` lists the selected accounts and which are out of limits.
+
+> **Good to know**: Mid-task moves follow the same rules as automatic fallback. A graph workflow, or a step with more steps after it, waits for the reset instead.
+
+The manager can still name an account with `cez-manager task create --runner claude --account <id>`. If that account is out of limits, the output warns and names a selected account with capacity. The task records the requested account and the account that actually ran; open its agent badge to see the account label. If a selected account was deleted, task creation is refused instead of using another account.
 
 A manager can pick the model and reasoning effort of a task it starts, for example `cez-manager task create --model opus --effort max`, and of a finished task it continues with `task say`. Cezar checks the choice against the task's agent and the models it discovered on this machine. An unknown model, another agent's model, or an effort the model lacks is refused with the valid choices, instead of quietly running on the default. `cez-manager task <run>` and `tasks --json` show each task's agent, model and effort.
 
-`cez-manager task cancel <run> --reason "…"` stops a task and every task it dispatched. They become **cancelled**, the task thread shows who cancelled it and why, and the worktree and branch stay for you to inspect. A manager may cancel only the tasks it started. To let it cancel other tasks in its write repositories, yours included, turn on **Cancel any task** in its settings menu. A read-only repository never allows it.
+`cez-manager task cancel <run> --reason "…"` stops a task and every task it dispatched. They become **cancelled**, the task thread shows who cancelled it and why, and the worktree and branch stay for you to inspect. A manager may cancel only the tasks it started. To let it cancel other tasks in its write repositories, yours included, turn on **Cancel or switch any task** in its settings menu. A read-only repository never allows it.
 
-`cez-manager task retry <run>` starts a failed or cancelled task again as a new task, with the same objective, workflow, model and effort. With **Automatic**, it keeps the original agent. A selected **Agent for new tasks** also applies to retries; an incompatible model or effort is refused.
+`cez-manager task switch --project <id> <run> --runner codex --account default --model gpt-6.2-sol` changes an existing task's agent and keeps its ID, conversation, worktree and branch. Supply any of `--runner`, `--account`, `--model` or `--effort`. The manager can switch tasks it started in its write repositories. **Cancel or switch any task** also lets it switch other tasks there. The same **Agent for new tasks** account selections and model validation apply.
+
+A queued task keeps its place. A live agent turn stops before its replacement starts. The new session receives the prior conversation and continues in the same worktree. In an unfinished workflow, the switch applies to steps that use the replaced runner, including unpinned steps that use it. An account-only switch keeps each step's model and effort. A cancelled workflow resumes at its remaining step. When a check failed, the selected agent gets a turn to fix it before verification runs again with a fresh retry budget and the remaining workflow continues. Settled tasks without a workflow checkpoint use the same Continue path as the cockpit. The task timeline and manager status record who switched it and which agent was selected.
+
+`cez-manager task retry <run> --runner codex` retries a failed or cancelled task in place using the switch permissions. A retry without agent flags starts a new task with the original objective, workflow, model and effort. With **Automatic**, it keeps the original agent. A selected **Agent for new tasks** also applies to retries. An incompatible model or effort is refused with the valid choices when available.
 
 Tasks you start yourself also appear in the manager's task list and attention, marked as started by the user, and each task lists the pull request it opened. So a manager can see work that already exists before it starts more. `cez-manager workflows` marks what each workflow can do (push, open a pull request, post to GitHub, or read-only), and the manager is told to use a read-only workflow when you ask only for a review.
 
@@ -294,7 +323,7 @@ Paste a screenshot, drop a file on the chat, or select **+** in the composer, in
 
 Paste a transcript, notes or a log into the chat and ask the manager to file it or pass it to a task. The manager never retypes the text. It names your message, and Cezar copies it into the task word for word on the server, with the files you attached. The task's objective holds the manager's instruction, then your message between two marker lines.
 
-A manager does this with `--attach-last-user-message` on `cez-manager task create` or `task say`, or `--from-message <id>` for an earlier message. For text it wrote itself, it saves a file under `files/` in its working folder and passes `--file`. Claude managers may write only in that folder.
+A manager does this with `--attach-last-user-message` on `cez-manager task create` or `task say`, or `--from-message <id>` for an earlier message. For text it wrote itself, it saves a file under `files/` in its working folder and passes `--file`. Claude managers may write only in that folder, and `--file` reads only from it or the manager's attachments.
 
 Cezar refuses a task or message whose text is a placeholder such as `[transcript here]`, `PASTE` or `<<<…>>>` where content belongs, and the manager tells you so in its reply.
 
@@ -311,6 +340,10 @@ A card closes on its own when a newer card asks the same thing again (the same c
 Choose **Workspace → Questions** in the Manager sidebar, or open `/manager/questions`, to see every open question from your managers and tasks in one list, grouped by where it was asked. Answer it there, **Dismiss** it (the agent is told you skipped it; **Undo** is offered for a few seconds), or use **Open in context** to jump to the card in its chat. A manager card that relays a task's question appears once, under the task, and answering either copy closes both. A card you answer or dismiss there stays in place for 30 seconds with what happened (your answer and where it was sent, or **Dismissed**), then leaves; so does one that closes while you are looking at it, with the reason. It leaves only once you are idle (not while the pointer or keyboard focus is in the list, nor for 3 seconds after you scroll or press a key), and the text you are reading does not move. The count drops as soon as you click.
 
 The count beside **Questions** includes only questions that still need you. A card marked **May be out of date** still counts until you dismiss it or the agent closes it. A question left unanswered for longer than the **Move to Older after** setting (7 days by default) moves to **Older** and stops counting; it is not closed. **Closed** lists the last seven days with the reason each closed. With managers turned off, **Questions** sits in the project sidebar and lists task questions.
+
+## Now in Manager mode
+
+**Workspace → Now** in the Manager sidebar, and the **Now** tab on a phone, open the managers' own Now (`/manager/now`). It stays in Manager mode; a project's **Now** is unchanged. It lists what every manager needs from you: their questions, approvals and important messages, and the tasks they started or follow. A task row names its manager. To see one manager, pick it in the **All managers** menu at the top right, or tap the floating filter button on a phone; **Show all managers**, or the button's **×**, goes back. Rows work as in a project's Now: answer or approve in place, **✕** to dismiss with **Undo**, **⋯** for more, and **Probably done** for what no longer needs you. The badge on **Now** counts these items.
 
 ## Choose read-only or write access
 

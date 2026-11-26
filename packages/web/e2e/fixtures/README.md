@@ -71,3 +71,11 @@ untouched.
 To regenerate: build, boot `CEZ_DRY_RUN=1 node dist/index.js serve --repo <tmp-git-repo>`,
 start a task whose text is `mock:subagents`, wait for it to settle, then copy
 `<tmp>/.ai/cezar/runs/<id>.ndjson` here and normalize the timestamps.
+
+## `phone-overflow-seed.ts`
+
+Not a recording: it boots its own dry-run cezar and seeds it through the API, plus two at-rest
+edits (a PR URL on the runs, and chat lines appended to the manager's `chat.ndjson`). Every
+seeded string carries an unbroken id, SHA or URL, the input that widened the phone Approvals
+page. `phone-overflow.e2e.ts` sweeps it; `npx tsx packages/web/e2e/fixtures/phone-overflow-seed.ts`
+leaves one up for a manual look.

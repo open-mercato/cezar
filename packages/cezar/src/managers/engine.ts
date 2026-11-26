@@ -32,31 +32,63 @@ import {
   type ManagerMessagesResponse,
   type ManagerProposeActionInput,
   type ManagerRetryTaskInput,
+  type ManagerSwitchTaskInput,
   type ManagerSnapshot,
   type ManagerSummary,
   type ManagerTaskDetail,
   type ManagerTaskAgent,
+  type ManagerAgentRef,
+  type ManagerAgentSwitchReason,
+  type ManagerBackupAgent,
+  type ManagerAccountState,
   type ManagerTaskMessageInput,
   type ManagerTaskMessageResponse,
   type ManagerTurnKind,
+  type SwitchRunAgentResponse,
   type QuestionClosed,
   type QuestionStale,
   type UpdateManagerInput,
+  type ManagerMemoryResponse,
+  type PutManagerMemoryInput,
+  MANAGER_MEMORY_LIMITS,
   supersededAskIds,
   questionCardPartlyReasked,
   questionCardSharedHeaders,
 } from '@open-mercato/cezar-contract';
-import type { AutomationDefinition, AutomationReportMode, ManagerBashDenial } from '@open-mercato/cezar-contract';
+import type { AttentionKind, AutomationDefinition, AutomationReportMode, ManagerBashDenial } from '@open-mercato/cezar-contract';
 import { DEFAULT_AGENT_ACCOUNT_ID } from '../workspace/agent-accounts.ts';
+import { taskAgentSelection } from '../runs/agent-selection.ts';
+import { loadConfig } from '../config.ts';
+import { loadWorkspaceConfig } from '../workspace/config.ts';
 import { agentModelsLocked } from '../core/agent-model-policy.ts';
-import { CodexToolPolicyError } from '../core/codex-tool-policy.ts';
 import { parseAskCloseMarkers, parseAskMarker, stripAskCloseMarkers, stripAskMarker, type AskCloseMarker } from '../core/ask.ts';
 import type { RunRecord } from '../runs/store.ts';
 import { isIdleParked } from '../runs/store.ts';
+import { chooseTaskAgent, type AccountOption, type RoleRouting, type TaskAgentChoice } from './task-agent-choice.ts';
+import { fiveHourUsedPercent } from '../workspace/usage-windows.ts';
+import {
+  chainChanged,
+  chainOf,
+  cutOffNote,
+  earliestRelease,
+  failoverReason,
+  hasChain,
+  holdFor,
+  nextRow,
+  pickRow,
+  refName,
+  rowKey,
+  switchNoticeText,
+  withRow,
+  type ChainHold,
+  type ChainRow,
+} from './agent-chain.ts';
 import { isRunnerId, type AgentEvent, type AgentRunner, type AgentRunSpec, type AgentSession, type ContentBlock, type RunnerId } from '../core/agent-runner.ts';
 import { supportsProfiles } from '../core/agent-profiles.ts';
 import { readOnlyEnv } from '../core/read-only-env.ts';
 import { canEnforceReadOnly, createRunner } from '../core/runner-factory.ts';
+import { noCompatibleRunnerRefusal, readOnlyWorkflowRefusal, workflowSupportsBackend } from '../workflows/capabilities.ts';
+import { loadWorkflows } from '../workflows/load.ts';
 import { parseUsageLimit } from '../core/usage-limit.ts';
 import type { UiEvent } from '../core/ui-events.ts';
 import { assertCezarHomeWriteIsSandboxed, managersDir } from '../paths.ts';
@@ -78,6 +110,9 @@ import {
   managerBashHookCommand,
   managerBashPatternIssue,
   managerBashSuggestion,
+  managerShellPlan,
+  MANAGER_SHELL_DESCRIPTION,
+  MANAGER_BASH_FILTERS,
 } from './bash-policy.ts';
 import { classifyManagerFailure, failureCause, managerFailureMessage, retryPlan, type ManagerFailureKind } from './failure.ts';
 import { placeholderIn, placeholderRefusal, withForwarded } from './forward.ts';
@@ -91,11 +126,14 @@ import {
   connectorInfos,
   connectorPromptSection,
   connectorToolName,
+  hasConnectorGrant,
   observeConnectors,
   type ObservedConnectors,
 } from './connectors.ts';
 import { taskModelIssue, type TaskModelCatalog } from './task-model.ts';
-import { chatPrompt, followupPrompt, jobPrompt, MANAGER_IMPORTANT, managerSystemPrompt, MANAGER_QUIET, recapPrompt, watchPrompt } from './prompts.ts';
+import { TurnStatsCollector } from './turn-stats.ts';
+import { chatPrompt, followupPrompt, jobPrompt, MANAGER_IMPORTANT, managerSystemPrompt, MANAGER_QUIET, sessionPreamble, watchPrompt } from './prompts.ts';
+import { claudeAutoMemory, memoryBytes, readMemory, removeMemoryEntry, renderMemory, setMemoryEntry, writeMemory, type MemoryFile } from './memory.ts';
 import { buildSnapshot, findRun, gateAttention, openTaskAskId, prTie, taskDetailRows, taskEventOf, type ManagerGithubFacts, type ManagerProjectSource, type TaskEvent } from './snapshot.ts';
 import {
   ageLabel,
@@ -106,6 +144,8 @@ import {
   namesWork,
   openAsk,
   openCardsBlock,
+  openCardsDigest,
+  openCardsUnchanged,
   aboutPrProjects,
   prRefs,
   replaces,
@@ -123,6 +163,7 @@ import { outsideRelayScope } from '../relay/scope.ts';
 import { PlanUsageTracker, recordUsageObservation, type LedgerAccountRef } from '../usage-ledger/recorder.ts';
 import { ledgerAccountRef } from '../usage-ledger/identity.ts';
 import { managerConsumerId } from '../usage-ledger/report.ts';
+import type { RestartGate } from '../workspace/restart-gate.ts';
 
 /**
  * The manager turn engine (spec 2026-10-31-managers § Turns, § Watching, § Safety). One turn per
@@ -142,6 +183,11 @@ export interface ManagerEngineDeps {
   defaultRunner: () => Promise<RunnerId>;
   /** Why this account cannot be picked, as `POST /runs` would say it. */
   accountError: (runner: RunnerId, agentProfile: string) => Promise<string | null>;
+  /** An account's resolved id, label and usage-limit reset (epoch ms) from the workspace holds.
+   *  Absent: every account has capacity. */
+  accountLimit?: (runner: RunnerId, agentProfile: string | undefined, repoRoot?: string) => Promise<{ account: string; label: string; until?: number }>;
+  /** Running tasks per `runner:account` across the workspace (spec 2026-11-25-manager-task-routing). Absent: none. */
+  accountLoad?: () => ReadonlyMap<string, number>;
   /** The cockpit's own routes, in process: POST /runs, merge, enable have exactly one implementation. */
   request: LoopbackRequest;
   costVisible: () => boolean;
@@ -149,8 +195,9 @@ export interface ManagerEngineDeps {
   autoResume?: () => boolean;
   /** Raises the OS notification; absent where there is nobody at the machine. */
   notifySystem?: (title: string, body: string) => void;
-  /** Wakes a sleeping phone (spec relay R5). Takes the manager's id only: no text reaches a push. */
-  pushSignal?: (managerId: string) => void;
+  /** Wakes a sleeping phone (spec relay R5). The manager's id and the kind, which each phone's
+   *  settings filter on (spec 2026-11-20-phone-notifications-inbox); no text reaches a push. */
+  pushSignal?: (managerId: string, kind: AttentionKind) => void;
   runnerFor?: (runner: RunnerId) => AgentRunner;
   /** Usage telemetry (docs/telemetry.md); absent sends nothing. Consent is the sender's to check. */
   telemetry?: ManagerTelemetry;
@@ -164,6 +211,40 @@ export interface ManagerEngineDeps {
   retryDelayMs?: number;
   /** A manager was deactivated or reactivated: the Questions count leaves its cards out while inactive. */
   onActivityChange?: (managerId: string) => void;
+  /** "Restart when idle": a turn in flight blocks it, and while it is pending only the user's own
+   *  chat starts a turn — watches, jobs and follow-ups wait (the restart re-arms them). */
+  restartGate?: RestartGate;
+  /** A chain row's usage limit was recorded or released: the task queues re-read `accountHolds()`. */
+  onAccountHoldsChanged?: () => void;
+}
+
+/** What `driveChain` ran and how it ended (spec 2026-11-25-manager-agent-chain). */
+interface ChainOutcome {
+  result: DriveResult;
+  /** The manager as the last row ran it: its account names a rejected login. */
+  ran: Manager;
+  /** Absent for a manager with no backups: its messages stay as they always were. */
+  ref?: ManagerAgentRef;
+  /** Every row is out of usage limits: the turn waits until the first of them resets. */
+  exhaustedUntil?: Date;
+}
+
+/** A row's identity for holds and the chat; resolved once per turn. */
+interface RowInfo {
+  row: ChainRow;
+  ref: ManagerAgentRef;
+  /** `runner|account`: the hold key. */
+  key: string;
+  /** `runner:account`: the queue's key, for the workspace hold. */
+  accountKey: string;
+  /** A workspace hold on this account (a task hit its limit), epoch ms. */
+  workspaceUntil?: number;
+}
+
+interface ChainPlan {
+  rows: ChainRow[];
+  infos: RowInfo[];
+  row: ChainRow;
 }
 
 /** What `check`, a connector probe and the chat routes answer for a deactivated manager (spec 2026-11-19-manager-deactivate). */
@@ -254,6 +335,12 @@ function followedTasks(state: ManagerState): string[] {
   return [...at].sort(([, a], [, b]) => msOf(b) - msOf(a)).map(([key]) => key);
 }
 
+/** Any role on the list turns routing on; a list without roles keeps the original order. */
+export const routedByRoles = (manager: Pick<Manager, 'taskAgents'>): boolean => manager.taskAgents?.some((agent) => agent.role !== undefined) === true;
+
+export const roleRouting = (manager: Pick<Manager, 'taskBusyAt'>): RoleRouting =>
+  manager.taskBusyAt !== undefined ? { maxRunning: manager.taskBusyAt } : {};
+
 const connectedTo = (manager: Manager, projectId: string): boolean =>
   manager.projects === 'all' || manager.projects.includes(projectId);
 
@@ -294,6 +381,8 @@ interface ActiveTurn {
   /** Plan-usage ledger: the reply this turn writes and the account it runs on (design rev 3). */
   ledgerMessageId?: string;
   planAccount?: LedgerAccountRef & { provider: 'claude' | 'codex' };
+  /** The open cards this chat turn shows (`openCards`): `ids` stands in for `full` only in a resumed session. */
+  cards?: { digest: string; full: string; ids?: string };
 }
 
 interface Runtime {
@@ -330,6 +419,13 @@ const MAX_TIMER_MS = 2 ** 31 - 1;
 const MAX_WATCH_BACKOFF = 4;
 /** The pause before the one retry a passing failure (network, busy servers) earns. */
 const RETRY_BACKOFF_MS = 5_000;
+/** A chat resumes its transcript only while the prompt cache is warm (1 h), the context is small and
+ *  the session young; otherwise it starts over from memory and live state (spec 2026-11-21 § 2.2). */
+export const SESSION_IDLE_MS = 55 * 60_000;
+export const SESSION_CONTEXT_MAX = 100_000;
+export const SESSION_AGE_MS = 12 * 60 * 60_000;
+/** Followed tasks a new session is told about. */
+const PREAMBLE_TASKS = 15;
 /** Failed watch checks in a row before the chat hears about them; fewer are logged quietly. */
 const WATCH_NOTICE_AFTER = 3;
 const OUTPUT_LIMIT = 4_000;
@@ -366,7 +462,9 @@ export function managerWriteRules(filesDir: string): string[] {
 export { MANAGER_BASH_ALLOWLIST } from './bash-policy.ts';
 
 /** Backends that keep the manager to `MANAGER_BASH_ALLOWLIST` (Pi drops `Bash` instead). */
-const ALLOWLIST_FENCED: ReadonlySet<RunnerId> = new Set(['claude', 'pi']);
+// Claude fences Bash with its hook, Codex through cezar's broker
+// running `managerShellPlan` in an isolated session (#2330).
+const ALLOWLIST_FENCED: ReadonlySet<RunnerId> = new Set<RunnerId>(['claude', 'pi']).add('codex');
 
 /** `attachmentInputSchema`'s per-file bound, and the task text bound of `POST /runs`. */
 const ATTACHMENT_BASE64_LIMIT = 7_000_000;
@@ -378,6 +476,13 @@ interface Forward {
   forwarded: ManagerForwarded;
 }
 
+/** Where a user turn starts, shared by its retries (spec 2026-11-21 § 2.3). */
+interface TurnOrigin {
+  startedAt: number;
+  /** The session record before this turn, when it resumes one. */
+  prior?: NonNullable<ManagerState['sessions']['chat']>;
+}
+
 const SESSION_FIELD = { chat: 'sessionId', watch: 'watchSessionId', job: 'jobSessionId' } as const;
 
 const CONNECTORS_CLAUDE_ONLY = 'Only a Claude Code manager can use connectors: Codex, OpenCode and the others keep their own MCP configuration.';
@@ -387,9 +492,24 @@ const CONNECTOR_CALL_LIMIT_MS = 5 * 60_000;
 
 type ConnectorCall = Extract<ManagerActionRequest, { type: 'connector-call' }>;
 
+const MEMORY_DURING_WATCH = 'Memory cannot change while a background check runs (it is read-only). Try again in a moment.';
 const WATCH_REFUSAL = 'A watch check is read-only: it may ask the user to act, it may not act. Say what you would do and let the user ask for it.';
 
 const shellQuote = (value: string): string => `'${value.replace(/'/g, `'\\''`)}'`;
+
+/**
+ * A Codex manager's Bash: the policy Claude's hook applies, run by cezar's broker. Unlike a Claude
+ * manager's `gh`, which stays inside the user's Claude Bash sandbox (only `cez-manager` is excluded),
+ * these commands run directly on the host with the engine's environment, so a sandbox network
+ * allowlist does not apply to them. They are still only the vetted read-only set.
+ */
+function codexManagerShell(bashAllow: readonly string[] | undefined, env: Record<string, string | undefined>): NonNullable<AgentRunSpec['brokeredShell']> {
+  return {
+    verify: (command) => managerShellPlan(command, bashAllow ?? []), env, describe: MANAGER_SHELL_DESCRIPTION,
+    // The cockpit is loopback and the filters read only their pipe; every `gh`, user patterns included, is network.
+    offlinePrograms: ['cez-manager', ...MANAGER_BASH_FILTERS],
+  };
+}
 
 /** `cez-manager` on the turn's PATH, so `bashAllowlist` can name one word. */
 export function ensureManagerShim(): string {
@@ -484,6 +604,12 @@ const judgedFields = ({ important, headline, ask }: Judged) => ({
   ...(ask ? { ask } : {}),
 });
 
+/** A task report's push kind; any other headline is an important message. */
+const reportKind = (fields: unknown): AttentionKind => {
+  const state = (fields as { taskReport?: { state?: string } } | undefined)?.taskReport?.state;
+  return state === 'failed' ? 'failed' : state === 'needs-you' ? 'task' : 'message';
+};
+
 /** A question always waits on the user, so it interrupts like an approval does. */
 const alertBody = ({ important, headline, ask, text }: Judged): string | undefined =>
   important ? headline ?? onePlainLine(text) : ask ? 'Has a question for you' : undefined;
@@ -539,7 +665,28 @@ export class ManagerEngine {
   /** The Questions inbox provider's listeners: every card opened, closed or flagged. */
   private readonly askListeners = new Set<(change: ManagerAskChange) => void>();
 
-  constructor(private readonly deps: ManagerEngineDeps) {}
+  private readonly offRestartGate: Array<() => void> = [];
+
+  constructor(private readonly deps: ManagerEngineDeps) {
+    const gate = deps.restartGate;
+    if (gate) {
+      this.offRestartGate.push(
+        gate.addSource(() => [{ kind: 'manager', names: this.turnsInFlight() }]),
+        gate.onRelease(() => {
+          for (const id of this.runtimes.keys()) this.pump(id);
+        }),
+      );
+    }
+  }
+
+  /** Names of the managers mid-turn, for the restart gate. */
+  private turnsInFlight(): string[] {
+    const names: string[] = [];
+    for (const [id, runtime] of this.runtimes) {
+      if (runtime.active) names.push(this.deps.store.get(id)?.name ?? id);
+    }
+    return names;
+  }
 
   private now(): number {
     return this.deps.now?.() ?? Date.now();
@@ -628,12 +775,15 @@ export class ManagerEngine {
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
+    for (const off of this.offRestartGate.splice(0)) off();
     if (this.timer) clearTimeout(this.timer);
     if (this.recoveryTimer) clearTimeout(this.recoveryTimer);
     for (const timer of this.alerts) clearTimeout(timer);
     this.alerts.clear();
     for (const timer of this.followupTimers.values()) clearTimeout(timer);
     this.followupTimers.clear();
+    for (const timer of this.chainHoldTimers.values()) clearTimeout(timer);
+    this.chainHoldTimers.clear();
     this.timer = undefined;
     for (const runtime of this.runtimes.values()) {
       if (runtime.retry) clearTimeout(runtime.retry);
@@ -746,6 +896,7 @@ export class ManagerEngine {
       costUsd: this.deps.costVisible() ? state.costUsd : 0,
       followedTasks: followedTasks(state),
       ...denialsOf(manager, state.bashDenials),
+      ...await this.activeAgentOf(manager, state).then((activeAgent) => (activeAgent ? { activeAgent } : {}), () => ({})),
     };
   }
 
@@ -783,7 +934,9 @@ export class ManagerEngine {
   async snapshot(id: string): Promise<ManagerSnapshot | undefined> {
     const manager = this.deps.store.get(id);
     if (!manager) return undefined;
-    return buildSnapshot(await this.sources(manager), this.deps.github, this.now());
+    const sources = await this.sources(manager);
+    const snapshot = await buildSnapshot(sources, this.deps.github, this.now());
+    return { ...snapshot, accounts: await this.accountStates(manager, sources) };
   }
 
   private nextChange(id: string): number {
@@ -823,6 +976,25 @@ export class ManagerEngine {
     return error ? { error, status: 400 } : undefined;
   }
 
+  /** Each backup's account must exist, and no two rows of the chain may share a runner and account. */
+  private async backupsIssue(
+    primaryRunner: string | undefined,
+    primaryProfile: string | undefined,
+    backups: ManagerBackupAgent[] | null | undefined,
+  ): Promise<ManagerRefusal | undefined> {
+    if (!backups?.length) return undefined;
+    const first = primaryRunner !== undefined && isRunnerId(primaryRunner) ? primaryRunner : await this.deps.defaultRunner();
+    const seen = new Set([rowKey(first, primaryProfile ?? DEFAULT_AGENT_ACCOUNT_ID)]);
+    for (const backup of backups) {
+      const issue = await this.accountIssue(backup.runner, backup.agentProfile);
+      if (issue) return issue;
+      const key = rowKey(backup.runner, backup.agentProfile ?? DEFAULT_AGENT_ACCOUNT_ID);
+      if (seen.has(key)) return { error: 'Each agent and account can appear only once in the chain', status: 400 };
+      seen.add(key);
+    }
+    return undefined;
+  }
+
   private async taskAccountsIssue(agents: ManagerTaskAgent[] | null | undefined): Promise<ManagerRefusal | undefined> {
     for (const agent of agents ?? []) {
       const issue = await this.accountIssue(agent.runner, agent.agentProfile);
@@ -832,7 +1004,8 @@ export class ManagerEngine {
   }
 
   async create(input: CreateManagerInput, ctx: ManagerTelemetryContext = {}): Promise<ManagerSummary | ManagerRefusal> {
-    const issue = await this.accountIssue(input.runner, input.agentProfile) ?? await this.taskAccountsIssue(input.taskAgents);
+    const issue = await this.accountIssue(input.runner, input.agentProfile) ?? await this.taskAccountsIssue(input.taskAgents)
+      ?? await this.backupsIssue(input.runner, input.agentProfile, input.backups);
     if (issue) return issue;
     const first = this.deps.store.list().length === 0;
     const id = randomUUID();
@@ -853,6 +1026,10 @@ export class ManagerEngine {
       ...(input.model !== undefined ? { model: input.model } : {}),
       ...(input.effort !== undefined ? { effort: input.effort } : {}),
       ...(input.agentProfile !== undefined ? { agentProfile: input.agentProfile } : {}),
+      ...(input.backups?.length ? { backups: input.backups } : {}),
+      ...(input.failback !== undefined ? { failback: input.failback } : {}),
+      ...(input.taskBusyAt !== undefined ? { taskBusyAt: input.taskBusyAt } : {}),
+      ...(input.taskLimitSwitch !== undefined ? { taskLimitSwitch: input.taskLimitSwitch } : {}),
       ...(input.connectors !== undefined ? { connectors: input.connectors } : {}),
       cronMinutes: input.cronMinutes ?? MANAGER_DEFAULT_CRON_MINUTES,
       jobs: [],
@@ -882,17 +1059,25 @@ export class ManagerEngine {
     const issue = await this.accountIssue(
       input.runner === null ? undefined : (input.runner ?? current.runner),
       input.agentProfile === null ? undefined : input.agentProfile,
-    ) ?? await this.taskAccountsIssue(input.taskAgents);
+    ) ?? await this.taskAccountsIssue(input.taskAgents) ?? (input.backups !== undefined || input.runner !== undefined || input.agentProfile !== undefined
+      ? await this.backupsIssue(
+          input.runner === null ? undefined : (input.runner ?? current.runner),
+          input.agentProfile === null ? undefined : (input.agentProfile ?? current.agentProfile),
+          input.backups === undefined ? current.backups : input.backups,
+        )
+      : undefined);
     if (issue) return issue;
     const badPattern = input.bashAllow?.map(managerBashPatternIssue).find(Boolean);
     if (badPattern) return { error: badPattern, status: 400 };
-    const optional = <K extends 'runner' | 'taskRunner' | 'taskAgents' | 'model' | 'effort' | 'agentProfile'>(key: K): Partial<Pick<Manager, K>> => {
+    const optional = <K extends 'runner' | 'taskRunner' | 'taskAgents' | 'model' | 'effort' | 'agentProfile' | 'failback' | 'taskBusyAt' | 'taskLimitSwitch'>(key: K): Partial<Pick<Manager, K>> => {
       const value = input[key];
       if (value === null) return {};
       const kept = value ?? current[key];
       return kept === undefined ? {} : ({ [key]: kept } as Partial<Pick<Manager, K>>);
     };
-    const { runner: _runner, taskRunner: _taskRunner, taskAgents: _taskAgents, model: _model, effort: _effort, agentProfile: _agentProfile, quickPrompts: _quickPrompts, bashAllow: _bashAllow, ...base } = current;
+    const { runner: _runner, taskRunner: _taskRunner, taskAgents: _taskAgents, model: _model, effort: _effort, agentProfile: _agentProfile, quickPrompts: _quickPrompts, bashAllow: _bashAllow, backups: _backups, failback: _failback, taskBusyAt: _taskBusyAt, taskLimitSwitch: _taskLimitSwitch, ...base } = current;
+    // An emptied chain is stored as no chain: that manager is today's manager again.
+    const backups = input.backups === undefined ? current.backups : input.backups ?? undefined;
     const bashAllow = input.bashAllow ? [...new Set(input.bashAllow)] : current.bashAllow;
     // An emptied list is stored as no list.
     const quickPrompts = input.quickPrompts ?? current.quickPrompts;
@@ -929,11 +1114,17 @@ export class ManagerEngine {
       ...optional('model'),
       ...optional('effort'),
       ...optional('agentProfile'),
+      ...(backups?.length ? { backups } : {}),
+      ...optional('failback'),
+      ...optional('taskBusyAt'),
+      ...optional('taskLimitSwitch'),
       updatedAt: this.iso(),
     };
     let updated = this.deps.store.update(id, () => next);
     if (!updated) return { error: 'manager not found', status: 404 };
     if (input.clearBashDenials) this.deps.store.updateState(id, (state) => ({ ...state, bashDenials: [] }));
+    // Editing the chain, or "Switch back now", answers with #1 from the next turn.
+    if (input.switchToPrimary || chainChanged(current, updated)) this.resetChain(id, updated, input.switchToPrimary === true);
     if (input.active !== undefined && this.applyActivity(id, input.active, input.catchUp === true)) updated = this.deps.store.get(id) ?? updated;
     // "Use another account" (spec 2026-11-18-inline-account-reconnect): the chat turn the old login
     // failed re-runs on the new one, in a fresh session (the session key follows the account).
@@ -1127,6 +1318,8 @@ export class ManagerEngine {
 
   resumeAuthFailed(provider: string, profileId: string): Array<{ managerId: string; title: string }> {
     const resumed: Array<{ managerId: string; title: string }> = [];
+    // A chain row waiting on this login is open again.
+    this.releaseAuthHolds(provider, profileId);
     for (const manager of this.deps.store.list()) {
       // A replay is a model call: an inactive manager keeps its reconnect card instead.
       if (manager.inactive) continue;
@@ -1248,6 +1441,8 @@ export class ManagerEngine {
   private pump(id: string): void {
     const runtime = this.runtime(id);
     if (this.disposed || runtime.deleted || runtime.active || runtime.queue.length === 0) return;
+    // A pending restart: only what the user just typed starts a turn (and the restart waits for it).
+    if (this.deps.restartGate?.holding && !runtime.queue.some((item) => item.kind === 'chat')) return;
     // Queued before it was deactivated, by a path that skipped the gate's sweep (a lease retry).
     if (this.inactive(id)) {
       runtime.queue = [];
@@ -1358,7 +1553,7 @@ export class ManagerEngine {
       // Task events still owed a follow-up ride along: the user asking first answers them too.
       const { notes, followups } = store.state(id);
       turn.sourceTasks = [...item.messageIds.flatMap((messageId) => store.message(id, messageId)?.sourceTasks ?? []), ...taskSources([item.text, ...notes, ...followups.map((entry) => entry.line)].join('\n'))];
-      const heard = (await this.visibleTurn(id, manager, chatPrompt(item.text, notes, item.paths, item.messageIds, followups.map((entry) => entry.line), this.openCards(id)), 'chat', turn, undefined, item)) === 'heard';
+      const heard = (await this.visibleTurn(id, manager, chatPrompt(item.text, notes, item.paths, item.messageIds, followups.map((entry) => entry.line), this.openCards(id, turn)), 'chat', turn, undefined, item)) === 'heard';
       if (heard) this.consumeNotes(id, notes, followups);
       return;
     }
@@ -1367,7 +1562,7 @@ export class ManagerEngine {
       // Nothing left (a chat took them up), or a usage limit holds: `tick` brings it back after.
       if (followups.length === 0 || (resume && msOf(resume.at) > this.now())) return;
       turn.sourceTasks = taskSources(followups.map((entry) => entry.line).join('\n'));
-      const outcome = await this.visibleTurn(id, manager, followupPrompt(followups.map((entry) => entry.line), notes, this.openCards(id)), 'chat', turn);
+      const outcome = await this.visibleTurn(id, manager, followupPrompt(followups.map((entry) => entry.line), notes, this.openCards(id, turn)), 'chat', turn);
       if (outcome === 'heard') this.consumeNotes(id, notes, followups);
       // Failed: no retry that could bill in a loop; the next chat hears them instead.
       else if (outcome === 'failed' && store.get(id)) {
@@ -1424,7 +1619,13 @@ export class ManagerEngine {
     chat?: Extract<QueueItem, { kind: 'chat' }>,
   ): Promise<TurnOutcome> {
     const { store } = this.deps;
-    const base = { sourceTasks: turn.sourceTasks ?? [], id: randomUUID(), seq: store.nextSeq(id), at: this.iso(), kind: 'assistant' as const, turn: kind, ...(jobName ? { jobName } : {}) };
+    // Before the reply's slot: a switch notice reads above the answer it explains.
+    const plan = await this.chainPlan(id, manager);
+    let base = {
+      sourceTasks: turn.sourceTasks ?? [], id: randomUUID(), seq: store.nextSeq(id), at: this.iso(), kind: 'assistant' as const, turn: kind,
+      ...(jobName ? { jobName } : {}),
+      ...(plan ? { agent: plan.infos[plan.row.slot]!.ref } : {}),
+    };
     let sent = this.publish(id, { ...base, text: '', streaming: true, commands: [] }, true);
     let keyframe = 0;
     let throttle: NodeJS.Timeout | undefined;
@@ -1462,23 +1663,44 @@ export class ManagerEngine {
     };
     const startedAt = this.now();
     turn.ledgerMessageId = base.id;
-    const result = await this.drive(id, manager, prompt, turn, (progress) => {
+    const chain = await this.driveChain(id, manager, plan, prompt, turn, (progress) => {
       read = progress;
       if (!throttle) {
         throttle = setTimeout(flush, STREAM_THROTTLE_MS);
         throttle.unref?.();
       }
-    }).catch(turnFailure);
-    this.reportTurn(manager, turn, startedAt, result);
+    }, {
+      // The reply a limit cut off stays, marked; the backup answers in a new one below the notice.
+      cutOff: (partial, ref) => {
+        if (throttle) clearTimeout(throttle);
+        throttle = undefined;
+        read = () => ({ text: '', commands: [] });
+        const text = judged(partial.text.replace(QUIET_LINE, '').trim()).text;
+        // The CLI's own limit or login line, echoed as the reply, is what the notice already says.
+        const echo = partial.commands.length === 0 && classifyManagerFailure(text) !== 'unknown';
+        if ((!text || echo) && partial.commands.length === 0) return;
+        this.publish(id, { ...base, agent: ref, text, streaming: false, commands: partial.commands, cutOff: true }, true);
+        base = { ...base, id: randomUUID() };
+      },
+      resumed: () => {
+        base = { ...base, seq: store.nextSeq(id), at: this.iso() };
+        keyframe = 0;
+        turn.ledgerMessageId = base.id;
+        sent = this.publish(id, { ...base, text: '', streaming: true, commands: [] }, true);
+      },
+    }).catch((error: unknown) => ({ result: turnFailure(error), ran: manager } as ChainOutcome));
+    const result = chain.result;
+    if (chain.ref) base = { ...base, agent: chain.ref };
+    this.reportTurn(chain.ran, turn, startedAt, result);
     if (throttle) clearTimeout(throttle);
     if (!store.get(id)) return 'failed';
     this.addCost(id, result.costUsd);
-    const resetAt = this.usageLimit(result, turn);
+    const resetAt = chain.exhaustedUntil ?? this.usageLimit(result, turn);
     const cause = result.error ? failureCause(result.error, result.text) : undefined;
     const failed = cause && !turn.stopped && !resetAt ? this.recordFailure(id, kind, cause, result.runner) : undefined;
     // A rejected login renders the reconnect card, and a reconnect of that account re-runs the chat.
     const authFailure = failed && !turn.timedOut && classifyManagerFailure(cause!) === 'auth'
-      ? { provider: result.runner ?? await this.runnerOf(manager), profileId: manager.agentProfile ?? DEFAULT_AGENT_ACCOUNT_ID }
+      ? { provider: result.runner ?? await this.runnerOf(chain.ran), profileId: chain.ran.agentProfile ?? DEFAULT_AGENT_ACCOUNT_ID }
       : undefined;
     if (kind === 'chat' && chat) {
       store.updateState(id, (state) => ({
@@ -1507,7 +1729,7 @@ export class ManagerEngine {
       return 'limited';
     }
     const body = alertBody(judgement);
-    if (body) this.alert(id, base, body);
+    if (body) this.alert(id, base, body, judgement.important ? 'message' : 'question');
     const heard = !result.error && !turn.stopped;
     // A turn that got through proves the limit lifted (or the account changed).
     if (heard && kind === 'chat') this.clearResume(id, false);
@@ -1574,7 +1796,7 @@ export class ManagerEngine {
       }));
     }
     this.emitChange(id);
-    if (post.headline) this.alert(id, written, post.headline);
+    if (post.headline) this.alert(id, written, post.headline, reportKind(post.fields));
     return written;
   }
 
@@ -1708,8 +1930,17 @@ export class ManagerEngine {
     if (written.kind === 'assistant') this.askChanged(id, written, false);
   }
 
-  private openCards(id: string): string {
-    return openCardsBlock(this.deps.store.messages(id).filter(openAsk), this.now());
+  /** A chat resuming a session that already saw these cards gets their ids; `drive` restores the list for a fresh one. */
+  private openCards(id: string, turn?: ActiveTurn): string {
+    const { store } = this.deps;
+    const cards = store.messages(id).filter(openAsk);
+    const full = openCardsBlock(cards, this.now());
+    if (turn?.kind !== 'chat') return full;
+    const meta = store.state(id).sessions.chat;
+    const digest = openCardsDigest(cards);
+    const ids = this.resumes('chat', meta) && meta?.cardsDigest === digest ? openCardsUnchanged(cards) : '';
+    turn.cards = { digest, full, ...(ids ? { ids } : {}) };
+    return ids || full;
   }
 
   /** Waiting tasks' open questions, so a relayed card can name the one it copies (`about.ask`). */
@@ -1959,10 +2190,11 @@ export class ManagerEngine {
     const final = event.state === 'done' || event.state === 'review' || event.state === 'needs-you' ? finalAssistantText(dataDir, run.id) : undefined;
     const clipped = final && final.length > TASK_REPORT_TEXT_LIMIT ? `${final.slice(0, TASK_REPORT_TEXT_LIMIT)}…` : final;
     const important = event.state === 'failed' || event.state === 'needs-you';
+    const switched = run.agentSwitch?.summary;
     this.postDirect(id, {
       messageId,
       turn: 'watch',
-      text: `${card}\n\n**${state}**${clipped ? `\n\n${clipped}` : ''}`,
+      text: `${card}\n\n**${state}**${switched ? `\n\n${switched}` : ''}${clipped ? `\n\n${clipped}` : ''}`,
       ...(important ? { headline: `${title}: ${TASK_STATE_LINE[event.state].toLowerCase()}${detail ? ` (${detail})` : ''}`.slice(0, HEADLINE_LIMIT) } : {}),
       fields: { taskReport: { projectId, runId: run.id, state: event.state, ...(root ? { rootRunId: root.id } : {}) } },
       attentionKeys: event.attentionKeys,
@@ -2010,7 +2242,7 @@ export class ManagerEngine {
   }
 
   /** Delayed, then skipped if the chat was read meanwhile: an open tab needs no interruption. */
-  private alert(id: string, message: { id: string; seq: number }, body: string): void {
+  private alert(id: string, message: { id: string; seq: number }, body: string, kind: AttentionKind): void {
     const { notifySystem, pushSignal, store } = this.deps;
     // An inactive manager raises nothing: its tasks' own surfaces (Questions, Now) still show them.
     if ((!notifySystem && !pushSignal) || this.inactive(id)) return;
@@ -2019,7 +2251,7 @@ export class ManagerEngine {
       const manager = store.get(id);
       if (!manager || manager.notify === false || manager.inactive || !unseen(store.state(id), message)) return;
       notifySystem?.(manager.name, body);
-      pushSignal?.(id);
+      pushSignal?.(id, kind);
     }, SYSTEM_NOTIFY_DELAY_MS));
     timer.unref?.();
     this.alerts.add(timer);
@@ -2035,7 +2267,7 @@ export class ManagerEngine {
     // Only keys still fresh are worth remembering; the rest were reported and will not come back.
     this.pushedAttention.set(id, new Set(waiting));
     if (newKeys.length === 0 || store.get(id)?.notify === false) return;
-    pushSignal(id);
+    pushSignal(id, 'task');
   }
 
   private async watchTurn(
@@ -2049,15 +2281,19 @@ export class ManagerEngine {
     const { store } = this.deps;
     turn.sourceTasks = fresh.flatMap((item) => item.runId ? [{ projectId: item.projectId, runId: item.runId }] : []);
     const startedAt = this.now();
-    const result = await this.drive(id, manager, watchPrompt(snapshot, fresh, this.openCards(id), await this.taskQuestions(manager)), turn, () => undefined).catch(turnFailure);
-    this.reportTurn(manager, turn, startedAt, result);
+    const plan = await this.chainPlan(id, manager);
+    const chain = await this.driveChain(id, manager, plan, watchPrompt(snapshot, fresh, this.openCards(id), await this.taskQuestions(manager), manager.instructions), turn, () => undefined)
+      .catch((error: unknown) => ({ result: turnFailure(error), ran: manager } as ChainOutcome));
+    const result = chain.result;
+    const agent = chain.ref ? { agent: chain.ref } : {};
+    this.reportTurn(chain.ran, turn, startedAt, result);
     if (!store.get(id)) return;
     this.addCost(id, result.costUsd);
     // A user's Stop leaves the keys fresh for the next check; a hung backend is a failure the chat shows.
     if (turn.stopped && !turn.timedOut) return;
     const error = turn.timedOut ? TURN_LIMIT_ERROR : result.error;
     const lastMessage = store.messages(id).at(-1);
-    const resetAt = this.usageLimit(result, turn);
+    const resetAt = chain.exhaustedUntil ?? this.usageLimit(result, turn);
     if (resetAt) {
       // Not a failure: no backoff, and its keys stay fresh for the check after the reset.
       const repeat = lastMessage?.kind === 'assistant' && lastMessage.turn === 'watch' && lastMessage.resumeAt ? lastMessage : undefined;
@@ -2071,6 +2307,7 @@ export class ManagerEngine {
         text: result.commands.length === 0 ? result.text.trim() : '',
         streaming: false,
         commands: [],
+        ...agent,
         resumeAt: resetAt.toISOString(),
       }, true);
       this.armResume(id, resetAt, messageId);
@@ -2118,11 +2355,12 @@ export class ManagerEngine {
       ...judgedFields(judgement),
       streaming: false,
       commands: result.commands,
+      ...agent,
       ...(this.deps.costVisible() && result.costUsd > 0 ? { costUsd: result.costUsd } : {}),
     }, true);
     this.settleAsks(id, written, closes);
     const body = alertBody(judgement);
-    if (body) this.alert(id, written, body);
+    if (body) this.alert(id, written, body, judgement.important ? 'message' : 'question');
   }
 
   /** `manager_turn_completed`, and the turn's duration as a timing (stopped turns time nothing). */
@@ -2166,6 +2404,46 @@ export class ManagerEngine {
     if (usd > 0) this.deps.store.updateState(id, (state) => ({ ...state, costUsd: state.costUsd + usd }));
   }
 
+  /**
+   * Parks the current transcripts under their key and brings back `sessionKey`'s, if any. A parked
+   * transcript that missed replies another row wrote since starts over: only the preamble carries them.
+   */
+  private swapSessions(id: string, sessionKey: string): void {
+    const { store } = this.deps;
+    const state = store.state(id);
+    if (state.sessionKey === sessionKey) return;
+    const messages = store.messages(id);
+    // The turn's own streaming placeholder keeps its seq for the reply, so it does not count as seen.
+    const lastSeq = messages.filter((message) => !(message.kind === 'assistant' && message.streaming)).at(-1)?.seq ?? 0;
+    store.updateState(id, (current) => {
+      const parked = { ...current.parkedSessions };
+      if (current.sessionKey) {
+        parked[current.sessionKey] = {
+          ...(current.sessionId ? { sessionId: current.sessionId } : {}),
+          ...(current.watchSessionId ? { watchSessionId: current.watchSessionId } : {}),
+          ...(current.jobSessionId ? { jobSessionId: current.jobSessionId } : {}),
+          sessions: current.sessions,
+          parkedSeq: lastSeq,
+        };
+      }
+      const candidate = parked[sessionKey];
+      const missed = candidate && messages.some((message) => message.kind === 'assistant' && !message.streaming && message.seq > (candidate.parkedSeq ?? 0));
+      const restored = missed ? undefined : candidate;
+      delete parked[sessionKey];
+      // One per chain row at most.
+      const kept = Object.fromEntries(Object.entries(parked).slice(-4));
+      return {
+        ...current,
+        sessionId: restored?.sessionId,
+        watchSessionId: restored?.watchSessionId,
+        jobSessionId: restored?.jobSessionId,
+        sessions: restored?.sessions ?? {},
+        sessionKey,
+        parkedSessions: kept,
+      };
+    });
+  }
+
   /** One agent session, resumed when there is one; a failed resume restarts from a recap once. */
   private async drive(
     id: string,
@@ -2176,17 +2454,16 @@ export class ManagerEngine {
   ): Promise<DriveResult> {
     const { store } = this.deps;
     const runner = await this.runnerOf(manager);
-    // Every manager turn requires a tool fence, including chats and unattended watches.
-    if (runner === 'codex') return { ...turnFailure(new CodexToolPolicyError('a manager needs its cez-manager shell fence, which Codex cannot enforce', 'Refusing this manager turn; no model turn was started. Pick Claude Code for this manager.')), runner };
     const sessionKey = `${runner}|${manager.agentProfile ?? ''}`;
+    // A chain keeps each row's transcript, so going back to #1 resumes it while it is still young.
+    if (hasChain(manager)) this.swapSessions(id, sessionKey);
     const state = store.state(id);
     const field = SESSION_FIELD[turn.kind];
-    const resumeId = state.sessionKey === sessionKey ? state[field] : undefined;
+    const resumeId = state.sessionKey === sessionKey && this.resumes(turn.kind, state.sessions[turn.kind]) ? state[field] : undefined;
     const resumable = resumeId !== undefined;
     const sources = await this.sources(manager);
     const profile = supportsProfiles(runner) ? await resolveProfileEnvForRoot(undefined, runner, manager.agentProfile) : { env: {} };
-    // Codex is refused above; Claude is the one manager runner with plan limits today.
-    const planProvider = runner === 'claude' ? runner : undefined;
+    const planProvider = runner === 'claude' || runner === 'codex' ? runner : undefined;
     const planProfile = 'profile' in profile ? profile.profile : undefined;
     turn.planAccount = planProvider && planProfile
       ? await ledgerAccountRef(planProvider, planProfile).catch(() => undefined)
@@ -2217,16 +2494,29 @@ export class ManagerEngine {
     const bashHook = runner === 'claude' ? managerBashHookCommand() : undefined;
     // Read per turn, so a revoke applies from the next one; a watch reads untrusted text and gets none.
     const connectorTurn = runner === 'claude' && turn.kind !== 'watch';
+    // A new chat session hears what it would otherwise have remembered; a watch or job is self-contained.
+    // A fresh session never saw the cards a resumed one would get by id.
+    const unseen = turn.cards?.ids ? prompt.replace(turn.cards.ids, () => turn.cards!.full) : prompt;
+    const freshPrompt = turn.kind === 'chat' ? `${this.preamble(id, sources)}${unseen}` : prompt;
     const connectorRules = connectorTurn ? connectorAllowRules(manager.connectors, state.connectors) : [];
+    // A manager with nothing granted loads no connector; a watch never calls one (spec 2026-11-21 § 2.4).
+    const noMcpServers = runner === 'claude' && (!connectorTurn || !hasConnectorGrant(manager.connectors));
+    // Read per turn, so an edit in Settings reaches a resumed session too.
+    const globalInstructions = (await loadWorkspaceConfig().catch(() => null))?.systemPrompt;
     const base: AgentRunSpec = {
       systemPrompt: managerSystemPrompt(
         manager,
         sources.map((source) => ({ id: source.id, name: source.name, access: managerAccessOf(manager, source.id) })),
         connectorTurn ? connectorPromptSection(manager.connectors, state.connectors) : '',
         // Only where the turn can Write the file it would pass.
-        { textInFiles: runner === 'claude' && writable !== undefined },
+        {
+          textInFiles: runner === 'claude' && writable !== undefined,
+          memory: renderMemory(this.memoryFor(id, (profile.env as Record<string, string | undefined>).CLAUDE_CONFIG_DIR ?? process.env.CLAUDE_CONFIG_DIR).entries),
+          globalInstructions,
+        },
       ),
-      userPrompt: prompt,
+      // A session restored from another row may not have seen the cards an ids-only prompt names.
+      userPrompt: resumeId ? (turn.cards?.ids && state.sessions.chat?.cardsDigest !== turn.cards.digest ? unseen : prompt) : freshPrompt,
       cwd: store.workdir(id),
       allowedTools: [...MANAGER_ALLOWED_TOOLS, ...(writable ? managerWriteRules(writable) : []), ...connectorRules],
       bashAllowlist: [...MANAGER_BASH_ALLOWLIST, ...(manager.bashAllow ?? [])],
@@ -2243,6 +2533,8 @@ export class ManagerEngine {
         ...profile.env,
         CEZ_MANAGER_ID: id,
         CEZ_MANAGER_TURN: turn.kind,
+        // One memory, cezar's: Claude's own would split it per runner and grow unseen.
+        ...(runner === 'claude' ? { CLAUDE_CODE_DISABLE_AUTO_MEMORY: '1' } : {}),
         ...(manager.bashAllow?.length ? { [MANAGER_BASH_ALLOW_ENV]: JSON.stringify(manager.bashAllow) } : {}),
         ...(apiUrl ? { CEZ_API_URL: apiUrl } : {}),
         ...(process.env.CEZ_BIN ? { CEZ_BIN: process.env.CEZ_BIN } : {}),
@@ -2250,12 +2542,17 @@ export class ManagerEngine {
         ...(readOnlyWatch ? readOnlyEnv() : {}),
       },
       ...(readOnlyWatch ? { enforceReadOnly: true } : {}),
+      ...(noMcpServers ? { noMcpServers: true } : {}),
       ...(planAccount ? { onUsageWindows: (observation) => recordUsageObservation(planAccount, observation) } : {}),
       ...(manager.model && !locked ? { model: manager.model } : {}),
       // Another backend refuses an explicit effort, so a manager moved off one drops it.
       ...(manager.effort && runnerSupportsReasoningEffort(runner) ? { reasoningEffort: manager.effort } : {}),
     };
-    const first = await this.session(id, base, sessionKey, runner, resumeId, turn, onProgress);
+    // Claude's Bash inherits the cockpit's env plus the turn's; the broker runs Codex's commands in the same.
+    if (runner === 'codex') base.brokeredShell = codexManagerShell(manager.bashAllow, { ...process.env, ...base.env });
+    // A retry is the same user turn: it counts once, measured from the session as it stood before.
+    const origin: TurnOrigin = { startedAt: this.now(), ...(resumeId && state.sessions[turn.kind] ? { prior: state.sessions[turn.kind]! } : {}) };
+    const first = await this.session(id, base, sessionKey, runner, resumeId, turn, onProgress, origin);
     // A turn that ran a command may have acted: running it twice could act twice.
     if (!first.error || turn.stopped || turn.timedOut || first.commands.length > 0) return { ...first, runner };
     const plan = retryPlan(classifyManagerFailure(failureCause(first.error, first.text)), resumable);
@@ -2263,14 +2560,10 @@ export class ManagerEngine {
     if (plan === 'again') {
       await new Promise((resolve) => setTimeout(resolve, this.deps.retryDelayMs ?? RETRY_BACKOFF_MS).unref?.());
       if (turn.stopped || !store.get(id)) return { ...first, runner };
-      const again = await this.session(id, base, sessionKey, runner, resumeId, turn, onProgress);
+      const again = await this.session(id, base, sessionKey, runner, resumeId, turn, onProgress, origin);
       return { ...again, costUsd: again.costUsd + first.costUsd, runner };
     }
-    // Only a chat gets the transcript back: it holds what watches read.
-    const recap = turn.kind === 'chat'
-      ? recapPrompt(store.messages(id).filter((message) => !(message.kind === 'assistant' && message.streaming)))
-      : '';
-    const fresh = await this.session(id, { ...base, userPrompt: `${recap}${prompt}` }, sessionKey, runner, undefined, turn, onProgress);
+    const fresh = await this.session(id, { ...base, userPrompt: freshPrompt }, sessionKey, runner, undefined, turn, onProgress, { startedAt: origin.startedAt });
     return { ...fresh, costUsd: fresh.costUsd + first.costUsd, runner };
   }
 
@@ -2282,6 +2575,7 @@ export class ManagerEngine {
     resumeId: string | undefined,
     turn: ActiveTurn,
     onProgress: (progress: Progress) => void,
+    origin: TurnOrigin = { startedAt: this.now() },
   ): Promise<DriveResult> {
     const { store } = this.deps;
     // Claude takes an id we mint; every other backend mints its own and reports it (`session`).
@@ -2295,6 +2589,9 @@ export class ManagerEngine {
     const commands: ManagerCommand[] = [];
     const bashCommands = new Map<string, string>();
     const text = () => [committed, draft].filter(Boolean).join('\n\n');
+    const turnStats = new TurnStatsCollector();
+    const turnStartedAt = origin.startedAt;
+    const priorSession = origin.prior;
     // Read when the throttle flushes, not per token: re-joining a long reply per delta is quadratic.
     const snapshot: Progress = () => ({ text: text(), commands: [...commands] });
     const progress = () => onProgress(snapshot);
@@ -2311,6 +2608,7 @@ export class ManagerEngine {
       }));
     };
     const onEvent = (event: AgentEvent) => {
+      turnStats.event(event);
       // An error first means no transcript exists; resuming it would only fail again.
       if (sessionId && event.type !== 'error') saveSession(sessionId);
       switch (event.type) {
@@ -2349,7 +2647,8 @@ export class ManagerEngine {
           error ??= event.message;
           break;
         case 'mcp-servers':
-          this.observeConnectors(id, event);
+          // A turn that loaded none would report every server gone; the probe still sees them.
+          if (!base.noMcpServers) this.observeConnectors(id, event);
           break;
         default:
           break;
@@ -2380,8 +2679,35 @@ export class ManagerEngine {
     } catch (cause) {
       error ??= cause instanceof Error ? cause.message : String(cause);
     }
+    const sessionTurn = (priorSession?.turns ?? 0) + 1;
+    const stats = turnStats.stats({
+      fresh: !resumeId,
+      sessionTurn,
+      ...(sessionId ? { session: sessionId.slice(0, 8) } : {}),
+      ...(priorSession ? { idleMs: turnStartedAt - msOf(priorSession.lastAt) } : {}),
+    });
     // A watch that reported nothing new is "quiet": the hint weighs its cadence against that.
-    planUsage?.close(turn.kind === 'watch' ? { quiet: !judged(text().replace(QUIET_LINE, '').trim()).text } : {});
+    planUsage?.close({ ...(turn.kind === 'watch' ? { quiet: !judged(text().replace(QUIET_LINE, '').trim()).text } : {}), turn: stats });
+    if (saved && store.get(id)) {
+      const at = this.iso();
+      store.updateState(id, (state) => {
+        const cardsDigest = !error && turn.cards ? turn.cards.digest : resumeId ? state.sessions[turn.kind]?.cardsDigest : undefined;
+        return {
+          ...state,
+          sessions: {
+            ...state.sessions,
+            [turn.kind]: {
+              // Seen only once the turn ran; a failed one keeps what the resumed transcript had.
+              ...(cardsDigest !== undefined ? { cardsDigest } : {}),
+              startedAt: priorSession?.startedAt ?? new Date(turnStartedAt).toISOString(),
+              lastAt: at,
+              turns: sessionTurn,
+              ...(turnStats.context > 0 ? { contextTokens: turnStats.context } : priorSession?.contextTokens !== undefined ? { contextTokens: priorSession.contextTokens } : {}),
+            },
+          },
+        };
+      });
+    }
     return { text: committed || draft, commands, costUsd, ...(error ? { error } : {}) };
   }
 
@@ -2436,6 +2762,332 @@ export class ManagerEngine {
         this.enqueue(manager.id, { kind: 'job', jobId: job.id });
       }
     }
+  }
+
+  // ---- agent chain (spec 2026-11-25-manager-agent-chain) -------------------------------------
+
+  /** Usage-limit holds this process recorded, per manager: `accountHolds()` is asked on every pump. */
+  private readonly chainHolds = new Map<string, Map<string, number>>();
+  private chainHoldsLoaded = false;
+
+  /** Rows a manager's chain has exhausted, as the queue keys them, so tasks avoid them too. */
+  accountHolds(): { deadlines: ReadonlyMap<string, number>; deadline: ReadonlySet<string>; inFlight: ReadonlySet<string> } {
+    if (!this.chainHoldsLoaded) {
+      this.chainHoldsLoaded = true;
+      // Inside a pump: loading must not re-enter the semaphore.
+      for (const manager of this.deps.store.list()) if (hasChain(manager)) this.syncChainHolds(manager.id, false);
+    }
+    const now = this.now();
+    const deadlines = new Map<string, number>();
+    for (const holds of this.chainHolds.values()) {
+      for (const [key, until] of holds) if (until > now) deadlines.set(key, Math.min(until, deadlines.get(key) ?? Infinity));
+    }
+    return { deadlines, deadline: new Set(deadlines.keys()), inFlight: new Set() };
+  }
+
+  private readonly chainHoldTimers = new Map<string, NodeJS.Timeout>();
+
+  private syncChainHolds(id: string, notify = true): void {
+    const manager = this.deps.store.get(id);
+    const now = this.now();
+    const holds = new Map<string, number>();
+    // Only a manager with a chain shares its limits: one without backups behaves as it always did.
+    if (manager && hasChain(manager)) {
+      for (const hold of Object.values(this.deps.store.state(id).chain?.holds ?? {})) {
+        const until = msOf(hold.until);
+        if (hold.accountKey && hold.reason === 'usage-limit' && until > now) holds.set(hold.accountKey, Math.max(until, holds.get(hold.accountKey) ?? 0));
+      }
+    }
+    const before = JSON.stringify([...(this.chainHolds.get(id) ?? [])]);
+    if (holds.size > 0) this.chainHolds.set(id, holds);
+    else this.chainHolds.delete(id);
+    // A queue waiting on one of these must hear when it ends: nothing else wakes it.
+    clearTimeout(this.chainHoldTimers.get(id));
+    this.chainHoldTimers.delete(id);
+    if (holds.size > 0) {
+      const timer = setTimeout(() => this.syncChainHolds(id), Math.min(Math.min(...holds.values()) - now + 1_000, MAX_TIMER_MS));
+      timer.unref?.();
+      this.chainHoldTimers.set(id, timer);
+    }
+    if (notify && before !== JSON.stringify([...holds])) this.deps.onAccountHoldsChanged?.();
+  }
+
+  private async rowInfo(row: ChainRow): Promise<RowInfo> {
+    const runner = row.runner !== undefined && isRunnerId(row.runner) ? row.runner : await this.deps.defaultRunner();
+    const limit = await this.deps.accountLimit?.(runner, row.agentProfile).catch(() => undefined);
+    const account = limit?.account ?? row.agentProfile ?? DEFAULT_AGENT_ACCOUNT_ID;
+    const label = limit?.label ?? (row.agentProfile ?? 'default account');
+    return {
+      row,
+      ref: { slot: row.slot, runner, profileId: account, label, ...(row.model ? { model: row.model } : {}) },
+      key: rowKey(runner, account),
+      accountKey: `${runner}:${account}`,
+      ...(limit?.until !== undefined ? { workspaceUntil: limit.until } : {}),
+    };
+  }
+
+  /** Why this row cannot answer now: its own hold, or a workspace hold on its account. */
+  private rowHold(id: string, info: RowInfo, now: number): ChainHold | undefined {
+    const own = this.deps.store.state(id).chain?.holds[info.key];
+    if (own && msOf(own.until) > now) return own;
+    if (info.workspaceUntil !== undefined && info.workspaceUntil > now) return { until: new Date(info.workspaceUntil).toISOString(), reason: 'held' };
+    return undefined;
+  }
+
+  private updateChain(id: string, change: (chain: NonNullable<ManagerState['chain']>) => NonNullable<ManagerState['chain']>): void {
+    this.deps.store.updateState(id, (state) => ({ ...state, chain: change(state.chain ?? { holds: {} }) }));
+    this.syncChainHolds(id);
+  }
+
+  private setActive(id: string, slot: number, reason: ManagerAgentSwitchReason): void {
+    this.updateChain(id, (chain) => {
+      if (slot === 0) {
+        const { active: _active, ...rest } = chain;
+        return rest;
+      }
+      return { ...chain, active: { slot, reason, since: chain.active?.slot === slot ? chain.active.since : this.iso() } };
+    });
+  }
+
+  private chainNotice(id: string, manager: Manager, from: RowInfo, to: RowInfo, reason: ManagerAgentSwitchReason, until?: string): void {
+    const lost: Array<'connectors' | 'write'> = to.ref.runner !== 'claude' && hasConnectorGrant(manager.connectors) ? ['connectors'] : [];
+    const reconnect = reason === 'auth' && isRunnerId(from.ref.runner) ? { provider: from.ref.runner, profileId: from.ref.profileId } : undefined;
+    this.publish(id, {
+      id: randomUUID(),
+      seq: this.deps.store.nextSeq(id),
+      at: this.iso(),
+      kind: 'notice',
+      text: switchNoticeText(from.ref, to.ref, reason, until, lost),
+      agentSwitch: {
+        from: from.ref,
+        to: to.ref,
+        reason,
+        ...(until ? { until } : {}),
+        ...(lost.length ? { lost } : {}),
+        ...(reconnect ? { reconnect } : {}),
+      },
+    }, true);
+    this.emitChange(id);
+  }
+
+  /** Back to #1. A settings edit also forgets login, billing and CLI retries, which it may have fixed. */
+  private resetChain(id: string, manager: Manager, switchBack: boolean): void {
+    const chain = this.deps.store.state(id).chain;
+    if (!chain) return;
+    const was = chain.active?.slot ?? 0;
+    this.updateChain(id, (current) => ({
+      holds: Object.fromEntries(Object.entries(current.holds).filter(([, hold]) => !switchBack && (hold.reason === 'usage-limit' || hold.reason === 'held'))),
+    }));
+    if (!switchBack || was === 0 || !hasChain(manager)) return;
+    void Promise.all([this.rowInfo(chainOf(manager)[Math.min(was, chainOf(manager).length - 1)]!), this.rowInfo(chainOf(manager)[0]!)])
+      .then(([from, to]) => this.chainNotice(id, manager, from, to, 'manual'), () => undefined);
+  }
+
+  /** A login is back: no row waits on it any longer (spec 2026-11-18-inline-account-reconnect). */
+  private releaseAuthHolds(provider: string, profileId: string): void {
+    const key = rowKey(provider, profileId);
+    for (const manager of this.deps.store.list()) {
+      const hold = this.deps.store.state(manager.id).chain?.holds[key];
+      if (hold?.reason !== 'auth') continue;
+      this.updateChain(manager.id, (chain) => ({ ...chain, holds: Object.fromEntries(Object.entries(chain.holds).filter(([other]) => other !== key)) }));
+    }
+  }
+
+  /** The row a turn starts on, with the notice when that is not the row that answered last. */
+  private async chainPlan(id: string, manager: Manager): Promise<ChainPlan | undefined> {
+    if (!hasChain(manager)) return undefined;
+    const rows = chainOf(manager);
+    const infos = await Promise.all(rows.map((row) => this.rowInfo(row)));
+    const now = this.now();
+    const state = this.deps.store.state(id);
+    const active = Math.min(state.chain?.active?.slot ?? 0, rows.length - 1);
+    const preferred = manager.failback === 'manual' ? active : 0;
+    const { row, skipped } = pickRow(rows, preferred, (candidate) => this.rowHold(id, infos[candidate.slot]!, now));
+    // Every row held: the preferred row is tried as today, but nothing switched, so no notice.
+    if (row.slot !== active && skipped.length < rows.length) {
+      if (row.slot === 0) {
+        this.chainNotice(id, manager, infos[active]!, infos[0]!, 'back');
+        this.setActive(id, 0, 'back');
+      } else {
+        const blocked = skipped.find((entry) => entry.row.slot === active) ?? skipped[0];
+        const cause = blocked?.hold;
+        const reason = cause?.reason ?? 'held';
+        this.chainNotice(id, manager, infos[blocked?.row.slot ?? active]!, infos[row.slot]!, reason, reason === 'usage-limit' || reason === 'held' ? cause?.until : undefined);
+        this.setActive(id, row.slot, reason);
+      }
+    }
+    return { rows, infos, row };
+  }
+
+  /**
+   * One turn across the chain: a row that runs out of limits, loses its login, its credits or its CLI
+   * hands the same turn to the next open row. A manager without backups runs exactly `drive`.
+   */
+  private async driveChain(
+    id: string,
+    manager: Manager,
+    plan: ChainPlan | undefined,
+    prompt: string,
+    turn: ActiveTurn,
+    onProgress: (progress: Progress) => void,
+    hooks: { cutOff?: (partial: DriveResult, ref: ManagerAgentRef) => void; resumed?: () => void } = {},
+  ): Promise<ChainOutcome> {
+    if (!plan) return { result: await this.drive(id, manager, prompt, turn, onProgress), ran: manager };
+    const { rows, infos } = plan;
+    const attempted = new Set<number>();
+    let row = plan.row;
+    let current = prompt;
+    let spent = 0;
+    for (;;) {
+      attempted.add(row.slot);
+      const info = infos[row.slot]!;
+      const ran = withRow(manager, row);
+      const attempt = await this.drive(id, ran, current, turn, onProgress);
+      spent += attempt.costUsd;
+      const result = { ...attempt, costUsd: spent };
+      if (!this.deps.store.get(id)) return { result, ran, ref: info.ref };
+      const now = this.now();
+      const resetAt = this.usageLimit(result, turn);
+      const cause = result.error ? failureCause(result.error, result.text) : undefined;
+      const reason = cause && !turn.stopped && !turn.timedOut ? failoverReason(classifyManagerFailure(cause), resetAt !== undefined) : undefined;
+      if (!reason) {
+        // A turn that got through proves the row works again.
+        if (!result.error && !turn.stopped && this.deps.store.state(id).chain?.holds[info.key]) {
+          this.updateChain(id, (chain) => ({ ...chain, holds: Object.fromEntries(Object.entries(chain.holds).filter(([key]) => key !== info.key)) }));
+        }
+        // Every row was held and the preferred one got through anyway: it is the one answering now.
+        if (!result.error && !turn.stopped && (this.deps.store.state(id).chain?.active?.slot ?? 0) !== row.slot) {
+          this.setActive(id, row.slot, row.slot === 0 ? 'back' : 'held');
+        }
+        return { result, ran, ref: info.ref };
+      }
+      const reset = resetAt?.getTime() ?? (reason === 'usage-limit' ? parseUsageLimit(cause!, now)?.resetAt.getTime() : undefined);
+      const hold = holdFor(reason, this.deps.store.state(id).chain?.holds[info.key], now, reset);
+      this.updateChain(id, (chain) => ({ ...chain, holds: { ...chain.holds, [info.key]: { ...hold, ...(reason === 'usage-limit' ? { accountKey: info.accountKey } : {}) } } }));
+      const next = nextRow(rows, row.slot, attempted, (candidate) => this.rowHold(id, infos[candidate.slot]!, now));
+      if (!next) {
+        // Every row is out: wait for the first reset, as a manager without backups waits for its own.
+        const release = reason === 'usage-limit' && this.deps.autoResume?.() !== false
+          ? earliestRelease(infos.map((candidate) => this.rowHold(id, candidate, now)))
+          : undefined;
+        return { result, ran, ref: info.ref, ...(release !== undefined ? { exhaustedUntil: new Date(release) } : {}) };
+      }
+      hooks.cutOff?.(result, info.ref);
+      this.chainNotice(id, manager, info, infos[next.slot]!, reason, reason === 'usage-limit' ? hold.until : undefined);
+      this.setActive(id, next.slot, reason);
+      hooks.resumed?.();
+      current = `${cutOffNote(refName(info.ref), result.commands)}${prompt}`;
+      row = next;
+    }
+  }
+
+  /** `activeAgent` for the summary: only while a backup answers. */
+  private async activeAgentOf(manager: Manager, state: ManagerState): Promise<ManagerSummary['activeAgent'] | undefined> {
+    const active = state.chain?.active;
+    if (!hasChain(manager) || !active || active.slot === 0) return undefined;
+    const rows = chainOf(manager);
+    const row = rows[active.slot];
+    if (!row) return undefined;
+    const [info, primary] = await Promise.all([this.rowInfo(row), this.rowInfo(rows[0]!)]);
+    const hold = this.rowHold(manager.id, primary, this.now());
+    return {
+      agent: info.ref,
+      reason: active.reason,
+      since: active.since,
+      ...(hold ? { primaryBackAt: hold.until } : {}),
+    };
+  }
+
+  // ---- sessions and memory (spec 2026-11-21-manager-short-sessions-and-memory) ---------------
+
+  /** Watches and jobs always start over; a chat resumes only a warm, small, young transcript. */
+  private resumes(kind: ActiveTurn['kind'], meta: ManagerState['sessions']['chat']): boolean {
+    if (kind !== 'chat' || !meta) return false;
+    const now = this.now();
+    return now - msOf(meta.lastAt) < SESSION_IDLE_MS
+      && now - msOf(meta.startedAt) < SESSION_AGE_MS
+      && (meta.contextTokens ?? 0) < SESSION_CONTEXT_MAX;
+  }
+
+  /** What a new chat session starts from besides memory: recent exchanges and followed tasks. */
+  private preamble(id: string, sources: ManagerProjectSource[]): string {
+    const { store } = this.deps;
+    const messages = store.messages(id).filter((message) => !(message.kind === 'assistant' && message.streaming));
+    const tasks = Object.entries(store.state(id).follows)
+      .sort(([, a], [, b]) => msOf(b.at) - msOf(a.at))
+      .slice(0, PREAMBLE_TASKS)
+      .flatMap(([key]) => {
+        const [projectId, runId] = key.split('/');
+        const run = projectId && runId ? findRun(sources.find((source) => source.id === projectId)?.runs() ?? [], runId) : undefined;
+        return run ? [`- [[task:${projectId}/${run.id}]] ${run.status}${run.prNumber !== undefined ? `, PR #${run.prNumber}` : ''}: ${run.title ?? run.task.slice(0, 80)}`] : [];
+      });
+    return sessionPreamble(messages, tasks);
+  }
+
+  /** The manager's memory, importing Claude Code's auto-memory for its workdir once. */
+  private memoryFor(id: string, claudeConfigDir?: string): MemoryFile {
+    const { store } = this.deps;
+    const dir = store.dir(id);
+    const current = readMemory(dir, (message) => console.warn(`[cezar] ${message}`)) ?? { entries: [] };
+    if (current.imported) return current;
+    const at = this.iso();
+    const imported = claudeAutoMemory(store.workdir(id), claudeConfigDir, at).filter((entry) => !current.entries.some((other) => other.key === entry.key));
+    let entries = current.entries;
+    for (const entry of imported) {
+      const next = setMemoryEntry({ entries }, entry.key, { kind: entry.kind, text: entry.text, ...(entry.why ? { why: entry.why } : {}) }, at, 'import');
+      if ('error' in next) continue;
+      entries = next.entries;
+    }
+    const file: MemoryFile = { entries, imported: { at, count: entries.length - current.entries.length } };
+    try {
+      writeMemory(dir, file);
+    } catch (error) {
+      console.warn(`[cezar] manager ${id} memory: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    return file;
+  }
+
+  private memoryResponse(file: MemoryFile): ManagerMemoryResponse {
+    return { entries: file.entries, limits: { entries: MANAGER_MEMORY_LIMITS.entries, bytes: MANAGER_MEMORY_LIMITS.bytes }, usedBytes: memoryBytes(file.entries) };
+  }
+
+  /** Memory reaches every later system prompt unfenced, and a watch reads untrusted text: no write
+   *  lands while one runs. The route cannot tell the cockpit from the agent, so the user's waits too. */
+  private watching(id: string): boolean {
+    return this.runtimes.get(id)?.active?.kind === 'watch';
+  }
+
+  /** The Claude config dir a turn would import from: the manager's account, not the server's own. */
+  private async claudeConfigDir(manager: Manager): Promise<string | undefined> {
+    const runner = await this.runnerOf(manager);
+    const profile = supportsProfiles(runner) ? await resolveProfileEnvForRoot(undefined, runner, manager.agentProfile) : { env: {} };
+    return (profile.env as Record<string, string | undefined>).CLAUDE_CONFIG_DIR ?? process.env.CLAUDE_CONFIG_DIR;
+  }
+
+  async memory(id: string): Promise<ManagerMemoryResponse | undefined> {
+    const manager = this.deps.store.get(id);
+    if (!manager) return undefined;
+    return this.memoryResponse(this.memoryFor(id, await this.claudeConfigDir(manager)));
+  }
+
+  async setMemory(id: string, key: string, input: PutManagerMemoryInput): Promise<ManagerMemoryResponse | ManagerRefusal | undefined> {
+    const manager = this.deps.store.get(id);
+    if (!manager) return undefined;
+    if (this.watching(id)) return { error: MEMORY_DURING_WATCH, status: 409 };
+    const next = setMemoryEntry(this.memoryFor(id, await this.claudeConfigDir(manager)), key, input, this.iso(), input.source);
+    if ('error' in next) return next;
+    writeMemory(this.deps.store.dir(id), next);
+    return this.memoryResponse(next);
+  }
+
+  async removeMemory(id: string, key: string): Promise<ManagerMemoryResponse | ManagerRefusal | undefined> {
+    const manager = this.deps.store.get(id);
+    if (!manager) return undefined;
+    if (this.watching(id)) return { error: MEMORY_DURING_WATCH, status: 409 };
+    const next = removeMemoryEntry(this.memoryFor(id, await this.claudeConfigDir(manager)), key);
+    if ('error' in next) return next;
+    writeMemory(this.deps.store.dir(id), next);
+    return this.memoryResponse(next);
   }
 
   // ---- connectors (spec 2026-11-12-manager-connectors) --------------------------------------
@@ -2608,6 +3260,15 @@ export class ManagerEngine {
     });
   }
 
+  /** Whether the project runs tasks in its checkout by default (spec 2026-10-20-trunk-based-projects).
+   *  An unreadable config answers no: the request then goes out as asked. */
+  private async inPlaceProject(prefix: string): Promise<boolean> {
+    const response = await this.forward(`${prefix}/config`).catch(() => undefined);
+    if (!response?.ok) return false;
+    const config = (await response.json().catch(() => ({}))) as { taskWorkspace?: unknown };
+    return config.taskWorkspace === 'in-place';
+  }
+
   private static async refusalOf(response: Response): Promise<ManagerRefusal> {
     const body = (await response.json().catch(() => ({}))) as { error?: unknown };
     const status = response.status;
@@ -2684,7 +3345,8 @@ export class ManagerEngine {
     return { text, ...(forward ? { forward } : {}) };
   }
 
-  async createTask(id: string, input: ManagerCreateTaskInput): Promise<ManagerCreateTaskResponse | ManagerRefusal> {
+  /** `retry`: the task being retried — its pair ranks first while still allowed, and its model and effort stay only on its runner. */
+  async createTask(id: string, input: ManagerCreateTaskInput, retry?: { runner?: string; agentProfile?: string; allowed: boolean }): Promise<ManagerCreateTaskResponse | ManagerRefusal> {
     const scope = await this.toolScope(id, input.projectId, true);
     if ('error' in scope) return scope;
     const readOnly = managerAccessOf(scope.manager, input.projectId) === 'read';
@@ -2696,24 +3358,136 @@ export class ManagerEngine {
     const composed = this.composed(id, input.task, input);
     if ('error' in composed) return composed;
     const { forward } = composed;
-    const agents = scope.manager.taskAgents;
+    const workflowName = input.workflow ?? 'quick-task';
+    const root = scope.source?.root;
+    const workflowCatalog = root ? (await loadWorkflows(root)).workflows : [];
+    const workflowDef = workflowCatalog.find((w) => w.name === workflowName);
+    const workflowCompatible = (candidateRunner: RunnerId) =>
+      readOnly || workflowSupportsBackend(workflowDef, candidateRunner, workflowCatalog);
+    const agents = scope.manager.taskAgents?.filter((agent): agent is ManagerTaskAgent & { runner: RunnerId } => isRunnerId(agent.runner));
     const preferred = await this.runnerOf(scope.manager);
-    const candidates = agents?.filter((agent) => (!input.runner || agent.runner === input.runner)
+    const matching = agents?.filter((agent) => (!input.runner || agent.runner === input.runner)
       && (input.agentProfile === undefined || agent.agentProfile === input.agentProfile));
-    if (candidates?.length === 0) {
+    if (matching?.length === 0) {
       return { error: 'Choose an agent account from the manager’s selected accounts for new tasks', status: 403 };
     }
-    const selected = candidates?.find((agent) => agent.runner === preferred) ?? candidates?.[0];
-    const runner = selected?.runner ?? scope.manager.taskRunner ?? input.runner ?? preferred;
-    const agentProfile = selected ? selected.agentProfile : input.agentProfile;
+    const compatibleAgents = agents?.filter((agent) => workflowCompatible(agent.runner));
+    const candidates = matching?.filter((agent) => workflowCompatible(agent.runner));
+    if (matching && candidates?.length === 0) {
+      const refusal = noCompatibleRunnerRefusal(workflowDef, matching.map((agent) => agent.runner), workflowCatalog);
+      return { error: refusal ?? `No allowed agent supports workflow "${workflowName}"`, status: 400 };
+    }
+    const now = this.now();
+    let choice: TaskAgentChoice | undefined;
+    let fallbackOptions: AccountOption[] | undefined;
+    /** The runner picked when every listed account has capacity: --model/--effort are refused, not dropped, there. */
+    let firstRunner: string | undefined;
+    // Roles on the list switch on routing (spec 2026-11-25-manager-task-routing); none keeps the original order.
+    const roles = agents && routedByRoles(scope.manager) ? roleRouting(scope.manager) : undefined;
+    if (compatibleAgents && candidates) {
+      // The manager's settings are the default: a retried task's own account, then its own runner, then list order.
+      // With roles, list order is the order (Backup rows are used top to bottom).
+      const rank = (agent: ManagerTaskAgent) => (roles ? 0 : retry?.allowed && agent.runner === retry.runner && agent.agentProfile === retry.agentProfile ? 0 : agent.runner === preferred ? 1 : 2);
+      const ordered = [...candidates].sort((a, b) => rank(a) - rank(b));
+      const load = roles ? this.deps.accountLoad?.() : undefined;
+      const allowed = await Promise.all([...compatibleAgents].sort((a, b) => rank(a) - rank(b)).map(async (agent) => {
+        const option = await this.accountOption(agent.runner, agent.agentProfile, root);
+        if (!roles) return option;
+        const usage = fiveHourUsedPercent(option.runner, option.account, now);
+        return { ...option, role: agent.role ?? 'main', load: load?.get(`${option.runner}:${option.account}`) ?? 0, ...(usage !== undefined ? { usage } : {}) };
+      }));
+      const options = ordered.map((agent) => allowed.find((option) => option.runner === agent.runner && option.agentProfile === agent.agentProfile)!);
+      const own = roles && retry?.allowed && input.agentProfile === undefined
+        ? options.find((option) => option.runner === retry.runner && option.agentProfile === retry.agentProfile && option.role === 'main')
+        : undefined;
+      // A retry keeps its own Main account while it is open: its cache is warm.
+      const ownOpen = own && (own.until === undefined || own.until <= now) && (roles?.maxRunning === undefined || (own.load ?? 0) < roles.maxRunning);
+      choice = ownOpen ? { chosen: own, reason: `retry: its own account ${own.runner} · ${own.label}` } : chooseTaskAgent(options, {
+        explicitAccount: input.agentProfile !== undefined, fromSettings: true, allowed, now,
+        ...(roles ? { roles } : {}),
+        ...(input.runner && candidates.length < compatibleAgents.length ? { narrowedBy: `--runner ${input.runner}` } : {}),
+      });
+      firstRunner = options[0]?.runner;
+      const picked = choice.chosen;
+      // An explicit --runner or --account keeps a usage-limit fallback on that runner, as does "same agent only".
+      const sameRunner = input.runner !== undefined || input.agentProfile !== undefined || scope.manager.taskLimitSwitch === 'same-agent';
+      // The whole list, the task's own account included: admission skips whichever account just ran
+      // out, so a dispatched child on another listed account still falls back to this one.
+      // "Wait for the reset" records an empty list: the task keeps the reset-time auto-resume.
+      fallbackOptions = scope.manager.taskLimitSwitch === 'wait' ? [] : allowed.filter((option, index) => (!sameRunner || option.runner === picked.runner)
+        && allowed.findIndex((other) => other.runner === option.runner && other.account === option.account) === index);
+    }
+    const runner = choice?.chosen.runner ?? scope.manager.taskRunner ?? input.runner ?? preferred;
+    const agentProfile = choice ? choice.chosen.agentProfile : input.agentProfile;
     if (!isRunnerId(runner)) return { error: `unknown runner: ${runner}`, status: 400 };
+    if (!readOnly) {
+      const workflowRefusal = readOnlyWorkflowRefusal(workflowDef, runner, workflowCatalog);
+      if (workflowRefusal) return { error: workflowRefusal, status: 400 };
+    }
     const accountIssue = await this.accountIssue(runner, agentProfile);
     if (accountIssue) return accountIssue;
+    choice ??= chooseTaskAgent([await this.accountOption(runner, agentProfile, root)], { explicitAccount: agentProfile !== undefined, fromSettings: false, now });
+    // --model/--effort are checked on the runner the task really landed on. A runner the flags did not
+    // pin (a limit skip off the first listed runner, a retry on another runner) drops only what fails
+    // there; anywhere else a bad flag is refused with the valid choices, as before.
+    const unpinned = (firstRunner !== undefined && !input.runner && firstRunner !== runner)
+      || (retry?.runner !== undefined && retry.runner !== runner);
+    let carried = input;
     if (input.model || input.effort) {
       const issue = await this.modelIssue(runner, input.model, input.effort);
-      if (issue) return issue;
+      if (issue && !unpinned) return issue;
+      if (issue) {
+        // Dropped only when another allowed runner can use it: a flag the manager typed that no listed
+        // runner accepts (a typo) is refused with the valid choices, as when nothing moved. A retry's
+        // flags are the old run's, so they are only ever dropped.
+        const runners = retry ? [] as RunnerId[] : [...new Set((compatibleAgents ?? []).map((agent) => agent.runner))].filter((other) => other !== runner);
+        const usable = async (check: (other: RunnerId) => Promise<ManagerRefusal | undefined>) => {
+          for (const other of runners) if (!(await check(other))) return true;
+          return false;
+        };
+        const refusedHere = (model?: string, effort?: string) => this.modelIssue(runner, model, effort);
+        // Refused as if nothing had moved: the valid choices of the first listed runner, not the landed one.
+        const asFirst = (firstRunner ?? runner) as RunnerId;
+        if (!retry && input.model && (await refusedHere(input.model)) && !(await usable((other) => this.modelIssue(other, input.model, undefined)))) {
+          return (await this.modelIssue(asFirst, input.model, undefined)) ?? issue;
+        }
+        if (!retry && input.effort && (await refusedHere(undefined, input.effort)) && !(await usable((other) => this.modelIssue(other, undefined, input.effort)))) {
+          return (await this.modelIssue(asFirst, undefined, input.effort)) ?? issue;
+        }
+        const model = input.model && !(await this.modelIssue(runner, input.model, undefined)) ? input.model : undefined;
+        const effort = input.effort && !(await this.modelIssue(runner, model, input.effort)) ? input.effort : undefined;
+        carried = { ...input, model, effort };
+        const dropped = [input.model && !model && `--model ${input.model}`, input.effort && !effort && `--effort ${input.effort}`].filter(Boolean).join(' and ');
+        choice = { ...choice, reason: `${choice.reason}; ${dropped} dropped: not valid on ${runner}` };
+      }
     }
+    // Default models from Settings → Agents (when not locked) and per-row pins on `taskAgents`.
+    const modelsLocked = agentModelsLocked(root);
+    const projectConfig = !modelsLocked && root ? await loadConfig(root).catch(() => undefined) : undefined;
+    const defaultModelFor = (candidateRunner: RunnerId, candidateProfile?: string): string | undefined => {
+      if (modelsLocked) return undefined;
+      const row = agents?.find((agent) => agent.runner === candidateRunner && agent.agentProfile === candidateProfile);
+      if (row?.model) return row.model;
+      if (projectConfig?.defaultModelsAuto?.[candidateRunner]) return undefined;
+      return projectConfig?.defaultModels?.[candidateRunner];
+    };
+    const effectiveModel = carried.model ?? defaultModelFor(runner, agentProfile);
+    // A fallback entry carries the requested model only where that runner accepts it, else its row/settings default.
+    const modelValidOn = new Map<string, boolean>();
+    const fallback: Array<{ provider: RunnerId; profileId: string; model?: string }> | undefined = fallbackOptions && [];
+    for (const option of fallbackOptions ?? []) {
+      if (input.model && !modelValidOn.has(option.runner)) modelValidOn.set(option.runner, !(await this.modelIssue(option.runner, input.model, undefined)));
+      const entryModel = input.model
+        ? (modelValidOn.get(option.runner) ? input.model : undefined)
+        : defaultModelFor(option.runner, option.agentProfile);
+      fallback!.push({ provider: option.runner, profileId: option.account, ...(entryModel ? { model: entryModel } : {}) });
+    }
+    const agentNote = `Agent chosen by manager ${scope.manager.name}: ${choice.chosen.runner} · ${choice.chosen.label} — ${choice.reason}`;
     const prefix = `/p/${encodeURIComponent(input.projectId)}`;
+    // A dispatch root always gets its own worktree, which overrides a trunk-based project's in-place
+    // workspace: no Commit to the base branch, no auto-land. The project's model wins over the flag.
+    const dispatchIgnored = input.dispatch === true && (await this.inPlaceProject(prefix));
+    const dispatch = input.dispatch === true && !dispatchIgnored;
     // Before the request: anything the run does after it starts is news to this manager.
     const followedAt = this.iso();
     const response = await this.forward(`${prefix}/runs`, {
@@ -2725,10 +3499,17 @@ export class ManagerEngine {
         ...(readOnly ? { readOnly: true, enforceReadOnly: true } : {}),
         runner,
         ...(agentProfile !== undefined ? { agentProfile } : {}),
-        ...(input.model ? { model: input.model } : {}),
-        ...(input.effort ? { reasoningEffort: input.effort } : {}),
-        ...(input.dispatch ? { dispatch: {} } : {}),
+        ...(effectiveModel ? { model: effectiveModel } : {}),
+        ...(carried.effort ? { reasoningEffort: carried.effort } : {}),
+        ...(dispatch ? { dispatch: {} } : {}),
         startedByManager: { id: scope.manager.id, name: scope.manager.name },
+        managerAgent: {
+          note: agentNote.slice(0, 500),
+          ...(fallback ? { fallback: fallback.slice(0, 10) } : {}),
+          // The queue may move a routed task to an account that frees up; an explicit --account or
+          // --runner stays, since the queue's targets span every agent on the list.
+          ...(roles && input.agentProfile === undefined && input.runner === undefined ? { routed: true } : {}),
+        },
       },
     });
     if (!response.ok) return ManagerEngine.refusalOf(response);
@@ -2741,7 +3522,51 @@ export class ManagerEngine {
     this.rememberTaskSource(id, input.projectId, run.id);
     const named = `${input.title ?? ''}\n${input.task ?? ''}`;
     this.managerActed(id, { tasks: taskSources(named).map((task) => followKey(task.projectId, task.runId)), prs: prRefs(named) }, 'you started a task on it since');
-    return { projectId: input.projectId, runId: run.id, ...(forward ? { forwarded: forward.forwarded } : {}) };
+    return {
+      projectId: input.projectId,
+      runId: run.id,
+      ...(forward ? { forwarded: forward.forwarded } : {}),
+      ...(dispatchIgnored ? { notice: `dispatch ignored: ${input.projectId} runs tasks in place` } : {}),
+      agent: {
+        runner: choice.chosen.runner,
+        ...(choice.chosen.agentProfile !== undefined ? { agentProfile: choice.chosen.agentProfile } : {}),
+        account: choice.chosen.account,
+        label: choice.chosen.label,
+        reason: choice.reason,
+        ...(choice.queuedUntil !== undefined ? { queuedUntil: new Date(choice.queuedUntil).toISOString() } : {}),
+      },
+      ...(choice.warning ? { warning: choice.warning } : {}),
+    };
+  }
+
+  /** One account's usage-limit state, from the workspace holds; unknown = capacity. */
+  private async accountOption(runner: RunnerId, agentProfile: string | undefined, repoRoot?: string): Promise<AccountOption> {
+    const state = await this.deps.accountLimit?.(runner, agentProfile, repoRoot).catch(() => undefined);
+    return {
+      runner,
+      ...(agentProfile !== undefined ? { agentProfile } : {}),
+      account: state?.account ?? agentProfile ?? 'default',
+      label: state?.label ?? agentProfile ?? 'automatic account',
+      ...(state?.until !== undefined ? { until: state.until } : {}),
+    };
+  }
+
+  /** The accounts new tasks may use and their limit state, for `cez-manager status`. */
+  private async accountStates(manager: Manager, sources: ManagerProjectSource[]): Promise<ManagerAccountState[]> {
+    const root = sources.find((source) => source.available)?.root;
+    const agents = manager.taskAgents?.filter((agent): agent is ManagerTaskAgent & { runner: RunnerId } => isRunnerId(agent.runner))
+      ?? [{ runner: manager.taskRunner && isRunnerId(manager.taskRunner) ? manager.taskRunner : await this.runnerOf(manager) }];
+    const now = this.now();
+    return Promise.all(agents.map(async (agent) => {
+      const option = await this.accountOption(agent.runner, agent.agentProfile, root);
+      return {
+        runner: option.runner,
+        ...(option.agentProfile !== undefined ? { agentProfile: option.agentProfile } : {}),
+        account: option.account,
+        label: option.label,
+        ...(option.until !== undefined && option.until > now ? { outOfLimitsUntil: new Date(option.until).toISOString() } : {}),
+      };
+    }));
   }
 
   /** A live task takes the message; a finished one is continued with it. */
@@ -2812,7 +3637,7 @@ export class ManagerEngine {
     if (!run) return { error: 'task not found', status: 404 };
     if (run.startedByManager?.id !== manager.id && manager.cancelAnyTask !== true) {
       return {
-        error: `task ${input.runId} was not started by this manager, so it cannot cancel it. Ask the user to cancel it, or to allow "Cancel any task" in your settings`,
+        error: `task ${input.runId} was not started by this manager, so it cannot cancel it. Ask the user to cancel it, or to allow "Cancel or switch any task" in your settings`,
         status: 403,
       };
     }
@@ -2833,20 +3658,80 @@ export class ManagerEngine {
     };
   }
 
-  /** A failed or cancelled task started again as a new one: same objective, workflow, runner, model, effort. */
+  async switchTask(id: string, input: ManagerSwitchTaskInput): Promise<ManagerCreateTaskResponse | ManagerRefusal> {
+    const scope = await this.toolScope(id, input.projectId, true);
+    if ('error' in scope) return scope;
+    const run = findRun(scope.source?.runs() ?? [], input.runId);
+    if (!scope.source || !run) return { error: 'task not found', status: 404 };
+    return this.changeTaskAgent(scope.manager, scope.source.root, run, input);
+  }
+
+  private async changeTaskAgent(manager: Manager, repoRoot: string, run: RunRecord, input: ManagerSwitchTaskInput): Promise<ManagerCreateTaskResponse | ManagerRefusal> {
+    const { projectId } = input;
+    if (managerAccessOf(manager, projectId) === 'read') {
+      return { error: `${projectId} is read-only for this manager: it cannot switch task agents there`, status: 403 };
+    }
+    if (run.startedByManager?.id !== manager.id && manager.cancelAnyTask !== true) {
+      return { error: `task ${run.id} was not started by this manager. Ask the user to switch it, or to allow "Cancel or switch any task" in your settings`, status: 403 };
+    }
+    const current = taskAgentSelection(run, run.runner ?? (await loadConfig(repoRoot)).defaultRunner);
+    const runner = input.runner ?? current.runner;
+    if (!isRunnerId(runner)) return { error: `unknown runner: ${runner}`, status: 400 };
+    const currentAccount = runner === current.runner ? current.agentProfile : undefined;
+    const candidates = manager.taskAgents?.filter((agent) => agent.runner === runner);
+    // An account-less entry allows the project's resolved account, just as in fallback admission.
+    const automatic = candidates?.some((agent) => agent.agentProfile === undefined)
+      ? (await this.accountOption(runner, undefined, repoRoot)).account
+      : undefined;
+    const allowed = candidates?.map((agent) => agent.agentProfile ?? automatic ?? DEFAULT_AGENT_ACCOUNT_ID);
+    const preferredAccount = runner === current.runner ? currentAccount ?? automatic : undefined;
+    const agentProfile = input.agentProfile ?? (allowed
+      ? allowed.find((account) => account === preferredAccount) ?? allowed[0]
+      : currentAccount);
+    if ((allowed && (agentProfile === undefined || !allowed.includes(agentProfile)))
+      || (!allowed && manager.taskRunner && manager.taskRunner !== runner)) {
+      return { error: 'Choose an agent account from the manager’s selected accounts for new tasks', status: 403 };
+    }
+    const accountIssue = await this.accountIssue(runner, agentProfile);
+    if (accountIssue) return accountIssue;
+    // Send only explicit pins. The workflow resolves inherited pins independently for each step.
+    const { model, effort } = input;
+    const issue = model || effort ? await this.modelIssue(runner, model, effort) : undefined;
+    if (issue) return issue;
+    const response = await this.forward(`/p/${encodeURIComponent(projectId)}/runs/${encodeURIComponent(run.id)}/switch-agent`, {
+      method: 'POST',
+      body: {
+        runner, agentProfile, model,
+        reasoningEffort: effort,
+        changedBy: manager.name,
+      },
+    });
+    if (!response.ok) return ManagerEngine.refusalOf(response);
+    const { summary } = (await response.json()) as SwitchRunAgentResponse;
+    this.rememberTaskSource(manager.id, projectId, run.id);
+    this.managerActed(manager.id, { tasks: [followKey(projectId, run.id)] }, 'you switched that task’s agent since');
+    return { projectId, runId: run.id, notice: summary };
+  }
+
+  /** With agent flags, reopen the same failed task. A plain retry repeats the workflow from scratch. */
   async retryTask(id: string, input: ManagerRetryTaskInput): Promise<ManagerCreateTaskResponse | ManagerRefusal> {
     const scope = await this.toolScope(id, input.projectId, true);
     if ('error' in scope) return scope;
     const run = findRun(scope.source?.runs() ?? [], input.runId);
-    if (!run) return { error: 'task not found', status: 404 };
+    if (!scope.source || !run) return { error: 'task not found', status: 404 };
     if (run.status !== 'failed' && run.status !== 'cancelled') {
       return { error: `task ${input.runId} is ${run.status}: only a failed or cancelled task can be retried. Use \`task say\` to continue it`, status: 409 };
+    }
+    if (input.runner || input.agentProfile || input.model || input.effort) {
+      return this.changeTaskAgent(scope.manager, scope.source.root, run, input);
     }
     if (run.workflow === '(planned)') return { error: 'an inline plan cannot be retried: start a new task with its objective instead', status: 409 };
     const effort = run.reasoningEffort && (['low', 'medium', 'high', 'max'] as const).find((level) => level === run.reasoningEffort);
     const allowed = scope.manager.taskAgents
       ? scope.manager.taskAgents.some((agent) => agent.runner === run.runner && agent.agentProfile === run.agentProfile)
       : !scope.manager.taskRunner || scope.manager.taskRunner === run.runner;
+    // With an allowed-accounts list the retry takes the manager's default (limit-aware), its old account first.
+    const pinned = allowed && !scope.manager.taskAgents;
     const created = await this.createTask(id, {
       projectId: input.projectId,
       task: run.task,
@@ -2854,11 +3739,11 @@ export class ManagerEngine {
       allowPlaceholder: true,
       workflow: run.workflow,
       ...(run.titleOrigin === 'user' ? { title: run.title } : {}),
-      ...(allowed && run.runner ? { runner: run.runner } : {}),
-      ...(allowed && run.agentProfile ? { agentProfile: run.agentProfile } : {}),
+      ...(pinned && run.runner ? { runner: run.runner } : {}),
+      ...(pinned && run.agentProfile ? { agentProfile: run.agentProfile } : {}),
       ...(run.model ? { model: run.model } : {}),
       ...(effort ? { effort } : {}),
-    });
+    }, { runner: run.runner, agentProfile: run.agentProfile, allowed });
     if (!('error' in created)) this.managerActed(id, { tasks: [followKey(input.projectId, run.id)] }, 'you retried that task since');
     return created;
   }
@@ -2927,7 +3812,7 @@ export class ManagerEngine {
     this.deps.telemetry?.track('manager_action_proposed', managerActionLabel(action));
     this.emitChange(id);
     // An approval always waits on the user, so it never needs the agent's judgement.
-    this.alert(id, message, `Needs your approval: ${describe(action)}`);
+    this.alert(id, message, `Needs your approval: ${describeAction(action)}`, 'approval');
     return { actionId: message.id, status: 'pending', ...(replaced.length ? { replaced } : {}), ...(alsoWaitingIn.length ? { alsoWaitingIn } : {}) };
   }
 
@@ -3042,7 +3927,7 @@ export class ManagerEngine {
     // Deleted while the action ran: writing the result would recreate its directory.
     if (!this.deps.store.get(id)) return;
     this.publish(id, { ...message, status, result }, true);
-    this.addNote(id, `${describe(message.action)}: ${result}`);
+    this.addNote(id, `${describeAction(message.action)}: ${result}`);
     this.emitChange(id);
   }
 
@@ -3261,7 +4146,7 @@ const replacedBy = (action: ManagerActionRequest): string => {
   return 'Replaced by a newer proposal';
 };
 
-const describe = (action: ManagerActionRequest): string => {
+export const describeAction = (action: ManagerActionRequest): string => {
   if (action.type === 'merge-pr') return `Merge of ${action.projectId}#${action.number}`;
   if (action.type === 'enable-automation') return `Enabling automation ${action.name ?? action.automationId}`;
   if (action.type === 'connector-call') return `Calling ${action.tool} on ${action.connectorName ?? action.connector}`;

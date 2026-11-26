@@ -35,6 +35,9 @@ import type {
   diskGuardStatusSchema,
   hostUsageSchema,
   accountUsageResponseSchema,
+  planUsageReportSchema,
+  planUsageConsumersResponseSchema,
+  planUsageTrackingSchema,
   openProjectInResponseSchema,
   openTargetsResponseSchema,
   providerConnectResponseSchema,
@@ -146,6 +149,9 @@ describe('src/contract projects/workspace schemas match the routes exactly', () 
   type DeleteUpload200 = InferResponseType<(typeof client.api.v1.workspace.uploads)[':uploadId']['$delete'], 200>;
   type HostUsage200 = InferResponseType<(typeof client.api.v1.workspace)['host-usage']['$get'], 200>;
   type AccountUsage200 = InferResponseType<(typeof client.api.v1.workspace)['account-usage']['$get'], 200>;
+  type PlanUsage200 = InferResponseType<(typeof client.api.v1.workspace)['plan-usage']['$get'], 200>;
+  type PlanUsageConsumers200 = InferResponseType<(typeof client.api.v1.workspace)['plan-usage']['consumers']['$get'], 200>;
+  type PlanUsageTracking200 = InferResponseType<(typeof client.api.v1.workspace)['plan-usage']['tracking']['$get'], 200>;
   type DiskGuard200 = InferResponseType<(typeof client.api.v1.workspace)['disk-guard']['$get'], 200>;
   type UiState200 = InferResponseType<(typeof client.api.v1)['ui-state']['$get'], 200>;
   type SetUiState200 = InferResponseType<(typeof client.api.v1)['ui-state']['$put'], 200>;
@@ -280,6 +286,9 @@ describe('src/contract projects/workspace schemas match the routes exactly', () 
     Assert<Exact<z.input<typeof brandingLogoUploadSchema>, BrandingLogoUploadBody>>,
     Assert<Exact<z.infer<typeof hostUsageSchema>, HostUsage200>>,
     Assert<Exact<z.infer<typeof accountUsageResponseSchema>, AccountUsage200>>,
+    Assert<Exact<z.infer<typeof planUsageReportSchema>, PlanUsage200>>,
+    Assert<Exact<z.infer<typeof planUsageConsumersResponseSchema>, PlanUsageConsumers200>>,
+    Assert<Exact<z.infer<typeof planUsageTrackingSchema>, PlanUsageTracking200>>,
     Assert<Exact<z.infer<typeof diskGuardStatusSchema>, DiskGuard200>>,
     // the two open GUI-pref bags — GET and the merged answer the PUT sends back
     Assert<ExactOpen<z.infer<typeof uiStateSchema>, UiState200>>,

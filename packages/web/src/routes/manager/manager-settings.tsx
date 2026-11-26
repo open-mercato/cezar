@@ -1,4 +1,4 @@
-import { BellIcon, BotIcon, ClockIcon, MessageSquareTextIcon, OctagonXIcon, PlugIcon, PlusIcon, RefreshCwIcon, ReplyIcon, SettingsIcon, TerminalIcon, Trash2Icon, UserRoundIcon } from 'lucide-react'
+import { BellIcon, BotIcon, BrainIcon, ClockIcon, MessageSquareTextIcon, OctagonXIcon, PlugIcon, PlusIcon, RefreshCwIcon, ReplyIcon, SettingsIcon, TerminalIcon, Trash2Icon, UserRoundIcon } from 'lucide-react'
 import { useCallback, useImperativeHandle, useRef, useState, type ReactNode, type Ref } from 'react'
 
 import { checkManager, useDeleteManager, useUpdateManager } from '@/api/managers'
@@ -31,6 +31,7 @@ import { MascotPicker } from './mascot-picker'
 
 import { SheetContent } from './manager-approval'
 import { ConnectorsDialog } from './manager-connectors'
+import { MemoryDialog } from './manager-memory'
 import { ShellAccessDialog } from './manager-shell-access'
 import { PICKER_TRIGGER, RefreshPicker, ProjectsPicker, type ManagerPatch } from './manager-pickers'
 import { ManagerAgentDialog } from './manager-agent-dialog'
@@ -346,6 +347,8 @@ export function useCheckNow(managerId: string): () => void {
 export interface ManagerSettingsHandle {
   openAccount: () => void
   openJobs: () => void
+  /** The (i) popover's "Agent settings": the Manager agent dialog. */
+  openAgent: () => void
   /** A sidebar row's Settings…: the gear menu itself. */
   openMenu: () => void
 }
@@ -354,7 +357,7 @@ export interface ManagerSettingsHandle {
 export function ManagerSettings({ manager, onPatch, ref }: { manager: ManagerSummary; onPatch: (patch: ManagerPatch) => void; ref?: Ref<ManagerSettingsHandle> }) {
   const update = useUpdateManager(manager.id)
   const remove = useDeleteManager(manager.id)
-  const [dialog, setDialog] = useState<'agent' | 'rename' | 'jobs' | 'connectors' | 'shell' | 'prompts' | 'delete' | null>(null)
+  const [dialog, setDialog] = useState<'agent' | 'rename' | 'jobs' | 'connectors' | 'memory' | 'shell' | 'prompts' | 'delete' | null>(null)
   const [menuOpen, setMenuOpen] = useState(false)
   const connectorCount = Object.values(manager.connectors ?? {}).filter((grant) => grant.level !== 'off').length
   const trigger = useRef<HTMLButtonElement>(null)
@@ -366,9 +369,10 @@ export function ManagerSettings({ manager, onPatch, ref }: { manager: ManagerSum
       setDialog('agent')
     },
     openJobs: () => { setMenuOpen(false); setDialog('jobs') },
+    openAgent: () => { setFocusAccount(false); setMenuOpen(false); setDialog('agent') },
     openMenu: () => setMenuOpen(true),
   }), [])
-  const openDialog = (next: 'agent' | 'rename' | 'jobs' | 'connectors' | 'shell' | 'prompts' | 'delete') => {
+  const openDialog = (next: 'agent' | 'rename' | 'jobs' | 'connectors' | 'memory' | 'shell' | 'prompts' | 'delete') => {
     setFocusAccount(false)
     setMenuOpen(false)
     setDialog(next)
@@ -422,9 +426,9 @@ export function ManagerSettings({ manager, onPatch, ref }: { manager: ManagerSum
           </label>
           <label className="flex min-h-8 w-full items-center gap-1.5 px-1.5 text-sm text-muted-foreground pointer-coarse:min-h-11">
             <OctagonXIcon aria-hidden="true" className="size-3.5 shrink-0" />
-            <span className="flex-1" title="Let it cancel tasks it did not start, in its write projects">Cancel any task</span>
+            <span className="flex-1" title="Let it cancel or switch the agent of tasks it did not start in its write projects. A switch can move work to another vendor or use another account’s quota.">Cancel or switch any task</span>
             <Switch
-              aria-label="Cancel any task"
+              aria-label="Cancel or switch any task"
               checked={manager.cancelAnyTask === true}
               onCheckedChange={(cancelAnyTask) => update.mutate({ cancelAnyTask })}
             />
@@ -437,6 +441,7 @@ export function ManagerSettings({ manager, onPatch, ref }: { manager: ManagerSum
           <MenuRow icon={<PlugIcon aria-hidden="true" />} onClick={() => openDialog('connectors')}>
             Connectors{connectorCount > 0 ? ` (${connectorCount})` : ''}…
           </MenuRow>
+          <MenuRow icon={<BrainIcon aria-hidden="true" />} onClick={() => openDialog('memory')}>Memory…</MenuRow>
           <MenuRow icon={<TerminalIcon aria-hidden="true" />} onClick={() => openDialog('shell')}>
             Shell access{manager.bashDenials?.length ? ` (${manager.bashDenials.length} refused)` : ''}…
           </MenuRow>
@@ -470,6 +475,7 @@ export function ManagerSettings({ manager, onPatch, ref }: { manager: ManagerSum
       {dialog === 'connectors' ? (
         <ConnectorsDialog manager={manager} open onOpenChange={closeDialog} onCloseAutoFocus={returnFocus} onSave={(connectors) => update.mutateAsync({ connectors })} />
       ) : null}
+      {dialog === 'memory' ? <MemoryDialog manager={manager} open onOpenChange={closeDialog} onCloseAutoFocus={returnFocus} /> : null}
       {dialog === 'shell' ? (
         <ShellAccessDialog manager={manager} open onOpenChange={closeDialog} onCloseAutoFocus={returnFocus} onUpdate={(patch) => update.mutateAsync(patch)} />
       ) : null}

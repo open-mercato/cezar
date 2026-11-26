@@ -4,8 +4,9 @@ import { threadId } from 'node:worker_threads';
 import { hostname, tmpdir, uptime } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { currentTaskPr } from '../attention/list.ts';
 import { readRunIndexFromDisk } from './run-index.ts';
-import { reconcileLoadedRun, RunStore } from './store.ts';
+import { prCheckoutDir, reconcileLoadedRun, RunStore } from './store.ts';
 
 import type { RunRecord } from './store.ts';
 
@@ -169,6 +170,14 @@ describe('RunStore — directional usage persistence', () => {
     expect(store.getRun(run.id)?.liveUsage).toMatchObject({ limits, contextTokens: 5000, contextWindow: 200000 });
     store.flush();
     expect(RunStore.open(dataDir).getRun(run.id)?.liveUsage).toMatchObject({ limits, contextTokens: 5000 });
+  });
+
+  it('keeps per-request and per-turn token splits off the record (they are manager turn stats)', () => {
+    const store = RunStore.open(dataDir);
+    const run = store.createRun({ title: 'live', workflow: 'quick-task', task: 'live', steps: [] });
+    store.setLiveUsage(run.id, { contextTokens: 5000, cacheWriteTokens: 4000 });
+    store.setLiveUsage(run.id, { turnTokens: { cacheReadTokens: 1, cacheWriteTokens: 2, outputTokens: 3 } });
+    expect(store.getRun(run.id)?.liveUsage).toEqual({ contextTokens: 5000, at: expect.any(String) });
   });
 
   it('keeps aggregates absent for old records and incomplete invocation or turn checkpoints', () => {
@@ -1014,6 +1023,28 @@ describe('RunStore — agent-declared marker refs (spec 2026-07-18-task-ref-mark
     });
     expect(store.getRun(run.id)?.prRefs).toHaveLength(1);
     expect(store.getRun(run.id)?.prRefs?.[0]?.url).toBe('https://github.com/open-mercato/cezar/pull/42');
+  });
+
+  it('declaring a PR again (CEZ:PR) makes it the task’s current PR (spec 2026-11-23-needs-you-triage)', () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      vi.setSystemTime(new Date('2026-11-20T10:00:00.000Z'));
+      const { store, run } = freshRun();
+      store.applyMarkerRefs(run.id, { pr: 10 });
+      vi.setSystemTime(new Date('2026-11-21T10:00:00.000Z'));
+      store.recordPrRef(run.id, { number: 11, url: 'https://github.com/o/r/pull/11', origin: 'created' });
+      expect(currentTaskPr(store.getRun(run.id)!)).toBe(11);
+      vi.setSystemTime(new Date('2026-11-22T10:00:00.000Z'));
+      store.applyMarkerRefs(run.id, { pr: 10 });
+      expect(store.getRun(run.id)?.prRefs?.find((ref) => ref.number === 10)?.at).toBe('2026-11-22T10:00:00.000Z');
+      expect(currentTaskPr(store.getRun(run.id)!)).toBe(10);
+      // A patch re-sending the created URL is not a new declaration.
+      vi.setSystemTime(new Date('2026-11-23T10:00:00.000Z'));
+      store.updateRun(run.id, { pullRequestUrl: 'https://github.com/o/r/pull/11' });
+      expect(currentTaskPr(store.getRun(run.id)!)).toBe(10);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('preserves legacy scalar associations before a replacement patch is applied', () => {
@@ -2380,8 +2411,11 @@ describe('RunStore — per-record salvage of records this version cannot read (P
     write([unreadable, readable]);
     const store = RunStore.open(dataDir); // creates <dataDir>/runs
     writeFileSync(join(dataDir, 'runs', 'future-1.ndjson'), '{"type":"note"}\n', 'utf8');
+    mkdirSync(join(prCheckoutDir(dataDir, 'future-1'), 'tree'), { recursive: true });
     expect(store.deleteRun('future-1')).toBe(true);
     expect(existsSync(join(dataDir, 'runs', 'future-1.ndjson'))).toBe(false);
+    // A review's exported PR goes with the task.
+    expect(existsSync(prCheckoutDir(dataDir, 'future-1'))).toBe(false);
     store.flush();
     expect(onDisk().map((r) => r.id)).toEqual(['good-1']);
     expect(store.deleteRun('future-1')).toBe(false);

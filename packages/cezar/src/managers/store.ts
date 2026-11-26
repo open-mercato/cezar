@@ -37,6 +37,18 @@ import { atomicWriteJsonSync } from '../workspace/config.ts';
  * write must show up here without an event.
  */
 
+const sessionMetaSchema = z
+  .object({
+    startedAt: z.string(),
+    lastAt: z.string(),
+    turns: z.number().int().min(0),
+    contextTokens: z.number().int().min(0).optional(),
+    /** The open cards this transcript was last shown in full (`openCardsDigest`). */
+    cardsDigest: z.string().optional(),
+  })
+  .optional()
+  .catch(undefined);
+
 const stateSchema = z
   .object({
     sessionId: z.string().optional().catch(undefined),
@@ -45,6 +57,9 @@ const stateSchema = z
     jobSessionId: z.string().optional().catch(undefined),
     /** `runner|account` the session belongs to: a transcript does not follow either change. */
     sessionKey: z.string().optional().catch(undefined),
+    /** Per transcript: when it started, its last turn, how many turns and how much context it holds
+     *  (spec 2026-11-21-manager-short-sessions-and-memory § 2.2–2.3). */
+    sessions: z.object({ chat: sessionMetaSchema, watch: sessionMetaSchema, job: sessionMetaSchema }).catch({}),
     lastCheckAt: z.string().optional().catch(undefined),
     /** Attention keys already spoken about, → when. A key that disappears is forgotten. */
     reported: z.record(z.string(), z.string()).catch({}),
@@ -103,6 +118,33 @@ const stateSchema = z
         messageId: z.string(),
         chat: z.object({ text: z.string(), paths: z.array(z.string()), messageIds: z.array(z.string()) }),
       })
+      .optional()
+      .catch(undefined),
+    /** The agent chain (spec 2026-11-25-manager-agent-chain): the row answering now and the rows that cannot. */
+    chain: z
+      .object({
+        /** Absent = #1. */
+        active: z.object({ slot: z.number().int().min(0).max(3), reason: z.string(), since: z.string() }).optional(),
+        /** `runner|account` → why that row is skipped and until when. */
+        holds: z.record(z.string(), z.object({
+          until: z.string(),
+          reason: z.enum(['usage-limit', 'held', 'auth', 'billing', 'missing-cli']),
+          streak: z.number().int().min(1).optional(),
+          accountKey: z.string().optional(),
+        })).catch({}),
+      })
+      .optional()
+      .catch(undefined),
+    /** Transcripts of the other chain rows, by session key: going back resumes a still-young one. */
+    parkedSessions: z
+      .record(z.string(), z.object({
+        sessionId: z.string().optional(),
+        watchSessionId: z.string().optional(),
+        jobSessionId: z.string().optional(),
+        sessions: z.object({ chat: sessionMetaSchema, watch: sessionMetaSchema, job: sessionMetaSchema }).catch({}),
+        /** The chat's last seq when it was parked: a reply after it means the transcript missed turns. */
+        parkedSeq: z.number().int().optional(),
+      }))
       .optional()
       .catch(undefined),
   })

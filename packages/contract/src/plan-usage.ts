@@ -45,6 +45,34 @@ export type PlanUsageConsumerKind = z.infer<typeof planUsageConsumerKindSchema>;
 export const planUsageManagerPartSchema = z.enum(['chat', 'watch', 'job']);
 export type PlanUsageManagerPart = z.infer<typeof planUsageManagerPartSchema>;
 
+/** One manager turn's shape (spec 2026-11-21-manager-short-sessions-and-memory § 2.3): what a
+ *  spike is made of. `fresh`: the turn started a new session; `idleMs`: since that session's last turn. */
+export const planUsageTurnStatsSchema = z.object({
+  requests: z.number().int().nonnegative(),
+  contextFirst: z.number().int().nonnegative(),
+  contextPeak: z.number().int().nonnegative(),
+  toolResultChars: z.number().int().nonnegative(),
+  tools: z.object({
+    route: z.number().int().nonnegative(),
+    look: z.number().int().nonnegative(),
+    own: z.number().int().nonnegative(),
+    write: z.number().int().nonnegative(),
+  }),
+  fresh: z.boolean(),
+  sessionTurn: z.number().int().positive(),
+  idleMs: z.number().int().nonnegative().optional(),
+  /** The turn's own prompt-cache reads and writes and its output, when the runner reports them. */
+  cacheReadTokens: z.number().int().nonnegative().optional(),
+  cacheWriteTokens: z.number().int().nonnegative().optional(),
+  outputTokens: z.number().int().nonnegative().optional(),
+  /** Its first request wrote more than half its context to the cache: the history was re-cached. */
+  cold: z.boolean().optional(),
+  /** The first 8 characters of the agent session it ran in. */
+  session: z.string().max(64).optional(),
+  usd: z.number().finite().nonnegative().optional(),
+});
+export type PlanUsageTurnStats = z.infer<typeof planUsageTurnStatsSchema>;
+
 export const planUsageConsumerSchema = z.object({
   /** `run:<projectId>/<runId>`, `mgr:<managerId>` or `internal:<purpose>`. */
   id: z.string(),
@@ -69,8 +97,13 @@ export const planUsageConsumerSchema = z.object({
   turns: z.object({ chat: z.number().int().nonnegative(), watch: z.number().int().nonnegative(), job: z.number().int().nonnegative() }).optional(),
   /** Manager watch checks whose reply reported nothing new. */
   quietWatchTurns: z.number().int().nonnegative().optional(),
-  /** Manager only: estimate per assistant message id (the per-reply footnote). */
-  messages: z.array(z.object({ messageId: z.string(), part: planUsageManagerPartSchema, estimatePp: pp })).optional(),
+  /** Manager only: estimate per turn, keyed by its assistant message id — the popover's largest turns,
+   *  kept to debug a spike (spec 2026-11-20-manager-plan-usage-popover). `at`: when the turn began. */
+  messages: z.array(z.object({
+    messageId: z.string(), part: planUsageManagerPartSchema, at: iso, estimatePp: pp, aloneInferredPp: pp, sharedEstimatePp: pp,
+    /** The turn's shape (spec 2026-11-21-manager-short-sessions-and-memory § 2.3). */
+    turn: planUsageTurnStatsSchema.optional(),
+  })).optional(),
 });
 export type PlanUsageConsumer = z.infer<typeof planUsageConsumerSchema>;
 

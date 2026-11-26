@@ -102,3 +102,24 @@ export function isUsageWindowBlocking(window: UsageWindow, now = Date.now()): bo
   return (window.status === 'blocked' || (window.usedPercent ?? 0) >= 100) && window.observedAt <= now &&
     window.resetsAt !== null && window.resetsAt > now;
 }
+
+/** A reading older than this says nothing about the account now. */
+const FRESH_READING_MS = 30 * 60_000;
+
+/**
+ * The newest five-hour used % cezar observed for an account, or `undefined` when the reading is
+ * stale, belongs to a window that already reset, or was never taken. A tie-break only
+ * (spec 2026-11-25-manager-task-routing): unknown counts as equal, never as busy.
+ */
+export function fiveHourUsedPercent(provider: string, accountId: string, now = Date.now()): number | undefined {
+  let newest: UsageWindow | undefined;
+  for (const snapshot of read(join(cezarHomeDir(), 'usage-windows.json'))) {
+    if (snapshot.binding.provider !== provider || snapshot.binding.accountId !== accountId) continue;
+    for (const window of snapshot.windows) {
+      if (window.kind !== 'five-hour' || window.usedPercent === null || window.applicability !== 'all') continue;
+      if (!newest || window.observedAt > newest.observedAt) newest = window;
+    }
+  }
+  if (!newest || now - newest.observedAt > FRESH_READING_MS || (newest.resetsAt !== null && newest.resetsAt <= now)) return undefined;
+  return newest.usedPercent ?? undefined;
+}

@@ -13,17 +13,29 @@ sources:
   - label: "Specification"
     path: .ai/specs/2026-07-29-agent-profiles.md
     commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+  - label: "Add account from the cockpit"
+    path: .ai/specs/2026-11-24-add-account-in-cockpit.md
 ---
 Each profile has its own agent configuration directory. This lets you use several signed-in accounts from the same provider.
 
 ## Where to find it
 
-Settings → Global → Agent accounts
+Settings → Agents → Accounts → **Add account**. The task and manager account pickers also offer **Add account…**.
 
 ## How to use it
 
-1. Open Settings → Agent accounts and add an account.
-2. Set up a separate profile directory and sign in through the agent's CLI using that directory.
-3. Select the account for the project that should use it.
+1. Click **Add account**, pick the agent (Claude Code, Codex, OMP or Kimi) and name the account.
+2. cezar creates a private folder for it under `~/.cezar/agent-homes/` and starts the agent's own sign-in there. Your default CLI login is not touched.
+3. Copy the sign-in link into the browser profile you use for that account. cezar never opens a browser for you. If the agent shows a code, paste it back into cezar, or enter the device code shown in cezar on the agent's page.
+4. cezar checks that the account works and shows who signed in, with its plan and usage.
+5. Select the account for the project, task or manager that should use it.
 
-> **Good to know**: Each account has a separate provider configuration directory. Account editing is disabled by default in remote mode. A trusted self-hosted installation can enable it with `CEZ_REMOTE_AGENT_ACCOUNTS=1`.
+To use a folder you already signed in to from a terminal, choose **Advanced: use a folder that is already signed in** in step 1.
+
+OMP and Kimi can only sign in inside a terminal. On this computer cezar opens one for you. On a phone, finish the sign-in on the computer, then press **Check again**.
+
+The phone app can add accounts the same way. It never sees or sends folder paths, and it can remove only the accounts cezar created.
+
+Removing an account cezar created signs it out and deletes its folder. Removing an account at a folder you chose only removes it from cezar's list.
+
+> **Good to know**: Each account has a separate provider configuration directory. A sign-in that is never finished is cleaned up after 24 hours. Account editing is disabled by default in remote mode. A trusted self-hosted installation can enable it with `CEZ_REMOTE_AGENT_ACCOUNTS=1`.

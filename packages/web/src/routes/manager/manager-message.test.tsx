@@ -807,3 +807,31 @@ describe('ManagerMessageRow — expired login (spec 2026-11-18-inline-account-re
     expect(screen.getByText(/Reconnected Claude Code · Default · resumed/)).toBeTruthy()
   })
 })
+
+describe('the reply footnote (restored 2026-11-22)', () => {
+  const usage = { pp: 0.8, alonePp: 0.8, windows: ['Claude · default · 5-hour limit 10:00–15:00'] }
+  const renderWith = (message: ManagerMessage, planUsage?: typeof usage) => {
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } })
+    client.setQueryData(workspaceQueryKeys.projects, { projects: [], bootProject: 'alpha', projectsDir: '' })
+    return render(
+      <QueryClientProvider client={client}>
+        <MemoryRouter>
+          <ManagerMessageRow message={message} origin={origin} onDecide={vi.fn()} {...(planUsage ? { planUsage } : {})} />
+        </MemoryRouter>
+      </QueryClientProvider>,
+    )
+  }
+
+  it('shows under a finished reply what it cost', () => {
+    renderWith(assistantMessage(3, { text: 'Merged.' }), usage)
+    expect(screen.getByText(/^This reply ≈ 0.8% of 5h/)).toBeTruthy()
+  })
+
+  it('waits for a streaming reply to finish, and shows nothing without a ledger entry', () => {
+    const { container } = renderWith(assistantMessage(4, { text: 'Work', streaming: true }), usage)
+    expect(container.querySelector('[data-slot="manager-reply-usage"]')).toBeNull()
+    cleanup()
+    renderWith(assistantMessage(5, { text: 'Done.' }))
+    expect(document.querySelector('[data-slot="manager-reply-usage"]')).toBeNull()
+  })
+})

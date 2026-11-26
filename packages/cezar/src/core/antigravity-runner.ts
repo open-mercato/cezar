@@ -16,6 +16,7 @@ import { buildChildEnv } from './agent-env.ts';
 import { disclaimedCommand } from './disclaim-spawn.ts';
 import { readNdjson } from './ndjson.ts';
 import { createAntigravityUiState, mapAntigravityMessage } from './antigravity-ui-mapper.ts';
+import { createAntigravityToolGuard, type AntigravityToolGuard } from './antigravity-tool-guard.ts';
 import { armInactivityDeadline, inactivityTimeoutMessage } from './inactivity-deadline.ts';
 
 const DEFAULT_TIMEOUT_MS = 30 * 60_000;
@@ -40,11 +41,16 @@ export interface AntigravityRunnerOptions {
  * opening message travels on stdin — never on the command line, which Windows caps at 32K chars.
  * `-p=` (an EMPTY print prompt) must stay last: agy's `-p` takes the next argv word as its value.
  */
-export function buildAntigravityArgs(spec: AgentRunSpec): string[] {
+export function buildAntigravityArgs(
+  spec: AgentRunSpec,
+  guard?: Pick<AntigravityToolGuard, 'settingsJson' | 'hookDir'>,
+): string[] {
   const args = ['--input-format', 'stream-json', '--output-format', 'stream-json', '--dangerously-skip-permissions'];
   if (spec.model?.trim()) args.push('--model', spec.model.trim());
   if (spec.resume && spec.sessionId) args.push('--conversation', spec.sessionId);
+  if (guard?.settingsJson) args.push('--settings', guard.settingsJson);
   for (const dir of spec.additionalDirectories ?? []) args.push('--add-dir', dir);
+  if (guard?.hookDir) args.push('--add-dir', guard.hookDir);
   return [...args, '-p='];
 }
 
@@ -86,7 +92,8 @@ export class AntigravityRunner implements AgentRunner {
   startSession(spec: AgentRunSpec, onEvent?: (event: AgentEvent) => void, opts: SessionOptions = {}): AgentSession {
     assertReasoningEffortSupported('antigravity', spec.reasoningEffort);
     const env = buildChildEnv({ backend: this.backend, extraEnv: spec.env });
-    const args = buildAntigravityArgs(spec);
+    const guard = createAntigravityToolGuard(spec);
+    const args = buildAntigravityArgs(spec, guard);
     // The dry-run mock is a node script; on Windows `disclaimedCommand` already routes scripts to
     // node, elsewhere it relies on the shebang — be explicit so a non-executable checkout works.
     const script = /\.[cm]?js$/.test(this.bin);
@@ -239,6 +246,7 @@ export class AntigravityRunner implements AgentRunner {
       }
 
       const exitCode = await waitForExit(child);
+      guard?.cleanup();
       if (killTimer) clearTimeout(killTimer);
       const fail = (message: string, reason: 'error' | 'timeout' = 'error', reported = false): never => {
         if (!reported) emit({ type: 'error', message });

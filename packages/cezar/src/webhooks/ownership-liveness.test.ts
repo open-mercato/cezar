@@ -175,3 +175,44 @@ it('keeps an unverifiable published owner fenced', async () => {
   await expect(acquireOwnership(dir)).rejects.toThrow('Cannot verify process identity');
   expect(lockToken(dir)).toBe(OWNER);
 });
+
+// #2398: a renamed host (DHCP/VPN toggle) must not wedge a dead owner's lock.
+describe('renamed host, same kernel', () => {
+  const RENAMED = 'renamed-host.example';
+  beforeEach(() => { probe.own = { pid: 4242, start: '1', boot: BOOT_A }; });
+
+  it('reclaims a dead owner whose host differs but whose stable boot ID matches', async () => {
+    const dir = scratch();
+    ownerAt(dir, { host: RENAMED, boot: BOOT_A, start: '5' });
+
+    const owner = await acquireOwnership(dir);
+    expect(owner?.recovered).toBe(true);
+    await owner!.release();
+  });
+
+  it('still keeps a live owner on the renamed host', async () => {
+    const dir = scratch();
+    ownerAt(dir, { host: RENAMED, boot: BOOT_A, start: '5' });
+    probe.live.set(777, '5');
+
+    expect(await acquireOwnership(dir)).toBeUndefined();
+    expect(lockToken(dir)).toBe(OWNER);
+  });
+
+  it('still throws for another host with a different boot ID', async () => {
+    const dir = scratch();
+    ownerAt(dir, { host: RENAMED, boot: BOOT_B, start: '5' });
+
+    await expect(acquireOwnership(dir)).rejects.toThrow('Cannot verify foreign owner identity');
+    expect(lockToken(dir)).toBe(OWNER);
+  });
+
+  it('still throws on another host with an equal non-UUID (Windows) boot token', async () => {
+    probe.own = { pid: 4242, start: '133800000000000000', boot: '133600000000000000' };
+    const dir = scratch();
+    ownerAt(dir, { host: RENAMED, boot: '133600000000000000', start: WIN_START });
+
+    await expect(acquireOwnership(dir)).rejects.toThrow('Cannot verify foreign owner identity');
+    expect(lockToken(dir)).toBe(OWNER);
+  });
+});

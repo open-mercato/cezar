@@ -79,6 +79,7 @@ function taskRow(run: RunRecord, childCount: number): ManagerSnapshotTask {
     ...pullRequestOf(run),
     ...(run.cancelReason ? { cancelReason: run.cancelReason } : {}),
     ...(run.cancelledBy ? { cancelledBy: run.cancelledBy } : {}),
+    ...(run.agentSwitch ? { agentSwitch: run.agentSwitch.summary } : {}),
   };
 }
 
@@ -119,6 +120,19 @@ export function snapshotTasks(runs: RunRecord[]): ManagerSnapshotTask[] {
   const counts = childCounts(runs);
   const open = runs.filter((run) => !run.archived && !run.dispatch?.parentRunId).sort(byLastActivityDesc);
   return open.slice(0, TASK_LIMIT).map((run) => taskRow(run, counts.get(run.id) ?? 0));
+}
+
+/** Finished tasks a compact listing still shows per project, newest first. */
+const RECENT_FINISHED = 20;
+const FINISHED = new Set(['done', 'cancelled']);
+
+/** Every unfinished task, plus the newest finished ones (spec 2026-11-21 § 2.4). */
+export function recentTasks<T extends { status: string; lastActivityAt?: string }>(tasks: T[]): { shown: T[]; hidden: number } {
+  const finished = tasks.filter((task) => FINISHED.has(task.status))
+    .sort((a, b) => (b.lastActivityAt ?? '').localeCompare(a.lastActivityAt ?? ''));
+  const kept = new Set(finished.slice(0, RECENT_FINISHED));
+  const shown = tasks.filter((task) => !FINISHED.has(task.status) || kept.has(task));
+  return { shown, hidden: tasks.length - shown.length };
 }
 
 /** A run by its id, or by a prefix of at least eight characters that names only it (the branch's `cez/<id8>`). */

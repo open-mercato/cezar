@@ -1,3 +1,4 @@
+import { hasWorkflowGraph } from '@/lib/has-workflow-graph'
 import '@xyflow/react/dist/style.css'
 
 import {
@@ -110,7 +111,8 @@ export function TaskGraphRoute() {
 
 export function TaskGraphView({ run, embedded = false }: { run: ApiRun; embedded?: boolean }) {
   const def = run.workflowDef
-  const graph = useMemo(() => (def ? graphForWorkflow(def) : null), [def])
+  const showGraph = hasWorkflowGraph(run)
+  const graph = useMemo(() => (def && showGraph ? graphForWorkflow(def) : null), [def, showGraph])
   const overlay = useMemo(() => (graph ? runOverlay(graph, run, { closing: closingStepOf(run) }) : null), [graph, run])
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const selected = graph?.nodes.find((n) => n.id === selectedId)

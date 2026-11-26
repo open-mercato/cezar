@@ -45,6 +45,7 @@ import type { TrackerKind } from '@open-mercato/cezar-api-client'
 import { FOLD_ARIA_KEYS, SidebarDrawer, SidebarFoldButton, SidebarFrame, useDesktopShell, useSidebarFolded, useSidebarWidth, type SidebarResize } from '@/components/sidebar-frame'
 import { cn } from '@/lib/utils'
 import { exitSidebarRail, useSidebarRail } from '@/lib/sidebar-rail'
+import { MANAGER_NOW_PATH } from '@/routes/manager/manager-now-model'
 import { useCompactNavigation } from '@/lib/use-compact-navigation'
 
 export type RepoChip = {
@@ -478,7 +479,7 @@ export const AppShell = React.memo(function AppShell({
           <Sheet open={menuOpen} onOpenChange={setMenuOpen}>
             {threadBar ? null : (
               <MobileTopBar
-                title={managerMode ? 'Manager' : globalTasks ? 'All tasks' : (current?.label ?? brandName)}
+                title={managerMode ? (pathname === MANAGER_NOW_PATH ? 'Now' : 'Manager') : globalTasks ? 'All tasks' : (current?.label ?? brandName)}
                 attention={managersAvailable && !managerMode ? managerAttention : null}
                 // The compact navigation keeps this bar at every width; the sidebar replaces it otherwise.
                 everyWidth={phoneNav}
@@ -527,6 +528,7 @@ export const AppShell = React.memo(function AppShell({
               onMore={openMenu}
               manager={managerMode}
               attention={managerAttention}
+              nowCount={nowCount}
               managerTo={managerTo}
               managerTasks={managerMode ? managerTasks : null}
               everyWidth={phoneNav}
@@ -1083,7 +1085,7 @@ function areaCountTitle(item: NavItem, count: number | null): string | undefined
   if (!count) return undefined
   const one = count === 1
   if (item.badge === 'tasks-unread') return `${count} unread finished ${one ? 'task' : 'tasks'}`
-  if (item.badge === 'needs-you') return `${count} ${one ? 'task needs' : 'tasks need'} you`
+  if (item.badge === 'needs-you') return `${count} ${one ? 'thing needs' : 'things need'} you`
   return undefined
 }
 

@@ -70,6 +70,21 @@ export class RunnerModelCatalog {
     return this.get(runner);
   }
 
+  /** The picker's "Refresh models…": re-probe now, but a failed probe keeps the last good list
+   *  (unlike `refresh`, whose account recheck must drop the previous account's models). */
+  reprobe(runner: RunnerId): Promise<RunnerModelCatalogResult> {
+    const pending = this.#inFlight.get(runner);
+    if (pending) return pending;
+    const cached = this.#cache.get(runner);
+    // A failure-only entry has no list to fall back to — never dress it up as a cached one.
+    const lastGood = cached && cached.models.length > 0 ? cached : undefined;
+    const refresh = this.#refresh(runner, lastGood).finally(() => {
+      this.#inFlight.delete(runner);
+    });
+    this.#inFlight.set(runner, refresh);
+    return refresh;
+  }
+
   get(runner: RunnerId): Promise<RunnerModelCatalogResult> {
     const cached = this.#cache.get(runner);
     const now = this.#now();
