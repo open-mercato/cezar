@@ -121,6 +121,7 @@ export function parseUsageLimit(message: string | undefined, now = Date.now()): 
     return settle(epochMs, now, 'claude-marker');
   }
   if (!LIMIT_PHRASE_RE.test(message)) return null;
+  const cap = MONTHLY_CREDITS_RE.test(message) ? MAX_MONTHLY_USAGE_LIMIT_WAIT_MS : MAX_USAGE_LIMIT_WAIT_MS;
 
   const at = RESET_AT_RE.exec(message);
   if (at) {
@@ -131,15 +132,17 @@ export function parseUsageLimit(message: string | undefined, now = Date.now()): 
     // as UTC, so `2026-08-03` alone would land up to a day away from the day the provider named.
     const stamp = at[1]!.includes('T') ? at[1]! : at[1]!.replace(' ', 'T');
     const parsed = Date.parse(stamp.includes('T') ? stamp : `${stamp}T00:00`);
-    if (Number.isFinite(parsed)) return settle(parsed, now, 'timestamp');
+    if (Number.isFinite(parsed)) return settle(parsed, now, 'timestamp', cap);
   }
 
   const dated = RESET_DATE_CLOCK_RE.exec(message);
   if (dated) {
     // A named day the parser cannot place is not a reason to guess the next clock instead.
     const parsed = parseDatedReset(dated, now);
-    const cap = MONTHLY_CREDITS_RE.test(message) ? MAX_MONTHLY_USAGE_LIMIT_WAIT_MS : MAX_USAGE_LIMIT_WAIT_MS;
-    return parsed === null ? null : settle(parsed, now, 'clock', cap);
+    if (parsed === null || parsed - now > cap) return null;
+    // Minute-truncated like the clock-only form: pad so the resume lands after the reset (#1081).
+    // After the cap, so a weekly reset at the window's edge is not dropped for its padding.
+    return settle(parsed + CLOCK_RESET_BUFFER_MS, now, 'clock', cap + CLOCK_RESET_BUFFER_MS);
   }
 
   const clock = RESET_CLOCK_RE.exec(message);
@@ -212,9 +215,7 @@ function parseDatedReset(match: RegExpExecArray, now: number): number | null {
   if (candidate === null) return null;
   // A day ago or more is last year's date read as this year's; minutes ago is a limit that lifted.
   // A stale date rolled a year ahead fails `settle`'s cap and reads as unparsed.
-  const reset = now - candidate > 24 * 60 * 60_000 ? at(year + 1) : candidate;
-  // Minute-truncated like the clock-only form: pad so the resume lands after the reset (#1081).
-  return reset === null ? null : reset + CLOCK_RESET_BUFFER_MS;
+  return now - candidate > 24 * 60 * 60_000 ? at(year + 1) : candidate;
 }
 
 /**

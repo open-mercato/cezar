@@ -133,6 +133,7 @@ describe('switching a task agent', { timeout: 20_000 }, () => {
         fireAutoResume(runId: string): void;
       };
       clearTimeout(resumes.autoResumeTimers.get(id));
+      store.updateRun(id, { autoResumeAt: new Date(Date.now() - 1_000).toISOString() }); // the window has reopened
       resumes.fireAutoResume(id);
       expect(store.getRun(id)).toMatchObject({ status: 'queued', autoResumeAttempts: 1 });
       await restart();

@@ -4459,7 +4459,12 @@ export class RunManager {
     // The hold's key resolves an absent profile through the accounts file (#1722); load it now.
     void this.refreshAccounts().then(() => this.onQueueHoldChange());
     this.store.updateRun(runId, { autoResumeAt: new Date(deadline).toISOString(), autoResumeReason: reason });
-    const timer = setTimeout(() => this.fireAutoResume(runId), Math.max(0, deadline - Date.now()));
+    this.armAutoResumeTimer(runId, deadline);
+  }
+
+  /** Node fires a delay past 2^31-1 ms at once; a monthly reset (#2517) is longer, so cap and re-arm. */
+  private armAutoResumeTimer(runId: string, deadline: number): void {
+    const timer = setTimeout(() => this.fireAutoResume(runId), Math.min(2_147_483_647, Math.max(0, deadline - Date.now())));
     timer.unref?.();
     this.autoResumeTimers.set(runId, timer);
   }
@@ -4473,6 +4478,12 @@ export class RunManager {
     this.autoResumeTimers.delete(runId);
     const run = this.store.getRun(runId);
     if (!run || run.status !== 'failed' || !run.autoResumeAt) return;
+    // A capped timer woke before the reset: wait out the rest.
+    const deadline = Date.parse(run.autoResumeAt);
+    if (deadline > Date.now()) {
+      this.armAutoResumeTimer(runId, deadline);
+      return;
+    }
     // Belt and braces against the one gap `reconcileAutoResumes` cannot close: the setting going
     // off in the window between the last pump and this tick.
     if (!this.semaphore.autoResumeOnUsageLimit()) {
