@@ -1917,6 +1917,19 @@ describe('CEZ:ASK parks as waiting and emits ask.requested (#473)', () => {
       }
     });
 
+    it('a run that is already done answers Finish as a no-op success (stale button)', () => {
+      const record = createWaiting('already done');
+      store.updateRun(record.id, { status: 'done' });
+      expect(manager.finish(record.id)).toBe(true);
+      expect(store.getRun(record.id)?.status).toBe('done');
+    });
+
+    it('a failed run still refuses Finish', () => {
+      const record = createWaiting('failed');
+      store.updateRun(record.id, { status: 'failed' });
+      expect(manager.finish(record.id)).toBe(false);
+    });
+
     it('also covers the gap after teardown cleared the session object', () => {
       const record = createWaiting('torn down');
       activeMap().set(record.id, { cancelled: false, sessionEverOpened: true });
