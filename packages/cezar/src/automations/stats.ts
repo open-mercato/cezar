@@ -53,25 +53,26 @@ export function weekStart(now: number, timeZone: string): number {
 
 export function automationStats(input: AutomationStatsInput): AutomationStatsResult {
   const { now, costMetrics } = input;
-  const ids = new Set(input.definitions.map((definition) => definition.id));
   const runsById = new Map(input.runs.map((run) => [run.id, run] as const));
   const since7d = now - WEEK_MS;
   const sinceWeek = weekStart(now, input.timeZone);
 
-  // The header strip: every run launched by one of this project's automations this week.
+  // The header strip: every run launched by one of this project's automations this week. The runs
+  // are this project's own, so a removed or replaced definition keeps its history here (#1957).
   let runs = 0;
   let failed = 0;
   let agentMs = 0;
   let cost = 0;
   for (const run of input.runs) {
-    const automationId = automationIdOf(run);
-    if (!automationId || !ids.has(automationId)) continue;
-    const startedAt = Date.parse(run.startedAt ?? run.createdAt);
-    if (!Number.isFinite(startedAt) || startedAt < sinceWeek) continue;
+    if (!automationIdOf(run)) continue;
+    const launchedAt = Date.parse(run.startedAt ?? run.createdAt);
+    if (!Number.isFinite(launchedAt) || launchedAt < sinceWeek) continue;
     runs += 1;
     if (run.status === 'failed') failed += 1;
+    // Agent time starts when an agent does: queue wait before `startedAt` is not execution (#1957).
+    const startedAt = run.startedAt ? Date.parse(run.startedAt) : NaN;
     const finishedAt = run.finishedAt ? Date.parse(run.finishedAt) : now;
-    if (Number.isFinite(finishedAt) && finishedAt > startedAt) agentMs += finishedAt - startedAt;
+    if (Number.isFinite(startedAt) && Number.isFinite(finishedAt) && finishedAt > startedAt) agentMs += finishedAt - startedAt;
     if (typeof run.costUsd === 'number') cost += run.costUsd;
   }
 
