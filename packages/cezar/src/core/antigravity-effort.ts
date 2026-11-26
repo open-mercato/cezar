@@ -70,6 +70,48 @@ export function resolveAntigravityEffort(input: {
   return { model: target.id, note: `effort ${effort} -> ${target.id}` };
 }
 
+/** A listed antigravity model or model family (`gemini-4-neon`); what makes a `--model` an explicit antigravity request. */
+export function isAntigravityModel(model: string, models: readonly string[]): boolean {
+  return models.includes(model) || models.some((id) => antigravityVariantOf(id)?.family === model);
+}
+
+/**
+ * The fallback form (a task that landed on antigravity only because earlier agents were out of
+ * limits): never refuses. No exact variant takes the nearest one (the lower on a tie; `max` the
+ * highest); a family without variants, or no model list, drops the effort. `model` undefined = keep
+ * whatever model the task would run anyway. The note says what happened, for the task record.
+ */
+export function closestAntigravityEffort(input: {
+  effort: string;
+  /** The model this task would run on antigravity (row pin, Settings or native default); any variant is ignored. */
+  model?: string | undefined;
+  models?: readonly string[] | undefined;
+}): { model?: string; note: string } {
+  const { effort } = input;
+  const models = input.models ?? [];
+  const dropped = (why: string) => ({ note: `effort ${effort} dropped on antigravity: ${why}` });
+  if (!input.model) return dropped('no model chosen to take a variant of');
+  if (models.length === 0) return dropped('model list unavailable');
+  const family = models.some((id) => antigravityVariantOf(id)?.family === input.model) ? input.model : antigravityVariantOf(input.model)?.family ?? input.model;
+  const variants = models
+    .map((id) => ({ id, parsed: antigravityVariantOf(id) }))
+    .filter((entry): entry is { id: string; parsed: AntigravityVariant } => entry.parsed?.family === family)
+    .sort((a, b) => rank(a.parsed.variant) - rank(b.parsed.variant));
+  if (variants.length === 0) return dropped(`${family} has no effort variants`);
+  if (effort === 'max') {
+    const top = variants[variants.length - 1]!;
+    return { model: top.id, note: `effort max -> ${top.id}` };
+  }
+  const exact = variants.find((entry) => entry.parsed.variant === effort);
+  if (exact) return { model: exact.id, note: `effort ${effort} -> ${exact.id}` };
+  const wanted = rank(effort);
+  if (wanted < 0) return dropped(`'${effort}' is not an effort level antigravity lists`);
+  // Ascending order + strict < keeps the lower variant on a tie.
+  let nearest = variants[0]!;
+  for (const entry of variants) if (Math.abs(rank(entry.parsed.variant) - wanted) < Math.abs(rank(nearest.parsed.variant) - wanted)) nearest = entry;
+  return { model: nearest.id, note: `effort ${effort}: no exact variant on antigravity, using ${nearest.id}` };
+}
+
 function familyHint(models: readonly string[]): string {
   const families = [...new Set(models.map((id) => antigravityVariantOf(id)?.family).filter((family): family is string => Boolean(family)))];
   return families.length > 0 ? `. Families: ${families.slice(0, 20).join(', ')}` : '';

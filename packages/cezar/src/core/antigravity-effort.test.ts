@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { antigravityVariantOf, resolveAntigravityEffort } from './antigravity-effort.ts';
+import { antigravityVariantOf, closestAntigravityEffort, isAntigravityModel, resolveAntigravityEffort } from './antigravity-effort.ts';
 
 // `agy models` ids, as listed live (account-specific; never hardcoded in the mapper).
 const models = [
@@ -57,5 +57,31 @@ describe('resolveAntigravityEffort', () => {
   it('without a model list, accepts only a full id that already names the effort', () => {
     expect(resolveAntigravityEffort({ effort: 'high', model: 'gemini-4-neon-high' })).toMatchObject({ model: 'gemini-4-neon-high' });
     expect(resolveAntigravityEffort({ effort: 'high', model: 'gemini-4-neon' })).toEqual({ error: expect.stringContaining('model list is unavailable') });
+  });
+});
+
+describe('closestAntigravityEffort (a limit fallback onto antigravity)', () => {
+  const listed = ['two-low', 'two-high', 'mid-medium', 'mid-high', 'gemini-4-neon-low', 'gemini-4-neon-medium', 'gemini-4-neon-high', 'gemini-4-neon-xhigh', 'gemini-pro-orchestrator'];
+
+  it('takes the exact variant when there is one, and max as the highest', () => {
+    expect(closestAntigravityEffort({ effort: 'high', model: 'gemini-4-neon-medium', models: listed })).toEqual({ model: 'gemini-4-neon-high', note: 'effort high -> gemini-4-neon-high' });
+    expect(closestAntigravityEffort({ effort: 'max', model: 'mid', models: listed })).toEqual({ model: 'mid-high', note: 'effort max -> mid-high' });
+  });
+
+  it('takes the nearest variant, the lower one on a tie, and says so', () => {
+    expect(closestAntigravityEffort({ effort: 'medium', model: 'two-high', models: listed })).toEqual({ model: 'two-low', note: 'effort medium: no exact variant on antigravity, using two-low' });
+    expect(closestAntigravityEffort({ effort: 'low', model: 'mid', models: listed })).toMatchObject({ model: 'mid-medium' });
+  });
+
+  it('drops the effort, never refuses, when no variant can carry it', () => {
+    expect(closestAntigravityEffort({ effort: 'high', model: 'gemini-pro-orchestrator', models: listed })).toEqual({ note: 'effort high dropped on antigravity: gemini-pro-orchestrator has no effort variants' });
+    expect(closestAntigravityEffort({ effort: 'high', models: listed })).toEqual({ note: expect.stringContaining('dropped on antigravity') });
+    expect(closestAntigravityEffort({ effort: 'high', model: 'gemini-4-neon' })).toEqual({ note: 'effort high dropped on antigravity: model list unavailable' });
+  });
+
+  it('isAntigravityModel tells an explicit antigravity --model (id or family) from another runner\'s', () => {
+    expect(isAntigravityModel('gemini-4-neon', listed)).toBe(true);
+    expect(isAntigravityModel('gemini-4-neon-low', listed)).toBe(true);
+    expect(isAntigravityModel('opus', listed)).toBe(false);
   });
 });

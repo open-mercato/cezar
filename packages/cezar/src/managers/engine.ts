@@ -131,7 +131,7 @@ import {
   type ObservedConnectors,
 } from './connectors.ts';
 import { taskModelIssue, type TaskModelCatalog } from './task-model.ts';
-import { resolveAntigravityEffort } from '../core/antigravity-effort.ts';
+import { closestAntigravityEffort, isAntigravityModel, resolveAntigravityEffort } from '../core/antigravity-effort.ts';
 import { readAgentModelSettings } from '../agent-config/models.ts';
 import { TurnStatsCollector } from './turn-stats.ts';
 import { chatPrompt, followupPrompt, jobPrompt, MANAGER_IMPORTANT, managerSystemPrompt, MANAGER_QUIET, sessionPreamble, watchPrompt } from './prompts.ts';
@@ -3448,14 +3448,26 @@ export class ManagerEngine {
       if (projectConfig?.defaultModelsAuto?.[candidateRunner]) return undefined;
       return projectConfig?.defaultModels?.[candidateRunner];
     };
-    // Antigravity's effort is a model variant: --effort becomes the matching model id, or a refusal.
+    // Antigravity's effort is a model variant: --effort becomes the matching model id. Asked for
+    // explicitly (--runner antigravity, an antigravity --model, the first listed agent) a missing
+    // variant is refused; reached by a limit fallback it takes the closest variant, or is dropped.
     let effortNote: string | undefined;
+    // The flags as typed: fallback entries on other runners carry these, not antigravity's variant.
+    const requested = input;
     if (runner === 'antigravity' && input.effort) {
-      const mapped = await this.antigravityEffort(input.model, input.effort, defaultModelFor(runner, agentProfile), root);
-      if ('error' in mapped && !retry) return mapped;
-      // A retry's flags are the old run's, so one that cannot apply here is dropped, as below.
-      effortNote = 'error' in mapped ? `--effort ${input.effort} dropped: ${mapped.error}` : mapped.note;
-      input = { ...input, ...('error' in mapped ? {} : { model: mapped.model }), effort: undefined };
+      const models = await this.antigravityModels();
+      const viaFallback = unpinned && input.runner !== 'antigravity' && !(input.model && isAntigravityModel(input.model, models ?? []));
+      if (viaFallback) {
+        const mapped = closestAntigravityEffort({ effort: input.effort, model: await this.antigravityDefault(defaultModelFor(runner, agentProfile), root), models });
+        effortNote = mapped.note;
+        input = { ...input, ...(mapped.model ? { model: mapped.model } : {}), effort: undefined };
+      } else {
+        const mapped = await this.antigravityEffort(input.model, input.effort, defaultModelFor(runner, agentProfile), root, models);
+        if ('error' in mapped && !retry) return mapped;
+        // A retry's flags are the old run's, so one that cannot apply here is dropped, as below.
+        effortNote = 'error' in mapped ? `--effort ${input.effort} dropped: ${mapped.error}` : mapped.note;
+        input = { ...input, ...('error' in mapped ? {} : { model: mapped.model }), effort: undefined };
+      }
       choice = { ...choice, reason: `${choice.reason}; ${effortNote}` };
     }
     let carried = input;
@@ -3492,9 +3504,9 @@ export class ManagerEngine {
     const modelValidOn = new Map<string, boolean>();
     const fallback: Array<{ provider: RunnerId; profileId: string; model?: string }> | undefined = fallbackOptions && [];
     for (const option of fallbackOptions ?? []) {
-      if (input.model && !modelValidOn.has(option.runner)) modelValidOn.set(option.runner, !(await this.modelIssue(option.runner, input.model, undefined)));
-      const entryModel = input.model
-        ? (modelValidOn.get(option.runner) ? input.model : undefined)
+      if (requested.model && !modelValidOn.has(option.runner)) modelValidOn.set(option.runner, !(await this.modelIssue(option.runner, requested.model, undefined)));
+      const entryModel = requested.model
+        ? (modelValidOn.get(option.runner) ? requested.model : undefined)
         : defaultModelFor(option.runner, option.agentProfile);
       fallback!.push({ provider: option.runner, profileId: option.account, ...(entryModel ? { model: entryModel } : {}) });
     }
@@ -3643,13 +3655,21 @@ export class ManagerEngine {
   }
 
   /** `--effort` on antigravity as the model variant that carries it (core/antigravity-effort.ts); a 400 naming the valid ones. */
-  private async antigravityEffort(model: string | undefined, effort: string, defaultModel: string | undefined, root: string | undefined): Promise<{ model: string; note: string } | ManagerRefusal> {
+  private async antigravityEffort(model: string | undefined, effort: string, defaultModel: string | undefined, root: string | undefined, models?: string[]): Promise<{ model: string; note: string } | ManagerRefusal> {
+    models ??= await this.antigravityModels();
+    const resolved = resolveAntigravityEffort({ effort, model, defaultModel: model ? undefined : await this.antigravityDefault(defaultModel, root), models });
+    return 'error' in resolved ? { error: resolved.error, status: 400 } : resolved;
+  }
+
+  private async antigravityModels(): Promise<string[] | undefined> {
     const response = await this.forward(`/models?${new URLSearchParams({ runner: 'antigravity' })}`).catch(() => undefined);
     const catalog = response?.ok ? (await response.json().catch(() => undefined)) as TaskModelCatalog | undefined : undefined;
-    // With no Settings default, the family is the one agy itself would run.
-    const fallback = model || defaultModel ? defaultModel : root ? (await readAgentModelSettings('antigravity', root).catch(() => undefined))?.model : undefined;
-    const resolved = resolveAntigravityEffort({ effort, model, defaultModel: fallback, models: catalog?.models.map((entry) => entry.id) });
-    return 'error' in resolved ? { error: resolved.error, status: 400 } : resolved;
+    return catalog?.models.map((entry) => entry.id);
+  }
+
+  /** With no Settings default, the family is the one agy itself would run. */
+  private async antigravityDefault(defaultModel: string | undefined, root: string | undefined): Promise<string | undefined> {
+    return defaultModel ?? (root ? (await readAgentModelSettings('antigravity', root).catch(() => undefined))?.model : undefined);
   }
 
   /** `--model`/`--effort` against the runner and the host's model catalog; a 400 naming the valid ones. */

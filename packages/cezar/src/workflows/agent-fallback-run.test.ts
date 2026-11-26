@@ -12,6 +12,7 @@ import { RunManager, setFallbackProviderCheck } from './run.ts';
 import { managerAccountLimit } from '../managers/account-limit.ts';
 import { REVIEW_PR } from './templates.ts';
 import type { WorkflowDef } from './types.ts';
+import { setAntigravityEffortCatalog } from '../core/antigravity-effort.ts';
 
 const run = promisify(execFile);
 const GIT_ID = ['-c', 'user.name=test', '-c', 'user.email=test@local'];
@@ -123,6 +124,21 @@ describe('automatic agent fallback', () => {
     const record = store.getRun(started.id);
     expect(record?.reasoningEffort).toBeUndefined();
     expect(record?.steps.find((step) => step.id === record.fallbackEpisode?.current?.stepId)?.reasoningEffort).toBeUndefined();
+  }, 40_000);
+
+  it('a handover onto antigravity carries the effort as the closest model variant, with a note', async () => {
+    setAntigravityEffortCatalog({ get: async () => ({ runner: 'antigravity', source: 'live', stale: false, models: ['gemini-4-neon-low', 'gemini-4-neon-high'].map((id) => ({ id, label: id, description: '' })) }) });
+    try {
+      await enable([{ provider: 'antigravity', profileId: 'default', model: 'gemini-4-neon-high' }]);
+      manager = new RunManager(store, repoRoot);
+      const started = manager.startRun(workflow, { task: 'fix the bug mock:limit', worktree: false });
+      store.updateRun(started.id, { reasoningEffort: 'medium' });
+      await until(() => (store.getRun(started.id)?.fallbackEpisode?.current !== undefined), 'fallback to reserve its successor');
+      expect(messages(started.id)).toContain('effort medium: no exact variant on antigravity, using gemini-4-neon-low');
+      expect(messages(started.id).some((m) => m.includes('gemini-4-neon-low continues this task'))).toBe(true);
+    } finally {
+      setAntigravityEffortCatalog(undefined);
+    }
   }, 40_000);
 
   it('uses the project checkout default and retains it across fallback after the trunk-based merge', async () => {

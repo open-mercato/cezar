@@ -82,7 +82,7 @@ import { getTeamSkillsCached, materializeSkillDir, refreshTeamSkills, waitForTea
 import { mentionsSkill, PROVISION_SKILL_DIRS, provisionSkills, skillClosure } from '../skills-provision.ts';
 import { seedAgentConfigLocalLayer } from '../agent-config/seed.ts';
 import { readAgentModelProvider, readAgentModelSettings } from '../agent-config/models.ts';
-import { antigravityModelIds, resolveAntigravityEffort } from '../core/antigravity-effort.ts';
+import { antigravityModelIds, closestAntigravityEffort, resolveAntigravityEffort } from '../core/antigravity-effort.ts';
 import { loadConfig, type CezConfig } from '../config.ts';
 import { bypassPermissionsBlocked } from '../bypass-permissions.ts';
 import { isLifecycleConfigTracked } from '../worktree-lifecycle/config.ts';
@@ -4405,11 +4405,23 @@ export class RunManager {
         this.store.appendEvent(runId, { type: 'note', message: `fallback skipped ${label(key)} — ${refusal}` });
         continue;
       }
+      // Antigravity has no effort flag: a handover carries the task's effort as the closest variant, or drops it.
+      let model = candidate.model;
+      if (candidate.provider === 'antigravity' && run.reasoningEffort && !agentModelsLocked(this.repoRoot)) {
+        const mapped = closestAntigravityEffort({
+          effort: run.reasoningEffort,
+          model: model ?? (await readAgentModelSettings('antigravity', this.repoRoot).catch(() => undefined))?.model,
+          models: await antigravityModelIds(),
+        });
+        if (this.disposed || !this.stillAwaitingFallback(runId, failedStepId)) return;
+        model = mapped.model ?? model;
+        this.store.appendEvent(runId, { type: 'note', message: mapped.note });
+      }
       // The reservation: written before the continuation exists, so no restart can pick it twice.
       this.store.updateRun(runId, { fallbackEpisode: { pending: true, attempted: [...attempted], ...(run.fallbackEpisode?.current ? { current: run.fallbackEpisode.current } : {}) } });
       const switched = this.queueAgentHandoff(runId, {
         runner: candidate.provider as RunnerId,
-        model: candidate.model,
+        model,
         agentProfile: candidate.profileId,
       }, AGENT_FALLBACK_PROMPT);
       if (!switched.ok) {
@@ -4421,7 +4433,7 @@ export class RunManager {
       this.store.appendEvent(runId, {
         type: 'lifecycle',
         tone: 'info',
-        message: `${label(fromKey)} ${startFailure !== undefined ? 'could not start' : 'reached its usage limit'} — ${label(key)} · ${candidate.model ?? 'auto model'} continues this task`,
+        message: `${label(fromKey)} ${startFailure !== undefined ? 'could not start' : 'reached its usage limit'} — ${label(key)} · ${model ?? 'auto model'} continues this task`,
       });
       void this.pump();
       return;

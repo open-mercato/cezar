@@ -3626,6 +3626,59 @@ describe('ManagerEngine', () => {
         expect(retried).not.toHaveProperty('warning');
       });
 
+      describe('antigravity effort: closest variant on a limit fallback, refusal when asked for', () => {
+        const agyModels = ['gemini-4-neon-low', 'gemini-4-neon-high', 'gemini-pro-orchestrator'];
+        const withAgy = (held: Record<string, number>) => makeEngine({
+          accountLimit: async (runner, agentProfile) => {
+            const account = agentProfile ?? 'default';
+            const until = held[`${runner}:${account}`];
+            return { account, label: `${account} login`, ...(until !== undefined ? { until } : {}) };
+          },
+          request: async (path, init) => {
+            requests.push({ path, method: init?.method ?? 'GET', ...(typeof init?.body === 'string' ? { body: JSON.parse(init.body) } : {}) });
+            if (path.startsWith('/api/v1/models')) {
+              return Response.json(path.includes('antigravity') ? { models: agyModels.map((id) => ({ id, label: id, description: '' })) } : { models: [] });
+            }
+            if (path.endsWith('/runs')) return Response.json({ id: 'new-run' }, { status: 201 });
+            return Response.json({ ok: true });
+          },
+        });
+        const claudesOut = { 'claude:first': RESET, 'claude:second': RESET };
+        const runsBody = () => requests.filter((request) => request.path.endsWith('/runs')).at(-1)?.body;
+
+        it('a fallback with no exact variant starts on the closest one and records why', async () => {
+          const engine = withAgy(claudesOut);
+          const id = await managerWith(engine, [...twoClaudes, { runner: 'antigravity', model: 'gemini-4-neon-high' }]);
+          const created = await engine.createTask(id, { projectId: 'alpha', task: 'Fix it', effort: 'medium' });
+          const note = 'effort medium: no exact variant on antigravity, using gemini-4-neon-low';
+          expect(created).toMatchObject({ notice: note, agent: { runner: 'antigravity', reason: expect.stringContaining(note) } });
+          expect(runsBody()).toMatchObject({ runner: 'antigravity', model: 'gemini-4-neon-low', managerAgent: { note: expect.stringContaining(note) } });
+          expect(runsBody()).not.toHaveProperty('reasoningEffort');
+        });
+
+        it('a fallback onto a model without variants drops the effort with a note', async () => {
+          const engine = withAgy(claudesOut);
+          const id = await managerWith(engine, [...twoClaudes, { runner: 'antigravity', model: 'gemini-pro-orchestrator' }]);
+          const created = await engine.createTask(id, { projectId: 'alpha', task: 'Fix it', effort: 'high' });
+          expect(created).toMatchObject({ notice: 'effort high dropped on antigravity: gemini-pro-orchestrator has no effort variants', agent: { runner: 'antigravity' } });
+          expect(runsBody()).toMatchObject({ runner: 'antigravity', model: 'gemini-pro-orchestrator' });
+          expect(runsBody()).not.toHaveProperty('reasoningEffort');
+        });
+
+        it('an explicit --runner antigravity or antigravity --model still refuses a missing variant', async () => {
+          const engine = withAgy({});
+          const id = await managerWith(engine, [...twoClaudes, { runner: 'antigravity', model: 'gemini-4-neon-high' }]);
+          expect(await engine.createTask(id, { projectId: 'alpha', task: 'x', runner: 'antigravity', effort: 'medium' }))
+            .toMatchObject({ status: 400, error: expect.stringContaining("no 'medium' variant of gemini-4-neon") });
+          // Reached by a fallback, but the --model names antigravity: explicit.
+          const out = withAgy(claudesOut);
+          const outId = await managerWith(out, [...twoClaudes, { runner: 'antigravity' }]);
+          expect(await out.createTask(outId, { projectId: 'alpha', task: 'x', model: 'gemini-4-neon', effort: 'medium' }))
+            .toMatchObject({ status: 400, error: expect.stringContaining("no 'medium' variant of gemini-4-neon") });
+          expect(requests.some((request) => request.path.endsWith('/runs'))).toBe(false);
+        });
+      });
+
       it('after a limit skip to another runner only what that runner refuses is dropped, never the task', async () => {
         const engine = limited({ 'claude:first': RESET, 'claude:second': RESET });
         const id = await managerWith(engine, [...twoClaudes, { runner: 'codex' as const, agentProfile: 'work' }]);
