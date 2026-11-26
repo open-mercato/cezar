@@ -420,7 +420,7 @@ describe('cez manager', () => {
       expect(calls).toHaveLength(before);
     });
 
-    it('task say --fresh asks for a fresh session; without it nothing is sent', async () => {
+    it('task say --fresh asks for a fresh session; without it freshContext is absent', async () => {
       const { run, calls, logs } = harness();
       expect(await run('task', 'say', '--project', 'alpha', 'r1', '--fresh', 'Re-review PR 7')).toBe(0);
       expect(calls.at(-1)).toMatchObject({ url: 'http://x/api/v1/workspace/managers/m1/task-message', body: { runId: 'r1', text: 'Re-review PR 7', freshContext: true } });

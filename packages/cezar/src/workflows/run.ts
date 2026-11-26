@@ -598,7 +598,7 @@ interface ContinueRunOptions {
   /** Agent account for the reopened session (spec 2026-07-29-agent-profiles). Omitted = the
    *  account the run is already on. */
   agentProfile?: string;
-  /** Open a new session with no prior conversation (#2474 re-reviews): same task, worktree and branch. */
+  /** Open a new session with no prior conversation (#2513 re-reviews): same task, worktree and branch. */
   freshContext?: boolean;
 }
 
@@ -1558,6 +1558,9 @@ const RESTART_CONTINUATION_PROMPT =
 /** Opens a `freshContext` continuation, ahead of the instruction. */
 export const FRESH_CONTEXT_NOTE =
   'This is a fresh session on the same task, worktree and branch: the earlier conversation was cleared on purpose. Form your own judgement from the code as it is now, and do not rely on earlier verdicts or conclusions, including any in the handoff file.';
+/** A queued fresh Continue revived without its persisted instruction (a record from before `freshPrompt`). */
+const FRESH_RESTART_PROMPT =
+  'The cezar process restarted before this session opened, and the instruction it was opened with was lost. Work out what the task needs now from its objective and the current state of its branch and pull request, then do it.';
 const SWITCH_AGENT_PROMPT =
   'Continue this task on the newly selected agent. Use the handoff, conversation and existing worktree to pick up the work. If a user decision was pending, wait for their answer.';
 /** Openings cezar sends on its own; recorded like the user's messages, but not instructions. */
@@ -2753,11 +2756,13 @@ export class RunManager {
       const accountMatches = run.agentProfile === undefined || run.agentProfile === sessionAccount;
       const switchedInput = switched ? run.agentSwitch?.continuationInput : undefined;
       const fresh = queuedContinuation.freshContext === true;
+      // RESTART_CONTINUATION_PROMPT says to pick up from the handoff, which a fresh read must not.
+      const restartPrompt = fresh ? queuedContinuation.freshPrompt ?? FRESH_RESTART_PROMPT : RESTART_CONTINUATION_PROMPT;
       this.pendingContinuations.set(run.id, {
         stepId: queuedContinuation.id,
         sessionId: !switched && !fresh && sessionStep?.sessionId && sessionBackend === backend && accountMatches ? sessionStep.sessionId : undefined,
         backend,
-        prompt: switchedInput?.prompt ?? (switched ? SWITCH_AGENT_PROMPT : RESTART_CONTINUATION_PROMPT),
+        prompt: switchedInput?.prompt ?? (switched ? SWITCH_AGENT_PROMPT : restartPrompt),
         images: [],
         attachmentUrls: switchedInput?.attachmentUrls,
         ...(fresh ? { freshContext: true as const } : {}),
@@ -6251,9 +6256,11 @@ export class RunManager {
       ?? (targetRunner === (run.runner ?? 'claude') ? run.agentProfile : undefined);
     const accountSwitched = targetAccount !== undefined && targetAccount !== sessionAccount;
     const resume = !agentSwitch && !opts.freshContext && Boolean(sessionStep?.sessionId) && sessionBackend === targetRunner && !accountSwitched;
-    // An agent switch replays the queued Continue it replaces, its fresh intent included.
-    const freshContext = agentSwitch ? agentSwitch.previousContinuation?.freshContext === true : opts.freshContext === true;
-    const fresh = freshContext ? { freshContext: true as const } : {};
+    // An agent switch replays the queued Continue it replaces, its fresh intent included. Once a
+    // fresh session has run, a manual switch, a backup-agent fallback or a lost session seeds the
+    // whole run's transcript (spec 2026-10-31-managers, `--fresh`), so earlier turns can come back.
+    const freshRequested = agentSwitch ? agentSwitch.previousContinuation?.freshContext === true : opts.freshContext === true;
+    const fresh = freshRequested ? { freshContext: true as const } : {};
 
     // Follow-up runner/model/account override (#401, spec 2026-07-29-agent-profiles): the composer
     // lets the user pick which backend, model and login handle this continuation — the same flat
@@ -6368,6 +6375,8 @@ export class RunManager {
         attachmentUrls,
         ...fresh,
       });
+      // Only the step survives a restart; it carries the instruction until the session opens.
+      if (freshRequested && !previous) this.store.updateStep(runId, stepId, { freshPrompt: prompt });
       if (!agentSwitch || (!priorStep && !this.active.has(runId) && !this.starting.has(runId))) this.queue.push(runId);
       this.store.updateRun(runId, {
         status: 'queued',
@@ -6539,6 +6548,8 @@ export class RunManager {
       sessionId: spawnSessionId,
       backend,
       ...(continuationReasoningEffort ? { reasoningEffort: continuationReasoningEffort } : {}),
+      // The instruction is the turn's user-message from here on.
+      freshPrompt: undefined,
     });
     this.store.appendEvent(runId, { type: 'step-start', stepId, name: 'Continue', kind: 'agent', iteration: 1 });
     // Attachments pasted into the follow-up composer, on the same terms as a live-session
@@ -7019,7 +7030,7 @@ export class RunManager {
     const askNotes = this.store.takeAskNotes(runId);
     const asksBlock = openAsksBlock(this.store.getRun(runId)?.asks);
     const treeBlocks = [treeReports, treeInbox, ...askNotes, asksBlock].filter((block): block is string => Boolean(block));
-    // A fresh read must not be anchored on earlier verdicts, the handoff's included (#2474).
+    // A fresh read must not be anchored on earlier verdicts, the handoff's included (#2513).
     const freshPrompt = freshContext ? `${FRESH_CONTEXT_NOTE}\n\n${expandedPrompt}` : expandedPrompt;
     const openingPrompt = treeBlocks.length ? `${treeBlocks.join('\n\n')}\n\n---\n\n${freshPrompt}` : freshPrompt;
     // The previous runner's portable context (#954) opens the session first, then the tree
@@ -7095,6 +7106,7 @@ export class RunManager {
       } catch (err) {
         // The backend lost the session this task resumes (#1193): continue in a fresh
         // session seeded with the task's persisted state instead of failing every Continue.
+        // That state is the whole record, so it also carries turns from before a `--fresh` Continue.
         const replay = state.cancelled || this.active.get(runId) !== state ? undefined : resumeGuard.takeFallback(err);
         if (!replay || !recordBeforeTurn || sessionId === undefined) throw err;
         sessionError = undefined;

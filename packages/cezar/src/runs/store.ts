@@ -129,6 +129,8 @@ const stepStateSchema = z.object({
   profileId: z.string().optional(),
   /** A Continue opened with `freshContext` (#2513): a restart while it is queued must not resume. */
   freshContext: z.literal(true).optional().catch(undefined),
+  /** A queued fresh Continue's instruction, so a restart opens it with that text; cleared on open. */
+  freshPrompt: z.string().max(100_000).optional().catch(undefined),
   toolPolicy: stepToolPolicySchema.optional(),
   /** Canonical provider/model identity resolved for this step. Optional so older runs.json files
    *  remain readable and auto-model steps can retain an absent identity. */
@@ -1688,16 +1690,19 @@ export class RunStore extends EventEmitter {
   }
 
   /**
-   * Step-level counterpart of `redactPatch` (#456 review). `error` is the only
-   * free-text `StepState` field — it is set from raw `err.message` /process
+   * Step-level counterpart of `redactPatch` (#456 review). `error` and `freshPrompt` are the
+   * free-text `StepState` fields — `error` is set from raw `err.message` /process
    * output (`run.ts` `finishStep`), and `touch()` fans the whole record out
    * over SSE, so an unscrubbed copy leaked to `runs.json` AND to the browser.
    * The remaining fields are ids, enums, counters and timestamps.
    */
   private redactStepPatch(patch: Partial<Omit<StepState, 'id'>>, runId: string): Partial<Omit<StepState, 'id'>> {
     if (process.env.CEZ_REDACT_SECRETS === '0') return patch;
-    if (typeof patch.error !== 'string') return patch;
-    return { ...patch, error: this.redactText(patch.error, runId) };
+    return {
+      ...patch,
+      ...(typeof patch.error === 'string' ? { error: this.redactText(patch.error, runId) } : {}),
+      ...(typeof patch.freshPrompt === 'string' ? { freshPrompt: this.redactText(patch.freshPrompt, runId) } : {}),
+    };
   }
 
   /** Append a step to an existing run (used by "Continue" — spec 003). */

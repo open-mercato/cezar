@@ -1896,6 +1896,14 @@ describe('ManagerEngine', () => {
       });
     });
 
+    it('a refused message leaves the task\'s card unflagged', async () => {
+      const engine = makeEngine();
+      const id = await create(engine, 0);
+      persistCard(id, 'gone', ask('Gone'), { text: 'Should [[task:alpha/gone]] continue?' });
+      expect(await engine.taskMessage(id, { projectId: 'alpha', runId: 'gone', text: 'again', freshContext: true })).toMatchObject({ status: 404 });
+      expect(byId(id, 'gone')?.askStale).toBeUndefined();
+    });
+
     it('flags a card the manager acted on since: a task it messaged, a merge it proposed', async () => {
       const engine = makeEngine();
       const id = await create(engine, 0);
