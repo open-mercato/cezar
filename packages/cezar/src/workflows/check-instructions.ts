@@ -53,9 +53,9 @@ const CHECK_WORDS = new RegExp(
   '(?<![\\p{L}\\p{N}])(' +
     [
       'tests?', 'testing', 'tested', 'testu', 'testem', 'testowi', 'teście', 'testy', 'testów', 'testami', 'testach', 'testom',
-      'testuj\\p{L}*', 'testowa\\p{L}*', 'przetest\\p{L}*',
+      'testuj\\p{L}*', 'testow\\p{L}*', 'przetest\\p{L}*', 'vitest', 'pytest',
       'checks?', 'checking', 'checked', 'suites?', 'specs?', 'verify', 'verifies', 'verified', 'verification', 'ci',
-      'lint', 'lints', 'linting', 'linter', 'typecheck', 'typechecks', 'typechecking', 'builds?',
+      'lint', 'lints', 'linting', 'linters?', 'typecheck', 'typechecks', 'typechecking', 'builds?',
       'sprawdź', 'sprawdza\\p{L}*', 'sprawdzi\\p{L}*', 'sprawdzeni\\p{L}*', 'weryfik\\p{L}*',
     ].join('|') +
     ')(?![\\p{L}\\p{N}])',
@@ -68,14 +68,19 @@ export function instructionsConcernChecks(instructions: string): boolean {
 
 const SHELL_CONTROL = /[|&;<>`$(){}\\\n\r!#]/;
 
+/** Which test files a narrowed runner collects: JS/TS for vitest and jest, Python for pytest. */
+export type TestKind = 'js' | 'py';
+
 /** The runners narrowed at all: they take test files and folders as plain arguments and fail when a
  *  path holds no test (unless `passWithNoTests`, refused below). Every other runner (go, cargo, mocha,
  *  rspec, `node --test`, …) runs a source path as zero tests and exits 0, so its check runs as written. */
-const RUNNER_PATTERNS = [
-  /^(?:npx\s+|pnpm\s+exec\s+|yarn\s+|bunx\s+)?(?:vitest(?:\s+run)?|jest|pytest|py\.test)(?:\s+\S+)*$/,
-  /^python3?\s+-m\s+pytest(?:\s+\S+)*$/,
+const RUNNER_PATTERNS: ReadonlyArray<readonly [RegExp, TestKind]> = [
+  [/^(?:npx\s+|pnpm\s+exec\s+|yarn\s+|bunx\s+)?(?:vitest(?:\s+run)?|jest)(?:\s+\S+)*$/, 'js'],
+  [/^(?:npx\s+|pnpm\s+exec\s+|yarn\s+|bunx\s+)?(?:pytest|py\.test)(?:\s+\S+)*$/, 'py'],
+  [/^python3?\s+-m\s+pytest(?:\s+\S+)*$/, 'py'],
 ];
-const PASS_WITH_NO_TESTS = /passWithNoTests/i;
+/** Both spellings vitest and jest accept (`--passWithNoTests`, `--pass-with-no-tests`). */
+const PASS_WITH_NO_TESTS = /pass-?with-?no-?tests/i;
 const PACKAGE_SCRIPT = /^(?:npm|pnpm|yarn|bun)\s+(?:run\s+|run-script\s+)?([\w:.-]+)$/;
 
 /** `scripts[name]` from the worktree's `package.json`, or undefined. */
@@ -91,15 +96,22 @@ export function packageScriptReader(cwd: string): (name: string) => string | und
   };
 }
 
-/** A command that hands appended paths straight to a test runner, an npm-style script included
+const runnerKind = (command: string): TestKind | undefined => RUNNER_PATTERNS.find(([pattern]) => pattern.test(command))?.[1];
+
+/** The kind of test runner a command hands appended paths straight to, an npm-style script included
  *  when its body is one such command — `"test": "vitest run && tsc"` would hand them to `tsc` (#2519 review). */
-export function directTestRunner(command: string, readScript: (name: string) => string | undefined): boolean {
+export function testRunnerKind(command: string, readScript: (name: string) => string | undefined): TestKind | undefined {
   const trimmed = command.trim();
-  if (RUNNER_PATTERNS.some((pattern) => pattern.test(trimmed))) return true;
+  const direct = runnerKind(trimmed);
+  if (direct) return direct;
   const script = PACKAGE_SCRIPT.exec(trimmed)?.[1];
-  if (!script || ['install', 'ci', 'exec', 'x', 'dlx'].includes(script)) return false;
+  if (!script || ['install', 'ci', 'exec', 'x', 'dlx'].includes(script)) return undefined;
   const body = readScript(script);
-  return Boolean(body) && !SHELL_CONTROL.test(body!) && !PASS_WITH_NO_TESTS.test(body!) && RUNNER_PATTERNS.some((pattern) => pattern.test(body!));
+  return body && !SHELL_CONTROL.test(body) && !PASS_WITH_NO_TESTS.test(body) ? runnerKind(body) : undefined;
+}
+
+export function directTestRunner(command: string, readScript: (name: string) => string | undefined): boolean {
+  return testRunnerKind(command, readScript) !== undefined;
 }
 
 /**
@@ -114,10 +126,11 @@ export function rewritableCheck(command: string, readScript: (name: string) => s
     && !PASS_WITH_NO_TESTS.test(trimmed) && directTestRunner(trimmed, readScript);
 }
 
-/** A test file the narrowed runners pick up: `*.test.*`/`*.spec.*` (JS/TS) or `test_*.py`/`*_test.py`. */
-export function isTestFile(path: string): boolean {
+/** A test file the given runner collects: `*.test.*`/`*.spec.*` (JS/TS) or `test_*.py`/`*_test.py`.
+ *  A file of the other kind runs as zero tests, which a config-level `passWithNoTests` turns green. */
+export function isTestFile(path: string, kind: TestKind): boolean {
   const name = basename(path);
-  return /\.(test|spec)\.[cm]?[jt]sx?$/.test(name) || /^test_.+\.py$/.test(name) || /.+_test\.py$/.test(name);
+  return kind === 'js' ? /\.(test|spec)\.[cm]?[jt]sx?$/.test(name) : /^test_.+\.py$/.test(name) || /.+_test\.py$/.test(name);
 }
 
 /** `src/a.test.ts` → `a`, `test_a.py` → `a`, `a_test.py` → `a`; a source file's own stem. */
@@ -126,32 +139,42 @@ function stem(path: string): string {
 }
 
 const TEST_DIRS = ['__tests__', 'test', 'tests'];
+/** Source roots whose tests may sit in a test folder beside them (`pkg/src/a.ts` ↔ `pkg/tests/a.test.ts`). */
+const SOURCE_ROOTS = ['src', 'lib'];
 
-/** A test file covers a changed source file when named after it and kept beside it: the same folder,
- *  a `__tests__`/`test(s)` folder inside it, or one beside it. A stem alone (`index`) is far too loose. */
-function testCovers(testFile: string, source: string): boolean {
-  if (stem(testFile) !== stem(source)) return false;
-  const testDir = dirname(testFile);
+/** Where a test named after `source` counts as its test: the same folder, a `__tests__`/`test(s)` folder
+ *  inside it, the same sub-path in a test folder beside it (`src/a/x.ts` ↔ `src/tests/a/x.test.ts`), or a
+ *  test folder beside a source root. A stem alone (`index`) is far too loose. */
+function testFoldersFor(source: string): string[] {
+  const at = (dir: string, name: string) => (dir === '.' ? name : `${dir}/${name}`);
   const sourceDir = dirname(source);
-  if (testDir === sourceDir) return true;
-  if (TEST_DIRS.some((name) => testDir === (sourceDir === '.' ? name : `${sourceDir}/${name}`))) return true;
-  const parent = dirname(sourceDir);
-  return TEST_DIRS.some((name) => testDir === (parent === '.' ? name : `${parent}/${name}`));
+  const folders = [sourceDir, ...TEST_DIRS.map((name) => at(sourceDir, name))];
+  if (sourceDir !== '.') {
+    const parent = dirname(sourceDir);
+    const leaf = basename(sourceDir);
+    folders.push(...TEST_DIRS.map((name) => at(at(parent, name), leaf)));
+    if (SOURCE_ROOTS.includes(leaf)) folders.push(...TEST_DIRS.map((name) => at(parent, name)));
+  }
+  return folders;
 }
 
 export type RewriteContext = {
   changedFiles: readonly string[];
+  /** The test files the check's runner collects. */
+  kind: TestKind;
   /** An existing regular file, relative to the worktree. */
   isFile: (path: string) => boolean;
-  /** An existing folder holding at least one test file (`isTestFile`), relative to the worktree. */
+  /** An existing folder holding at least one test file of `kind`, relative to the worktree. */
   hasTests: (dir: string) => boolean;
+  /** The regular files directly inside a folder (names only); empty when it does not exist. */
+  listFiles: (dir: string) => readonly string[];
 };
 
 /**
  * The model's answer, accepted only as the original followed by an optional `--` and paths that each
- * run real tests — an existing test file, or a folder holding one — and that together cover every
- * changed source file. A flag (`--help`, `--passWithNoTests`, `-run XYZ`, `--config=…`), a glob, or a
- * source path the runner would run as zero tests could make the check pass vacuously, and a subset
+ * run real tests of the check's runner — an existing test file, or a folder holding one — and that
+ * together cover every changed file. A flag (`--help`, `--passWithNoTests`, `-run XYZ`, `--config=…`),
+ * a glob, a source path or another runner's test could make the check pass vacuously, and a subset
  * would skip the tests of what else changed; any of those runs the check as written.
  */
 export function acceptRewrite(original: string, answer: string, context: RewriteContext): boolean {
@@ -159,6 +182,7 @@ export function acceptRewrite(original: string, answer: string, context: Rewrite
   if (!answer.startsWith(`${base} `)) return false;
   const appended = answer.slice(base.length).trim();
   if (!appended || appended.length > COMMAND_MAX || SHELL_CONTROL.test(appended)) return false;
+  const isTest = (path: string) => isTestFile(path, context.kind);
   let separators = 0;
   const files: string[] = [];
   const dirs: string[] = [];
@@ -170,26 +194,40 @@ export function acceptRewrite(original: string, answer: string, context: Rewrite
     if (token.startsWith('-') || !/^[\w./@+-]+$/.test(token) || PASS_WITH_NO_TESTS.test(token)) return false;
     const path = token.replace(/\/+$/, '').replace(/^\.\//, '');
     if (!path || isAbsolute(path) || path.split('/').includes('..')) return false;
-    if (isTestFile(path) && context.isFile(path)) files.push(path);
+    if (isTest(path) && context.isFile(path)) files.push(path);
     else if (context.hasTests(path)) dirs.push(path);
     else return false;
   }
   if (separators > 1 || files.length + dirs.length === 0) return false;
-  const inDir = (file: string) => dirs.some((dir) => file.startsWith(`${dir}/`));
+  const runs = (test: string) => files.includes(test) || dirs.some((dir) => test.startsWith(`${dir}/`));
   // Every changed file must still be tested: a changed test that still exists runs itself, and a
-  // changed source file sits inside a passed folder or beside a passed test named after it.
-  return context.changedFiles.every((file) => isTestFile(file)
-    ? !context.isFile(file) || files.includes(file) || inDir(file)
-    : inDir(file) || files.some((test) => testCovers(test, file)));
+  // changed source file sits inside a passed folder, or has tests named after it and ALL of them run,
+  // so a planted `x.spec.ts` cannot stand in for the real `x.test.ts`.
+  return context.changedFiles.every((file) => {
+    if (runs(file)) return true;
+    if (isTest(file)) return !context.isFile(file);
+    const own = stem(file);
+    const tests = testFoldersFor(file).flatMap((dir) => context.listFiles(dir)
+      .filter((name) => isTest(name) && stem(name) === own)
+      .map((name) => (dir === '.' ? name : `${dir}/${name}`)));
+    return tests.length > 0 && tests.every(runs);
+  });
 }
 
 /** The worktree as `acceptRewrite` sees it. `hasTests` walks at most a few thousand entries. */
-export function worktreeRewriteContext(cwd: string, changedFiles: readonly string[]): RewriteContext {
+export function worktreeRewriteContext(cwd: string, changedFiles: readonly string[], kind: TestKind): RewriteContext {
   const stat = (path: string) => {
     try {
       return lstatSync(join(cwd, path));
     } catch {
       return undefined;
+    }
+  };
+  const entriesOf = (dir: string): Dirent[] => {
+    try {
+      return readdirSync(join(cwd, dir), { withFileTypes: true });
+    } catch {
+      return [];
     }
   };
   const hasTests = (dir: string): boolean => {
@@ -198,22 +236,22 @@ export function worktreeRewriteContext(cwd: string, changedFiles: readonly strin
     let seen = 0;
     while (queue.length && seen < 5_000) {
       const current = queue.shift()!;
-      let entries: Dirent[];
-      try {
-        entries = readdirSync(join(cwd, current), { withFileTypes: true });
-      } catch {
-        continue;
-      }
-      for (const entry of entries) {
+      for (const entry of entriesOf(current)) {
         seen += 1;
         const child = `${current}/${entry.name}`;
         if (entry.isDirectory() && entry.name !== 'node_modules' && !entry.name.startsWith('.')) queue.push(child);
-        else if (entry.isFile() && isTestFile(entry.name)) return true;
+        else if (entry.isFile() && isTestFile(entry.name, kind)) return true;
       }
     }
     return false;
   };
-  return { changedFiles, isFile: (path) => Boolean(stat(path)?.isFile()), hasTests };
+  return {
+    changedFiles,
+    kind,
+    isFile: (path) => Boolean(stat(path)?.isFile()),
+    hasTests,
+    listFiles: (dir) => entriesOf(dir).filter((entry) => entry.isFile()).map((entry) => entry.name),
+  };
 }
 
 export function buildCheckInstructionsPrompt(command: string, changedFiles: string[]): string {
@@ -256,6 +294,7 @@ export async function resolveCheckCommand(input: {
     || !rewritableCheck(input.command, packageScriptReader(cwd))) {
     return asWritten();
   }
+  const kind = testRunnerKind(input.command, packageScriptReader(cwd))!;
   try {
     const config = await loadConfig(input.repoRoot);
     const choice = await resolveNamerModel(config.defaultRunner, config);
@@ -284,7 +323,7 @@ export async function resolveCheckCommand(input: {
     const answer = parseCheckCommandAnswer(result.text);
     if (!answer) return asWritten('global instructions: no usable answer about this check, so it runs as written', true);
     if (answer.command === input.command.trim()) return asWritten('global instructions: nothing to change in this check');
-    if (!acceptRewrite(input.command, answer.command, worktreeRewriteContext(cwd, changedFiles))) {
+    if (!acceptRewrite(input.command, answer.command, worktreeRewriteContext(cwd, changedFiles, kind))) {
       return asWritten(`global instructions: refused \`${answer.command.slice(0, 200)}\` (a check may only gain \`--\` and test files or folders that cover every changed file), so it runs as written`);
     }
     return { command: answer.command, changed: true, reason: answer.reason ?? 'no reason given' };

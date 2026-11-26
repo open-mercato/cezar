@@ -1,6 +1,6 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const run = vi.fn();
@@ -81,9 +81,16 @@ describe('check commands follow the global instructions', () => {
   });
 
   // The deterministic guard (#2519 reviews): `--` plus test files or test folders that cover every change.
-  const TESTS = ['src/cart/total.test.ts', 'src/cart/total.spec.ts', 'src/cart/__tests__/tax.test.ts', 'src/other/index.test.ts', 'tests/test_util.py', 'src/cart/test_util.py'];
+  const TESTS = ['src/cart/total.test.ts', 'src/cart/total.spec.ts', 'src/cart/__tests__/tax.test.ts', 'src/other/index.test.ts', 'tests/test_util.py', 'src/cart/test_util.py',
+    'src/tests/index.test.ts', 'src/tests/bar/index.test.ts'];
   const DIRS: Record<string, boolean> = { src: true, 'src/cart': true, 'src/cart/__tests__': true, 'src/other': true, tests: true, 'src/empty': false, docs: false };
-  const contextFor = (changedFiles: string[]) => ({ changedFiles, isFile: (path: string) => TESTS.includes(path) || path === 'src/cart/total.ts', hasTests: (dir: string) => DIRS[dir] === true });
+  const contextFor = (changedFiles: string[], kind: 'js' | 'py' = 'js') => ({
+    changedFiles,
+    kind,
+    isFile: (path: string) => TESTS.includes(path) || path === 'src/cart/total.ts',
+    hasTests: (dir: string) => DIRS[dir] === true,
+    listFiles: (dir: string) => TESTS.filter((test) => dirname(test) === dir).map((test) => basename(test)),
+  });
   const context = contextFor(['src/cart/total.ts', 'src/cart/total.test.ts']);
   it.each([
     ['npm test || true'], ['npm test; exit 0'], ['exit 0'], ['echo ok'], ['true'], [':'],
@@ -105,7 +112,7 @@ describe('check commands follow the global instructions', () => {
   });
 
   it.each([
-    ['npm test -- src/cart/total.test.ts'], ['npm test -- src/cart'], ['npm test -- src/cart/'], ['npm test -- ./src/cart'], ['npm test -- src'],
+    ['npm test -- src/cart/total.test.ts src/cart/total.spec.ts'], ['npm test -- src/cart'], ['npm test -- src/cart/'], ['npm test -- ./src/cart'], ['npm test -- src'],
   ])('accepts %j', (answer) => {
     expect(acceptRewrite('npm test', answer, context)).toBe(true);
   });
@@ -114,7 +121,7 @@ describe('check commands follow the global instructions', () => {
   it('refuses a rewrite that leaves a changed file untested', () => {
     const both = contextFor(['src/cart/total.ts', 'src/other/index.ts']);
     expect(acceptRewrite('npm test', 'npm test -- src/cart/total.test.ts', both)).toBe(false);
-    expect(acceptRewrite('npm test', 'npm test -- src/cart/total.test.ts src/other/index.test.ts', both)).toBe(true);
+    expect(acceptRewrite('npm test', 'npm test -- src/cart/total.test.ts src/cart/total.spec.ts src/other/index.test.ts', both)).toBe(true);
     const changedTest = contextFor(['src/cart/__tests__/tax.test.ts']);
     expect(acceptRewrite('npm test', 'npm test -- src/cart/total.test.ts', changedTest)).toBe(false);
     expect(acceptRewrite('npm test', 'npm test -- src/cart/__tests__/tax.test.ts', changedTest)).toBe(true);
@@ -125,7 +132,7 @@ describe('check commands follow the global instructions', () => {
     writeFileSync(join(WORKTREE, 'only-deps/node_modules/pkg/a.test.ts'), '');
     writeFileSync(join(WORKTREE, 'only-hidden/.cache/a.test.ts'), '');
     writeFileSync(join(WORKTREE, 'nested/deep/inner/b.spec.ts'), '');
-    const real = worktreeRewriteContext(WORKTREE, ['src/a.ts']);
+    const real = worktreeRewriteContext(WORKTREE, ['src/a.ts'], 'js');
     expect(real.hasTests('src')).toBe(true);
     expect(real.hasTests('nested')).toBe(true);
     expect(real.hasTests('only-deps')).toBe(false);
@@ -139,9 +146,21 @@ describe('check commands follow the global instructions', () => {
   it('ties a test to a changed file by name and place, not by name alone', () => {
     expect(acceptRewrite('npm test', 'npm test -- src/other/index.test.ts', contextFor(['src/lib/index.ts']))).toBe(false);
     expect(acceptRewrite('npm test', 'npm test -- src/cart/__tests__/tax.test.ts', contextFor(['src/cart/tax.ts']))).toBe(true);
-    expect(acceptRewrite('npm test', 'npm test -- src/cart/total.spec.ts', contextFor(['src/cart/total.ts']))).toBe(true);
-    expect(acceptRewrite('pytest', 'pytest tests/test_util.py', contextFor(['src/util.py']))).toBe(true);
-    expect(acceptRewrite('pytest', 'pytest tests/test_util.py', contextFor(['src/deep/util.py']))).toBe(false);
+    // Every test named after the file runs: a planted `total.spec.ts` cannot stand in for `total.test.ts`.
+    expect(acceptRewrite('npm test', 'npm test -- src/cart/total.spec.ts', contextFor(['src/cart/total.ts']))).toBe(false);
+    expect(acceptRewrite('npm test', 'npm test -- src/cart/total.spec.ts src/cart/total.test.ts', contextFor(['src/cart/total.ts']))).toBe(true);
+    // A sibling test folder mirrors the sub-path; its top level serves only a source root.
+    expect(acceptRewrite('npm test', 'npm test -- src/tests/index.test.ts', contextFor(['src/bar/index.ts']))).toBe(false);
+    expect(acceptRewrite('npm test', 'npm test -- src/tests/bar/index.test.ts', contextFor(['src/bar/index.ts']))).toBe(true);
+    expect(acceptRewrite('pytest', 'pytest tests/test_util.py', contextFor(['src/util.py'], 'py'))).toBe(true);
+    expect(acceptRewrite('pytest', 'pytest tests/test_util.py', contextFor(['src/deep/util.py'], 'py'))).toBe(false);
+  });
+
+  // Final review: another runner's test runs as zero tests, which a config-level passWithNoTests turns green.
+  it('refuses a test file the check\'s runner does not collect', () => {
+    expect(acceptRewrite('npm test', 'npm test -- src/cart/test_util.py', contextFor(['src/cart/util.ts']))).toBe(false);
+    expect(acceptRewrite('pytest', 'pytest src/cart/total.test.ts', contextFor(['src/cart/total.ts'], 'py'))).toBe(false);
+    expect(acceptRewrite('pytest', 'pytest src/cart/test_util.py', contextFor(['src/cart/util.py'], 'py'))).toBe(true);
   });
 
   it('narrows only a command that hands paths straight to a test runner (review B)', () => {
@@ -167,15 +186,18 @@ describe('check commands follow the global instructions', () => {
     // passWithNoTests turns a folder without tests green, in the command or the script body.
     expect(rewritableCheck('npx vitest run --passWithNoTests', read)).toBe(false);
     expect(rewritableCheck('npm test', () => 'jest --passWithNoTests')).toBe(false);
+    expect(rewritableCheck('npx vitest run --pass-with-no-tests', read)).toBe(false);
+    expect(rewritableCheck('npm test', () => 'jest --pass-with-no-tests')).toBe(false);
+    expect(acceptRewrite('npm test', 'npm test -- src/cart/total.test.ts --pass-with-no-tests', context)).toBe(false);
   });
 
   it('reads Polish instructions about tests too', () => {
-    for (const text of ['Uruchamiaj tylko testy związane ze zmianą.', 'Sprawdź tylko zmienione pliki.', 'Bez pełnej weryfikacji.', 'Nie przetestuj wszystkiego.', 'Run only related tests.', 'Skip the linter.',
+    for (const text of ['Uruchamiaj tylko testy związane ze zmianą.', 'Sprawdź tylko zmienione pliki.', 'Bez pełnej weryfikacji.', 'Nie przetestuj wszystkiego.', 'Run only related tests.', 'Skip the linter.', 'Run only vitest for changed files.', 'Skip the linters.', 'Uruchom tylko testowe pliki.',
       'Nie sprawdzać całego projektu.', 'Uruchom tylko jeden plik testu.', 'Zakończ testem.', 'W teście nic nie zmieniaj.', 'Nie przetestować całości.', 'Bez sprawdzania lintera.']) {
       expect(instructionsConcernChecks(text)).toBe(true);
     }
     // Whole words only (re-review 4).
-    for (const text of ['Never checkout main.', 'Quote the testament.', 'Use the Spectrum palette.', 'Kontroluj długość linii.']) {
+    for (const text of ['Never checkout main.', 'Quote the testament.', 'Use the Spectrum palette.', 'Kontroluj długość linii.', 'To jest ważne.']) {
       expect(instructionsConcernChecks(text)).toBe(false);
     }
   });
