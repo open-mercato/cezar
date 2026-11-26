@@ -1,7 +1,7 @@
 # Task tags on automations
 
-**Status:** implemented · **Date:** 2026-11-23 · **Amends:** `2026-11-23-task-tags.md` § 5
-(#2432, implemented by #2434)
+**Status:** implemented · **Date:** 2026-11-23 · **Phase 2 of** `2026-11-23-task-tags.md`
+(§ 12; phase 1 is #2434) · **Amends:** its § 5
 
 ## Problem
 
