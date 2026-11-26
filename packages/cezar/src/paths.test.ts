@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { basename, isAbsolute, join } from 'node:path';
 import {
   DEFAULT_SERVER_INSTANCE,
   agentHomePaths,
@@ -15,6 +15,10 @@ import {
   workspaceUiStatePath,
 } from './paths.ts';
 
+// Expected paths are built with node:path so the suite holds on win32 (#2146).
+const H = join('/tmp', 'cez-home-test');
+const U = join('/home', 'u');
+
 describe('paths', () => {
   const original = process.env.CEZ_HOME;
   afterEach(() => {
@@ -28,16 +32,16 @@ describe('paths', () => {
   });
 
   it('honors the CEZ_HOME override', () => {
-    process.env.CEZ_HOME = '/tmp/cez-home-test';
-    expect(cezarHomeDir()).toBe('/tmp/cez-home-test');
-    expect(serverStatePath()).toBe('/tmp/cez-home-test/server.json');
-    expect(serverLockPath()).toBe('/tmp/cez-home-test/server.install.lock');
+    process.env.CEZ_HOME = H;
+    expect(cezarHomeDir()).toBe(H);
+    expect(serverStatePath()).toBe(join(H, 'server.json'));
+    expect(serverLockPath()).toBe(join(H, 'server.install.lock'));
   });
 
   it('the default instance keeps the legacy un-suffixed paths', () => {
-    process.env.CEZ_HOME = '/tmp/cez-home-test';
-    expect(serverStatePath(DEFAULT_SERVER_INSTANCE)).toBe('/tmp/cez-home-test/server.json');
-    expect(serverLockPath(DEFAULT_SERVER_INSTANCE)).toBe('/tmp/cez-home-test/server.install.lock');
+    process.env.CEZ_HOME = H;
+    expect(serverStatePath(DEFAULT_SERVER_INSTANCE)).toBe(join(H, 'server.json'));
+    expect(serverLockPath(DEFAULT_SERVER_INSTANCE)).toBe(join(H, 'server.install.lock'));
   });
 
   it('workspace config/ui-state live directly under the cezar home', () => {
@@ -47,18 +51,16 @@ describe('paths', () => {
   });
 
   it('workspace paths honor the CEZ_HOME override', () => {
-    process.env.CEZ_HOME = '/tmp/cez-home-test';
-    expect(workspaceConfigPath()).toBe('/tmp/cez-home-test/config.json');
-    expect(workspaceUiStatePath()).toBe('/tmp/cez-home-test/ui-state.json');
+    process.env.CEZ_HOME = H;
+    expect(workspaceConfigPath()).toBe(join(H, 'config.json'));
+    expect(workspaceUiStatePath()).toBe(join(H, 'ui-state.json'));
   });
 
   it('a named instance lives under server-instances/, keyed by slug', () => {
-    process.env.CEZ_HOME = '/tmp/cez-home-test';
-    expect(serverInstancesDir()).toBe('/tmp/cez-home-test/server-instances');
-    expect(serverStatePath('shop-example-com')).toBe('/tmp/cez-home-test/server-instances/shop-example-com.json');
-    expect(serverLockPath('shop-example-com')).toBe(
-      '/tmp/cez-home-test/server-instances/shop-example-com.install.lock',
-    );
+    process.env.CEZ_HOME = H;
+    expect(serverInstancesDir()).toBe(join(H, 'server-instances'));
+    expect(serverStatePath('shop-example-com')).toBe(join(H, 'server-instances', 'shop-example-com.json'));
+    expect(serverLockPath('shop-example-com')).toBe(join(H, 'server-instances', 'shop-example-com.install.lock'));
   });
 });
 
@@ -102,8 +104,8 @@ it('an EMPTY CEZ_HOME falls back to the default instead of a relative cwd path',
   const original = process.env.CEZ_HOME;
   process.env.CEZ_HOME = '';
   try {
-    expect(cezarHomeDir().startsWith('/')).toBe(true);
-    expect(cezarHomeDir().endsWith('/.cezar')).toBe(true);
+    expect(isAbsolute(cezarHomeDir())).toBe(true);
+    expect(basename(cezarHomeDir())).toBe('.cezar');
   } finally {
     if (original === undefined) delete process.env.CEZ_HOME;
     else process.env.CEZ_HOME = original;
@@ -112,17 +114,17 @@ it('an EMPTY CEZ_HOME falls back to the default instead of a relative cwd path',
 
 describe('agentHomePaths', () => {
   it('defaults to the agents\' documented home directories', () => {
-    const paths = agentHomePaths({ HOME: '/home/u' } as NodeJS.ProcessEnv);
-    expect(paths.claude).toBe('/home/u/.claude');
-    expect(paths.codex).toBe('/home/u/.codex');
-    expect(paths.opencodeConfig).toBe('/home/u/.config/opencode');
-    expect(paths.cursor).toBe('/home/u/.cursor');
-    expect(paths.pi).toBe('/home/u/.pi/agent');
+    const paths = agentHomePaths({ HOME: U } as NodeJS.ProcessEnv);
+    expect(paths.claude).toBe(join(U, '.claude'));
+    expect(paths.codex).toBe(join(U, '.codex'));
+    expect(paths.opencodeConfig).toBe(join(U, '.config', 'opencode'));
+    expect(paths.cursor).toBe(join(U, '.cursor'));
+    expect(paths.pi).toBe(join(U, '.pi', 'agent'));
   });
 
   it('honors agent-specific home overrides', () => {
     const paths = agentHomePaths({
-      HOME: '/home/u',
+      HOME: U,
       CLAUDE_CONFIG_DIR: '/opt/claude-klaudiusz',
       CODEX_HOME: '/opt/codex',
       CURSOR_CONFIG_DIR: '/opt/cursor',
@@ -131,14 +133,14 @@ describe('agentHomePaths', () => {
     } as NodeJS.ProcessEnv);
     expect(paths.claude).toBe('/opt/claude-klaudiusz');
     expect(paths.codex).toBe('/opt/codex');
-    expect(paths.opencodeConfig).toBe('/xdg/opencode');
+    expect(paths.opencodeConfig).toBe(join('/xdg', 'opencode'));
     expect(paths.cursor).toBe('/opt/cursor');
     expect(paths.pi).toBe('/opt/pi-agent');
   });
 
   it('ignores a blank CLAUDE_CONFIG_DIR rather than yielding a relative path', () => {
-    const paths = agentHomePaths({ HOME: '/home/u', CLAUDE_CONFIG_DIR: '   ' } as NodeJS.ProcessEnv);
-    expect(paths.claude).toBe('/home/u/.claude');
+    const paths = agentHomePaths({ HOME: U, CLAUDE_CONFIG_DIR: '   ' } as NodeJS.ProcessEnv);
+    expect(paths.claude).toBe(join(U, '.claude'));
   });
 
   it('falls back to USERPROFILE when HOME is unset', () => {
@@ -149,20 +151,20 @@ describe('agentHomePaths', () => {
 
 describe('claudeStateFilePath', () => {
   it('is a SIBLING of the default ~/.claude', () => {
-    const env = { HOME: '/home/u' } as NodeJS.ProcessEnv;
-    expect(claudeStateFilePath(agentHomePaths(env).claude, env)).toBe('/home/u/.claude.json');
+    const env = { HOME: U } as NodeJS.ProcessEnv;
+    expect(claudeStateFilePath(agentHomePaths(env).claude, env)).toBe(join(U, '.claude.json'));
   });
 
   it('moves INSIDE an overridden config dir', () => {
-    const env = { HOME: '/home/u', CLAUDE_CONFIG_DIR: '/home/u/.claude-klaudiusz' } as NodeJS.ProcessEnv;
-    expect(claudeStateFilePath(agentHomePaths(env).claude, env)).toBe('/home/u/.claude-klaudiusz/.claude.json');
+    const env = { HOME: U, CLAUDE_CONFIG_DIR: join(U, '.claude-klaudiusz') } as NodeJS.ProcessEnv;
+    expect(claudeStateFilePath(agentHomePaths(env).claude, env)).toBe(join(U, '.claude-klaudiusz', '.claude.json'));
   });
 
   it('moves inside for a profile dir passed explicitly, with no env override', () => {
     // The agent-profile path: the env still says "default", but the caller resolved
     // a second account's dir. Reading `dirname()` here would hit the WRONG account's file.
-    const env = { HOME: '/home/u' } as NodeJS.ProcessEnv;
-    expect(claudeStateFilePath('/home/u/.claude-klaudiusz', env)).toBe('/home/u/.claude-klaudiusz/.claude.json');
+    const env = { HOME: U } as NodeJS.ProcessEnv;
+    expect(claudeStateFilePath(join(U, '.claude-klaudiusz'), env)).toBe(join(U, '.claude-klaudiusz', '.claude.json'));
   });
 
   it('reads an account\'s OWN state file when the cezar process carries an override', () => {
@@ -170,15 +172,15 @@ describe('claudeStateFilePath', () => {
     // account (legal — the discovered account is /opt/work, so it is not a duplicate). The answer is
     // the file INSIDE it, because that is the one the CLI will read when cezar runs that account as
     // `CLAUDE_CONFIG_DIR=~/.claude claude`. The sibling would describe a login it never uses.
-    const env = { HOME: '/home/u', CLAUDE_CONFIG_DIR: '/opt/work' } as NodeJS.ProcessEnv;
-    expect(claudeStateFilePath('/home/u/.claude', env)).toBe('/home/u/.claude/.claude.json');
-    expect(claudeStateFilePath('/opt/work', env)).toBe('/opt/work/.claude.json');
+    const env = { HOME: U, CLAUDE_CONFIG_DIR: '/opt/work' } as NodeJS.ProcessEnv;
+    expect(claudeStateFilePath(join(U, '.claude'), env)).toBe(join(U, '.claude', '.claude.json'));
+    expect(claudeStateFilePath('/opt/work', env)).toBe(join('/opt/work', '.claude.json'));
   });
 
   it('keeps the SIBLING spelling for the discovered account on a plain machine', () => {
     // The zero-config path, and the one case where the file is not inside: no override anywhere, so
     // the CLI never sees the variable.
-    const env = { HOME: '/home/u' } as NodeJS.ProcessEnv;
-    expect(claudeStateFilePath('/home/u/.claude', env)).toBe('/home/u/.claude.json');
+    const env = { HOME: U } as NodeJS.ProcessEnv;
+    expect(claudeStateFilePath(join(U, '.claude'), env)).toBe(join(U, '.claude.json'));
   });
 });
