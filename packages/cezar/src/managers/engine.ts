@@ -3131,6 +3131,8 @@ export class ManagerEngine {
     try {
       session = (this.deps.runnerFor ?? createRunner)(runner).startSession({
         userPrompt: 'Reply with OK.',
+        // A connector probe: it answers nothing the user reads, so nothing can steer it.
+        globalInstructions: false,
         cwd: this.deps.store.workdir(id),
         allowedTools: [],
         env: { ...profile.env, CEZ_MANAGER_ID: id },
@@ -3184,6 +3186,8 @@ export class ManagerEngine {
       session = (this.deps.runnerFor ?? createRunner)(runner).startSession({
         systemPrompt: 'You run one tool call the user approved in cezar, exactly as approved, and nothing else.',
         userPrompt: connectorCallPrompt(tool, action.args),
+        // The user approved this exact call; instructions must not rewrite it after the fact.
+        globalInstructions: false,
         cwd: store.workdir(id),
         allowedTools: [tool],
         env: { ...profile.env, CEZ_MANAGER_ID: id },

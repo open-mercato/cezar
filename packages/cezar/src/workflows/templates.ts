@@ -18,22 +18,30 @@ import type { WorkflowDef } from './types.ts';
 /**
  * The implement agent knows the repo's runner and which tests its change touches; cezar does not.
  * It records that command in `$CEZ_TEST_COMMAND_FILE`, and the check re-runs it for an exit code
- * the agent cannot argue with. No record, the whole suite — never weaker than a fixed command.
- * Running agent-written shell adds no capability: the agent already controls what `npm test` runs.
+ * of its own. No record (or only blanks and comments), the whole suite. The record is trusted
+ * input: an agent can narrow it or neuter it, just as it could edit the tests, so the check
+ * prints it first and `implement-review-pr`'s gate shows it (`recordedTests`). cezar clears it at
+ * every agent round (`clearTestCommandRecord`), so a stale narrow command never outlives its round.
+ * `bash -l` like the outer `bash -lc` (profile functions such as nvm), `-e -o pipefail` so a
+ * failing line or a failing stage of `… | tail` fails the check.
  */
 export const RELATED_TESTS_COMMAND =
-  'if [ -s "${CEZ_TEST_COMMAND_FILE:-}" ]; then ' +
-  'echo "Running the related tests recorded in \$CEZ_TEST_COMMAND_FILE:"; sed "s/^/  /" "$CEZ_TEST_COMMAND_FILE"; ' +
-  'bash -e "$CEZ_TEST_COMMAND_FILE"; ' +
-  'else echo "No related tests recorded in \$CEZ_TEST_COMMAND_FILE: running the whole suite."; npm test; fi';
+  'f="${CEZ_TEST_COMMAND_FILE:-}"; ' +
+  'if [ -n "$f" ] && [ -f "$f" ] && grep -qvE \'^[[:space:]]*(#.*)?$\' "$f"; then ' +
+  'echo "Related-tests command recorded by the agent ($f):"; sed \'s/^/  | /\' "$f"; echo; ' +
+  'bash -l -e -o pipefail "$f"; ' +
+  'else echo \'No related-tests command recorded in $CEZ_TEST_COMMAND_FILE: running the whole suite (npm test).\'; npm test; fi';
 
 export const RECORD_TESTS_PROMPT =
   'Run only the tests related to your change. When you are done, write the shell command that runs them ' +
-  '(for example `npm test -- path/to/changed.test.ts`) to the file named by $CEZ_TEST_COMMAND_FILE, replacing what is ' +
-  'there; the next step re-runs it to verify your work. Leave the file absent only when the whole suite is the right check.';
+  '(for example `npm test -- path/to/changed.test.ts`) to the file named by $CEZ_TEST_COMMAND_FILE, one command per ' +
+  'line, without `&&` or `||` chains; the next step re-runs it to verify your work, and shows it to the reviewer. ' +
+  'cezar empties that file at the start of every agent round, so write it each time. Leave it absent only when the ' +
+  'whole suite is the right check.';
 
 const IMPLEMENT_PROMPT = `{{task}}\n\n${RECORD_TESTS_PROMPT}`;
-const UPDATE_TESTS_NOTE = ' If the related tests changed, update $CEZ_TEST_COMMAND_FILE.';
+const UPDATE_TESTS_NOTE =
+  ' cezar emptied $CEZ_TEST_COMMAND_FILE for this round: write the related-tests command there again, or leave it absent to run the whole suite.';
 
 function builtIn(name: string, description: string, graph: WorkflowGraph): WorkflowDef {
   const issues = graphIssues(graph);
@@ -103,7 +111,7 @@ export const IMPLEMENT_REVIEW_PR = builtIn(
         session: { continue: 'implement' },
         prompt: 'The reviewer asked for changes:\n\n{{nodes.review.summary}}\n\nMake them.' + UPDATE_TESTS_NOTE,
       },
-      { id: 'gate', type: 'gate.human', name: 'Your review', message: 'Review verdict: {{nodes.review.verdict}}. Open a PR for “{{task}}”?' },
+      { id: 'gate', type: 'gate.human', name: 'Your review', message: 'Review verdict: {{nodes.review.verdict}}.\n\nRun tests ran the agent\'s related-tests command (blank: the whole suite ran):\n{{nodes.tests.recordedTests}}\n\nOpen a PR for “{{task}}”?' },
       { id: 'pr', type: 'github.draft-pr', name: 'Draft PR' },
       { id: 'done', type: 'end', name: 'PR opened', status: 'success' },
       { id: 'stopped', type: 'end', name: 'Stopped', status: 'failed' },
