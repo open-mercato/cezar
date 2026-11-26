@@ -5145,6 +5145,32 @@ describe('ManagerEngine', () => {
       expect(engine.accountHolds().deadlines.get('claude:default')).toBe(Date.parse(resetAt));
     });
 
+    it('"out of usage credits" hands the turn to #2 and holds #1 until its named reset', async () => {
+      clock = Date.parse('2026-11-26T08:11:00Z');
+      const engine = makeEngine({ now: () => clock });
+      const id = await withBackup(engine);
+      const credits = 'You\'re out of usage credits · resets Dec 1 at 1am (Europe/Warsaw)';
+      const until = '2026-12-01T00:00:00.000Z';
+      backend.scripts.push({ fail: credits }, say('Answered on codex.'));
+      engine.send(id, 'rc-7 home: keep it on both');
+      await settled(engine);
+      expect(backend.specs).toHaveLength(2);
+      expect(backend.specs[1]).toMatchObject({ model: 'gpt-5.5' });
+      expect(switches(id)).toEqual([expect.objectContaining({ reason: 'usage-limit', until })]);
+      expect(assistants(id)).toEqual([expect.objectContaining({ text: 'Answered on codex.', agent: expect.objectContaining({ slot: 1 }) })]);
+      expect(assistants(id)[0]).not.toHaveProperty('error');
+      expect(engine.accountHolds().deadlines.get('claude:default')).toBe(Date.parse(until));
+
+      // A later turn before the reset skips #1 entirely.
+      clock = Date.parse('2026-11-28T12:00:00Z');
+      backend.scripts.push(say('Still codex.'));
+      engine.send(id, '5698 review: retry');
+      await settled(engine);
+      expect(backend.specs).toHaveLength(3);
+      expect(backend.specs[2]).toMatchObject({ model: 'gpt-5.5' });
+      expect(switches(id)).toHaveLength(1);
+    });
+
     it('goes back to #1 on the first turn after its reset, in a fresh session that hears what the backup said', async () => {
       // Close enough to the reset that #1's transcript would still be warm, but it missed #2's replies.
       clock = Date.parse('2026-11-10T14:40:00Z');
