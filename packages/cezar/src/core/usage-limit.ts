@@ -42,6 +42,11 @@ export const MAX_USAGE_LIMIT_WAIT_MS = 7 * 24 * 60 * 60_000;
 export const MAX_MONTHLY_USAGE_LIMIT_WAIT_MS = 31 * 24 * 60 * 60_000;
 const MONTHLY_CREDITS_RE = /\bout\s+of\s+usage\s+(?:credits|quota)\b/i;
 
+/** Claude's monthly credits wording: an account-wide block whose reset may be weeks out. */
+export function isMonthlyCreditsLimit(message: string): boolean {
+  return MONTHLY_CREDITS_RE.test(message);
+}
+
 // A clock-only message omits reset seconds. Pad before selecting its day (#1081).
 const CLOCK_RESET_BUFFER_MS = 60_000;
 

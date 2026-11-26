@@ -1,10 +1,16 @@
 import { localTimeZone, type UsageAccountBinding, type UsageWindow, type UsageWindowsSnapshot } from '@open-mercato/cezar-contract';
-import { MAX_USAGE_LIMIT_WAIT_MS } from '../core/usage-limit.ts';
+import { MAX_MONTHLY_USAGE_LIMIT_WAIT_MS, MAX_USAGE_LIMIT_WAIT_MS } from '../core/usage-limit.ts';
 import { AUTO_RESUME_GRACE_MS } from '../workflows/run.ts';
 import { probeCodexUsageWindows } from '../core/codex-usage-probe.ts';
 import { loadUsageWindows, saveUsageWindows, isUsageWindowBlocking } from '../workspace/usage-windows.ts';
 import type { ResolvedAgentProfile } from '../workspace/agent-profiles.ts';
 import { digest, type ResetResolver } from './deferred-start.ts';
+
+/** Named windows (5-hour, weekly, Codex) reset within a week; an unnamed one with no known duration
+ *  may be Claude's monthly credits allowance, so it gets the same monthly cap as the parser (#2517). */
+export function maxResetWaitMs(w: UsageWindow): number {
+  return w.kind === 'other' && w.durationMinutes === null ? MAX_MONTHLY_USAGE_LIMIT_WAIT_MS : MAX_USAGE_LIMIT_WAIT_MS;
+}
 
 /** Unknown model applicability is not evidence that the general bucket covers that model. */
 export function selectResetWindows(snapshot: UsageWindowsSnapshot, models: Array<string | undefined>, now = Date.now()): UsageWindow[] | null {
@@ -18,7 +24,7 @@ export function selectResetWindows(snapshot: UsageWindowsSnapshot, models: Array
     if (applicable.some(w => w.resetsAt === null && (w.status === 'blocked' || (w.usedPercent ?? 0) >= 100))) return null;
     const blocking = applicable.filter(w => isUsageWindowBlocking(w, now));
     const selected = blocking.length ? blocking : applicable.filter(w => w.kind === (snapshot.provider === 'claude' ? 'five-hour' : 'primary'));
-    if (!selected.length || selected.some(w => w.observedAt > now || w.resetsAt === null || w.resetsAt <= now || w.resetsAt > now + MAX_USAGE_LIMIT_WAIT_MS)) return null;
+    if (!selected.length || selected.some(w => w.observedAt > now || w.resetsAt === null || w.resetsAt <= now || w.resetsAt > now + maxResetWaitMs(w))) return null;
     for (const w of selected) picked.set(w.id, w);
   }
   return picked.size ? [...picked.values()] : null;
@@ -72,7 +78,7 @@ export async function deferredHoldUntil(definition: import('./types.ts').Schedul
     // safely apply to those. New definitions include every confirmed agent step.
     for (const window of snapshot?.windows ?? []) {
       if (window.applicability !== 'all' && !(window.applicability === 'models' && models?.some(m => m.model !== undefined && window.models.includes(m.model)))) continue;
-      if (window.observedAt > Date.parse(definition.createdAt) && isUsageWindowBlocking(window, now) && window.resetsAt! <= now + MAX_USAGE_LIMIT_WAIT_MS) until = Math.max(until, window.resetsAt! + AUTO_RESUME_GRACE_MS);
+      if (window.observedAt > Date.parse(definition.createdAt) && isUsageWindowBlocking(window, now) && window.resetsAt! <= now + maxResetWaitMs(window)) until = Math.max(until, window.resetsAt! + AUTO_RESUME_GRACE_MS);
     }
   }
   return until || null;

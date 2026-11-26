@@ -55,6 +55,13 @@ describe('usage reset selection', () => {
     expect(selectResetWindows(snapshot([primary], 'codex'), [undefined], NOW)).toEqual([primary]);
     expect(selectResetWindows(snapshot([{ ...primary, resetsAt: NOW + 8 * 86_400_000 }], 'codex'), [undefined], NOW)).toBeNull();
   });
+  it('keeps a monthly credits block weeks out, but not a named weekly window that far (#2517)', () => {
+    const credits = window({ id: 'terminal-limit', kind: 'other', durationMinutes: null, status: 'blocked', usedPercent: 100, resetsAt: NOW + 20 * 86_400_000 });
+    expect(selectResetWindows(snapshot([credits]), ['sonnet'], NOW)).toEqual([credits]);
+    expect(selectResetWindows(snapshot([{ ...credits, resetsAt: NOW + 32 * 86_400_000 }]), ['sonnet'], NOW)).toBeNull();
+    const weekly = window({ id: 'seven_day', kind: 'weekly', durationMinutes: 10080, status: 'blocked', resetsAt: NOW + 20 * 86_400_000 });
+    expect(selectResetWindows(snapshot([weekly]), ['sonnet'], NOW)).toBeNull();
+  });
 });
 
 it('applies newer holds to the confirmed step models, including overrides, but not unrelated models', async () => {
@@ -81,6 +88,12 @@ it('applies newer holds to the confirmed step models, including overrides, but n
     await saveUsageWindows({ provider: 'claude', accountId: 'default', profilePath: '/synthetic-profile' }, { provider: 'claude', source: 'claude-stream', observedAt: now, windows: [{ ...blocked, applicability: 'all', models: [] }] });
     expect(await deferredHoldUntil(definition)).toBe(blocked.resetsAt! + 30_000);
     await saveUsageWindows({ provider: 'claude', accountId: 'default', profilePath: '/synthetic-profile' }, { provider: 'claude', source: 'claude-stream', observedAt: now, windows: [{ ...blocked, applicability: 'all', models: [], resetsAt: null }] });
+    expect(await deferredHoldUntil(definition)).toBeNull();
+    // A monthly credits block weeks out still holds the automation back; a weekly one that far does not (#2517).
+    const credits = { ...blocked, id: 'terminal-limit', kind: 'other' as const, durationMinutes: null, applicability: 'all' as const, models: [], resetsAt: now + 20 * 86_400_000 };
+    await saveUsageWindows({ provider: 'claude', accountId: 'default', profilePath: '/synthetic-profile' }, { provider: 'claude', source: 'claude-stream', observedAt: now, windows: [credits] });
+    expect(await deferredHoldUntil(definition)).toBe(credits.resetsAt + 30_000);
+    await saveUsageWindows({ provider: 'claude', accountId: 'default', profilePath: '/synthetic-profile' }, { provider: 'claude', source: 'claude-stream', observedAt: now, windows: [{ ...credits, kind: 'weekly', durationMinutes: 10080 }] });
     expect(await deferredHoldUntil(definition)).toBeNull();
   } finally { vi.unstubAllEnvs(); rmSync(root, { recursive: true, force: true }); }
 });

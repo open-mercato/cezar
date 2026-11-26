@@ -4455,7 +4455,10 @@ export class RunManager {
     return true;
   }
 
-  /** Wake the queue when a known fallback account hold expires. */
+  /**
+   * Wake the queue when a known fallback account hold expires. A capped timer that fires early
+   * (a hold past 2^31-1 ms) only re-arms when work is queued: the pump then reads `accountHolds()`.
+   */
   private armHoldExpiry(at: number): void {
     if (this.disposed || this.holdDeadlines.has(at)) return;
     this.holdDeadlines.add(at);
