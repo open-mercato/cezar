@@ -37,6 +37,7 @@ describe('classifyAgentFailure — the agent CLIs\' own words (telemetry fingerp
     ['Your input exceeds the context window of this model. (context_length_exceeded)', 'context_too_large'],
     // telemetry gaps (0fa28a3b, 96174abb, 0399e0f1, 83c98049)
     ['API Error: Usage credits ran out before the response was finished.', 'billing'],
+    ["You're out of usage credits · resets Dec 1 at 1am (Europe/Warsaw)", 'usage_limit'],
     ['Model user RPM limit exceeded for glm/glm-5 maximum 3 requests per minute per account', 'transient'],
     ['Model glm/glm-5 is temporarily unavailable', 'transient'],
     ['This content was flagged for possible cybersecurity risk. If this seems wrong, try rephrasing your request. If you’re doing authorized security work that requires more cyber permissive safeguards, apply for Daybreak access via <url> before retrying. [cyberPolicy]', 'content_flagged'],
