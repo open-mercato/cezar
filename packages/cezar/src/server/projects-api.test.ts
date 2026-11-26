@@ -809,6 +809,44 @@ describe('workspace projects API', () => {
       contexts.disposeAll();
     });
 
+    it.each(['project folder', 'task worktree'] as const)(
+      'removes a project whose %s was deleted under a waiting task, cancelling the stranded run', async (gone) => {
+        const contexts = new ProjectContexts({ listProjects });
+        const other = await registerProject(otherRoot);
+        const ctx = await contexts.context(other.id);
+        const worktreePath = join(otherRoot, '.ai/cezar/worktrees/stranded');
+        mkdirSync(worktreePath, { recursive: true });
+        const run = ctx.store.createRun({ title: 'stranded', workflow: 'quick-task', task: 'x', steps: [] });
+        ctx.store.updateRun(run.id, { status: 'waiting', worktreePath });
+        const cancel = vi.spyOn(ctx.manager, 'cancel');
+        rmSync(gone === 'project folder' ? otherRoot : worktreePath, { recursive: true, force: true });
+        try {
+          const { status, body } = await del(other.id, { contexts });
+          expect(status).toBe(200);
+          expect(body).toEqual({ removed: true, id: other.id });
+          expect(cancel).toHaveBeenCalledWith(run.id);
+          expect(contexts.peek(other.id)).toBeUndefined();
+        } finally {
+          contexts.disposeAll();
+          mkdirSync(otherRoot, { recursive: true });
+        }
+      },
+    );
+
+    it('still 409s a waiting task whose worktree exists', async () => {
+      const contexts = new ProjectContexts({ listProjects });
+      const other = await registerProject(otherRoot);
+      const ctx = await contexts.context(other.id);
+      const worktreePath = join(otherRoot, '.ai/cezar/worktrees/live');
+      mkdirSync(worktreePath, { recursive: true });
+      const run = ctx.store.createRun({ title: 'live', workflow: 'quick-task', task: 'x', steps: [] });
+      ctx.store.updateRun(run.id, { status: 'waiting', worktreePath });
+      const refused = await del(other.id, { contexts });
+      expect(refused.status).toBe(409);
+      expect(refused.body.runningTasks).toBe(1);
+      contexts.disposeAll();
+    });
+
     it('404s an unknown id and a malformed one, without touching the registry', async () => {
       const other = await registerProject(otherRoot);
       for (const id of ['nope', 'Not%20A%20Slug', 'a'.repeat(120)]) {

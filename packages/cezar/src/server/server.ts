@@ -3546,7 +3546,8 @@ export function createAppParts(deps: ServerDeps) {
         );
       }
 
-      const active = activeRunCount(id);
+      const { live, stranded } = activeRuns(id, entry.root);
+      const active = live.length;
       if (active > 0) {
         return c.json(
           {
@@ -3575,6 +3576,10 @@ export function createAppParts(deps: ServerDeps) {
       trackerWatches.invalidateProject(entry.root);
       // Its terminals live in the app-level registry, which no project route reaches once it is gone.
       for (const run of contexts.peek(id)?.store.listRuns() ?? []) stopTaskProcesses(run.id);
+      // dispose() leaves providers alive on purpose; a stranded run's agent must not outlive its folder.
+      for (const run of stranded) {
+        try { contexts.peek(id)?.manager.cancel(run.id); } catch { /* best effort: the registry row is already gone */ }
+      }
       stopTaskProcesses(projectTerminalOwner(entry.root));
       contexts.dispose(id);
       workspaceEvents.emit('project-removed', { id });
@@ -3914,11 +3919,20 @@ export function createAppParts(deps: ServerDeps) {
    * directories, and a stale `running` row left by a crashed process would
    * become a 409 the user could never clear.
    */
-  const activeRunCount = (projectId: string): number => {
+  const activeRuns = (projectId: string, root: string): { live: RunRecord[]; stranded: RunRecord[] } => {
     const ctx = contexts.peek(projectId);
-    if (!ctx) return 0;
-    // An idle park has no agent process to strand.
-    return ctx.store.listRuns().filter((run) => ACTIVE_RUN_STATUSES.has(run.status) && !isIdleParked(run)).length;
+    const live: RunRecord[] = [];
+    const stranded: RunRecord[] = [];
+    if (!ctx) return { live, stranded };
+    const rootGone = !existsSync(root);
+    for (const run of ctx.store.listRuns()) {
+      // An idle park has no agent process to strand.
+      if (!ACTIVE_RUN_STATUSES.has(run.status) || isIdleParked(run)) continue;
+      // Deleted from disk under a live run: nothing is left to protect, and it can never finish.
+      if (rootGone || (run.worktreePath !== undefined && !existsSync(run.worktreePath))) stranded.push(run);
+      else live.push(run);
+    }
+    return { live, stranded };
   };
 
   // Workspace-level by design: update state spans project and global installs,
