@@ -191,6 +191,21 @@ describe("Claude's out-of-usage-credits window (manager backup did not take over
     expect(parseUsageLimit(message, Date.parse('2026-10-20T09:00:00Z'))).toBeNull();
   });
 
+  it('gives an ISO reset in the credits wording the same monthly cap', () => {
+    const early = Date.parse('2026-11-05T09:00:00Z');
+    expect(parseUsageLimit("You're out of usage credits, try again at 2026-12-01T00:00:00Z", early)?.resetAt.toISOString())
+      .toBe('2026-12-01T00:00:00.000Z');
+    expect(parseUsageLimit('Usage limit reached, try again at 2026-12-01T00:00:00Z', early)).toBeNull();
+  });
+
+  it('keeps a weekly reset at the edge of the window — padding is not counted against the cap', () => {
+    // Exactly seven days out; the minute of padding lands just past the cap.
+    const now = Date.parse('2026-11-24T09:00:00Z');
+    expect(parseUsageLimit('weekly limit · resets Dec 1, 9am (UTC)', now)?.resetAt.toISOString())
+      .toBe('2026-12-01T09:01:00.000Z');
+    expect(parseUsageLimit('weekly limit · resets Dec 1, 9:01am (UTC)', now)).toBeNull();
+  });
+
   it('without a reset it is still a usage limit with nothing to schedule, never billing', () => {
     const bare = "You're out of usage credits";
     expect(isUsageLimitMessage(bare)).toBe(true);
