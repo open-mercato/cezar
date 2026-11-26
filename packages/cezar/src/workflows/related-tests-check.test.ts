@@ -48,9 +48,28 @@ describe('built-in related-tests check', () => {
     expect((await runCheck({ CEZ_TEST_COMMAND_FILE: file })).code).not.toBe(0);
   }, 20_000);
 
+  // A recorded `… 2>&1 | tail -40` must not exit with `tail`'s status (review of #2519).
+  it('fails when a stage of a recorded pipeline fails', async () => {
+    writeFileSync(file, 'false | cat\n');
+    expect((await runCheck({ CEZ_TEST_COMMAND_FILE: file })).code).not.toBe(0);
+  }, 20_000);
+
+  it('prints the recorded command before running it, so a reviewer sees what ran', async () => {
+    writeFileSync(file, 'echo RELATED-ONLY\n');
+    const { output } = await runCheck({ CEZ_TEST_COMMAND_FILE: file });
+    expect(output).toContain(`Related-tests command recorded by the agent (${file}):\n  | echo RELATED-ONLY`);
+  }, 20_000);
+
+  it('names the variable, not an empty path, when it falls back', async () => {
+    const { output } = await runCheck({});
+    expect(output).toContain('No related-tests command recorded in $CEZ_TEST_COMMAND_FILE: running the whole suite (npm test).');
+  }, 20_000);
+
   it.each([
     ['the file is absent', () => ({ CEZ_TEST_COMMAND_FILE: join(dir, 'missing') })],
     ['the file is empty', () => (writeFileSync(file, ''), { CEZ_TEST_COMMAND_FILE: file })],
+    ['the file holds only blank lines', () => (writeFileSync(file, '\n  \n\t\n'), { CEZ_TEST_COMMAND_FILE: file })],
+    ['the file holds only comments', () => (writeFileSync(file, '# npm test -- a.test.ts\n  # nothing\n'), { CEZ_TEST_COMMAND_FILE: file })],
     ['the variable is unset', () => ({})],
   ])('falls back to the whole suite when %s', async (_label, setup) => {
     const { code, output } = await runCheck(setup());
@@ -59,13 +78,18 @@ describe('built-in related-tests check', () => {
   }, 20_000);
 
   it('is what both implement templates check with, and their agents are told to record the command', () => {
-    for (const workflow of [IMPLEMENT_AND_VERIFY, IMPLEMENT_REVIEW_PR]) {
+    for (const [workflow, agents] of [[IMPLEMENT_AND_VERIFY, ['implement', 'fix']], [IMPLEMENT_REVIEW_PR, ['implement', 'fix', 'address']]] as const) {
       const nodes = workflow.graph!.nodes;
       expect(nodes.find((n) => n.id === 'tests')).toMatchObject({ type: 'check', command: RELATED_TESTS_COMMAND });
-      for (const id of ['implement', 'fix']) {
+      for (const id of agents) {
         expect((nodes.find((n) => n.id === id) as { prompt: string }).prompt).toContain('$CEZ_TEST_COMMAND_FILE');
       }
     }
+  });
+
+  it('shows the recorded command at the implement-review-pr gate', () => {
+    const gate = IMPLEMENT_REVIEW_PR.graph!.nodes.find((n) => n.id === 'gate') as { message: string };
+    expect(gate.message).toContain('{{nodes.tests.recordedTests}}');
   });
 
   it('leaves no built-in check running a bare whole-suite command', () => {

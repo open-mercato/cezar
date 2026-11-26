@@ -18,9 +18,11 @@ Templates cover implementation with tests (implement-and-verify), implementation
 
 ## Run only the tests related to the change
 
-The Run tests step of implement-and-verify and implement-review-pr does not run the whole suite. The implement agent runs the tests related to its change and records that command in the file named by `$CEZ_TEST_COMMAND_FILE`, for example `npm test -- src/cart/total.test.ts`. The Run tests step then runs the recorded command again and uses its exit code, so a red result still sends the output to the fixer. That works with any test runner, because the agent already knows which one your repository uses. When the agent records nothing, the step runs `npm test` as before. The fixer and the agent that addresses review comments update the file when the related tests change. Its output starts by naming the command it ran.
+This is one result of the rule that [global instructions](../agents-and-models/system-prompt) reach every step. The Run tests step of implement-and-verify and implement-review-pr does not run the whole suite. The implement agent runs the tests related to its change and records that command in the file named by `$CEZ_TEST_COMMAND_FILE`, one command per line, for example `npm test -- src/cart/total.test.ts`. The Run tests step prints the recorded command, then runs it in a login shell with `-e -o pipefail`. A failing line, or a failing stage of a pipeline such as `… | tail`, turns the step red and sends the output to the fixer. When the file is missing, or holds only blank lines and comments, the step runs `npm test`.
 
-> **Good to know**: The record lives in the task's artifacts folder as a hidden file, so it never reaches the diff or the Assets view. To always run one fixed command, edit the Run tests step's command in your own copy of the workflow.
+cezar empties the file at the start of every agent round (the fixer, review follow-ups, Continue), so an old narrow command never outlives its round. In implement-review-pr, the gate before the PR shows the command the agent recorded. It is blank when the whole suite ran.
+
+> **Good to know**: The record lives in the task's artifacts folder as a hidden file, so it never reaches the diff or the Assets view. An agent could narrow the command or make it a no-op, just as it could edit the tests, which is why the step and the gate show it. To always run one fixed command, edit the Run tests step's command in your own copy of the workflow.
 
 ## Where to find it
 

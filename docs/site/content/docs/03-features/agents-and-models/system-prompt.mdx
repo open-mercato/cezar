@@ -31,6 +31,14 @@ than copying their parent's prompt, so they receive one copy of the latest globa
 rules. A manager reads the global instructions on every turn (chat, watch, job and follow-up) and
 must not ask a task to break them.
 
+They also reach every other model call cezar makes, on every agent: task titles and branch names, commit messages, the planner, and subagents. An agent is told to pass them to every subagent or helper agent it starts, such as Claude Code's Task tool. Two calls skip them on purpose: the connection probe and a tool call you approved exactly as written.
+
+## Check steps
+
+A workflow check step runs a shell command, which cannot read instructions. Just before a check runs, cezar asks the cheap naming model whether the command conflicts with your global instructions. The model gets the command and the files the task changed, and answers with the command to run. For example, with "run only checks relevant to the change", `npm test` can become `npm test -- src/cart/total.test.ts`. When the command changes, the check's output starts with a line naming both commands and the reason, so the fixer and you see it. Otherwise the step shows a note saying why the check runs as written.
+
+> **Good to know**: The model only adjusts how the check runs. Tests stay tests, and the check still fails on failure. With no global instructions there is no call at all. The call is skipped on a pull request from a fork, because its file names are untrusted. It is also skipped when the default agent has no cheap model, under `CEZ_DRY_RUN=1`, and with `CEZ_CHECK_INSTRUCTIONS=0`. In all of those cases, and on any failure, the check runs exactly as written. Gating checks before an automatic landing are never changed.
+
 ## Where to find it
 
 Settings → project → Instructions → System prompt
