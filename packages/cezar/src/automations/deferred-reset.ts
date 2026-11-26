@@ -2,14 +2,15 @@ import { localTimeZone, type UsageAccountBinding, type UsageWindow, type UsageWi
 import { MAX_MONTHLY_USAGE_LIMIT_WAIT_MS, MAX_USAGE_LIMIT_WAIT_MS } from '../core/usage-limit.ts';
 import { AUTO_RESUME_GRACE_MS } from '../workflows/run.ts';
 import { probeCodexUsageWindows } from '../core/codex-usage-probe.ts';
+import { CLAUDE_TERMINAL_LIMIT_WINDOW_ID } from '../core/usage-windows.ts';
 import { loadUsageWindows, saveUsageWindows, isUsageWindowBlocking } from '../workspace/usage-windows.ts';
 import type { ResolvedAgentProfile } from '../workspace/agent-profiles.ts';
 import { digest, type ResetResolver } from './deferred-start.ts';
 
-/** Named windows (5-hour, weekly, Codex) reset within a week; an unnamed one with no known duration
- *  may be Claude's monthly credits allowance, so it gets the same monthly cap as the parser (#2517). */
+/** Only Claude's terminal-limit window can hold a monthly credits reset (#2517); its marker resets
+ *  are already capped at seven days when parsed. Every provider-reported window keeps seven days. */
 export function maxResetWaitMs(w: UsageWindow): number {
-  return w.kind === 'other' && w.durationMinutes === null ? MAX_MONTHLY_USAGE_LIMIT_WAIT_MS : MAX_USAGE_LIMIT_WAIT_MS;
+  return w.id === CLAUDE_TERMINAL_LIMIT_WINDOW_ID ? MAX_MONTHLY_USAGE_LIMIT_WAIT_MS : MAX_USAGE_LIMIT_WAIT_MS;
 }
 
 /** Unknown model applicability is not evidence that the general bucket covers that model. */
