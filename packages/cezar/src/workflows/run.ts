@@ -5301,7 +5301,7 @@ export class RunManager {
       this.cancelPendingHandoff(runId);
       this.startNowRequested.delete(runId);
       this.store.updateRun(runId, { status: 'cancelled', finishedAt: new Date().toISOString() });
-      this.store.appendEvent(runId, { type: 'lifecycle', message: 'cancelled while queued' });
+      this.noteUserAction(runId, { type: 'lifecycle', message: 'cancelled while queued' });
       // A queued run never entered `active`, so it never reaches `dropActive` — the one terminal
       // transition that misses the settle hook. Without this a parent waiting on a child the user
       // cancelled from the queue would wait for a report nobody would ever send.
@@ -5316,7 +5316,7 @@ export class RunManager {
           status: 'cancelled', finishedAt: new Date().toISOString(),
           fallbackEpisode: { attempted: run.fallbackEpisode.attempted, done: true },
         });
-        this.store.appendEvent(runId, { type: 'lifecycle', message: 'cancelled while selecting a fallback agent' });
+        this.noteUserAction(runId, { type: 'lifecycle', message: 'cancelled while selecting a fallback agent' });
         this.reportSettledChildToParent(runId);
         return true;
       }
@@ -5326,7 +5326,7 @@ export class RunManager {
           if (step.status === 'running' || step.status === 'waiting') this.store.updateStep(runId, step.id, { status: 'cancelled', finishedAt });
         }
         this.store.updateRun(runId, { status: 'cancelled', finishedAt, currentStepId: undefined });
-        this.store.appendEvent(runId, { type: 'lifecycle', message: 'run cancelled' });
+        this.noteUserAction(runId, { type: 'lifecycle', message: 'run cancelled' });
         return true;
       }
       // Dequeued but not yet registered: a continuation awaits its lifecycle gate first (#1495).
@@ -5341,14 +5341,14 @@ export class RunManager {
       this.cancelledStarting.add(runId);
       this.cancelPendingHandoff(runId);
       this.store.updateRun(runId, { status: 'cancelled', finishedAt: new Date().toISOString(), currentStepId: undefined });
-      this.store.appendEvent(runId, { type: 'lifecycle', message: 'run cancelled' });
+      this.noteUserAction(runId, { type: 'lifecycle', message: 'run cancelled' });
       return true;
     }
     if (state.switchingAgent) {
       this.pendingJobs.delete(runId);
       this.cancelPendingHandoff(runId);
       this.store.updateRun(runId, { status: 'cancelled', finishedAt: new Date().toISOString(), currentStepId: undefined });
-      this.store.appendEvent(runId, { type: 'lifecycle', message: 'run cancelled during agent switch' });
+      this.noteUserAction(runId, { type: 'lifecycle', message: 'run cancelled during agent switch' });
       return true;
     }
     state.cancelled = true;
@@ -5370,7 +5370,7 @@ export class RunManager {
       }
     }
     this.store.updateRun(runId, { status: 'cancelled', finishedAt, currentStepId: undefined });
-    this.store.appendEvent(runId, { type: 'lifecycle', message: 'run cancelled' });
+    this.noteUserAction(runId, { type: 'lifecycle', message: 'run cancelled' });
     // A startup wedge has no provider session to reap, so release its slot immediately. Once a
     // session has opened, keep the slot until its interrupt/teardown settles; admitting a
     // replacement while a non-cooperative provider is still alive would violate maxParallel.
@@ -5378,6 +5378,16 @@ export class RunManager {
       this.dropActive(runId, state);
     } else this.armCancellationGrace(runId, state);
     return true;
+  }
+
+  /** A Finish/Cancel note that must not abort the action: a project deleted from disk throws
+   *  ENOENT here (#1105), and End session then 500'd forever with the agent still alive. */
+  private noteUserAction(runId: string, event: Parameters<RunStore['appendEvent']>[1]): void {
+    try {
+      this.store.appendEvent(runId, event);
+    } catch (err) {
+      console.error(`[cez] could not record "${event.type}" for ${runId.slice(0, 8)}: ${err instanceof Error ? err.message : String(err)}`);
+    }
   }
 
   private cancelPendingHandoff(runId: string): void {
@@ -5961,7 +5971,7 @@ export class RunManager {
   finish(runId: string): boolean {
     const state = this.active.get(runId);
     if (state?.graphFinish && !state.session?.open) {
-      this.store.appendEvent(runId, { type: 'lifecycle', message: 'finished by user at a workflow wait' });
+      this.noteUserAction(runId, { type: 'lifecycle', message: 'finished by user at a workflow wait' });
       state.finishedAtWait = true;
       state.graphFinish();
       return true;
@@ -5979,7 +5989,7 @@ export class RunManager {
       this.clearIdleTimer(state);
       state.idleClosed = undefined;
       if (state.askPark === 'waiting') state.askPark = 'abandoned';
-      this.store.appendEvent(runId, { type: 'lifecycle', message: 'finished by user — landing the changes' });
+      this.noteUserAction(runId, { type: 'lifecycle', message: 'finished by user — landing the changes' });
       return this.landWithAgent(runId, state, state.currentStepId, () => {
         state.finishRequested = true;
         state.session?.end();
@@ -5997,7 +6007,7 @@ export class RunManager {
       // instead of the `failed` an abandoned live park would settle as.
       if (state.askPark === 'waiting') state.askPark = 'abandoned';
       state.finishRequested = true;
-      this.store.appendEvent(runId, { type: 'lifecycle', message: 'session closed by user' });
+      this.noteUserAction(runId, { type: 'lifecycle', message: 'session closed by user' });
       state.session.end();
       return true;
     }
@@ -6010,7 +6020,7 @@ export class RunManager {
       if (state.askPark === 'waiting') state.askPark = 'abandoned';
       if (!state.finishRequested) {
         state.finishRequested = true;
-        this.store.appendEvent(runId, { type: 'lifecycle', message: 'finished by user while the session was closing' });
+        this.noteUserAction(runId, { type: 'lifecycle', message: 'finished by user while the session was closing' });
       }
       return true;
     }
@@ -6026,7 +6036,7 @@ export class RunManager {
         if (step.status === 'waiting' || step.status === 'running') this.store.updateStep(runId, step.id, { status: 'done', finishedAt: at });
       }
       this.clearPendingAsk(runId);
-      this.store.appendEvent(runId, { type: 'lifecycle', message: 'finished by user' });
+      this.noteUserAction(runId, { type: 'lifecycle', message: 'finished by user' });
       void this.settleSuccess(runId);
       return true;
     }
@@ -6036,7 +6046,7 @@ export class RunManager {
     }
     if (run?.status === 'review' && !this.isActive(runId)) {
       this.store.updateRun(runId, { status: 'done', completionReason: 'accepted' });
-      this.store.appendEvent(runId, { type: 'lifecycle', message: 'review accepted — finished without a PR' });
+      this.noteUserAction(runId, { type: 'lifecycle', message: 'review accepted — finished without a PR' });
       return true;
     }
     // Already finished (agent DONE, an earlier Finish, another cockpit tab): a stale button's
