@@ -609,6 +609,34 @@ describe('switching a task agent', { timeout: 20_000 }, () => {
     await expectFinished(id, ['work', 'continue-1']);
   });
 
+  it.each([false, true])('saves a switched Continue\'s instruction redacted, yet the live switch sends it verbatim (restart: %s, #2526)', async (withRestart) => {
+    const secret = 'gho_thisisarealsecrettoken123456';
+    vi.stubEnv('GITHUB_TOKEN', secret);
+    vi.stubEnv('CEZ_REDACT_SECRETS', undefined);
+    const release = semaphore.register({ busySlots: () => 1, oldestQueuedAt: () => null, pump: () => undefined });
+    const id = finishedRun();
+    expect(manager.continueRun(id, { text: `Deploy with ${secret}`, images: [screenshot] }, true)).toEqual({ ok: true });
+    expect(manager.switchAgent(id, selection)).toHaveProperty('summary');
+    expect(store.getRun(id)?.agentSwitch?.continuationInput?.prompt).toBe('Deploy with [REDACTED]');
+    store.flush();
+    expect(readFileSync(join(root, '.ai/cezar/runs.json'), 'utf8')).not.toContain(secret);
+    if (withRestart) {
+      manager.dispose();
+      release();
+      store = RunStore.open(join(root, '.ai/cezar'), { keepLive: true });
+      expect(store.getRun(id)?.agentSwitch?.continuationInput?.prompt).toBe('Deploy with [REDACTED]');
+      manager = new RunManager(store, root, { semaphore });
+      await manager.recover();
+    } else {
+      release();
+      await semaphore.release();
+    }
+    await vi.waitFor(() => expect(sessions).toHaveLength(1), wait);
+    expect(sessions[0]!.spec.userPrompt).toContain(withRestart ? 'Deploy with [REDACTED]' : `Deploy with ${secret}`);
+    sessions[0]!.settle();
+    await expectFinished(id, ['work', 'continue-1']);
+  });
+
   it.each([false, true])('recovers a pending switch after server restart (existing Continue: %s)', async (withContinue) => {
     const release = semaphore.register({ busySlots: () => 1, oldestQueuedAt: () => null, pump: () => undefined });
     const id = finishedRun(withContinue);

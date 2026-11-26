@@ -848,6 +848,24 @@ describe('RunStore — secret redaction before persistence (#427)', () => {
     expect(RunStore.open(dataDir).getRun(run.id)?.steps[0]?.freshPrompt).toBe('use [REDACTED] to re-review');
   });
 
+  it('redacts a secret in an agent switch\'s saved continuation prompt, in runs.json and after a reopen', () => {
+    process.env.GITHUB_TOKEN = 'gho_thisisarealsecrettoken123456';
+    delete process.env.CEZ_REDACT_SECRETS;
+    const store = RunStore.open(dataDir);
+    const run = store.createRun({ title: 't', workflow: 'w', task: 'deploy with gho_thisisarealsecrettoken123456', steps: [] });
+    store.updateRun(run.id, { agentSwitch: {
+      summary: 'Switched to Codex', continuationStepId: 'continue-1',
+      continuationInput: { prompt: 'use gho_thisisarealsecrettoken123456 next', attachmentUrls: ['/images/a.png'] },
+    } });
+    expect(store.getRun(run.id)?.agentSwitch?.continuationInput).toEqual({ prompt: 'use [REDACTED] next', attachmentUrls: ['/images/a.png'] });
+    store.flush();
+    expect(readFileSync(join(dataDir, 'runs.json'), 'utf8')).not.toContain('use gho_thisisarealsecrettoken123456');
+    const reopened = RunStore.open(dataDir).getRun(run.id);
+    expect(reopened?.agentSwitch).toMatchObject({ summary: 'Switched to Codex', continuationStepId: 'continue-1', continuationInput: { prompt: 'use [REDACTED] next' } });
+    // `task` stays verbatim: it is replayed into every dequeue, not only a restart.
+    expect(reopened?.task).toBe('deploy with gho_thisisarealsecrettoken123456');
+  });
+
   it('CEZ_REDACT_SECRETS=0 opts runs.json out as well', () => {
     process.env.GITHUB_TOKEN = 'gho_thisisarealsecrettoken123456';
     process.env.CEZ_REDACT_SECRETS = '0';

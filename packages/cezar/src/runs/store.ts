@@ -1694,7 +1694,8 @@ export class RunStore extends EventEmitter {
    * `StepState.error` is the step-level counterpart and is scrubbed the same
    * way in `updateStep` — `run.ts` feeds the SAME `err.message` string to both
    * calls, so redacting only the run-level copy left the token verbatim one
-   * field away (#456 review).
+   * field away (#456 review). An agent switch's saved `continuationInput.prompt`
+   * is scrubbed too, like a step's `freshPrompt` (#2526).
    */
   private redactPatch(
     patch: Partial<Omit<RunRecord, 'id' | 'steps'>>,
@@ -1706,6 +1707,9 @@ export class RunStore extends EventEmitter {
       const value = out[field];
       if (typeof value === 'string') out[field] = this.redactText(value, runId);
     }
+    // Read back only to revive a switch after a restart; the live switch keeps its own copy.
+    const input = out.agentSwitch?.continuationInput;
+    if (input) out.agentSwitch = { ...out.agentSwitch!, continuationInput: { ...input, prompt: this.redactText(input.prompt, runId) } };
     if (out.attentionRequest) out.attentionRequest = { ...out.attentionRequest, questions: out.attentionRequest.questions.map(q => ({ ...q, question: this.redactText(q.question, runId), ...(q.options ? { options: q.options.map(o => ({ ...o, label: this.redactText(o.label, runId), ...(o.description ? { description: this.redactText(o.description, runId) } : {}) })) } : {}) })) };
     return out;
   }
