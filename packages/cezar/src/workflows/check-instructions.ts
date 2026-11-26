@@ -52,10 +52,11 @@ export function checkInstructionsActive(env: NodeJS.ProcessEnv = process.env): b
 const CHECK_WORDS = new RegExp(
   '(?<![\\p{L}\\p{N}])(' +
     [
-      'tests?', 'testing', 'tested', 'testy', 'testów', 'testami', 'testach', 'testom', 'testuj\\p{L}*', 'testowa\\p{L}*', 'przetestuj\\p{L}*',
+      'tests?', 'testing', 'tested', 'testu', 'testem', 'testowi', 'teście', 'testy', 'testów', 'testami', 'testach', 'testom',
+      'testuj\\p{L}*', 'testowa\\p{L}*', 'przetest\\p{L}*',
       'checks?', 'checking', 'checked', 'suites?', 'specs?', 'verify', 'verifies', 'verified', 'verification', 'ci',
       'lint', 'lints', 'linting', 'linter', 'typecheck', 'typechecks', 'typechecking', 'builds?',
-      'sprawdź', 'sprawdzaj\\p{L}*', 'sprawdzi\\p{L}*', 'sprawdzeni\\p{L}*', 'sprawdzani\\p{L}*', 'weryfik\\p{L}*',
+      'sprawdź', 'sprawdza\\p{L}*', 'sprawdzi\\p{L}*', 'sprawdzeni\\p{L}*', 'weryfik\\p{L}*',
     ].join('|') +
     ')(?![\\p{L}\\p{N}])',
   'iu',

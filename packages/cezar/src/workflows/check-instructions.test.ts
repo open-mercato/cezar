@@ -9,7 +9,7 @@ const resolveNamerModel = vi.fn();
 vi.mock('../runs/namer-model.ts', () => ({ resolveNamerModel }));
 vi.mock('../workspace/agent-profiles.ts', () => ({ resolveProfileEnvForRoot: async () => ({ env: {}, profile: undefined }) }));
 
-const { acceptRewrite, buildCheckInstructionsPrompt, checkInstructionsActive, directTestRunner, instructionsConcernChecks, parseCheckCommandAnswer, resolveCheckCommand, rewritableCheck } = await import('./check-instructions.ts');
+const { acceptRewrite, buildCheckInstructionsPrompt, checkInstructionsActive, directTestRunner, instructionsConcernChecks, parseCheckCommandAnswer, resolveCheckCommand, rewritableCheck, worktreeRewriteContext } = await import('./check-instructions.ts');
 
 /** `npm test` resolves through this repo's own package.json script (`vitest run`), a direct runner. */
 const FILES = ['src/a.ts', 'src/a.test.ts'];
@@ -120,6 +120,21 @@ describe('check commands follow the global instructions', () => {
     expect(acceptRewrite('npm test', 'npm test -- src/cart/__tests__/tax.test.ts', changedTest)).toBe(true);
   });
 
+  it('reads the worktree: a test folder needs a test outside node_modules and dot folders', () => {
+    for (const dir of ['only-deps/node_modules/pkg', 'only-hidden/.cache', 'nested/deep/inner']) mkdirSync(join(WORKTREE, dir), { recursive: true });
+    writeFileSync(join(WORKTREE, 'only-deps/node_modules/pkg/a.test.ts'), '');
+    writeFileSync(join(WORKTREE, 'only-hidden/.cache/a.test.ts'), '');
+    writeFileSync(join(WORKTREE, 'nested/deep/inner/b.spec.ts'), '');
+    const real = worktreeRewriteContext(WORKTREE, ['src/a.ts']);
+    expect(real.hasTests('src')).toBe(true);
+    expect(real.hasTests('nested')).toBe(true);
+    expect(real.hasTests('only-deps')).toBe(false);
+    expect(real.hasTests('only-hidden')).toBe(false);
+    expect(real.hasTests('src/a.test.ts')).toBe(false);
+    expect(real.isFile('src/a.test.ts')).toBe(true);
+    expect(real.isFile('src')).toBe(false);
+  });
+
   // Re-review 3: a test covers a source file only beside it, never by stem anywhere in the repo.
   it('ties a test to a changed file by name and place, not by name alone', () => {
     expect(acceptRewrite('npm test', 'npm test -- src/other/index.test.ts', contextFor(['src/lib/index.ts']))).toBe(false);
@@ -155,7 +170,8 @@ describe('check commands follow the global instructions', () => {
   });
 
   it('reads Polish instructions about tests too', () => {
-    for (const text of ['Uruchamiaj tylko testy związane ze zmianą.', 'Sprawdź tylko zmienione pliki.', 'Bez pełnej weryfikacji.', 'Nie przetestuj wszystkiego.', 'Run only related tests.', 'Skip the linter.']) {
+    for (const text of ['Uruchamiaj tylko testy związane ze zmianą.', 'Sprawdź tylko zmienione pliki.', 'Bez pełnej weryfikacji.', 'Nie przetestuj wszystkiego.', 'Run only related tests.', 'Skip the linter.',
+      'Nie sprawdzać całego projektu.', 'Uruchom tylko jeden plik testu.', 'Zakończ testem.', 'W teście nic nie zmieniaj.', 'Nie przetestować całości.', 'Bez sprawdzania lintera.']) {
       expect(instructionsConcernChecks(text)).toBe(true);
     }
     // Whole words only (re-review 4).
