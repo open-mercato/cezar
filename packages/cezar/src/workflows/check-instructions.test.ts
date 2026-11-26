@@ -1,4 +1,7 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const run = vi.fn();
 vi.mock('../core/runner-factory.ts', () => ({ createRunner: () => ({ backend: 'claude', run }) }));
@@ -10,6 +13,11 @@ const { acceptRewrite, buildCheckInstructionsPrompt, checkInstructionsActive, di
 
 /** `npm test` resolves through this repo's own package.json script (`vitest run`), a direct runner. */
 const FILES = ['src/a.ts', 'src/a.test.ts'];
+const WORKTREE = mkdtempSync(join(tmpdir(), 'cez-check-rewrite-'));
+mkdirSync(join(WORKTREE, 'src'));
+for (const file of FILES) writeFileSync(join(WORKTREE, file), '');
+writeFileSync(join(WORKTREE, 'package.json'), JSON.stringify({ scripts: { test: 'vitest run', typecheck: 'tsc --noEmit' } }));
+afterAll(() => rmSync(WORKTREE, { recursive: true, force: true }));
 
 const RULE = 'Run only checks relevant to the change.';
 
@@ -34,7 +42,7 @@ describe('check commands follow the global instructions', () => {
 
   it('runs the adjusted command, with the instructions in the call and the changed files in the prompt', async () => {
     run.mockResolvedValue({ text: '{"command": "npm test -- src/a.test.ts", "reason": "only related tests"}' });
-    const result = await resolveCheckCommand({ repoRoot: process.cwd(), command: 'npm test', changedFiles: ['src/a.ts', 'src/a.test.ts'], instructions: RULE });
+    const result = await resolveCheckCommand({ repoRoot: process.cwd(), cwd: WORKTREE, command: 'npm test', changedFiles: ['src/a.ts', 'src/a.test.ts'], instructions: RULE });
     expect(result).toEqual({ command: 'npm test -- src/a.test.ts', changed: true, reason: 'only related tests' });
     const spec = run.mock.calls[0]![0];
     expect(spec.systemPrompt).toContain(RULE);
@@ -46,21 +54,21 @@ describe('check commands follow the global instructions', () => {
 
   it('runs the command as written when nothing conflicts, the answer is unusable, or the call fails', async () => {
     run.mockResolvedValueOnce({ text: '{"command": "npm test"}' });
-    expect(await resolveCheckCommand({ repoRoot: process.cwd(), command: 'npm test', changedFiles: FILES, instructions: RULE }))
+    expect(await resolveCheckCommand({ repoRoot: process.cwd(), cwd: WORKTREE, command: 'npm test', changedFiles: FILES, instructions: RULE }))
       .toMatchObject({ command: 'npm test', changed: false, note: expect.stringContaining('nothing to change') });
     run.mockResolvedValueOnce({ text: 'sure, run the tests' });
-    expect(await resolveCheckCommand({ repoRoot: process.cwd(), command: 'npm test', changedFiles: FILES, instructions: RULE }))
+    expect(await resolveCheckCommand({ repoRoot: process.cwd(), cwd: WORKTREE, command: 'npm test', changedFiles: FILES, instructions: RULE }))
       .toMatchObject({ command: 'npm test', changed: false, note: expect.stringContaining('no usable answer') });
     run.mockRejectedValueOnce(new Error('offline'));
-    expect(await resolveCheckCommand({ repoRoot: process.cwd(), command: 'npm test', changedFiles: FILES, instructions: RULE }))
+    expect(await resolveCheckCommand({ repoRoot: process.cwd(), cwd: WORKTREE, command: 'npm test', changedFiles: FILES, instructions: RULE }))
       .toMatchObject({ command: 'npm test', changed: false, note: expect.stringContaining('offline') });
   });
 
   it('makes no call without instructions, with the switch off, or with no changed files', async () => {
-    expect(await resolveCheckCommand({ repoRoot: process.cwd(), command: 'npm test', changedFiles: null, instructions: RULE })).toEqual({ command: 'npm test', changed: false });
-    expect(await resolveCheckCommand({ repoRoot: process.cwd(), command: 'npm test', changedFiles: FILES, instructions: '' })).toEqual({ command: 'npm test', changed: false });
+    expect(await resolveCheckCommand({ repoRoot: process.cwd(), cwd: WORKTREE, command: 'npm test', changedFiles: null, instructions: RULE })).toEqual({ command: 'npm test', changed: false });
+    expect(await resolveCheckCommand({ repoRoot: process.cwd(), cwd: WORKTREE, command: 'npm test', changedFiles: FILES, instructions: '' })).toEqual({ command: 'npm test', changed: false });
     process.env.CEZ_CHECK_INSTRUCTIONS = '0';
-    expect(await resolveCheckCommand({ repoRoot: process.cwd(), command: 'npm test', changedFiles: FILES, instructions: RULE })).toEqual({ command: 'npm test', changed: false });
+    expect(await resolveCheckCommand({ repoRoot: process.cwd(), cwd: WORKTREE, command: 'npm test', changedFiles: FILES, instructions: RULE })).toEqual({ command: 'npm test', changed: false });
     expect(run).not.toHaveBeenCalled();
   });
 
@@ -72,8 +80,11 @@ describe('check commands follow the global instructions', () => {
     expect(prompt.split('\n').filter((line) => line.startsWith('Check command:'))).toHaveLength(1);
   });
 
-  // The deterministic guard (#2519 reviews): only `--` and paths related to the change.
-  const context = { changedFiles: ['src/cart/total.ts', 'src/cart/total.test.ts', 'pkg/util.go'], exists: (path: string) => ['src/cart/total.spec.ts', 'pkg/util_test.go'].includes(path) };
+  // The deterministic guard (#2519 reviews): `--` plus test files or test folders that cover every change.
+  const TESTS = ['src/cart/total.test.ts', 'src/cart/total.spec.ts', 'src/cart/__tests__/tax.test.ts', 'src/other/index.test.ts', 'tests/test_util.py', 'src/cart/test_util.py'];
+  const DIRS: Record<string, boolean> = { src: true, 'src/cart': true, 'src/cart/__tests__': true, 'src/other': true, tests: true, 'src/empty': false, docs: false };
+  const contextFor = (changedFiles: string[]) => ({ changedFiles, isFile: (path: string) => TESTS.includes(path) || path === 'src/cart/total.ts', hasTests: (dir: string) => DIRS[dir] === true });
+  const context = contextFor(['src/cart/total.ts', 'src/cart/total.test.ts']);
   it.each([
     ['npm test || true'], ['npm test; exit 0'], ['exit 0'], ['echo ok'], ['true'], [':'],
     ['npm test -- src/cart/total.test.ts && echo done'], ['npm test -- $(cat list)'], ['npm test -- src/cart/total.test.ts | tail'],
@@ -83,21 +94,39 @@ describe('check commands follow the global instructions', () => {
     ['npm test -- --co'], ['npm test -- --list'], ['npm test -- -run XYZ'], ['npm test --prefix=sub'], ['npm test -- --config=src/cart/total.ts'],
     ['npm test -- src/cart/total.test.ts --passWithNoTests'],
     // Unrelated, absolute, parent or quoted paths.
-    ['npm test -- src/other.test.ts'], ['npm test -- /etc/passwd'], ['npm test -- ../outside.test.ts'], ['npm test -- "src/cart/total.test.ts"'],
-    // A token opening with a glob can expand into a planted `--passWithNoTests` file (review C).
-    ['npm test -- *'], ['npm test -- *.test.ts'], ['npm test -- [-]*'], ['npm test -- ?'],
+    ['npm test -- src/other/index.test.ts'], ['npm test -- /etc/passwd'], ['npm test -- ../outside.test.ts'], ['npm test -- "src/cart/total.test.ts"'],
+    // Globs: a token opening with one can expand into a planted `--passWithNoTests` file (review C).
+    ['npm test -- *'], ['npm test -- *.test.ts'], ['npm test -- [-]*'], ['npm test -- ?'], ['npm test -- src/cart/*.test.ts'],
     ['npm test -- -- src/cart/total.test.ts -- src/cart'],
+    // A source path runs zero tests; a folder without tests too (re-review 1).
+    ['npm test -- src/cart/total.ts'], ['npm test -- src/empty'], ['npm test -- docs'],
   ])('refuses %j as a rewrite of npm test', (answer) => {
     expect(acceptRewrite('npm test', answer, context)).toBe(false);
   });
 
   it.each([
-    ['npm test -- src/cart/total.test.ts'], ['npm test -- src/cart'], ['npm test -- src/cart/'], ['npm test -- src/cart/total.test.ts src/cart/total.ts'],
-    // An existing test named after a changed file, and a pattern inside a changed directory.
-    ['npm test -- src/cart/total.spec.ts'], ['npm test -- src/cart/*.test.ts'], ['go test ./... pkg/util_test.go'],
+    ['npm test -- src/cart/total.test.ts'], ['npm test -- src/cart'], ['npm test -- src/cart/'], ['npm test -- ./src/cart'], ['npm test -- src'],
   ])('accepts %j', (answer) => {
-    const original = answer.startsWith('go test') ? 'go test ./...' : 'npm test';
-    expect(acceptRewrite(original, answer, context)).toBe(true);
+    expect(acceptRewrite('npm test', answer, context)).toBe(true);
+  });
+
+  // Re-review 1: a subset leaves another changed file untested; a changed test must run itself.
+  it('refuses a rewrite that leaves a changed file untested', () => {
+    const both = contextFor(['src/cart/total.ts', 'src/other/index.ts']);
+    expect(acceptRewrite('npm test', 'npm test -- src/cart/total.test.ts', both)).toBe(false);
+    expect(acceptRewrite('npm test', 'npm test -- src/cart/total.test.ts src/other/index.test.ts', both)).toBe(true);
+    const changedTest = contextFor(['src/cart/__tests__/tax.test.ts']);
+    expect(acceptRewrite('npm test', 'npm test -- src/cart/total.test.ts', changedTest)).toBe(false);
+    expect(acceptRewrite('npm test', 'npm test -- src/cart/__tests__/tax.test.ts', changedTest)).toBe(true);
+  });
+
+  // Re-review 3: a test covers a source file only beside it, never by stem anywhere in the repo.
+  it('ties a test to a changed file by name and place, not by name alone', () => {
+    expect(acceptRewrite('npm test', 'npm test -- src/other/index.test.ts', contextFor(['src/lib/index.ts']))).toBe(false);
+    expect(acceptRewrite('npm test', 'npm test -- src/cart/__tests__/tax.test.ts', contextFor(['src/cart/tax.ts']))).toBe(true);
+    expect(acceptRewrite('npm test', 'npm test -- src/cart/total.spec.ts', contextFor(['src/cart/total.ts']))).toBe(true);
+    expect(acceptRewrite('pytest', 'pytest tests/test_util.py', contextFor(['src/util.py']))).toBe(true);
+    expect(acceptRewrite('pytest', 'pytest tests/test_util.py', contextFor(['src/deep/util.py']))).toBe(false);
   });
 
   it('narrows only a command that hands paths straight to a test runner (review B)', () => {
@@ -106,8 +135,9 @@ describe('check commands follow the global instructions', () => {
     expect(directTestRunner('npm test', read)).toBe(true);
     expect(directTestRunner('pnpm exec vitest', read)).toBe(true);
     expect(directTestRunner('pytest -q', read)).toBe(true);
-    expect(directTestRunner('go test ./...', read)).toBe(true);
-    for (const command of ['npm run both', 'npm run chained', 'npm run typecheck', 'npm run lint', 'npm run nested', 'npm run missing', 'make test', 'npm install']) {
+    expect(directTestRunner('python -m pytest', read)).toBe(true);
+    // Runners that run a source path as zero tests and exit 0 are never narrowed (re-review 1).
+    for (const command of ['go test ./...', 'cargo test', 'mocha', 'rspec', 'node --test', 'dotnet test', 'npm run both', 'npm run chained', 'npm run typecheck', 'npm run lint', 'npm run nested', 'npm run missing', 'make test', 'npm install']) {
       expect(directTestRunner(command, read)).toBe(false);
     }
   });
@@ -119,27 +149,34 @@ describe('check commands follow the global instructions', () => {
     }
     expect(rewritableCheck('npm test', read)).toBe(true);
     expect(rewritableCheck('pytest -q', read)).toBe(true);
+    // passWithNoTests turns a folder without tests green, in the command or the script body.
+    expect(rewritableCheck('npx vitest run --passWithNoTests', read)).toBe(false);
+    expect(rewritableCheck('npm test', () => 'jest --passWithNoTests')).toBe(false);
   });
 
   it('reads Polish instructions about tests too', () => {
-    for (const text of ['Uruchamiaj tylko testy związane ze zmianą.', 'Sprawdź tylko zmienione pliki.', 'Bez pełnej weryfikacji.', 'Run only related tests.']) {
+    for (const text of ['Uruchamiaj tylko testy związane ze zmianą.', 'Sprawdź tylko zmienione pliki.', 'Bez pełnej weryfikacji.', 'Nie przetestuj wszystkiego.', 'Run only related tests.', 'Skip the linter.']) {
       expect(instructionsConcernChecks(text)).toBe(true);
+    }
+    // Whole words only (re-review 4).
+    for (const text of ['Never checkout main.', 'Quote the testament.', 'Use the Spectrum palette.', 'Kontroluj długość linii.']) {
+      expect(instructionsConcernChecks(text)).toBe(false);
     }
   });
 
   it('makes no call for a check it may not narrow, or instructions that never mention checks', async () => {
-    expect(await resolveCheckCommand({ repoRoot: process.cwd(), command: 'npm run typecheck', changedFiles: FILES, instructions: RULE })).toEqual({ command: 'npm run typecheck', changed: false });
+    expect(await resolveCheckCommand({ repoRoot: process.cwd(), cwd: WORKTREE, command: 'npm run typecheck', changedFiles: FILES, instructions: RULE })).toEqual({ command: 'npm run typecheck', changed: false });
     expect(instructionsConcernChecks('Write commit messages in Conventional Commits format.')).toBe(false);
-    expect(await resolveCheckCommand({ repoRoot: process.cwd(), command: 'npm test', changedFiles: [], instructions: 'Write commit messages in Conventional Commits format.' })).toEqual({ command: 'npm test', changed: false });
+    expect(await resolveCheckCommand({ repoRoot: process.cwd(), cwd: WORKTREE, command: 'npm test', changedFiles: [], instructions: 'Write commit messages in Conventional Commits format.' })).toEqual({ command: 'npm test', changed: false });
     expect(run).not.toHaveBeenCalled();
   });
 
   it('runs as written, saying why, when a guarded answer is refused or no cheap model exists', async () => {
     run.mockResolvedValueOnce({ text: '{"command": "npm test || true", "reason": "related only"}' });
-    expect(await resolveCheckCommand({ repoRoot: process.cwd(), command: 'npm test', changedFiles: FILES, instructions: RULE }))
+    expect(await resolveCheckCommand({ repoRoot: process.cwd(), cwd: WORKTREE, command: 'npm test', changedFiles: FILES, instructions: RULE }))
       .toMatchObject({ command: 'npm test', changed: false, note: expect.stringContaining('refused') });
     resolveNamerModel.mockResolvedValueOnce(undefined);
-    expect(await resolveCheckCommand({ repoRoot: process.cwd(), command: 'npm test', changedFiles: FILES, instructions: RULE }))
+    expect(await resolveCheckCommand({ repoRoot: process.cwd(), cwd: WORKTREE, command: 'npm test', changedFiles: FILES, instructions: RULE }))
       .toMatchObject({ command: 'npm test', changed: false, note: expect.stringContaining('no cheap model') });
     expect(run).toHaveBeenCalledTimes(1);
   });
