@@ -415,6 +415,7 @@ and a value inherited from the server's own environment is replaced:
 | `CEZ_BASE` | the recorded fork point |
 | `CEZ_STEP_ID` | this check step's id |
 | `CEZ_ATTEMPT` | 1-based attempt number of this check within the run |
+| `CEZ_TEST_COMMAND_FILE` | the file an agent records its related-tests command in (`.ai/cezar/artifacts/<runId>/.test-command`, set for agents too); the built-in Run tests check runs it, else `npm test` |
 | `CEZ_SHARED_CACHE_DIR` | `~/.cezar/cache/<projectId>` (`0700`), shared by the project's tasks — e.g. an e2e replay cache |
 | `CEZ_GITHUB_REPO`, `CEZ_GITHUB_NUMBER`, `CEZ_GITHUB_EVENT` | runs a GitHub automation launched only |
 | `CEZ_PR_HEAD_SHA`, `CEZ_PR_HEAD_REF`, `CEZ_PR_BASE_REF` | runs a `checkout: "pr-head"` automation launched on a pull request's head only |
@@ -554,6 +555,9 @@ whose counter never resets within a run, so every run is finite.
 - **Built-in templates** — `implement-and-verify`, `implement-review-pr`, `review-council`
   (three fresh reviewers at once, then a judge that ships or sends it back), `fix-ci` — sit
   next to `quick-task` (still the default). Open one in the editor; it saves as your copy.
+  The Run tests check of the two implement templates runs only the tests related to the
+  change: the implement agent records the command it ran in `$CEZ_TEST_COMMAND_FILE`, and
+  the check re-runs it, or `npm test` when nothing was recorded.
 - **Human gates.** Choose **Approve** or **Reject**, or reply in the task composer or
   through `cez-manager task say`. Plain replies such as “approve” and “reject” take the
   corresponding path. “Request changes”, “stop here”, “not yet” and “don’t push” take the reject path. Other text, such as
@@ -659,6 +663,7 @@ Useful environment variables:
 | `CEZ_SECRETS_KEYCHAIN=0` | Keep the secret store's data key out of the OS keychain and use the `0600` key file `~/.cezar/secrets/.key` only. By default the key goes to the keychain (macOS Keychain, Linux Secret Service, Windows Credential Manager, via the optional `@napi-rs/keyring`) when one is usable, and to the file otherwise; Settings → Secrets and `cezar secrets list` say which. Only the exact value `0`. |
 | `CEZ_REDACT_SECRETS=0` | Disable scrubbing of credential values/token shapes from the on-disk state (the NDJSON transcript and the free-text fields of `runs.json`). On by default; leave it on. Best-effort defense-in-depth, not a guarantee: it catches known token shapes and the values of your own secret-named env vars, so a credential in neither category can still get through. |
 | `CEZ_TITLE_UPDATES=0` | Turn off the live task-title refresh (the namer renames a task once, at its first turn end, then the title stays put). The Settings → Tasks toggle overrides this default. |
+| `CEZ_CHECK_INSTRUCTIONS=0` | Run every workflow check step as written. By default, when Settings → Global instructions is set, one cheap namer-model call before each check adjusts its command to them (e.g. only the related tests). Without instructions there is no call. Off under `CEZ_DRY_RUN=1` unless set to `1`. |
 | `CEZ_AUTONAME=0` | Disable ALL LLM task naming (creation + live) — titles stay heuristic (`437: /om-auto-review-pr`). Under `CEZ_DRY_RUN=1` naming is already off unless forced with `CEZ_AUTONAME=1`. |
 | `CEZ_REVIEW_GATE=1` | Turn ON the optional diff-first review gate (#489): a successful, non-autonomous run with changes parks at `review` (Accept / Send back / Draft PR) instead of finishing. Off by default — changed runs settle to `done` with the diff left in the worktree. Only `1` enables. The Settings → Tasks toggle overrides this; autonomous runs always skip it. |
 | `CEZ_NO_BANNER=1` | Silence every promo: the `open-mercato/skills` banner and the star-ask line on `cezar serve` startup, the sidebar's ⭐ chip, and the star-ask dialog (shown at most three times per browser, only after a task ends well once three have, and only while you are at the screen). It is also the star count's off switch — with it set, `GET /api/v1/star-count` answers `available: false` and cezar makes no request to github.com for it. Unset, the count refreshes at most every 15 minutes, and only alongside the cockpit's other requests — further paced to GitHub's rate limit (`GITHUB_TOKEN`/`GH_TOKEN`, when set, is sent with the request). Dismissing the banner in the cockpit (back when it had one) still silences the terminal half on its own. |

@@ -97,6 +97,8 @@ export async function planChain(repoRoot: string, task: string): Promise<PlanRes
           systemPrompt,
           userPrompt,
           cwd: repoRoot,
+          // Parsed answer: global instructions shape its content, never its format.
+          globalInstructions: 'format-bound',
           allowedTools: [],
           ...(Object.keys(profileEnv).length > 0 ? { env: profileEnv } : {}),
           model: plannerModel,

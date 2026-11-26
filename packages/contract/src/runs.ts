@@ -46,6 +46,8 @@ export const runAgentSwitchSchema = z.object({
   checkRepair: z.object({ checkId: z.string(), stepId: z.string() }).optional(),
   /** Fresh continuation to reconstruct if the server restarts before it launches. */
   continuationStepId: z.string().optional(),
+  /** Its instruction, secrets redacted (like a step's `freshPrompt`): only a switch revived after a
+   *  restart reads it and sees [REDACTED]; the live switch keeps the verbatim text in memory. */
   continuationInput: z.object({ prompt: z.string(), attachmentUrls: z.array(z.string()) }).optional(),
 });
 
@@ -173,6 +175,8 @@ export const stepStateSchema = z.object({
   profileId: z.string().optional(),
   /** A Continue opened in a new session with no prior conversation; absent otherwise. */
   freshContext: z.literal(true).optional(),
+  /** A queued fresh Continue's instruction until its session opens. */
+  freshPrompt: z.string().optional(),
   toolPolicy: stepToolPolicySchema.optional(),
   /** Canonical provider/model identity resolved for this step; absent for auto-model steps and
    *  records written before per-step attribution existed. */

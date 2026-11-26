@@ -12,6 +12,7 @@ import { PiRunner } from './pi-runner.ts';
 import { OmpRpcRunner } from './omp-rpc-runner.ts';
 import { AntigravityRunner } from './antigravity-runner.ts';
 import { diskFloorRefusal } from '../disk-space.ts';
+import { instructSpec } from './global-instructions.ts';
 
 /**
  * The single place that maps a backend id onto a concrete runner. Everything
@@ -105,7 +106,8 @@ function guardWorkingDirectory(runner: AgentRunner): AgentRunner {
   const guarded = Object.create(runner) as AgentRunner;
   guarded.startSession = function (spec, onEvent, opts) {
     check(spec);
-    return runner.startSession.call(this, spec, onEvent, opts);
+    // The one place every model call passes, so no caller can forget Settings → Global instructions.
+    return runner.startSession.call(this, instructSpec(spec), onEvent, opts);
   };
   guarded.run = function (spec, onEvent) {
     try {
@@ -113,7 +115,7 @@ function guardWorkingDirectory(runner: AgentRunner): AgentRunner {
     } catch (err) {
       return Promise.reject(err);
     }
-    return runner.run.call(this, spec, onEvent);
+    return runner.run.call(this, instructSpec(spec), onEvent);
   };
   return guarded;
 }

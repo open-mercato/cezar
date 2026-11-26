@@ -879,7 +879,12 @@ export type ManagerFollowTaskInput = z.infer<typeof managerFollowTaskInputSchema
 export const managerFollowTaskResponseSchema = z.object({ projectId: z.string(), runId: z.string(), following: z.boolean() });
 export type ManagerFollowTaskResponse = z.infer<typeof managerFollowTaskResponseSchema>;
 
-export const managerTaskMessageResponseSchema = z.object({ ok: z.literal(true), forwarded: managerForwardedSchema.optional() });
+export const managerTaskMessageResponseSchema = z.object({
+  ok: z.literal(true),
+  forwarded: managerForwardedSchema.optional(),
+  /** How a flag was applied, e.g. antigravity's `effort max -> <model>`. */
+  notice: z.string().optional(),
+});
 export type ManagerTaskMessageResponse = z.infer<typeof managerTaskMessageResponseSchema>;
 
 /** `cez manager task cancel`: the run and every task it dispatched. Worktree and branch stay. */

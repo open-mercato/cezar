@@ -206,6 +206,7 @@ import {
 } from './provider-telemetry.ts';
 import { RunnerModelCatalog } from '../core/runner-model-catalog.ts';
 import { setNamerModelCatalog } from '../runs/namer-model.ts';
+import { setAntigravityEffortCatalog } from '../core/antigravity-effort.ts';
 import { currentUsage, currentTimedUsage, onUsage } from '../core/process-usage.ts';
 import { DashboardReader } from '../workspace/dashboard.ts';
 import { dashboardRoutes } from './dashboard.ts';
@@ -1552,6 +1553,7 @@ export function createAppParts(deps: ServerDeps) {
   });
   // Bookkeeping calls pick their cheap model from the same discovery (#2012).
   setNamerModelCatalog(modelCatalog);
+  setAntigravityEffortCatalog(modelCatalog);
   const providerAuth = deps.providerAuth
     ?? new ProviderAuthService({ cwd: bootRoot, onInconclusive: (probe) => void reportInconclusiveProbe(probe) });
   const workspaceConfig = deps.workspaceConfig ?? {

@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { isUsageExhaustion, MAX_USAGE_LIMIT_WAIT_MS, parseUsageLimit } from './usage-limit.ts';
+import { classifyAgentFailure } from './agent-failure-class.ts';
+import { isResetlessLimitMessage } from './agent-errors.ts';
+import { isUsageExhaustion, isUsageLimitMessage, MAX_USAGE_LIMIT_WAIT_MS, parseUsageLimit } from './usage-limit.ts';
 
 /** A fixed clock — every expectation below is relative to it. */
 const NOW = Date.parse('2026-08-03T12:00:00.000Z');
@@ -113,16 +115,16 @@ describe('parseUsageLimit', () => {
 
   it('honors the day a weekly reset names instead of resuming at the next matching clock', () => {
     const hit = parseUsageLimit("You've hit your weekly limit · resets Aug 6, 9am (Europe/Warsaw)", NOW);
-    expect(hit?.resetAt.toISOString()).toBe('2026-08-06T07:00:00.000Z');
+    expect(hit?.resetAt.toISOString()).toBe('2026-08-06T07:01:00.000Z');
     expect(hit?.evidence).toBe('clock');
     expect(parseUsageLimit('Weekly limit reached ∙ resets Aug 4 at 10:30am (UTC)', NOW)?.resetAt.toISOString())
-      .toBe('2026-08-04T10:30:00.000Z');
+      .toBe('2026-08-04T10:31:00.000Z');
   });
 
   it('rolls a weekly reset named in January over the year end', () => {
     const lateDecember = Date.parse('2026-12-30T12:00:00.000Z');
     expect(parseUsageLimit('weekly limit · resets Jan 2, 9am (UTC)', lateDecember)?.resetAt.toISOString())
-      .toBe('2027-01-02T09:00:00.000Z');
+      .toBe('2027-01-02T09:01:00.000Z');
   });
 
   it('refuses a named day the calendar does not have rather than guessing a clock', () => {
@@ -166,5 +168,61 @@ describe('isUsageExhaustion — credits ran out (0fa28a3b)', () => {
   it('counts the message as exhaustion, but not an RPM throttle', () => {
     expect(isUsageExhaustion('API Error: Usage credits ran out before the response was finished.')).toBe(true);
     expect(isUsageExhaustion('Model user RPM limit exceeded for glm/glm-5 maximum 3 requests per minute per account')).toBe(false);
+  });
+});
+
+describe("Claude's out-of-usage-credits window (manager backup did not take over)", () => {
+  const message = "You're out of usage credits · resets Dec 1 at 1am (Europe/Warsaw)";
+  it('is usage exhaustion with its reset as the hold, not billing', () => {
+    expect(isUsageExhaustion(message)).toBe(true);
+    expect(isUsageLimitMessage(message)).toBe(true);
+    // Dec 1, 01:00 in Warsaw (UTC+1), plus the minute the prose truncates.
+    expect(parseUsageLimit(message, Date.parse('2026-11-26T09:11:00Z'))).toEqual({
+      resetAt: new Date('2026-12-01T00:01:00.000Z'),
+      evidence: 'clock',
+    });
+  });
+
+  it('keeps a monthly reset that is weeks away, but not a weekly one', () => {
+    const early = Date.parse('2026-11-05T09:00:00Z');
+    expect(parseUsageLimit(message, early)?.resetAt.toISOString()).toBe('2026-12-01T00:01:00.000Z');
+    expect(parseUsageLimit("You've hit your weekly limit · resets Dec 1 at 1am (Europe/Warsaw)", early)).toBeNull();
+    // A month and more out is still a corrupt or stale date.
+    expect(parseUsageLimit(message, Date.parse('2026-10-20T09:00:00Z'))).toBeNull();
+  });
+
+  it('gives an ISO reset in the credits wording the same monthly cap', () => {
+    const early = Date.parse('2026-11-05T09:00:00Z');
+    expect(parseUsageLimit("You're out of usage credits, try again at 2026-12-01T00:00:00Z", early)?.resetAt.toISOString())
+      .toBe('2026-12-01T00:00:00.000Z');
+    expect(parseUsageLimit('Usage limit reached, try again at 2026-12-01T00:00:00Z', early)).toBeNull();
+    // The relative shapes too: 20 days in hours.
+    expect(parseUsageLimit("You're out of usage credits, try again in 480 hours", early)?.evidence).toBe('delay');
+    expect(parseUsageLimit('Usage limit reached, try again in 480 hours', early)).toBeNull();
+  });
+
+  it('keeps a weekly reset at the edge of the window — padding is not counted against the cap', () => {
+    // Exactly seven days out; the minute of padding lands just past the cap.
+    const now = Date.parse('2026-11-24T09:00:00Z');
+    expect(parseUsageLimit('weekly limit · resets Dec 1, 9am (UTC)', now)?.resetAt.toISOString())
+      .toBe('2026-12-01T09:01:00.000Z');
+    expect(parseUsageLimit('weekly limit · resets Dec 1, 9:01am (UTC)', now)).toBeNull();
+  });
+
+  it('without a reset it is still a usage limit with nothing to schedule, never billing', () => {
+    const bare = "You're out of usage credits";
+    expect(isUsageLimitMessage(bare)).toBe(true);
+    expect(isUsageExhaustion(bare)).toBe(true);
+    expect(parseUsageLimit(bare, Date.parse('2026-11-26T09:11:00Z'))).toBeNull();
+    expect(classifyAgentFailure(bare)).toBe('usage_limit');
+    expect(isResetlessLimitMessage("You're out of usage credits. Add credits to continue.")).toBe(true);
+  });
+
+  it('reads "out of usage quota" the same way', () => {
+    const quota = 'You are out of usage quota · resets Dec 1 at 1am (Europe/Warsaw)';
+    expect(isUsageLimitMessage(quota)).toBe(true);
+    expect(isUsageExhaustion(quota)).toBe(true);
+    expect(classifyAgentFailure(quota)).toBe('usage_limit');
+    expect(parseUsageLimit(quota, Date.parse('2026-11-26T09:11:00Z'))?.resetAt.toISOString()).toBe('2026-12-01T00:01:00.000Z');
   });
 });
