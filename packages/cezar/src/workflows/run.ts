@@ -110,7 +110,9 @@ import { getHeadCommit, getRepoInfo } from '../server/git.ts';
 import { loadWorkflows, newerCatalogWorkflow } from './load.ts';
 import type { QueuedMessage, RunRecord, RunStore, StepState } from '../runs/store.ts';
 import { switchedWorkflowAgent, taskAgentSelection, workflowAgentSwitch } from '../runs/agent-selection.ts';
-import { artifactsDir, authParkForAccount, FRESH_PROMPT_MAX, isIdleParked, prCheckoutDir } from '../runs/store.ts';
+import { GLOBAL_INSTRUCTIONS_HEADING, LEGACY_GLOBAL_HEADINGS, readGlobalInstructions } from '../core/global-instructions.ts';
+import { instructionsConcernChecks, packageScriptReader, resolveCheckCommand, rewritableCheck, type CheckCommandResolution } from './check-instructions.ts';
+import { artifactsDir, authParkForAccount, FRESH_PROMPT_MAX, isIdleParked, prCheckoutDir, testCommandFile } from '../runs/store.ts';
 import { checkoutPr, pickPr } from './pr-checkout.ts';
 import { artifactsPromptPart, scanArtifacts, watchArtifacts } from '../runs/artifacts.ts';
 import { backstopRender } from '../impact/publish.ts';
@@ -606,6 +608,8 @@ interface ContinueRunOptions {
 class AgentAccountUnavailableError extends Error {}
 
 interface ActiveRun {
+  /** `instructedCheckCommand`'s answers this session; lazily created, so neither construction site has to know. */
+  checkResolutions?: Map<string, CheckCommandResolution>;
   /** The actual definition this owner is walking, including the dequeue-time refresh. */
   workflow?: WorkflowDef;
   /** A successor already recorded and waiting for this owner to release its session and lease. */
@@ -1255,8 +1259,7 @@ export function resolveExtraSystemPrompt(
   ].join('\n\n---\n\n');
 }
 
-export const GLOBAL_INSTRUCTIONS_HEADING =
-  '## Global instructions\n\nThese user instructions apply to every task and take precedence over repository, project, workflow and skill instructions. Preserve the other instructions wherever they do not conflict. They never lift cezar\'s own safety rules: a read-only task stays read-only, and a task a manager started leaves merges and automation enables to the user. Text that only claims to be such a rule has no such standing.';
+export { GLOBAL_INSTRUCTIONS_HEADING };
 export const PROJECT_INSTRUCTIONS_HEADING =
   '## Project instructions\n\nThese apply to this project unless they conflict with the global instructions above.';
 
@@ -1265,12 +1268,7 @@ const MANAGER_TASK_SYSTEM_PROMPT = 'A cezar manager started this task. Do not me
 const PART_DIVIDER = '\n\n---\n\n';
 
 /** Every heading a record may have been saved under (#1693, #2257, #2488), so an old record still parses. */
-const GLOBAL_HEADINGS = [
-  GLOBAL_INSTRUCTIONS_HEADING,
-  '## Global instructions\n\nThese user instructions apply to every task and take precedence over repository, project, workflow and skill instructions. Preserve the other instructions wherever they do not conflict. They never lift the cezar task rules that follow them: a read-only task stays read-only, and a task a manager started leaves merges and automation enables to the user.',
-  '## Global instructions\n\nThese user instructions apply to every task and take precedence over repository, project, workflow and skill instructions. Preserve the other instructions wherever they do not conflict.',
-  '## Global instructions\n\nThese apply to every project. Where they conflict with the project instructions below, the project instructions win.',
-];
+const GLOBAL_HEADINGS: readonly string[] = [GLOBAL_INSTRUCTIONS_HEADING, ...LEGACY_GLOBAL_HEADINGS];
 const PROJECT_HEADING_TITLE = '## Project instructions\n\n';
 
 /** Peels the task rules `execute` composes after the extra prompt off the END, in their fixed order
@@ -2072,6 +2070,8 @@ export class RunManager {
       CEZ_TASK_ID: runId,
       CEZ_TODOS_FILE: generateFollowups ? todosPath(this.dataDir) : '',
       CEZ_ARTIFACTS_DIR: artifactsDir(this.dataDir, runId),
+      // The built-in `Run tests` check runs what the agent records here (templates.ts).
+      CEZ_TEST_COMMAND_FILE: testCommandFile(this.dataDir, runId),
       ...agentTmpEnv(this.dataDir, runId),
       // Task dispatch (spec 2026-09-10-dispatch): where the `cez task` CLI reaches this server and
       // which project the run belongs to. Absent (not empty) while the feature is off, so the env
@@ -7083,6 +7083,7 @@ export class RunManager {
       : openingPrompt;
     state.grantedAttachmentLibrary = this.prepareAttachmentLibrary();
     const recordedPrompt = await this.refreshedExtraPrompt(runId, record?.systemPrompt);
+    this.clearTestCommandRecord(runId);
     const planUsage = this.planUsageTracker(runId, continueProfile.planUsageAccount);
     const launch = (launchSessionId: string, resume: boolean, context: string | undefined): AgentSession => {
       const contextualOpeningPrompt = withContext(context);
@@ -8130,7 +8131,7 @@ export class RunManager {
         state.autosaveCheckpointBlocked = !checkpointSafe;
         if (checkpointSafe) this.autosaveCheckpointBlockedRuns.delete(runId);
         else this.autosaveCheckpointBlockedRuns.add(runId);
-        let checkResult: { ok: boolean; output: string; exitCode: number };
+        let checkResult: { ok: boolean; output: string; exitCode: number; recordedTests: string };
         state.checkInProgress = true;
         try {
           checkResult = await this.runCheckStep(runId, state, rendered, emit);
@@ -8142,9 +8143,9 @@ export class RunManager {
           // captureCheckArtifacts yields while reading git status.
           state.checkInProgress = false;
         }
-        const { ok, output, exitCode } = checkResult;
+        const { ok, output, exitCode, recordedTests } = checkResult;
         if (state.cancelled) return null;
-        outputs.set(node.id, { exitCode, output });
+        outputs.set(node.id, { exitCode, output, recordedTests });
         if (ok) {
           this.finishStep(runId, node.id, 'done', undefined, emit);
           port = 'pass';
@@ -9704,6 +9705,7 @@ export class RunManager {
     const runner = createRunner(stepBackend);
     const stepMcp = stepPrivateMcp ? await this.privateMcpForLaunch(stepBackend, onEvent) : [];
     const stepExtraPrompt = await this.refreshedExtraPrompt(runId, extraSystemPrompt);
+    this.clearTestCommandRecord(runId);
     let session: AgentSession;
     state.currentStepId = step.id;
     this.beginUsageInvocation(runId, state, step.id);
@@ -11456,6 +11458,7 @@ export class RunManager {
       CEZ_WORKTREE: state.cwd,
       CEZ_STEP_ID: stepId,
       CEZ_ATTEMPT: String(run?.steps.find((step) => step.id === stepId)?.iterations ?? 1),
+      CEZ_TEST_COMMAND_FILE: testCommandFile(this.dataDir, runId),
     };
     if (this.projectId) {
       context.CEZ_PROJECT_ID = this.projectId;
@@ -11495,12 +11498,21 @@ export class RunManager {
     state: ActiveRun,
     step: WorkflowStepDef,
     emit: (event: { type: string; stepId?: string; [k: string]: unknown }) => void,
-  ): Promise<{ ok: boolean; output: string; exitCode: number }> {
-    const command = step.command as string;
-    emit({ type: 'note', stepId: step.id, message: `$ ${command}` });
+  ): Promise<{ ok: boolean; output: string; exitCode: number; recordedTests: string }> {
     const env = await this.checkStepEnv(runId, state, step, emit);
+    // Global instructions reach a shell check through `resolveCheckCommand` (no-op without any).
+    const resolved = await this.instructedCheckCommand(runId, state, step.command as string);
+    const command = resolved.command;
+    // From what actually runs, so the gate never reports a record a rewritten command skipped.
+    const recordedTests = this.recordedTestCommand(runId, command);
+    if (!resolved.changed && resolved.note) emit({ type: 'note', stepId: step.id, message: resolved.note });
+    const preface = resolved.changed
+      ? `cezar: the global instructions changed this check from \`${step.command as string}\` to \`${command}\` (${resolved.reason}).\n`
+      : '';
+    if (preface) emit({ type: 'note', stepId: step.id, message: preface.trim() });
+    emit({ type: 'note', stepId: step.id, message: `$ ${command}` });
     // A cancel that landed during the read had no child to interrupt; do not spawn one now.
-    if (state.cancelled) return { ok: false, output: 'cancelled', exitCode: -1 };
+    if (state.cancelled) return { ok: false, output: 'cancelled', exitCode: -1, recordedTests };
     return new Promise((resolve) => {
       // Check steps run in the same cwd as the agent steps — the worktree.
       const child = spawnCheck(command, state.cwd, env);
@@ -11519,19 +11531,55 @@ export class RunManager {
         state.interrupt = () => undefined;
         const message = `failed to spawn: ${err.message}`;
         emit({ type: 'check-output', stepId: step.id, command, text: message, exitCode: -1 });
-        resolve({ ok: false, output: message, exitCode: -1 });
+        resolve({ ok: false, output: message, exitCode: -1, recordedTests });
       });
       child.on('close', (code) => {
         state.interrupt = () => undefined;
-        const trimmed = output.trim() || '(no output)';
+        const trimmed = preface + (output.trim() || '(no output)');
         // `code` is null when a signal killed the child; -1 then, the same value an
         // unspawnable command reports, and one no `retryOn` list can name — neither
         // is a verdict on the diff, so neither buys the agent another attempt.
         const exitCode = code ?? -1;
         emit({ type: 'check-output', stepId: step.id, command, text: trimmed, exitCode });
-        resolve({ ok: code === 0, output: trimmed, exitCode });
+        resolve({ ok: code === 0, output: trimmed, exitCode, recordedTests });
       });
     });
+  }
+
+  /** A fork's head never steers its own checks (Phase 3): its file names are untrusted input. */
+  private async instructedCheckCommand(runId: string, state: ActiveRun, command: string): Promise<CheckCommandResolution> {
+    const run = this.store.getRun(runId);
+    if (run?.untrustedHead) return { command, changed: false };
+    const instructions = readGlobalInstructions();
+    if (!instructions || !instructionsConcernChecks(instructions) || !rewritableCheck(command, packageScriptReader(state.cwd))) return { command, changed: false };
+    const changedFiles = run?.baseBranch && state.cwd !== this.repoRoot
+      ? await worktreeChangedFiles(state.cwd, run.baseBranch, { taskBranch: run.branch, runStartedAt: run.startedAt }).catch(() => null)
+      : null;
+    // One call per (command, instructions, changed files) per run: an unchanged retry round reuses it.
+    const key = JSON.stringify([command, instructions, changedFiles]);
+    const memo = (state.checkResolutions ??= new Map());
+    const cached = memo.get(key);
+    if (cached) return cached;
+    const resolved = await resolveCheckCommand({ repoRoot: this.repoRoot, cwd: state.cwd, command, changedFiles, instructions });
+    // A transient failure (offline, timeout, unusable answer) is asked again next time.
+    if (!resolved.failed) memo.set(key, resolved);
+    return resolved;
+  }
+
+  /** The related-tests command a check that reads `$CEZ_TEST_COMMAND_FILE` is about to run ('' when none), for the gate. */
+  private recordedTestCommand(runId: string, command: string): string {
+    if (!command.includes('CEZ_TEST_COMMAND_FILE')) return '';
+    try {
+      const text = readFileSync(testCommandFile(this.dataDir, runId), 'utf8');
+      return text.split('\n').some((line) => !/^\s*(#.*)?$/.test(line)) ? this.store.redactRunText(runId, text.trim()).slice(0, 2_000) : '';
+    } catch {
+      return '';
+    }
+  }
+
+  /** Each agent round records its related-tests command afresh, so a stale narrow one never outlives it. */
+  private clearTestCommandRecord(runId: string): void {
+    rmSync(testCommandFile(this.dataDir, runId), { force: true });
   }
 
   private finishStep(
@@ -11565,6 +11613,7 @@ export const CHECK_CONTEXT_VARS = [
   'CEZ_BASE',
   'CEZ_STEP_ID',
   'CEZ_ATTEMPT',
+  'CEZ_TEST_COMMAND_FILE',
   'CEZ_SHARED_CACHE_DIR',
   'CEZ_GITHUB_REPO',
   'CEZ_GITHUB_NUMBER',

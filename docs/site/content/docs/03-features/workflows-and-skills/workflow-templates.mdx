@@ -16,6 +16,14 @@ sources:
 ---
 Templates cover implementation with tests (implement-and-verify), implementation with review and a PR (implement-review-pr), review by several agents (review-council), a read-only review of a pull request (review-pr), and CI repair (fix-ci). Select a template, adapt its test commands and prompts, then save your own copy.
 
+## Run only the tests related to the change
+
+This is one result of the rule that [global instructions](../agents-and-models/system-prompt) reach every step. The Run tests step of implement-and-verify and implement-review-pr does not run the whole suite. The implement agent runs the tests related to its change and records that command in the file named by `$CEZ_TEST_COMMAND_FILE`, one command per line, for example `npm test -- src/cart/total.test.ts`. The Run tests step prints the recorded command, then sources it with `set -eo pipefail` inside the step's own login shell, so your profile loads once and never under errexit. A failing line, or a failing stage of a pipeline such as `… | tail`, turns the step red and sends the output to the fixer. When the file is missing, or holds only blank lines and comments, the step runs `npm test`.
+
+cezar empties the file at the start of every agent round (the fixer, review follow-ups, Continue), so an old narrow command never outlives its round. In implement-review-pr, the gate before the PR shows the command the agent recorded. It is blank when the whole suite ran.
+
+> **Good to know**: The record lives in the task's artifacts folder as a hidden file, so it never reaches the diff or the Assets view. An agent could narrow the command or make it a no-op, just as it could edit the tests, which is why the step and the gate show it. To always run one fixed command, edit the Run tests step's command in your own copy of the workflow.
+
 ## Where to find it
 
 Workflows → built-in templates
@@ -23,7 +31,7 @@ Workflows → built-in templates
 ## How to use it
 
 1. Choose implement-and-verify, implement-review-pr, review-council, review-pr, or fix-ci.
-2. Adapt test commands and prompts.
+2. Adapt prompts, and the Run tests command if your repository needs a fixed one.
 3. Save your own copy of the workflow.
 
 ## Review a pull request without touching it
