@@ -1983,6 +1983,17 @@ export class RunManager {
       this.clearMonitoringWakeTimer(state, runId);
       this.clearMonitoringLivenessTimer(state);
       this.clearAutosaveTimer(state);
+      // A cancel's grace timer bails once `active` is cleared below, so keep its hard stop
+      // alive on its own: a cancelled agent that ignores SIGTERM must not outlive the manager.
+      const session = state.session;
+      if (state.cancelled && state.cancellationTimer && session?.hardStop) {
+        clearTimeout(state.cancellationTimer);
+        let settled = false;
+        const markSettled = () => { settled = true; };
+        void session.result.then(markSettled, markSettled);
+        state.cancellationTimer = setTimeout(() => { if (!settled) session.hardStop?.(); }, CANCEL_GRACE_MS);
+        state.cancellationTimer.unref?.();
+      }
       // Project disposal deliberately leaves providers alive. Their directory lease must
       // survive the manager too, until the actual provider result confirms its exit.
       const releaseWorktree = state.releaseWorktree;
@@ -5445,7 +5456,8 @@ export class RunManager {
   }
 
   /** A Finish/Cancel note that must not abort the action: a project deleted from disk throws
-   *  ENOENT here (#1105), and End session then 500'd forever with the agent still alive. */
+   *  ENOENT here (#1105), and End session then 500'd forever with the agent still alive.
+   *  Swallows (and logs) every write error, not only ENOENT — the action outranks its note. */
   private noteUserAction(runId: string, event: Parameters<RunStore['appendEvent']>[1]): void {
     try {
       this.store.appendEvent(runId, event);

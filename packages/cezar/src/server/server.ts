@@ -3580,7 +3580,12 @@ export function createAppParts(deps: ServerDeps) {
       for (const run of contexts.peek(id)?.store.listRuns() ?? []) stopTaskProcesses(run.id);
       // dispose() leaves providers alive on purpose; a stranded run's agent must not outlive its folder.
       for (const run of stranded) {
-        try { contexts.peek(id)?.manager.cancel(run.id); } catch { /* best effort: the registry row is already gone */ }
+        try {
+          if (!contexts.peek(id)?.manager.cancel(run.id)) console.error(`[cez] could not cancel stranded run ${run.id.slice(0, 8)} while removing project ${id}`);
+        } catch (err) {
+          // Best effort: the registry row is already gone.
+          console.error(`[cez] could not cancel stranded run ${run.id.slice(0, 8)}: ${err instanceof Error ? err.message : String(err)}`);
+        }
       }
       stopTaskProcesses(projectTerminalOwner(entry.root));
       contexts.dispose(id);
@@ -3931,7 +3936,10 @@ export function createAppParts(deps: ServerDeps) {
       // An idle park has no agent process to strand.
       if (!ACTIVE_RUN_STATUSES.has(run.status) || isIdleParked(run)) continue;
       // Deleted from disk under a live run: nothing is left to protect, and it can never finish.
-      if (rootGone || (run.worktreePath !== undefined && !existsSync(run.worktreePath))) stranded.push(run);
+      // A queued run's missing worktree is restored at dequeue (reclaim, retention.ts), so it is not stranded.
+      const worktreeGone = run.status !== 'queued' && !run.worktreeReclaimedAt
+        && run.worktreePath !== undefined && !existsSync(run.worktreePath);
+      if (rootGone || worktreeGone) stranded.push(run);
       else live.push(run);
     }
     return { live, stranded };
