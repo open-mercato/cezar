@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { isUsageExhaustion, MAX_USAGE_LIMIT_WAIT_MS, parseUsageLimit } from './usage-limit.ts';
+import { isUsageExhaustion, isUsageLimitMessage, MAX_USAGE_LIMIT_WAIT_MS, parseUsageLimit } from './usage-limit.ts';
 
 /** A fixed clock — every expectation below is relative to it. */
 const NOW = Date.parse('2026-08-03T12:00:00.000Z');
@@ -166,5 +166,18 @@ describe('isUsageExhaustion — credits ran out (0fa28a3b)', () => {
   it('counts the message as exhaustion, but not an RPM throttle', () => {
     expect(isUsageExhaustion('API Error: Usage credits ran out before the response was finished.')).toBe(true);
     expect(isUsageExhaustion('Model user RPM limit exceeded for glm/glm-5 maximum 3 requests per minute per account')).toBe(false);
+  });
+});
+
+describe("Claude's out-of-usage-credits window (manager backup did not take over)", () => {
+  const message = "You're out of usage credits · resets Dec 1 at 1am (Europe/Warsaw)";
+  it('is usage exhaustion with its reset as the hold, not billing', () => {
+    expect(isUsageExhaustion(message)).toBe(true);
+    expect(isUsageLimitMessage(message)).toBe(true);
+    // Dec 1, 01:00 in Warsaw (UTC+1).
+    expect(parseUsageLimit(message, Date.parse('2026-11-26T09:11:00Z'))).toEqual({
+      resetAt: new Date('2026-12-01T00:00:00.000Z'),
+      evidence: 'clock',
+    });
   });
 });
