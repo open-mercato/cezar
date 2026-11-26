@@ -408,7 +408,7 @@ describe('a read-only workflow', { timeout: 30_000 }, () => {
     // Another push, then a --fresh Continue: fresh context has no prior steps, so it must still get the new head and paths.
     const v3Sha = await pushPrHead(origin, { 'a.txt': 'one\nv3\n' }, 1);
     const beforeV3 = captured.launches.length;
-    manager!.continueRun(id, { text: 'Fresh re-review of PR #1', runner: 'claude', fresh: true });
+    manager!.continueRun(id, { text: 'Fresh re-review of PR #1', runner: 'claude', freshContext: true });
     await vi.waitFor(() => expect(captured.launches.length).toBeGreaterThan(beforeV3), { timeout: 15_000 });
     await terminal(id);
     expect(readFileSync(join(prTree, 'a.txt'), 'utf8')).toBe('one\nv3\n');
