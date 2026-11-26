@@ -18,6 +18,8 @@ export function failureKind(error: string | undefined): FailureKind | undefined 
   if (INTERRUPTED_RE.test(message)) return undefined;
   if (isClaudeMissingSessionError(message)) return 'missing_session';
   const failure = classifyAgentFailure(message);
+  // A closed label set (#1438): the safety-filter refusal has no label of its own.
+  if (failure === 'content_flagged') return 'other';
   if (failure !== 'other') return failure;
   if (TIMEOUT_RE.test(message)) return 'timeout';
   return 'other';

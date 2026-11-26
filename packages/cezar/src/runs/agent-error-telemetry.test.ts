@@ -277,3 +277,15 @@ describe('RunStore.appendEvent → agent error reports', () => {
     expect(reported()[0]?.context).toMatchObject({ 'agent.backend': 'opencode' });
   });
 });
+
+describe('reportAgentError — expected provider outcomes (0fa28a3b, 83c98049, 96174abb, 0399e0f1)', () => {
+  it.each([
+    ['claude', 'API Error: Usage credits ran out before the response was finished.'],
+    ['codex', 'This content was flagged for possible cybersecurity risk. If this seems wrong, try rephrasing your request. [cyberPolicy]'],
+    ['opencode', 'Model user RPM limit exceeded for glm/glm-5 maximum 3 requests per minute per account'],
+    ['opencode', 'Model glm/glm-5 is temporarily unavailable'],
+  ] as const)('does not report %s: %s', (backend, message) => {
+    reportAgentError(backend, { type: 'error', message });
+    expect(reported()).toEqual([]);
+  });
+});
