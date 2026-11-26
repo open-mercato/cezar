@@ -559,6 +559,8 @@ describe('a run stopped by a usage limit resumes itself', () => {
     expect(capped).toHaveLength(1);
 
     // The capped timer fires with the reset still weeks away: it re-arms, it does not resume.
+    // Disarm the real timer first; its callback runs by hand below.
+    clearTimeout(timers.mock.results[timers.mock.calls.indexOf(capped[0]!)]!.value as ReturnType<typeof setTimeout>);
     (capped[0]![0] as () => void)();
     const after = store.getRun(record.id);
     expect(after?.status).toBe('failed');
@@ -585,6 +587,8 @@ describe('a run stopped by a usage limit resumes itself', () => {
     expect(capped).toHaveLength(1);
     expect(scheduler.autoResumeTimers.has(record.id)).toBe(true);
     // Node fires a too-long delay early; the woken timer must wait, not resume.
+    // Disarm the real timer first; its callback runs by hand below.
+    clearTimeout(timers.mock.results[timers.mock.calls.indexOf(capped[0]!)]!.value as ReturnType<typeof setTimeout>);
     (capped[0]![0] as () => void)();
     const after = store.getRun(record.id);
     expect(after?.status).toBe('failed');
