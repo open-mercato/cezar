@@ -15,7 +15,12 @@ import { QUICK_TASK_WORKFLOW } from './types.ts';
 const run = promisify(execFile);
 const GIT_ID = ['-c', 'user.name=test', '-c', 'user.email=test@local'];
 
-const captured = vi.hoisted(() => ({ launches: [] as Array<{ backend: string; spec: AgentRunSpec }> }));
+const captured = vi.hoisted(() => ({
+  launches: [] as Array<{ backend: string; spec: AgentRunSpec }>,
+  holdNext: false,
+  sent: [] as Array<Array<{ type: string; text?: string }>>,
+  releaseHeld: undefined as (() => void) | undefined,
+}));
 
 // A capture stub: the backend refusal itself is `read-only-env.test.ts`'s business.
 vi.mock('../core/runner-factory.ts', () => ({
@@ -24,6 +29,37 @@ vi.mock('../core/runner-factory.ts', () => ({
     run: async () => ({ text: '', toolCalls: [], tokensUsed: 0 }),
     startSession: (spec: AgentRunSpec, onEvent?: (event: AgentEvent) => void) => {
       captured.launches.push({ backend, spec });
+      if (captured.holdNext) {
+        captured.holdNext = false;
+        let finish!: () => void;
+        let isOpen = true;
+        captured.releaseHeld = () => {
+          if (!isOpen) return;
+          isOpen = false;
+          onEvent?.({ type: 'text', text: 'done\n\nCEZ:DONE' });
+          onEvent?.({ type: 'turn-end' });
+          finish();
+        };
+        const result = new Promise<AgentRunResult>((resolve) => {
+          setTimeout(() => {
+            onEvent?.({ type: 'session', sessionId: `sess-${captured.launches.length}` });
+            onEvent?.({ type: 'text', text: 'first pass' });
+            onEvent?.({ type: 'turn-end' });
+          }, 10);
+          finish = () => resolve({ text: 'done\n\nCEZ:DONE', toolCalls: [], tokensUsed: 0 });
+        });
+        return {
+          result,
+          sendMessage: (blocks: Array<{ type: string; text?: string }>) => {
+            if (!isOpen) return false;
+            captured.sent.push(blocks);
+            return true;
+          },
+          end: () => { isOpen = false; finish(); },
+          interrupt: () => { isOpen = false; finish(); },
+          get open() { return isOpen; },
+        };
+      }
       return {
         result: new Promise<AgentRunResult>((resolve) => {
           setTimeout(() => {
@@ -54,6 +90,9 @@ describe('a read-only workflow', { timeout: 30_000 }, () => {
 
   beforeEach(async () => {
     captured.launches.length = 0;
+    captured.sent.length = 0;
+    captured.holdNext = false;
+    captured.releaseHeld = undefined;
     vi.stubEnv('CEZ_AUTONAME', '0');
     // Hermetic: a `gh` that is never logged in, and github.com URLs that resolve to nowhere locally.
     fakeBin = mkdtempSync(join(tmpdir(), 'cez-fake-gh-'));
@@ -75,6 +114,8 @@ describe('a read-only workflow', { timeout: 30_000 }, () => {
   });
 
   afterEach(() => {
+    captured.releaseHeld?.();
+    captured.releaseHeld = undefined;
     manager?.dispose();
     manager = undefined;
     store.flush();
@@ -321,6 +362,126 @@ describe('a read-only workflow', { timeout: 30_000 }, () => {
       expect(spec.bashAllowlist).not.toContain('git push');
       expect(spec.mcpServers).toEqual([]);
     }
+  });
+
+  /** Push a commit with `files` to `refs/pull/<prNumber>/head` on an existing bare `origin`. */
+  async function pushPrHead(origin: string, files: Record<string, string>, prNumber = 1): Promise<string> {
+    await run('git', ['checkout', '-q', '-b', `pr-${prNumber}-update`], { cwd: repoRoot });
+    for (const [path, text] of Object.entries(files)) {
+      mkdirSync(join(repoRoot, path, '..'), { recursive: true });
+      writeFileSync(join(repoRoot, path), text);
+    }
+    await run('git', ['add', '-A'], { cwd: repoRoot });
+    await run('git', [...GIT_ID, 'commit', '-qm', `pr ${prNumber} update`], { cwd: repoRoot });
+    const prSha = await head(repoRoot);
+    await run('git', ['push', '-q', '--force', origin, `HEAD:refs/pull/${prNumber}/head`], { cwd: repoRoot });
+    await run('git', ['checkout', '-q', 'main'], { cwd: repoRoot });
+    await run('git', ['branch', '-q', '-D', `pr-${prNumber}-update`], { cwd: repoRoot });
+    return prSha;
+  }
+
+  it('re-exports the new PR head on Continue and --fresh Continue after a new push, and switches to a follow-up PR URL', async () => {
+    const { origin, prSha: v1Sha } = await preparePr({ 'a.txt': 'one\nv1\n' });
+    const id = manager!.startRun(REVIEW_PR, { task: 'https://github.com/o/r/pull/1', runner: 'claude' }).id;
+    await terminal(id);
+    const prDir = prCheckoutDir(join(repoRoot, '.ai/cezar'), id);
+    const prTree = join(prDir, 'tree');
+    const artifacts = join(repoRoot, '.ai/cezar/artifacts', id);
+    expect(readFileSync(join(prTree, 'a.txt'), 'utf8')).toBe('one\nv1\n');
+
+    // New push to PR #1, then a normal Continue: must export v2 and hand its paths and head to the reviewer.
+    const v2Sha = await pushPrHead(origin, { 'a.txt': 'one\nv2\n' }, 1);
+    expect(v2Sha).not.toBe(v1Sha);
+    const beforeV2 = captured.launches.length;
+    manager!.continueRun(id, { text: 'Re-review the new push', runner: 'claude' });
+    await vi.waitFor(() => expect(captured.launches.length).toBeGreaterThan(beforeV2), { timeout: 15_000 });
+    await terminal(id);
+    expect(readFileSync(join(prTree, 'a.txt'), 'utf8')).toBe('one\nv2\n');
+    expect(readFileSync(join(prDir, 'pr-1.diff'), 'utf8')).toContain('+v2');
+    expect(readFileSync(join(artifacts, 'pr-1.diff'), 'utf8')).toContain('+v2');
+    const contV2 = captured.launches[beforeV2]!.spec;
+    expect(contV2.additionalDirectories).toContain(prDir);
+    expect(contV2.userPrompt).toContain(v2Sha);
+    expect(contV2.userPrompt).toContain(prTree);
+    expect(contV2.userPrompt).toContain(join(prDir, 'pr-1.diff'));
+
+    // Another push, then a --fresh Continue: fresh context has no prior steps, so it must still get the new head and paths.
+    const v3Sha = await pushPrHead(origin, { 'a.txt': 'one\nv3\n' }, 1);
+    const beforeV3 = captured.launches.length;
+    manager!.continueRun(id, { text: 'Fresh re-review of PR #1', runner: 'claude', fresh: true });
+    await vi.waitFor(() => expect(captured.launches.length).toBeGreaterThan(beforeV3), { timeout: 15_000 });
+    await terminal(id);
+    expect(readFileSync(join(prTree, 'a.txt'), 'utf8')).toBe('one\nv3\n');
+    const contV3 = captured.launches[beforeV3]!.spec;
+    expect(contV3.userPrompt).toContain(v3Sha);
+    expect(contV3.userPrompt).toContain(prTree);
+    expect(contV3.userPrompt).toContain(join(prDir, 'pr-1.diff'));
+
+    // A continuation naming a follow-up PR URL switches the checkout to that PR.
+    const pr2Sha = await pushPrHead(origin, { 'a.txt': 'one\nfrom pr 2\n' }, 2);
+    const beforePr2 = captured.launches.length;
+    manager!.continueRun(id, { text: 'Fixes moved to https://github.com/o/r/pull/2', runner: 'claude' });
+    await vi.waitFor(() => expect(captured.launches.length).toBeGreaterThan(beforePr2), { timeout: 15_000 });
+    await terminal(id);
+    expect(readFileSync(join(prTree, 'a.txt'), 'utf8')).toBe('one\nfrom pr 2\n');
+    expect(readFileSync(join(prDir, 'pr-2.diff'), 'utf8')).toContain('+from pr 2');
+    const contPr2 = captured.launches[beforePr2]!.spec;
+    expect(contPr2.userPrompt).toContain(pr2Sha);
+    expect(contPr2.userPrompt).toContain(join(prDir, 'pr-2.diff'));
+  });
+
+  it('exports the PR on Continue for a legacy built-in review-pr record predating github.pr-checkout', async () => {
+    const { prSha } = await preparePr({ 'a.txt': 'one\nlegacy-pr\n' });
+    const legacyReviewPr = {
+      ...REVIEW_PR,
+      graph: {
+        nodes: REVIEW_PR.graph!.nodes.filter((n) => n.type !== 'github.pr-checkout'),
+        edges: REVIEW_PR.graph!.edges
+          .filter((e) => e.from !== 'start' && !e.from.startsWith('checkout.'))
+          .concat([{ from: 'start', to: 'correctness' }]),
+      },
+    };
+    const id = manager!.startRun(legacyReviewPr, { task: 'https://github.com/o/r/pull/1', runner: 'claude' }).id;
+    await terminal(id);
+    const prDir = prCheckoutDir(join(repoRoot, '.ai/cezar'), id);
+    expect(existsSync(prDir)).toBe(false);
+
+    const before = captured.launches.length;
+    manager!.continueRun(id, { text: 'Re-review PR #1', runner: 'claude' });
+    await vi.waitFor(() => expect(captured.launches.length).toBeGreaterThan(before), { timeout: 15_000 });
+    await terminal(id);
+    expect(readFileSync(join(prDir, 'tree', 'a.txt'), 'utf8')).toBe('one\nlegacy-pr\n');
+    const continued = captured.launches[before]!.spec;
+    expect(continued.additionalDirectories).toContain(prDir);
+    expect(continued.userPrompt).toContain(prSha);
+    expect(continued.userPrompt).toContain(join(prDir, 'tree'));
+  });
+
+  it('refreshes the PR checkout before delivering a follow-up message to a live review-pr session', async () => {
+    const { origin } = await preparePr({ 'a.txt': 'one\nv1\n' });
+    const id = manager!.startRun(REVIEW_PR, { task: 'https://github.com/o/r/pull/1', runner: 'claude' }).id;
+    await terminal(id);
+    const prDir = prCheckoutDir(join(repoRoot, '.ai/cezar'), id);
+    const prTree = join(prDir, 'tree');
+
+    // Open a live Continue session, then push v2 while it is open and send a follow-up message.
+    captured.holdNext = true;
+    const before = captured.launches.length;
+    manager!.continueRun(id, { text: 'Hold open for follow-up', runner: 'claude' });
+    await vi.waitFor(() => expect(captured.launches.length).toBeGreaterThan(before), { timeout: 15_000 });
+    await vi.waitFor(() => expect(store.getRun(id)?.status).toBe('waiting'), { timeout: 15_000 });
+
+    const v2Sha = await pushPrHead(origin, { 'a.txt': 'one\nlive-v2\n' }, 1);
+    expect(manager!.sendMessage(id, [{ type: 'text', text: 'Check the new commit' }])).toBe(true);
+    await vi.waitFor(() => expect(captured.sent.length).toBeGreaterThan(0), { timeout: 15_000 });
+    expect(readFileSync(join(prTree, 'a.txt'), 'utf8')).toBe('one\nlive-v2\n');
+    const deliveredText = captured.sent[0]!.map((b) => b.text ?? '').join('\n');
+    expect(deliveredText).toContain(v2Sha);
+    expect(deliveredText).toContain(prTree);
+    expect(deliveredText).toContain('Check the new commit');
+
+    captured.releaseHeld?.();
+    await terminal(id);
   });
 
   it('refuses a backend that ignores tool limits, before spawning it', async () => {

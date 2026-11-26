@@ -111,7 +111,7 @@ import { loadWorkflows, newerCatalogWorkflow } from './load.ts';
 import type { QueuedMessage, RunRecord, RunStore, StepState } from '../runs/store.ts';
 import { switchedWorkflowAgent, taskAgentSelection, workflowAgentSwitch } from '../runs/agent-selection.ts';
 import { artifactsDir, authParkForAccount, FRESH_PROMPT_MAX, isIdleParked, prCheckoutDir } from '../runs/store.ts';
-import { checkoutPr, pickPr } from './pr-checkout.ts';
+import { checkoutPr, pickPr, prCheckoutPromptNote } from './pr-checkout.ts';
 import { artifactsPromptPart, scanArtifacts, watchArtifacts } from '../runs/artifacts.ts';
 import { backstopRender } from '../impact/publish.ts';
 // Task dispatch (spec 2026-09-10-dispatch). Every import below is inert unless the feature is
@@ -798,6 +798,18 @@ interface ActiveRun {
 }
 
 /**
+ * Whether `def` exports the reviewed PR into `prCheckoutDir`. Includes legacy built-in `review-pr`
+ * snapshots recorded before `github.pr-checkout` was added, so continuing an older review task
+ * still gets a fresh PR checkout.
+ */
+function workflowChecksOutPr(def: WorkflowDef | undefined): boolean {
+  return !!def && (
+    !!def.graph?.nodes.some((n) => n.type === 'github.pr-checkout')
+    || (def.name === 'review-pr' && def.source === 'built-in')
+  );
+}
+
+/**
  * What a workflow's own shape changes about an agent launch. A read-only workflow (review-pr) —
  * one that can neither publish nor grant a file-writing tool — never runs with Claude's
  * bypassPermissions, and its Claude steps may write the run's own artifacts directory; an Ask task
@@ -812,7 +824,7 @@ export function workflowLaunchSpec(
   exists: (path: string) => boolean = existsSync,
 ): { readOnlyWorkflow: boolean; artifactsWriteDir?: string; prDirs: string[]; readOnlyPaths: string[] } {
   const readOnlyWorkflow = !!def && isReadOnlyWorkflow(def) && !grantsFileWrites(def);
-  const checksOutPr = !!def?.graph?.nodes.some((n) => n.type === 'github.pr-checkout');
+  const checksOutPr = workflowChecksOutPr(def);
   return {
     readOnlyWorkflow,
     ...(readOnlyWorkflow && !state.readOnly ? { artifactsWriteDir: dirs.artifacts } : {}),
@@ -1635,6 +1647,8 @@ interface PreparedUserMessage {
   persisted: PersistedAttachment[];
   imageLibraryWrites: Array<() => void>;
   skills?: TaskSkillPreparation;
+  /** Empty string once checked/not applicable so re-entrant delivery does not re-fetch. */
+  prCheckoutNote?: string;
 }
 
 interface TaskSkillPreparation {
@@ -5900,24 +5914,33 @@ export class RunManager {
     const text = prepared?.text ?? '';
     const slash = leadingSlashSkillName(text);
     const catalog = prepared ? [...(state.skills ?? []), ...getTeamSkillsCached(this.repoRoot)] : [];
-    const needsSkills = prepared !== undefined && (
+    const needsSkills = prepared !== undefined && !prepared.skills && (
       requestedOpenMercatoSkills(slash ? [slash] : [], text).length > 0 ||
       catalog.some((skill) => skill.name === slash || (skill.kind !== 'command' && mentionsSkill(text, skill.name)))
     );
-    if (prepared && !prepared.skills && (needsSkills || state.skillMessageDelivery)) {
+    const runRecord = prepared !== undefined ? this.store.getRun(runId) : undefined;
+    const needsPrCheckout = prepared !== undefined && prepared.prCheckoutNote === undefined && workflowChecksOutPr(runRecord?.workflowDef);
+    const awaitingPrep = prepared !== undefined && (!prepared.skills || prepared.prCheckoutNote === undefined);
+    if (prepared && awaitingPrep && (needsSkills || needsPrCheckout || state.skillMessageDelivery)) {
       const message = prepared;
       const delivery = (state.skillMessageDelivery ?? Promise.resolve()).then(async () => {
         const stillLive = () => this.active.get(runId) === state && state.session?.open && !state.cancelled && !state.finishRequested;
         if (stillLive() && !this.disposed) {
-          message.skills = needsSkills ? await this.provisionTaskSkills(state, { slash, text }) : NO_TASK_SKILLS;
+          if (!message.skills) {
+            message.skills = needsSkills ? await this.provisionTaskSkills(state, { slash, text }) : NO_TASK_SKILLS;
+          }
+          if (stillLive() && !this.disposed && message.prCheckoutNote === undefined) {
+            const latest = this.store.getRun(runId);
+            message.prCheckoutNote = latest ? (await this.refreshPrCheckout(runId, state, latest, text)) ?? '' : '';
+          }
           if (stillLive() && !this.disposed && this.deliverMessage(runId, content, userAuthored, message, answering)) return;
         }
         if (this.disposed || !this.store.getRun(runId)) return;
         // The message is already in the thread. A replacement session has a new owner and may
         // have been closed by Finish, so retry only on an explicit user action.
-        this.store.appendEvent(runId, { type: 'lifecycle', message: 'the session closed while preparing skills for the message. Continue the task to retry it.' });
+        this.store.appendEvent(runId, { type: 'lifecycle', message: 'the session closed while preparing the message. Continue the task to retry it.' });
       }).catch(() => {
-        this.store.appendEvent(runId, { type: 'lifecycle', message: 'a message could not be delivered after preparing its skills' });
+        this.store.appendEvent(runId, { type: 'lifecycle', message: 'a message could not be delivered after preparing its context' });
       });
       state.skillMessageDelivery = delivery;
       void delivery.then(() => {
@@ -5928,8 +5951,11 @@ export class RunManager {
     const expanded = userAuthored ? expandRegistrySlashSkill(
       blocks, state.skills ?? [], (state.sessionBackend ?? this.store.getRun(runId)?.runner) as RunnerId | undefined, prepared?.skills?.missingShared,
     ) : blocks;
+    const withPrCheckout = prepared?.prCheckoutNote
+      ? [{ type: 'text' as const, text: prepared.prCheckoutNote }, ...expanded]
+      : expanded;
     const skillNotes = taskSkillNotes(prepared?.skills ?? NO_TASK_SKILLS);
-    const withSkills = skillNotes.length ? [...expanded, { type: 'text' as const, text: skillNotes.join('\n\n') }] : expanded;
+    const withSkills = skillNotes.length ? [...withPrCheckout, { type: 'text' as const, text: skillNotes.join('\n\n') }] : withPrCheckout;
     const withAttachments = persisted.length
       ? [...withSkills, pastedAttachmentsNote(persisted, this.attachmentLibraryHint(persisted, state.grantedAttachmentLibrary) ??
           (imageLibraryWrites.length ? this.usableAttachmentLibrary(state.grantedAttachmentLibrary) : undefined))]
@@ -6459,6 +6485,39 @@ export class RunManager {
       // Dropping the old owner can start the successor before this callback runs.
       if (this.openingContinuations.get(runId) === opening) this.openingContinuations.delete(runId);
     });
+  }
+
+  /**
+   * Re-export the PR head for a continuation or live follow-up of a PR-checkout workflow.
+   * Prefers a PR URL in `followUpText` (e.g. a follow-up PR) and falls back to `record.task`.
+   */
+  private async refreshPrCheckout(
+    runId: string,
+    state: ActiveRun,
+    record: RunRecord,
+    followUpText?: string,
+  ): Promise<string | undefined> {
+    if (!workflowChecksOutPr(record.workflowDef)) return undefined;
+    const pr = (followUpText ? await pickPr(state.cwd, followUpText) : undefined)
+      ?? await pickPr(state.cwd, record.task);
+    const note = (message: string, tone?: 'danger') =>
+      this.store.appendEvent(runId, { type: 'note', ...(tone ? { tone } : {}), message });
+    if (!pr) {
+      note('no GitHub pull request URL in the task to check out', 'danger');
+      return prCheckoutPromptNote(undefined, undefined);
+    }
+    const res = await checkoutPr({
+      cwd: state.cwd,
+      dir: prCheckoutDir(this.dataDir, runId),
+      copyTo: artifactsDir(this.dataDir, runId),
+      pr,
+      ...(record.baseBranch ? { baseBranch: record.baseBranch } : {}),
+      offline: process.env.CEZ_DRY_RUN === '1',
+      refPrefix: `refs/cezar/pr-checkouts/${runId}`,
+    });
+    for (const problem of res.problems) note(problem, 'danger');
+    if (res.checkedOut) note(`checked out PR #${pr.number} at ${res.head.slice(0, 12)} into ${res.tree}`);
+    return prCheckoutPromptNote(pr, res);
   }
 
   private async runContinuation(
@@ -7007,6 +7066,14 @@ export class RunManager {
       return;
     }
     const continuationTools = resolveAgentStepTools(state, toolsStep, savedTools);
+    // Re-export the PR head BEFORE `workflowLaunchSpec` checks whether `prCheckoutDir` exists:
+    // `github.pr-checkout` only runs at workflow start, so a continued, fresh-continued, retried
+    // or switched review task would otherwise read a stale head (or no checkout at all).
+    const prCheckoutNote = record ? await this.refreshPrCheckout(runId, state, record, prompt) : undefined;
+    if (this.disposed || state.cancelled || this.active.get(runId) !== state) {
+      this.dropActive(runId, state);
+      return;
+    }
     const continueLaunch = workflowLaunchSpec(record?.workflowDef, state, { artifacts: artifactsDir(this.dataDir, runId), prCheckout: prCheckoutDir(this.dataDir, runId) });
     this.store.updateStep(runId, stepId, { toolPolicy: continuationTools });
     // The temp-directory preflight (#785) rides along with the account resolution: a resumed
@@ -7061,6 +7128,7 @@ export class RunManager {
     if (continueSkills.missingShared.length) this.store.appendEvent(runId, missingSharedSkillsEvent(stepId, continueSkills.missingShared));
     const expandedPrompt = [
       continueProfile.trackerContext,
+      prCheckoutNote,
       expandRegistrySlashSkillText(prompt, state.skills ?? [], continueBackend, continueSkills.missingShared),
       ...taskSkillNotes(continueSkills),
     ].filter(Boolean).join('\n\n');
