@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { removeTempDir } from '../test-fixtures/remove-temp-dir.testkit.ts';
 import { artifactsDir, RunStore, type RunRecord } from '../runs/store.ts';
 import { RunManager } from './run.ts';
 import { ASSESS_IMPACT_WORKFLOW } from './templates.ts';
@@ -58,13 +59,16 @@ describe('artifacts rescan at turn end', () => {
     });
   });
 
-  afterEach(() => {
-    if (currentId) manager.cancel(currentId);
-    manager.dispose();
-    if (savedDryRun === undefined) delete process.env.CEZ_DRY_RUN;
-    else process.env.CEZ_DRY_RUN = savedDryRun;
-    store.flush();
-    rmSync(repoRoot, { recursive: true, force: true });
+  afterEach(async () => {
+    try {
+      if (currentId) manager.cancel(currentId);
+      manager.dispose();
+      store.flush();
+      await removeTempDir(repoRoot);
+    } finally {
+      if (savedDryRun === undefined) delete process.env.CEZ_DRY_RUN;
+      else process.env.CEZ_DRY_RUN = savedDryRun;
+    }
   });
 
   const waitFor = async (pred: () => boolean, ms = 20_000) => {

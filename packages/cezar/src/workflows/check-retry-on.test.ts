@@ -1,9 +1,10 @@
 import { execFile } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { removeTempDir, stopRuns } from '../test-fixtures/remove-temp-dir.testkit.ts';
 import { RunStore } from '../runs/store.ts';
 import { RunManager } from './run.ts';
 import type { WorkflowDef } from './types.ts';
@@ -43,14 +44,17 @@ describe('onFail.retryOn gates the check retry loop by exit code', () => {
     manager = new RunManager(store, repoRoot);
   });
 
-  afterEach(() => {
-    manager.dispose();
-    for (const [key, value] of Object.entries(savedEnv)) {
-      if (value === undefined) delete process.env[key];
-      else process.env[key] = value;
+  afterEach(async () => {
+    try {
+      await stopRuns(manager, store);
+      store.flush();
+      await removeTempDir(repoRoot);
+    } finally {
+      for (const [key, value] of Object.entries(savedEnv)) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
     }
-    store.flush();
-    rmSync(repoRoot, { recursive: true, force: true });
   });
 
   const workflowFor = (retryOn: number[]): WorkflowDef => ({
