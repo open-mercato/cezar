@@ -7,7 +7,6 @@ import { taskTagsPath } from '../paths.ts';
 import {
   TASK_TAG_TOMBSTONES_MAX,
   applyRunTagDelta,
-  colorForName,
   createTaskTag,
   defaultTaskTagStore,
   deleteTaskTag,
@@ -187,8 +186,20 @@ describe('task tag registry', () => {
       expect(tags.map((t) => t.name)).toEqual(['API', 'New one']);
       const made = store.tags.find((t) => t.name === 'New one');
       expect(made?.projectRoot).toBe('/a');
-      expect(made?.color).toBe(colorForName('New one'));
+      expect(made?.color).toBeDefined();
+      expect(made?.color).not.toBe('gray');
       expect(store.tags.find((t) => t.id === 'tt-globalapi01')?.lastUsedAt).toBeDefined();
+    });
+
+    it('gives a tag created without a color a random non-gray palette color, and keeps a chosen one', () => {
+      const store: TaskTagStore = { version: 1, tags: [], deleted: [] };
+      const colors = new Set(
+        Array.from({ length: 40 }, (_, i) => createTaskTag(store, { name: `t${i}`, projectRoot: null }).color),
+      );
+      expect(colors.has(undefined)).toBe(false);
+      expect(colors.has('gray')).toBe(false);
+      expect(colors.size).toBeGreaterThan(1);
+      expect(createTaskTag(store, { name: 'chosen', color: 'gray', projectRoot: null }).color).toBe('gray');
     });
 
     it('refuses a tombstoned id, an unknown id and an out-of-scope id', () => {

@@ -1,4 +1,4 @@
-import { randomBytes } from 'node:crypto';
+import { randomBytes, randomInt } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { z } from 'zod';
 import {
@@ -147,13 +147,10 @@ export function tagNameKey(name: string): string {
   return name.trim().toLowerCase();
 }
 
-/** Deterministic color for an inline-created tag (spec § 4.1). */
-export function colorForName(name: string): TaskTagColor {
-  let hash = 0;
-  for (const ch of tagNameKey(name)) hash = (hash * 31 + ch.charCodeAt(0)) >>> 0;
-  // `gray` is the neutral snapshot color, so an inline tag never gets it.
+/** A new tag created without a color gets a random palette color, never the neutral `gray`. */
+export function randomTaskTagColor(): TaskTagColor {
   const palette = TASK_TAG_COLORS.filter((c) => c !== 'gray');
-  return palette[hash % palette.length]!;
+  return palette[randomInt(palette.length)]!;
 }
 
 export function allocateTaskTagId(taken: ReadonlySet<string> = new Set()): string {
@@ -224,7 +221,7 @@ function insertTag(
   const tag: StoredTaskTag = {
     id: allocateTaskTagId(taken),
     name: input.name.trim(),
-    ...(input.color !== undefined ? { color: input.color } : {}),
+    color: input.color ?? randomTaskTagColor(),
     ...(input.description ? { description: input.description } : {}),
     ...(input.projectRoot !== null ? { projectRoot: input.projectRoot } : {}),
     createdAt: now.toISOString(),
@@ -309,7 +306,7 @@ export function resolveTagRefsIn(
       const key = tagNameKey(ref.name);
       tag = visibleTaskTags(store, projectRoot).find((t) => tagNameKey(t.name) === key);
       if (!tag) {
-        tag = insertTag(store, { name: ref.name, color: colorForName(ref.name), projectRoot }, now);
+        tag = insertTag(store, { name: ref.name, projectRoot }, now);
         created = true;
       }
     }
