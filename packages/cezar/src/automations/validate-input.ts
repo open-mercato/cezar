@@ -25,7 +25,7 @@ export const automationEditableSchema = z
     enabled: z.boolean().optional(),
     /** Omitted on create = `github`; omitted on update = the stored kind (spec 2026-09-14). */
     kind: z.enum(['github', 'schedule', 'tracker']).optional(),
-    events: z.array(automationEventSchema).min(1).max(7).optional(),
+    events: z.array(automationEventSchema).min(1).max(11).optional(),
     intervalSeconds: z.number().int().min(60).max(86_400).optional(),
     filters: automationFiltersSchema.optional(),
     trackerTrigger: trackerTriggerSchema.optional(),

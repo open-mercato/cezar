@@ -210,6 +210,56 @@ describe('GithubPoller', () => {
     });
   });
 
+  describe('pull_request label events (#2475)', () => {
+    const prItem = {
+      ...item, node_id: 'PR_one', number: 9, labels: [{ name: 'rebase' }],
+      html_url: 'https://github.com/acme/demo/pull/9', pull_request: {},
+    };
+    const timeline = [
+      { id: 1, node_id: 'L1', event: 'labeled', created_at: '2026-07-26T02:00:00.000Z', label: { name: 'rebase' } },
+      { id: 2, node_id: 'L2', event: 'unlabeled', created_at: '2026-07-26T02:10:00.000Z', label: { name: 'rebase' } },
+      { id: 3, node_id: 'L3', event: 'labeled', created_at: '2026-07-26T02:20:00.000Z', label: { name: 'rebase' } },
+    ];
+    const prDefinition: GithubAutomationDefinition = {
+      ...definition,
+      events: ['pull_request.labeled'],
+      filters: { ...definition.filters, changedLabels: ['rebase'] },
+      task: { prompt: 'Rebase {{github.url}}', checkout: 'pr-head' },
+    };
+    const fake = (row: unknown) => vi.fn(async (_executable: string, args: readonly string[]) =>
+      args.some((arg) => arg.includes('/timeline')) ? JSON.stringify(timeline) : JSON.stringify({ items: [row] }));
+
+    it('starts one candidate per add of the label on a pull request, re-adds included', async () => {
+      const run = fake(prItem);
+      const result = await new GithubPoller({ run }).poll('acme', 'demo', prDefinition, { since: '2026-07-26T01:00:00.000Z' });
+      expect(result.candidates.map((c) => [c.event, c.timestamp])).toEqual([
+        ['pull_request.labeled', '2026-07-26T02:00:00.000Z'],
+        ['pull_request.labeled', '2026-07-26T02:20:00.000Z'],
+      ]);
+      expect(run.mock.calls.some((call) => call[1].some((arg) => arg.includes('is:pr')))).toBe(true);
+    });
+
+    it('reports a removal as pull_request.unlabeled', async () => {
+      const result = await new GithubPoller({ run: fake(prItem) }).poll('acme', 'demo', {
+        ...prDefinition, events: ['pull_request.unlabeled'],
+      }, { since: '2026-07-26T01:00:00.000Z' });
+      expect(result.candidates.map((c) => c.event)).toEqual(['pull_request.unlabeled']);
+    });
+
+    it('does not launch for the same label on an issue', async () => {
+      const issueRun = fake({ ...item, labels: [{ name: 'rebase' }] });
+      const result = await new GithubPoller({ run: issueRun }).poll('acme', 'demo', prDefinition, { since: '2026-07-26T01:00:00.000Z' });
+      expect(result.candidates).toEqual([]);
+    });
+
+    it('does not launch a pull request for an issue.labeled-only automation', async () => {
+      const result = await new GithubPoller({ run: fake(prItem) }).poll('acme', 'demo', {
+        ...prDefinition, events: ['issue.labeled'], task: { prompt: 'x' },
+      }, { since: '2026-07-26T01:00:00.000Z' });
+      expect(result.candidates).toEqual([]);
+    });
+  });
+
   it('drops a labeled entry whose label is malformed instead of failing the poll', async () => {
     // The filter is `safeParse`, not a widened schema: `timelineEventSchema`
     // still defines what an entry must look like to be reconstructed from.

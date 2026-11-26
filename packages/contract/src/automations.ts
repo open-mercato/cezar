@@ -30,12 +30,14 @@ import { automationScheduleSchema, automationSchedulesSchema } from './automatio
 
 // ---- the definition ------------------------------------------------------------------------
 
-/** The GitHub activity an automation reacts to. Nine events, all bounded polls — never a webhook. */
+/** The GitHub activity an automation reacts to. Eleven events, all bounded polls — never a webhook. */
 export const automationEventSchema = z.enum([
   'pull_request.opened',
   'issue.opened',
   'issue.labeled',
   'issue.unlabeled',
+  'pull_request.labeled',
+  'pull_request.unlabeled',
   'pull_request.reviewed',
   'pull_request.review_requested',
   'pull_request.rereview_requested',

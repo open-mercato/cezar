@@ -18,6 +18,8 @@ export const EVENT_LABELS: Record<AutomationEvent, string> = {
   'issue.opened': 'An issue opens',
   'issue.labeled': 'An issue gets a label',
   'issue.unlabeled': 'An issue loses a label',
+  'pull_request.labeled': 'A pull request gets a label',
+  'pull_request.unlabeled': 'A pull request loses a label',
   'pull_request.reviewed': 'A review is submitted',
   'pull_request.review_requested': 'A review is requested',
   'pull_request.rereview_requested': 'A re-review is requested',

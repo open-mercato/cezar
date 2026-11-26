@@ -139,6 +139,7 @@ const RESULTS: readonly AutomationLogResult[] = [
 /** The nine bounded polls a GitHub automation can watch. */
 const EVENTS: readonly AutomationEvent[] = [
   'pull_request.opened', 'issue.opened', 'issue.labeled', 'issue.unlabeled',
+  'pull_request.labeled', 'pull_request.unlabeled',
   'pull_request.reviewed', 'pull_request.review_requested', 'pull_request.rereview_requested',
   'pull_request.closed', 'pull_request.merged',
 ]

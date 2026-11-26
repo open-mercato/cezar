@@ -82,12 +82,14 @@ export interface EditorDraft {
   allowForkHeads?: boolean
 }
 
-/** The nine events the poller reconstructs (Q6: nothing else is offered). */
+/** The eleven events the poller reconstructs (Q6: nothing else is offered). */
 export const GITHUB_EVENTS: readonly AutomationEvent[] = [
   'pull_request.opened',
   'issue.opened',
   'issue.labeled',
   'issue.unlabeled',
+  'pull_request.labeled',
+  'pull_request.unlabeled',
   'pull_request.reviewed',
   'pull_request.review_requested',
   'pull_request.rereview_requested',
@@ -428,7 +430,7 @@ export function unenforcedPromptLogins(draft: Pick<EditorDraft, 'kind' | 'prompt
 
 /** A label event needs `changedLabels` — the server's rule, surfaced before the 400. */
 export function needsChangedLabels(events: readonly AutomationEvent[]): boolean {
-  return events.includes('issue.labeled') || events.includes('issue.unlabeled')
+  return events.some(event => event === 'issue.labeled' || event === 'issue.unlabeled' || event === 'pull_request.labeled' || event === 'pull_request.unlabeled')
 }
 
 export const isScheduleEvery = (value: number): value is ScheduleEvery =>

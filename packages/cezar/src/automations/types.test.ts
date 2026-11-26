@@ -36,6 +36,16 @@ describe('automation schemas', () => {
     ).toBe(false);
   });
 
+  it('requires changedLabels for pull_request label events and accepts them with a pr-head checkout (#2475)', () => {
+    const events = ['pull_request.labeled', 'pull_request.unlabeled'];
+    expect(automationDefinitionSchema.safeParse({ ...definition, events }).success).toBe(false);
+    expect(automationDefinitionSchema.safeParse({
+      ...definition, events,
+      filters: { ...definition.filters, changedLabels: ['rebase'] },
+      task: { ...definition.task, checkout: 'pr-head' },
+    }).success).toBe(true);
+  });
+
   it('accepts the closed and merged events, but not with a pr-head checkout', () => {
     const events = ['pull_request.closed', 'pull_request.merged'];
     expect(automationDefinitionSchema.safeParse({ ...definition, events }).success).toBe(true);
