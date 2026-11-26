@@ -258,7 +258,7 @@ describe('the gemini runner behind the seam (Step 2.5)', () => {
     process.env.CEZ_GEMINI_BIN = join(tmpdir(), 'cez-gemini-does-not-exist-xyz');
     const gemini = (await detectEnvironment()).find((check) => check.name === 'gemini');
     expect(gemini).toMatchObject({ available: false });
-    expect(gemini!.hint).toContain('npm i -g @google/gemini-cli');
+    expect(gemini!.hint).toContain('npm install -g @google/gemini-cli');
     expect(gemini!.hint).toContain('API key');
   });
 

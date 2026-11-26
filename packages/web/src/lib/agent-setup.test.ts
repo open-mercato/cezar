@@ -1,9 +1,24 @@
 import { describe, expect, it } from 'vitest'
 
-import { agentSetupListRows, signInUrl } from '@/lib/agent-setup'
+import type { AgentSetupEntry, AgentSetupProvider } from '@open-mercato/cezar-api-client'
 
-const agent = (provider: 'claude' | 'codex' | 'copilot') => ({ provider, installCommand: `install ${provider}`, installHint: 'hint', loginCommand: `login ${provider}` })
-const setup = { available: true as const, session: null, agents: [agent('claude'), agent('codex'), agent('copilot')] }
+import { agentRowAction, agentSetupListRows, agentVersionChip, entryVersionState, signInUrl } from '@/lib/agent-setup'
+
+const agent = (provider: AgentSetupProvider, over: Partial<AgentSetupEntry> = {}): AgentSetupEntry => ({
+  provider,
+  loginCommand: `login ${provider}`,
+  install: { command: `install ${provider}`, runnable: true, sudo: false },
+  update: null,
+  docsUrl: 'https://example.com/docs',
+  installed: false,
+  version: null,
+  method: null,
+  minVersion: null,
+  latestVersion: null,
+  activeRuns: 0,
+  ...over,
+})
+const setup = { available: true, reason: null, interactive: true, session: null, agents: [agent('claude'), agent('codex'), agent('copilot')] }
 
 describe('agentSetupListRows', () => {
   it('leaves out the connected and the switched off, with installed agents first', () => {
@@ -24,6 +39,52 @@ describe('agentSetupListRows', () => {
 
   it('offers an install when the status has no row yet', () => {
     expect(agentSetupListRows(setup, undefined).every((row) => row.state === 'missing')).toBe(true)
+  })
+})
+
+describe('agentSetupListRows on the first-run page', () => {
+  it('keeps to the agents first-run has always offered', () => {
+    const wide = { ...setup, agents: [...setup.agents, agent('gemini'), agent('omp')] }
+    expect(agentSetupListRows(wide, undefined).map((row) => row.provider)).toEqual(['claude', 'codex', 'copilot'])
+  })
+})
+
+describe('agentRowAction (spec 2026-11-25-agent-cli-install-and-update)', () => {
+  const update = { command: 'brew upgrade claude-code', runnable: true, sudo: false }
+
+  it('offers Install only for a command cezar runs, How to install otherwise', () => {
+    expect(agentRowAction(agent('codex'), { provider: 'codex', status: 'not-installed' })).toBe('install')
+    expect(agentRowAction(agent('omp', { install: { command: 'brew install can1357/tap/omp', runnable: false, sudo: false } }), { provider: 'omp', status: 'not-installed' })).toBe('how-to-install')
+  })
+
+  it('offers Update for an outdated install, Sign in for a signed-out one, nothing when ready', () => {
+    const installed = { installed: true, version: '2.0.14', update }
+    expect(agentRowAction(agent('claude', { ...installed, minVersion: '2.1.0' }), { provider: 'claude', status: 'connected' })).toBe('update')
+    expect(agentRowAction(agent('claude', { ...installed, latestVersion: '2.0.14' }), { provider: 'claude', status: 'disconnected' })).toBe('sign-in')
+    expect(agentRowAction(agent('claude', { ...installed, latestVersion: '2.0.14' }), { provider: 'claude', status: 'connected' })).toBeNull()
+    expect(agentRowAction(agent('claude'), { provider: 'claude', status: 'not-installed', enabled: false })).toBeNull()
+  })
+})
+
+describe('entryVersionState', () => {
+  it('derives the state the server no longer sends: required, then available, else current', () => {
+    const at = (version: string | null, minVersion: string | null, latestVersion: string | null) =>
+      entryVersionState({ installed: true, version, minVersion, latestVersion })
+    expect(at('1.17.0', '1.18.0', '1.21.0')).toBe('update-required')
+    expect(at('1.18.0', '1.18.0', '1.21.0')).toBe('update-available')
+    expect(at('1.21.0', null, '1.21.0')).toBe('current')
+    expect(at('2.1.4-beta.1', null, '2.1.3')).toBe('current')
+    expect(at('2026.10.22-27dcf5f', null, null)).toBe('unknown')
+    expect(entryVersionState({ installed: false, version: '1.0.0', minVersion: '2.0.0', latestVersion: null })).toBe('unknown')
+  })
+})
+
+describe('agentVersionChip', () => {
+  it('says required, available or up to date', () => {
+    expect(agentVersionChip(agent('opencode', { installed: true, version: '1.17.0', minVersion: '1.18.0' }))).toEqual({ label: '1.18.0 required', tone: 'danger' })
+    expect(agentVersionChip(agent('claude', { installed: true, version: '2.0.14', latestVersion: '2.1.3' }))).toEqual({ label: '2.1.3 available', tone: 'warn' })
+    expect(agentVersionChip(agent('codex', { installed: true, version: '0.64.0', latestVersion: '0.64.0' }))).toEqual({ label: 'up to date', tone: 'ok' })
+    expect(agentVersionChip(agent('codex'))).toBeNull()
   })
 })
 

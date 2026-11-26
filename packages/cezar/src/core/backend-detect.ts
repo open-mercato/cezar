@@ -5,6 +5,7 @@ import type { RunnerId } from './agent-runner.ts';
 import { resolveAntigravityBin } from './antigravity-runner.ts';
 import { isForeignCursorAgent } from './cursor-bin.ts';
 import { cliVersionFrom } from './provider-auth.ts';
+import { installHintCommand } from './agent-install.ts';
 import { resolveClaudeBin } from './claude-bin.ts';
 import { geminiHasCredentials } from './gemini-credentials.ts';
 import { GEMINI_AUTH_HINT } from './gemini-ui-mapper.ts';
@@ -81,10 +82,7 @@ async function probeClaude(): Promise<BackendCheck> {
     return {
       name: 'claude',
       available: false,
-      // npm, to match what cezar's own installer runs (`server-install/steps.ts`, `NPM_GLOBAL`)
-      // and what the cockpit's accounts panel tells users — and because it is the one route
-      // that works on every platform this runs on.
-      hint: 'install Claude Code (npm i -g @anthropic-ai/claude-code) and log in',
+      hint: `install Claude Code (${installHintCommand('claude')}) and log in`,
     };
   }
 }
@@ -106,7 +104,7 @@ async function probeCodex(): Promise<BackendCheck> {
     return {
       name: 'codex',
       available: false,
-      hint: 'optional: install the Codex CLI (npm i -g @openai/codex) and log in to use the Codex runner',
+      hint: `optional: install the Codex CLI (${installHintCommand('codex')}) and log in to use the Codex runner`,
     };
   }
 }
@@ -128,7 +126,7 @@ async function probeOpencode(): Promise<BackendCheck> {
     return {
       name: 'opencode',
       available: false,
-      hint: 'optional: install OpenCode (https://opencode.ai) and configure a provider to use the OpenCode runner',
+      hint: `optional: install OpenCode (${installHintCommand('opencode')}) and configure a provider to use the OpenCode runner`,
     };
   }
 }
@@ -145,7 +143,7 @@ async function probeCursor(): Promise<BackendCheck> {
       return {
         name: 'cursor',
         available: false,
-        hint: `\`${bin}\` resolves but doesn't look like the Cursor CLI (got: ${stdout.trim().slice(0, 80)}); install it (curl https://cursor.com/install -fsS | bash) or set CEZ_CURSOR_AGENT_BIN`,
+        hint: `\`${bin}\` resolves but doesn't look like the Cursor CLI (got: ${stdout.trim().slice(0, 80)}); install it (${installHintCommand('cursor')}) or set CEZ_CURSOR_AGENT_BIN`,
       };
     }
     return {
@@ -158,7 +156,7 @@ async function probeCursor(): Promise<BackendCheck> {
     return {
       name: 'cursor',
       available: false,
-      hint: 'optional: install the Cursor CLI (curl https://cursor.com/install -fsS | bash) and run `agent login`',
+      hint: `optional: install the Cursor CLI (${installHintCommand('cursor')}) and run \`agent login\``,
     };
   }
 }
@@ -183,7 +181,7 @@ async function probePi(): Promise<BackendCheck> {
     return {
       name: 'pi',
       available: false,
-      hint: 'optional: install the pi CLI and log in to use the pi runner',
+      hint: `optional: install the pi CLI (${installHintCommand('pi')}) and log in to use the pi runner`,
     };
   }
 }
@@ -214,7 +212,7 @@ async function probeJunie(): Promise<BackendCheck> {
     return {
       name: 'junie',
       available: false,
-      hint: 'optional: install Junie (https://junie.jetbrains.com/cli) and log in to use the Junie runner',
+      hint: `optional: install Junie (${installHintCommand('junie')}) and log in to use the Junie runner`,
     };
   }
 }
@@ -248,7 +246,7 @@ async function probeAntigravity(): Promise<BackendCheck> {
     return {
       name: 'antigravity',
       available: false,
-      hint: 'optional: install the Antigravity CLI (https://antigravity.google/docs/cli) and sign in with `agy` to use the Antigravity runner',
+      hint: `optional: install the Antigravity CLI (${installHintCommand('antigravity')}) and sign in with \`agy\` to use the Antigravity runner`,
     };
   }
 }
@@ -274,7 +272,7 @@ async function probeCopilot(): Promise<BackendCheck> {
     return {
       name: 'copilot',
       available: false,
-      hint: 'optional: install GitHub Copilot CLI (`npm i -g @github/copilot`) and run `copilot login` to use the copilot runner',
+      hint: `optional: install GitHub Copilot CLI (\`${installHintCommand('copilot')}\`) and run \`copilot login\` to use the copilot runner`,
     };
   }
 }
@@ -301,7 +299,7 @@ async function probeOmp(): Promise<BackendCheck> {
     return {
       name: 'omp',
       available: false,
-      hint: 'optional: install OMP and log in to use the omp runner',
+      hint: `optional: install OMP (${installHintCommand('omp')}) and log in to use the omp runner`,
     };
   }
 }
@@ -325,7 +323,7 @@ async function probeGemini(): Promise<BackendCheck> {
     return {
       name: 'gemini',
       available: false,
-      hint: `optional: install Gemini CLI (npm i -g @google/gemini-cli) to use the Gemini runner. ${GEMINI_AUTH_HINT}`,
+      hint: `optional: install Gemini CLI (${installHintCommand('gemini')}) to use the Gemini runner. ${GEMINI_AUTH_HINT}`,
     };
   }
 }
@@ -347,7 +345,7 @@ async function probeKimi(): Promise<BackendCheck> {
     return {
       name: 'kimi',
       available: false,
-      hint: 'optional: install Kimi Code (https://moonshotai.github.io/kimi-code/) and run `kimi login` to use the Kimi runner',
+      hint: `optional: install Kimi Code (${installHintCommand('kimi')}) and run \`kimi login\` to use the Kimi runner`,
     };
   }
 }

@@ -1,4 +1,5 @@
-import { execFile, spawn } from 'node:child_process';
+import { execFile } from 'node:child_process';
+import { signalCheck, spawnCheck } from './check-process.ts';
 import { CEZAR_DATA_EXCLUDE } from '../data-gitignore.ts';
 import { gitHasIdentity, unresolvedConflicts } from '../git-worktree.ts';
 
@@ -56,12 +57,12 @@ const reason = (res: GitResult, fallback: string) =>
 
 export function runShellCheck(command: string, cwd: string, env?: NodeJS.ProcessEnv): Promise<{ ok: boolean; output: string }> {
   return new Promise((resolve) => {
-    const child = spawn('bash', ['-lc', command], { cwd, env: env ?? process.env });
+    const child = spawnCheck(command, cwd, env ?? process.env);
     let output = '';
     const collect = (chunk: Buffer) => {
       output = (output + chunk.toString('utf8')).slice(-CHECK_OUTPUT_TAIL);
     };
-    const timer = setTimeout(() => child.kill('SIGTERM'), CHECK_TIMEOUT_MS);
+    const timer = setTimeout(() => signalCheck(child, 'SIGTERM'), CHECK_TIMEOUT_MS);
     child.stdout.on('data', collect);
     child.stderr.on('data', collect);
     child.on('error', (err) => {
@@ -271,13 +272,16 @@ async function runChecks(root: string, options: LandOptions): Promise<LandResult
   return undefined;
 }
 
+/** How the landing part opens; `withCurrentGlobalInstructions` finds the part by it. */
+export const LANDING_PROMPT_LEAD = 'Landing: the project owner enabled AUTO-LAND for this project.';
+
 /** What the agent is told when the owner enabled auto-land — the Guard's written permission. An
  *  interactive run lands only after the user reviews it; an autonomous one lands on CEZ:DONE. */
 export function landingPromptPart(baseBranch: string | undefined, checks: string[], autonomous: boolean): string {
   const target = baseBranch ?? 'the checked-out base branch';
   const checkLine = checks.length ? ` runs the required checks (${checks.map((c) => `\`${c}\``).join(', ')})` : '';
   return [
-    `Landing: the project owner enabled AUTO-LAND for this project. You work directly in the repository checkout on ${target}.`,
+    `${LANDING_PROMPT_LEAD} You work directly in the repository checkout on ${target}.`,
     autonomous
       ? `When you end a turn with CEZ:DONE, cezar commits your changes, rebases onto the remote,${checkLine} and pushes to ${target} itself.`
       : `When you end a turn with CEZ:DONE, the user reviews your changes and may ask for corrections; when they approve, cezar commits, rebases onto the remote,${checkLine} and pushes to ${target} itself.`,

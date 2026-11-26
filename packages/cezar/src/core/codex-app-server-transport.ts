@@ -1,4 +1,5 @@
 import { spawn as nodeSpawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
+import { installHintCommand } from './agent-install.ts';
 import { dirname, resolve as resolvePath } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { trackChildExit } from './agent-runner.ts';
@@ -184,7 +185,7 @@ export function codexSpawnError(error: unknown, bin: string): Error {
   const code = (error as NodeJS.ErrnoException | undefined)?.code;
   if (code === 'ENOENT') {
     return new Error(
-      `\`${bin}\` not found on PATH — install the Codex CLI (npm i -g @openai/codex) and run \`codex\` once to log in`,
+      `\`${bin}\` not found on PATH — install the Codex CLI (${installHintCommand('codex')}) and run \`codex\` once to log in`,
     );
   }
   return error instanceof Error ? error : new Error(String(error));

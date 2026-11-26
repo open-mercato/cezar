@@ -12,7 +12,7 @@ import { probeCodexIdentity, probeCodexUsageWindows } from '../core/codex-usage-
 import { TrackerAgentBindingError } from '../server/tracker/agent-credentials.ts';
 import { trackerBindingComplete, trackerContextPath, trackerPrompt, trackerTaskContext } from '../server/tracker/task-access.ts';
 import { createHash, randomUUID } from 'node:crypto';
-import { spawn } from 'node:child_process';
+import { signalCheck, spawnCheck } from './check-process.ts';
 import { existsSync, renameSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { mkdir, realpath, access, writeFile } from 'node:fs/promises';
 import { assertCezarHomeWriteIsSandboxed, cezarHomeDir, cezBinPath } from '../paths.ts';
@@ -43,7 +43,7 @@ import { diskFullAgentErrorText } from '../disk-space.ts';
 import { accountStateHint, classifyAgentFailure, isOauthRefreshRace, transientRetryCap, transientRetryDelayMs } from '../core/agent-failure-class.ts';
 import { reportAgentError } from '../runs/agent-error-telemetry.ts';
 import { createRunner } from '../core/runner-factory.ts';
-import { REASONING_EFFORT_UNSUPPORTED_ERROR, runnerSupportsReasoningEffort, type RunnerId } from '../core/agent-runner.ts';
+import { isRunnerId, REASONING_EFFORT_UNSUPPORTED_ERROR, runnerSupportsReasoningEffort, type RunnerId } from '../core/agent-runner.ts';
 import { modelConflictsWithRunner, pinSurvivesRunnerSwitch } from '../core/model-presets.ts';
 import { AGENT_MODELS_LOCKED_ERROR, agentModelsLocked } from '../core/agent-model-policy.ts';
 import {
@@ -73,7 +73,7 @@ import {
   sanitizeAttachmentName,
   storedAttachmentExtension,
 } from '@open-mercato/cezar-contract';
-import type { AgentEvent, AgentRunResult, ContentBlock } from '../core/agent-runner.ts';
+import type { AgentEvent, AgentRunResult, AgentRunSpec, ContentBlock } from '../core/agent-runner.ts';
 import { discoverSkills, parseFrontmatter, type Skill } from '../skills.ts';
 import { automationsReachable } from '../automations/builtin-skill.ts';
 import { AUTOMATIONS_PROMPT } from '../automations/prompts.ts';
@@ -86,7 +86,7 @@ import { loadConfig, type CezConfig } from '../config.ts';
 import { bypassPermissionsBlocked } from '../bypass-permissions.ts';
 import { isLifecycleConfigTracked } from '../worktree-lifecycle/config.ts';
 import { generateCommitMessage } from './commit-message.ts';
-import { hasUnlanded, landInPlace, landingPromptPart, READ_ONLY_PROMPT, READ_ONLY_TOOLS, type LandResult } from './landing.ts';
+import { hasUnlanded, landInPlace, LANDING_PROMPT_LEAD, landingPromptPart, READ_ONLY_PROMPT, READ_ONLY_TOOLS, type LandResult } from './landing.ts';
 import { deleteRunLayouts } from '../runs/layouts.ts';
 import {
   autosaveCommit,
@@ -106,12 +106,15 @@ import {
 import { commentOnIssue, commentOnPr, fetchPrHeadChecks, fetchPrWatchFingerprint, findBranchPr, resolvePrTarget, updatePr } from '../server/forge/github.ts';
 import { createDraftPr } from '../server/pr.ts';
 import { baseDivergence, createOrSwitchBranch } from '../server/git-changes.ts';
-import { isReadOnlyWorkflow, readOnlyWorkflowRefusal } from './capabilities.ts';
+import { grantsFileWrites, isReadOnlyWorkflow, readOnlyWorkflowRefusal, workflowSupportsBackend } from './capabilities.ts';
 import { getHeadCommit, getRepoInfo } from '../server/git.ts';
 import { loadWorkflows, newerCatalogWorkflow } from './load.ts';
 import type { QueuedMessage, RunRecord, RunStore, StepState } from '../runs/store.ts';
 import { switchedWorkflowAgent, taskAgentSelection, workflowAgentSwitch } from '../runs/agent-selection.ts';
-import { artifactsDir, authParkForAccount, isIdleParked } from '../runs/store.ts';
+import { GLOBAL_INSTRUCTIONS_HEADING, LEGACY_GLOBAL_HEADINGS, readGlobalInstructions } from '../core/global-instructions.ts';
+import { instructionsConcernChecks, packageScriptReader, resolveCheckCommand, rewritableCheck, type CheckCommandResolution } from './check-instructions.ts';
+import { artifactsDir, authParkForAccount, FRESH_PROMPT_MAX, isIdleParked, prCheckoutDir, testCommandFile } from '../runs/store.ts';
+import { checkoutPr, existingPrCheckout, parsePrUrls, pickPr, prCheckoutPromptNote, remotePrHead } from './pr-checkout.ts';
 import { artifactsPromptPart, scanArtifacts, watchArtifacts } from '../runs/artifacts.ts';
 import { backstopRender } from '../impact/publish.ts';
 // Task dispatch (spec 2026-09-10-dispatch). Every import below is inert unless the feature is
@@ -167,6 +170,7 @@ import { DEFAULT_AGENT_ACCOUNT_ID, defaultAgentAccountStore, loadAgentAccounts, 
 import {
   candidateKey,
   eligibleFallbackCandidates,
+  currentManagerRouting,
   fallbackConsentCurrent,
   managerFallbackPolicy,
   getAgentFallbackPolicySync,
@@ -275,6 +279,7 @@ const IDLE_CLOSED_LIFECYCLE = 'run closed after inactivity — nobody replied; C
 /** Tail of an agent node's last turn kept as `{{nodes.<id>.summary}}`. */
 const NODE_SUMMARY_CAP = 4_000;
 import { freshContinuationContext } from './continuation-context.ts';
+import { laterInstructions, resumeWithContext } from './resume-prompt.ts';
 
 const CHECK_OUTPUT_CAP = 20_000;
 
@@ -597,11 +602,15 @@ interface ContinueRunOptions {
   /** Agent account for the reopened session (spec 2026-07-29-agent-profiles). Omitted = the
    *  account the run is already on. */
   agentProfile?: string;
+  /** Open a new session with no prior conversation (#2513 re-reviews): same task, worktree and branch. */
+  freshContext?: boolean;
 }
 
 class AgentAccountUnavailableError extends Error {}
 
 interface ActiveRun {
+  /** `instructedCheckCommand`'s answers this session; lazily created, so neither construction site has to know. */
+  checkResolutions?: Map<string, CheckCommandResolution>;
   /** The actual definition this owner is walking, including the dequeue-time refresh. */
   workflow?: WorkflowDef;
   /** A successor already recorded and waiting for this owner to release its session and lease. */
@@ -790,6 +799,46 @@ interface ActiveRun {
     observed: boolean;
     startedTurns: Set<string>;
     recordedTurns: Set<string>;
+  };
+}
+
+/**
+ * Whether `def` exports the reviewed PR into `prCheckoutDir`. Includes legacy built-in `review-pr`
+ * snapshots recorded before `github.pr-checkout` was added, so continuing an older review task
+ * still gets a fresh PR checkout.
+ */
+function workflowChecksOutPr(def: WorkflowDef | undefined): boolean {
+  return !!def && (
+    !!def.graph?.nodes.some((n) => n.type === 'github.pr-checkout')
+    || (def.name === 'review-pr' && def.source === 'built-in')
+  );
+}
+
+/**
+ * What a workflow's own shape changes about an agent launch. A read-only workflow (review-pr) —
+ * one that can neither publish nor grant a file-writing tool — never runs with Claude's
+ * bypassPermissions, and its Claude steps may write the run's own artifacts directory; an Ask task
+ * gets neither widening. A workflow that checks a PR out lets every step read the PR's folder
+ * (`prCheckoutDir`) once it exists — read, never run in, and never written: the agents' working
+ * directory stays the task's own tree.
+ */
+export function workflowLaunchSpec(
+  def: WorkflowDef | undefined,
+  state: Pick<ActiveRun, 'readOnly'>,
+  dirs: { artifacts: string; prCheckout: string },
+  exists: (path: string) => boolean = existsSync,
+): { readOnlyWorkflow: boolean; artifactsWriteDir?: string; prDirs: string[]; readOnlyPaths: string[] } {
+  const readOnlyWorkflow = !!def && isReadOnlyWorkflow(def) && !grantsFileWrites(def);
+  const checksOutPr = workflowChecksOutPr(def);
+  return {
+    readOnlyWorkflow,
+    ...(readOnlyWorkflow && !state.readOnly ? { artifactsWriteDir: dirs.artifacts } : {}),
+    // The folder itself, never its `tree/`; and only once made — `--add-dir` of a missing path fails.
+    prDirs: checksOutPr && exists(dirs.prCheckout) ? [dirs.prCheckout] : [],
+    // What the judge and the user read must stay what the checkout wrote.
+    readOnlyPaths: checksOutPr
+      ? [`${dirs.prCheckout}/**`, `${dirs.artifacts}/pr-*.diff`, `${dirs.artifacts}/pr-*.json`]
+      : [],
   };
 }
 
@@ -1145,7 +1194,7 @@ export interface StartRunInput {
   inheritedFallbackPolicy?: RunRecord['fallbackPolicy'];
   /** The manager's agent choice: a timeline note, and its other allowed accounts for a usage limit
    *  (absent: the project's own fallback policy). */
-  managerAgent?: { note: string; fallback?: Array<{ provider: RunnerId; profileId: string; model?: string }> };
+  managerAgent?: { note: string; routed?: true; fallback?: Array<{ provider: RunnerId; profileId: string; model?: string }> };
   /** Composer opt-out (#worktree-toggle): `false` runs the task in the repo
    *  working tree instead of an isolated worktree. Undefined/`true` keeps the
    *  default per-task worktree. Ignored for variants (they always isolate). */
@@ -1223,12 +1272,62 @@ export function resolveExtraSystemPrompt(
   ].join('\n\n---\n\n');
 }
 
-export const GLOBAL_INSTRUCTIONS_HEADING =
-  '## Global instructions\n\nThese user instructions apply to every task and take precedence over repository, project, workflow and skill instructions. Preserve the other instructions wherever they do not conflict.';
+export { GLOBAL_INSTRUCTIONS_HEADING };
 export const PROJECT_INSTRUCTIONS_HEADING =
   '## Project instructions\n\nThese apply to this project unless they conflict with the global instructions above.';
 
 const MANAGER_TASK_SYSTEM_PROMPT = 'A cezar manager started this task. Do not merge pull requests or enable automations: leave that to the user.';
+
+const PART_DIVIDER = '\n\n---\n\n';
+
+/** Every heading a record may have been saved under (#1693, #2257, #2488), so an old record still parses. */
+const GLOBAL_HEADINGS: readonly string[] = [GLOBAL_INSTRUCTIONS_HEADING, ...LEGACY_GLOBAL_HEADINGS];
+const PROJECT_HEADING_TITLE = '## Project instructions\n\n';
+
+/** Peels the task rules `execute` composes after the extra prompt off the END, in their fixed order
+ *  (manager line, landing, read-only), so the same words inside instruction text are never taken. */
+function splitTaskRules(text: string): { extra: string; rules: string[] } {
+  const matchers: Array<(part: string) => boolean> = [
+    (part) => part === READ_ONLY_PROMPT,
+    (part) => part.startsWith(LANDING_PROMPT_LEAD),
+    (part) => part === MANAGER_TASK_SYSTEM_PROMPT,
+  ];
+  let extra = text;
+  const rules: string[] = [];
+  for (const matches of matchers) {
+    const at = extra.lastIndexOf(PART_DIVIDER);
+    const part = at < 0 ? extra : extra.slice(at + PART_DIVIDER.length);
+    if (!matches(part)) continue;
+    rules.unshift(part);
+    extra = at < 0 ? '' : extra.slice(0, at);
+  }
+  return { extra, rules };
+}
+
+/** The project text inside a recorded extra prompt: a global block is recognised only by a heading
+ *  cezar wrote, or by the project part after it, so repository text that merely starts with
+ *  `## Global instructions` stays project text. */
+function recordedProjectText(extra: string): string {
+  const known = GLOBAL_HEADINGS.find((heading) => extra === heading || extra.startsWith(`${heading}\n\n`));
+  const split = extra.startsWith('## Global instructions\n\n') ? extra.indexOf(`${PART_DIVIDER}${PROJECT_HEADING_TITLE}`) : -1;
+  if (split >= 0) {
+    const project = extra.slice(split + PART_DIVIDER.length);
+    const explained = project.indexOf('\n\n', PROJECT_HEADING_TITLE.length);
+    return explained < 0 ? '' : project.slice(explained + 2);
+  }
+  return known ? '' : extra;
+}
+
+/**
+ * A run's recorded extra prompt rebuilt around the CURRENT global instructions. The record snapshots
+ * them at start, so a Continue, resume or agent switch would otherwise keep the text from before the
+ * user edited Settings, or none when they were set later. The project text and the task rules after
+ * it (manager line, landing, read-only) are kept as recorded.
+ */
+export function withCurrentGlobalInstructions(stored: string | undefined, current: string | undefined): string | undefined {
+  const { extra, rules } = splitTaskRules(stored?.trim() ?? '');
+  return composeSystemPrompt(resolveExtraSystemPrompt(recordedProjectText(extra), undefined, current), ...rules) || undefined;
+}
 
 /**
  * Joins the parts of one agent step's system prompt in fixed order — skill
@@ -1496,8 +1595,23 @@ export const VARIANT_HINTS: Record<string, string | undefined> = {
 
 const RESTART_CONTINUATION_PROMPT =
   'The cezar process restarted while you were working on this task. Read the handoff file (CEZ_HANDOFF_FILE) to recover context, then continue the task from where you left off.';
+/** Opens a `freshContext` continuation, ahead of the instruction. */
+export const FRESH_CONTEXT_NOTE =
+  'This is a fresh session on the same task, worktree and branch: the earlier conversation was cleared on purpose. Form your own judgement from the code as it is now, and do not rely on earlier verdicts or conclusions, including any in the handoff file.';
+/** A queued fresh Continue revived without its persisted instruction (a record from before `freshPrompt`). */
+const FRESH_RESTART_PROMPT =
+  'The cezar process restarted before this session opened, and the instruction it was opened with was lost. Work out what the task needs now from its objective and the current state of its branch and pull request, then do it.';
 const SWITCH_AGENT_PROMPT =
   'Continue this task on the newly selected agent. Use the handoff, conversation and existing worktree to pick up the work. If a user decision was pending, wait for their answer.';
+/** Openings cezar sends on its own; recorded like the user's messages, but not instructions. */
+const CEZAR_OPENINGS = [
+  RESTART_CONTINUATION_PROMPT,
+  SWITCH_AGENT_PROMPT,
+  AUTO_RESUME_PROMPT,
+  TRANSIENT_RETRY_PROMPT,
+  AUTH_RECONNECTED_PROMPT,
+  'Sent automatically by cezar',
+];
 
 interface PendingContinuation {
   stepId: string;
@@ -1508,6 +1622,8 @@ interface PendingContinuation {
    *  be given the path of. Persisted when the continuation actually opens, not here. */
   images: PastedContent[];
   attachmentUrls?: string[];
+  /** `ContinueRunOptions.freshContext`: no resume and no portable transcript. */
+  freshContext?: true;
 }
 
 interface ManualAgentHandoff {
@@ -1530,6 +1646,8 @@ interface PreparedUserMessage {
   persisted: PersistedAttachment[];
   imageLibraryWrites: Array<() => void>;
   skills?: TaskSkillPreparation;
+  /** The refreshed-checkout note; `''` once checked or not applicable — the sentinel `awaitingPrep` reads so re-entry does not re-fetch. */
+  prCheckoutNote?: string;
 }
 
 interface TaskSkillPreparation {
@@ -1766,8 +1884,10 @@ export class RunManager {
       oldestQueuedAt: () => this.oldestQueuedAt(),
       newestPromotionAt: () => this.newestPromotionAt(),
       accountHolds: () => this.accountHolds(),
+      accountLoad: () => this.accountLoad(),
       refreshQueueReasons: () => this.refreshQueueReasons(),
       activeRuns: () => this.store.listRuns().filter((r) => RESTART_SENSITIVE.has(r.status) && !isIdleParked(r)).length,
+      restartBlockers: () => this.restartBlockers(),
     });
     this.lifecycle = new WorktreeLifecycleCoordinator(repoRoot, store, {
       semaphore: this.semaphore,
@@ -1965,6 +2085,8 @@ export class RunManager {
       CEZ_TASK_ID: runId,
       CEZ_TODOS_FILE: generateFollowups ? todosPath(this.dataDir) : '',
       CEZ_ARTIFACTS_DIR: artifactsDir(this.dataDir, runId),
+      // The built-in `Run tests` check runs what the agent records here (templates.ts).
+      CEZ_TEST_COMMAND_FILE: testCommandFile(this.dataDir, runId),
       ...agentTmpEnv(this.dataDir, runId),
       // Task dispatch (spec 2026-09-10-dispatch): where the `cez task` CLI reaches this server and
       // which project the run belongs to. Absent (not empty) while the feature is off, so the env
@@ -2194,7 +2316,7 @@ export class RunManager {
       // An allowed-accounts list never falls back outside itself, so `[]` means no fallback at all.
       fallbackPolicy: input.startedByManager && input.inheritedFallbackPolicy?.source === 'manager' ? input.inheritedFallbackPolicy
         : input.startedByManager && input.managerAgent?.fallback
-        ? managerFallbackPolicy(input.managerAgent.fallback, input.startedByManager.id)
+        ? managerFallbackPolicy(input.managerAgent.fallback, input.startedByManager.id, input.managerAgent.routed === true)
         : ((policy) => (policy.enabled ? policy : undefined))(getAgentFallbackPolicySync(this.repoRoot)),
       // The global inbox is the ceiling on the per-run flag (#471). Enforced here rather than
       // at the HTTP route because `cezar run`, the inbox's own "▶ Run" and variants all reach
@@ -2353,6 +2475,34 @@ export class RunManager {
     const watchers = this.monitoring.size - spawnParked;
     const exemptMonitoring = Math.min(watchers, this.semaphore.maxMonitoringSessions());
     return this.active.size + this.starting.size - ordinaryWaiting - exemptMonitoring - spawnParked;
+  }
+
+  /**
+   * Runs a restart would cut off mid-work, by title. Unlike `busySlots`, a run monitoring its CI
+   * or its children counts — it is still working — and so does every queued run the pending
+   * restart does not hold. A run waiting on the user does not: boot resumes it as it was.
+   */
+  private restartBlockers(): string[] {
+    const names: string[] = [];
+    for (const run of this.store.listRuns()) {
+      const working = run.status === 'running' || this.starting.has(run.id)
+        || (run.status === 'queued' && !this.heldForRestart(run));
+      if (working) names.push(run.title || run.task.slice(0, 60));
+    }
+    return names;
+  }
+
+  /**
+   * A pending "restart when idle" holds new tasks in the queue, so the wait can end. Not held:
+   * continuations (a resume of work already under way — restart recovery, a usage-limit resume, the
+   * user's own Continue), a dispatched child (its parent is waiting on it, and the parent blocks the
+   * restart until it reports), and a run the user told to Start now.
+   */
+  private heldForRestart(run: RunRecord): boolean {
+    return this.semaphore.restartGate.holding
+      && !this.pendingContinuations.has(run.id)
+      && !run.dispatch?.parentRunId
+      && !this.startNowRequested.has(run.id);
   }
 
   /**
@@ -2533,12 +2683,18 @@ export class RunManager {
         this.forceNextPump = false;
         if (this.queue.length > 0 && !forced) await this.refreshAccounts();
         const holds = this.queue.length > 0 && !forced ? this.semaphore.accountHolds() : NO_HOLDS;
+        // A manager's routed task moves to an account that opened up, or waits while all are busy
+        // (spec 2026-11-25-manager-task-routing). Before `anyHold`: a move can lift its hold.
+        const routedBusy = forced ? new Set<string>() : this.routeQueuedManagerTasks(holds);
         const anyHold = holds.deadline.size > 0 || holds.inFlight.size > 0;
         // Only pay for the config read when something is actually held: a queued record may name
         // no runner, and then the account it would use is the configured default.
         const defaultRunner = anyHold ? (await loadConfig(this.repoRoot)).defaultRunner : undefined;
         const startable = (id: string): boolean => {
           const queued = this.store.getRun(id);
+          if (queued && this.heldForRestart(queued)) return false;
+          // Busy is a soft limit: "Start now" overrides it as it overrides `maxParallel`.
+          if (routedBusy.has(id) && !this.startNowRequested.has(id)) return false;
           if (queued && anyHold && accountHeldFor(queued, holds, defaultRunner ?? 'claude', this.askingAccounts(), this.pendingJobs.get(id)?.workflow)) return false;
           // "Start now" goes over `maxParallel` on purpose, but a non-git root still runs one at a time.
           if (this.startNowRequested.has(id)) return repo !== null || this.busySlots() < 1;
@@ -2643,13 +2799,17 @@ export class RunManager {
       const sessionAccount = sessionStep?.profileId ?? DEFAULT_AGENT_ACCOUNT_ID;
       const accountMatches = run.agentProfile === undefined || run.agentProfile === sessionAccount;
       const switchedInput = switched ? run.agentSwitch?.continuationInput : undefined;
+      const fresh = queuedContinuation.freshContext === true;
+      // RESTART_CONTINUATION_PROMPT says to pick up from the handoff, which a fresh read must not.
+      const restartPrompt = fresh ? queuedContinuation.freshPrompt ?? FRESH_RESTART_PROMPT : RESTART_CONTINUATION_PROMPT;
       this.pendingContinuations.set(run.id, {
         stepId: queuedContinuation.id,
-        sessionId: !switched && sessionStep?.sessionId && sessionBackend === backend && accountMatches ? sessionStep.sessionId : undefined,
+        sessionId: !switched && !fresh && sessionStep?.sessionId && sessionBackend === backend && accountMatches ? sessionStep.sessionId : undefined,
         backend,
-        prompt: switchedInput?.prompt ?? (switched ? SWITCH_AGENT_PROMPT : RESTART_CONTINUATION_PROMPT),
+        prompt: switchedInput?.prompt ?? (switched ? SWITCH_AGENT_PROMPT : restartPrompt),
         images: [],
         attachmentUrls: switchedInput?.attachmentUrls,
+        ...(fresh ? { freshContext: true as const } : {}),
       });
       this.enqueue(run.id);
       this.store.appendEvent(run.id, {
@@ -4166,7 +4326,8 @@ export class RunManager {
       ...defaultAgentAccountStore(),
       accounts: policy.candidates.map((c) => ({ id: c.profileId, provider: c.provider, configDir: '', label: '', addedAt: '' })),
     } as AgentAccountStore;
-    return eligibleFallbackCandidates(policy, attempted, held, accounts, this.repoRoot).eligible.length > 0;
+    const workflowDef = run.enforceReadOnly ? undefined : run.workflowDef;
+    return eligibleFallbackCandidates(policy, attempted, held, accounts, this.repoRoot, failed.backend ?? run.runner ?? 'claude', undefined, workflowDef).eligible.length > 0;
   }
 
   private finishFallbackAdmission(runId: string, message: string): void {
@@ -4222,7 +4383,8 @@ export class RunManager {
     if (startFailure === undefined && snapshot.source !== 'manager' && snapshot.candidates.some((candidate) => candidateKey(candidate) === fromKey)) {
       this.store.appendEvent(runId, { type: 'note', message: `fallback skipped ${label(fromKey)} — it is the agent that just reached its limit` });
     }
-    const { eligible, skipped } = eligibleFallbackCandidates(snapshot, attempted, this.semaphore.accountHolds().deadline, accounts, this.repoRoot);
+    const workflowDef = run.enforceReadOnly ? undefined : run.workflowDef;
+    const { eligible, skipped } = eligibleFallbackCandidates(snapshot, attempted, this.semaphore.accountHolds().deadline, accounts, this.repoRoot, fromKey.split(':')[0], this.semaphore.accountLoad(), workflowDef);
     for (const skip of skipped) {
       attempted.add(candidateKey(skip.candidate));
       this.store.appendEvent(runId, { type: 'note', message: `fallback skipped ${label(candidateKey(skip.candidate))} — ${skip.reason}` });
@@ -4308,7 +4470,10 @@ export class RunManager {
     return true;
   }
 
-  /** Wake the queue when a known fallback account hold expires. */
+  /**
+   * Wake the queue when a known fallback account hold expires. A capped timer that fires early
+   * (a hold past 2^31-1 ms) only re-arms when work is queued: the pump then reads `accountHolds()`.
+   */
   private armHoldExpiry(at: number): void {
     if (this.disposed || this.holdDeadlines.has(at)) return;
     this.holdDeadlines.add(at);
@@ -4326,7 +4491,12 @@ export class RunManager {
     // The hold's key resolves an absent profile through the accounts file (#1722); load it now.
     void this.refreshAccounts().then(() => this.onQueueHoldChange());
     this.store.updateRun(runId, { autoResumeAt: new Date(deadline).toISOString(), autoResumeReason: reason });
-    const timer = setTimeout(() => this.fireAutoResume(runId), Math.max(0, deadline - Date.now()));
+    this.armAutoResumeTimer(runId, deadline);
+  }
+
+  /** Node fires a delay past 2^31-1 ms at once; a monthly reset (#2517) is longer, so cap and re-arm. */
+  private armAutoResumeTimer(runId: string, deadline: number): void {
+    const timer = setTimeout(() => this.fireAutoResume(runId), Math.min(2_147_483_647, Math.max(0, deadline - Date.now())));
     timer.unref?.();
     this.autoResumeTimers.set(runId, timer);
   }
@@ -4340,6 +4510,12 @@ export class RunManager {
     this.autoResumeTimers.delete(runId);
     const run = this.store.getRun(runId);
     if (!run || run.status !== 'failed' || !run.autoResumeAt) return;
+    // A capped timer woke before the reset: wait out the rest.
+    const deadline = Date.parse(run.autoResumeAt);
+    if (deadline > Date.now()) {
+      this.armAutoResumeTimer(runId, deadline);
+      return;
+    }
     // Belt and braces against the one gap `reconcileAutoResumes` cannot close: the setting going
     // off in the window between the last pump and this tick.
     if (!this.semaphore.autoResumeOnUsageLimit()) {
@@ -4605,6 +4781,8 @@ export class RunManager {
       await this.reviveQueuedRun(run, 'queue watchdog');
     }
     if (this.queue.length === 0) return;
+    // A pending restart holds the queue on purpose; cancelling it pumps every manager.
+    if (this.semaphore.restartGate.holding) return;
     if (this.busySlots() > 0 || this.starting.size > 0) return;
     if (this.semaphore.busy() > 0) return;
     // A future deadline is a real reason to sit still: that timer will fire and pump.
@@ -4687,9 +4865,95 @@ export class RunManager {
       const until = holds.deadlines?.get(key);
       const reason: RunRecord['queueWaitReason'] = run.status !== 'queued' ? undefined
         : until !== undefined ? { kind: 'usage-reset', until: new Date(until).toISOString(), timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone }
-        : holds.inFlight.has(key) && !resumeInFlight(run) ? { kind: 'account-resume' } : undefined;
+        : holds.inFlight.has(key) && !resumeInFlight(run) ? { kind: 'account-resume' }
+        // The pump owns this one: it alone knows the task waits for a free account.
+        : run.queueWaitReason?.kind === 'account-busy' ? run.queueWaitReason : undefined;
       if (JSON.stringify(reason) !== JSON.stringify(run.queueWaitReason)) this.store.updateRun(run.id, { queueWaitReason: reason });
     }
+  }
+
+  /**
+   * Where a manager-routed queued task should start now (spec 2026-11-25-manager-task-routing):
+   * its own account while that is open; else the open Main with the fewest running, else the first
+   * open Backup; with none open, `busy` (wait) unless it is out of limits (the hold already waits).
+   * Only tasks the manager's roles placed: an explicit `--account` never moves.
+   */
+  private managerRoute(run: RunRecord, holds: AccountHolds, load: Map<string, number>):
+    { kind: 'stay'; key?: string } | { kind: 'busy' } | { kind: 'move'; runner: RunnerId; agentProfile: string; key: string } {
+    const policy = run.fallbackPolicy as AgentFallbackPolicy | undefined;
+    if (run.status !== 'queued' || policy?.source !== 'manager' || !policy.routed) return { kind: 'stay' };
+    const routing = currentManagerRouting(policy);
+    if (!routing || !routing.agents.some((agent) => agent.role !== undefined)) return { kind: 'stay' };
+    const accounts = this.askingAccounts();
+    const keyOf = (runner: RunnerId, agentProfile: string | undefined) => runAccountKey({ runner, agentProfile }, runner, accounts);
+    const busy = (key: string) => routing.maxRunning !== undefined && (load.get(key) ?? 0) >= routing.maxRunning;
+    const open = (key: string) => !holds.deadline.has(key) && !busy(key);
+    const ownRunner = run.runner ?? 'claude';
+    const own = keyOf(ownRunner, run.agentProfile);
+    if (open(own)) return { kind: 'stay', key: own };
+    // A pinned model or effort belongs to its runner: such a task moves only between its accounts.
+    const pinned = run.model !== undefined || run.reasoningEffort !== undefined;
+    const compatible = (runner: RunnerId) => run.enforceReadOnly || workflowSupportsBackend(run.workflowDef, runner);
+    const entries = routing.agents
+      .filter((agent): agent is typeof agent & { runner: RunnerId } =>
+        isRunnerId(agent.runner) && (!pinned || agent.runner === ownRunner) && compatible(agent.runner))
+      .map((agent, index) => ({ ...agent, index, key: keyOf(agent.runner, agent.agentProfile) }));
+    const main = entries.filter((entry) => entry.role !== 'backup' && open(entry.key))
+      .sort((a, b) => (load.get(a.key) ?? 0) - (load.get(b.key) ?? 0) || a.index - b.index)[0];
+    const target = main ?? entries.find((entry) => entry.role === 'backup' && open(entry.key));
+    if (target && target.key !== own) return { kind: 'move', runner: target.runner, agentProfile: target.key.slice(target.runner.length + 1), key: target.key };
+    return holds.deadline.has(own) ? { kind: 'stay' } : { kind: 'busy' };
+  }
+
+  /** Moves routed queued tasks that can start elsewhere; answers the ones that must wait for a free account. */
+  private routeQueuedManagerTasks(holds: AccountHolds): Set<string> {
+    const waiting = new Set<string>();
+    if (!this.queue.some((id) => (this.store.getRun(id)?.fallbackPolicy as AgentFallbackPolicy | undefined)?.routed)) return waiting;
+    const load = this.semaphore.accountLoad();
+    for (const id of [...this.queue]) {
+      const run = this.store.getRun(id);
+      if (!run) continue;
+      // Only before it ever starts: a Continue, auto-resume or requeue resumes where it ran, under
+      // the manager's mid-task setting instead.
+      const fresh = this.pendingJobs.has(id) && !this.pendingContinuations.has(id) && !run.steps.some((step) => step.startedAt);
+      const route = fresh ? this.managerRoute(run, holds, load) : { kind: 'stay' as const };
+      if (route.kind === 'busy') {
+        waiting.add(id);
+        if (run.queueWaitReason?.kind !== 'account-busy') this.store.updateRun(id, { queueWaitReason: { kind: 'account-busy' } });
+        continue;
+      }
+      if (route.kind !== 'move') {
+        // Counted as starting there, so a burst in one sweep does not pile onto one account.
+        if (route.key) load.set(route.key, (load.get(route.key) ?? 0) + 1);
+        if (run.queueWaitReason?.kind === 'account-busy') this.store.updateRun(id, { queueWaitReason: undefined });
+        continue;
+      }
+      const from = runAccountKey(run, run.runner ?? 'claude', this.askingAccounts());
+      const moved = this.switchAgent(id, { runner: route.runner, agentProfile: route.agentProfile, changedBy: 'manager routing' });
+      if ('error' in moved) {
+        // Its own account is busy and the move was refused: wait rather than start there anyway.
+        waiting.add(id);
+        if (run.queueWaitReason?.kind !== 'account-busy') this.store.updateRun(id, { queueWaitReason: { kind: 'account-busy' } });
+        continue;
+      }
+      // Counted as started there, so the next queued task spreads to another account.
+      load.set(route.key, (load.get(route.key) ?? 0) + 1);
+      this.store.updateRun(id, { queueWaitReason: undefined });
+      this.store.appendEvent(id, { type: 'note', message: `Routed to ${route.key.replace(':', ' · ')}: ${from.replace(':', ' · ')} ${holds.deadline.has(from) ? 'is out of usage limits' : 'is busy'}` });
+    }
+    return waiting;
+  }
+
+  /** Tasks running or starting per account: queued, waiting and parked ones use nothing. A
+   *  dequeued run is `starting` until `execute` writes `running`, and a burst must see it. */
+  accountLoad(): Map<string, number> {
+    const load = new Map<string, number>();
+    for (const run of this.store.listRuns()) {
+      if (!this.starting.has(run.id) && (run.status !== 'running' || isIdleParked(run))) continue;
+      const key = runAccountKey(run, run.runner ?? 'claude', this.accountStore && { store: this.accountStore, repoRoot: this.repoRoot, holding: true });
+      load.set(key, (load.get(key) ?? 0) + 1);
+    }
+    return load;
   }
 
   accountHolds(now = Date.now()): AccountHolds {
@@ -5090,6 +5354,13 @@ export class RunManager {
     return this.cancelOne(runId);
   }
 
+  /** A fresh Continue cancelled before it opened never needs its instruction again. */
+  private dropFreshPrompts(runId: string): void {
+    for (const step of this.store.getRun(runId)?.steps ?? []) {
+      if (step.freshPrompt !== undefined) this.store.updateStep(runId, step.id, { freshPrompt: undefined });
+    }
+  }
+
   /** One run's cancellation, with no regard for a hierarchy — what `cancel` has always done. */
   private cancelOne(runId: string): boolean {
     // Still waiting in the queue: just drop it there.
@@ -5100,6 +5371,7 @@ export class RunManager {
       this.pendingBranchNames.delete(runId);
       this.cancelPendingHandoff(runId);
       this.startNowRequested.delete(runId);
+      this.dropFreshPrompts(runId);
       this.store.updateRun(runId, { status: 'cancelled', finishedAt: new Date().toISOString() });
       this.store.appendEvent(runId, { type: 'lifecycle', message: 'cancelled while queued' });
       // A queued run never entered `active`, so it never reaches `dropActive` — the one terminal
@@ -5140,6 +5412,7 @@ export class RunManager {
       }
       this.cancelledStarting.add(runId);
       this.cancelPendingHandoff(runId);
+      this.dropFreshPrompts(runId);
       this.store.updateRun(runId, { status: 'cancelled', finishedAt: new Date().toISOString(), currentStepId: undefined });
       this.store.appendEvent(runId, { type: 'lifecycle', message: 'run cancelled' });
       return true;
@@ -5316,13 +5589,9 @@ export class RunManager {
       return { ...continuation, persistedImages: [], persistedAttachments: [] };
     }
     const stack = run.queuedMessages ?? [];
-    const amendedTask = [run.task, ...stack.map((message) => message.text)]
-      .map((part) => part.trim())
-      .filter((part) => part.length > 0)
-      .join('\n\n');
-    const prompt = amendedTask
-      ? `${continuation.prompt}\n\nCurrent task and queued updates:\n\n${amendedTask}`
-      : continuation.prompt;
+    // The newest instructions win, labelled by age — not the first objective as "current".
+    const later = laterInstructions(this.store.readEvents(runId), run.task, CEZAR_OPENINGS);
+    const prompt = resumeWithContext(continuation.prompt, run.task, later, stack.map((message) => message.text));
     const persisted = this.readPersistedAttachments(
       runId,
       stack.flatMap((message) => message.images ?? []),
@@ -5690,24 +5959,33 @@ export class RunManager {
     const text = prepared?.text ?? '';
     const slash = leadingSlashSkillName(text);
     const catalog = prepared ? [...(state.skills ?? []), ...getTeamSkillsCached(this.repoRoot)] : [];
-    const needsSkills = prepared !== undefined && (
+    const needsSkills = prepared !== undefined && !prepared.skills && (
       requestedOpenMercatoSkills(slash ? [slash] : [], text).length > 0 ||
       catalog.some((skill) => skill.name === slash || (skill.kind !== 'command' && mentionsSkill(text, skill.name)))
     );
-    if (prepared && !prepared.skills && (needsSkills || state.skillMessageDelivery)) {
+    const runRecord = prepared !== undefined ? this.store.getRun(runId) : undefined;
+    const needsPrCheckout = prepared !== undefined && prepared.prCheckoutNote === undefined && workflowChecksOutPr(runRecord?.workflowDef);
+    const awaitingPrep = prepared !== undefined && (!prepared.skills || prepared.prCheckoutNote === undefined);
+    if (prepared && awaitingPrep && (needsSkills || needsPrCheckout || state.skillMessageDelivery)) {
       const message = prepared;
       const delivery = (state.skillMessageDelivery ?? Promise.resolve()).then(async () => {
         const stillLive = () => this.active.get(runId) === state && state.session?.open && !state.cancelled && !state.finishRequested;
         if (stillLive() && !this.disposed) {
-          message.skills = needsSkills ? await this.provisionTaskSkills(state, { slash, text }) : NO_TASK_SKILLS;
+          if (!message.skills) {
+            message.skills = needsSkills ? await this.provisionTaskSkills(state, { slash, text }) : NO_TASK_SKILLS;
+          }
+          if (stillLive() && !this.disposed && message.prCheckoutNote === undefined) {
+            const latest = this.store.getRun(runId);
+            message.prCheckoutNote = latest ? (await this.refreshPrCheckout(runId, state, latest, text, true)) ?? '' : '';
+          }
           if (stillLive() && !this.disposed && this.deliverMessage(runId, content, userAuthored, message, answering)) return;
         }
         if (this.disposed || !this.store.getRun(runId)) return;
         // The message is already in the thread. A replacement session has a new owner and may
         // have been closed by Finish, so retry only on an explicit user action.
-        this.store.appendEvent(runId, { type: 'lifecycle', message: 'the session closed while preparing skills for the message. Continue the task to retry it.' });
+        this.store.appendEvent(runId, { type: 'lifecycle', message: 'the session closed while preparing the message. Continue the task to retry it.' });
       }).catch(() => {
-        this.store.appendEvent(runId, { type: 'lifecycle', message: 'a message could not be delivered after preparing its skills' });
+        this.store.appendEvent(runId, { type: 'lifecycle', message: 'a message could not be delivered after preparing its context' });
       });
       state.skillMessageDelivery = delivery;
       void delivery.then(() => {
@@ -5718,8 +5996,11 @@ export class RunManager {
     const expanded = userAuthored ? expandRegistrySlashSkill(
       blocks, state.skills ?? [], (state.sessionBackend ?? this.store.getRun(runId)?.runner) as RunnerId | undefined, prepared?.skills?.missingShared,
     ) : blocks;
+    const withPrCheckout = prepared?.prCheckoutNote
+      ? [{ type: 'text' as const, text: prepared.prCheckoutNote }, ...expanded]
+      : expanded;
     const skillNotes = taskSkillNotes(prepared?.skills ?? NO_TASK_SKILLS);
-    const withSkills = skillNotes.length ? [...expanded, { type: 'text' as const, text: skillNotes.join('\n\n') }] : expanded;
+    const withSkills = skillNotes.length ? [...withPrCheckout, { type: 'text' as const, text: skillNotes.join('\n\n') }] : withPrCheckout;
     const withAttachments = persisted.length
       ? [...withSkills, pastedAttachmentsNote(persisted, this.attachmentLibraryHint(persisted, state.grantedAttachmentLibrary) ??
           (imageLibraryWrites.length ? this.usableAttachmentLibrary(state.grantedAttachmentLibrary) : undefined))]
@@ -5843,7 +6124,17 @@ export class RunManager {
       this.store.appendEvent(runId, { type: 'lifecycle', message: 'review accepted — finished without a PR' });
       return true;
     }
+    // Already finished (agent DONE, an earlier Finish, another cockpit tab): a stale button's
+    // Finish is the intent already met, not a 409 (6a3cecee).
+    if (run?.status === 'done' && !this.isActive(runId)) return true;
     return false;
+  }
+
+  /** `withCurrentGlobalInstructions` for one session, echoed on the record so it shows what ran. */
+  private async refreshedExtraPrompt(runId: string, stored: string | undefined): Promise<string | undefined> {
+    const refreshed = withCurrentGlobalInstructions(stored, (await loadWorkspaceConfig().catch(() => null))?.systemPrompt);
+    if (refreshed !== stored && this.store.getRun(runId)) this.store.updateRun(runId, { systemPrompt: refreshed });
+    return refreshed;
   }
 
   /** Switch the queued job or hand the live run over after its current owner releases the tree. */
@@ -6025,7 +6316,7 @@ export class RunManager {
       // happened; an engine override cannot be folded in, so it is still refused.
       const continuing = this.starting.has(runId)
         || (unwinding !== undefined && !unwinding.cancelled && (unwinding.continueOnDrop !== undefined || !unwinding.sessionEverOpened));
-      if (continuing && resumable && !opts.runner && opts.model === undefined && opts.reasoningEffort === undefined && opts.agentProfile === undefined) {
+      if (continuing && resumable && !opts.freshContext && !opts.runner && opts.model === undefined && opts.reasoningEffort === undefined && opts.agentProfile === undefined) {
         const content: PastedContent[] = [...(opts.images ?? []), ...(opts.text?.trim() ? [{ type: 'text' as const, text: opts.text }] : [])];
         if (content.length === 0 || this.deferMessage(runId, content)) return { ok: true };
       }
@@ -6076,7 +6367,12 @@ export class RunManager {
     const targetAccount = opts.agentProfile
       ?? (targetRunner === (run.runner ?? 'claude') ? run.agentProfile : undefined);
     const accountSwitched = targetAccount !== undefined && targetAccount !== sessionAccount;
-    const resume = !agentSwitch && Boolean(sessionStep?.sessionId) && sessionBackend === targetRunner && !accountSwitched;
+    const resume = !agentSwitch && !opts.freshContext && Boolean(sessionStep?.sessionId) && sessionBackend === targetRunner && !accountSwitched;
+    // An agent switch replays the queued Continue it replaces, its fresh intent included. Once a
+    // fresh session has run, a manual switch, a backup-agent fallback or a lost session seeds the
+    // whole run's transcript (spec 2026-10-31-managers, `--fresh`), so earlier turns can come back.
+    const freshRequested = agentSwitch ? agentSwitch.previousContinuation?.freshContext === true : opts.freshContext === true;
+    const fresh = freshRequested ? { freshContext: true as const } : {};
 
     // Follow-up runner/model/account override (#401, spec 2026-07-29-agent-profiles): the composer
     // lets the user pick which backend, model and login handle this continuation — the same flat
@@ -6161,7 +6457,7 @@ export class RunManager {
     // A model picked in the composer is stamped on the turn's step so it outranks the pin of the
     // step that owns the session (#1488); '' is the explicit "auto".
     if (!priorStep) this.store.addStep(runId, {
-      id: stepId, name: 'Continue', kind: 'agent', ...(opts.model !== undefined ? { model: opts.model } : {}),
+      id: stepId, name: 'Continue', kind: 'agent', ...(opts.model !== undefined ? { model: opts.model } : {}), ...fresh,
     });
     const continuationReasoningEffort = agentModelsLocked(this.repoRoot)
       ? undefined
@@ -6189,7 +6485,11 @@ export class RunManager {
         prompt,
         images: previous ? [] : images,
         attachmentUrls,
+        ...fresh,
       });
+      // Only the step survives a restart; it carries the instruction until the session opens.
+      // Past the schema's cap the reload would drop it; the revive then opens with FRESH_RESTART_PROMPT.
+      if (freshRequested && !previous && prompt.length <= FRESH_PROMPT_MAX) this.store.updateStep(runId, stepId, { freshPrompt: prompt });
       if (!agentSwitch || (!priorStep && !this.active.has(runId) && !this.starting.has(runId))) this.queue.push(runId);
       this.store.updateRun(runId, {
         status: 'queued',
@@ -6211,7 +6511,7 @@ export class RunManager {
     // registers it in `active`.
     this.starting.add(runId);
     this.launchContinuation(runId, {
-      stepId, sessionId: resume ? sessionStep?.sessionId : undefined, backend: targetRunner, prompt, images,
+      stepId, sessionId: resume ? sessionStep?.sessionId : undefined, backend: targetRunner, prompt, images, ...fresh,
     });
     return { ok: true };
   }
@@ -6222,7 +6522,7 @@ export class RunManager {
     const hydrated = queued ? this.hydrateQueuedContinuation(runId, opening) : undefined;
     void outsideRelayScope(() => this.runContinuation(
       runId, opening.stepId, opening.sessionId, opening.backend, hydrated?.prompt ?? opening.prompt, opening.images,
-      hydrated?.persistedImages, hydrated?.persistedAttachments, ownerToken,
+      hydrated?.persistedImages, hydrated?.persistedAttachments, ownerToken, opening.freshContext === true,
     )).catch((err: unknown) => {
       this.failOwnedContinuation(runId, ownerToken, err instanceof Error ? err.message : String(err));
       if (!this.abandonCancelledStart(runId)) this.starting.delete(runId);
@@ -6230,6 +6530,60 @@ export class RunManager {
       // Dropping the old owner can start the successor before this callback runs.
       if (this.openingContinuations.get(runId) === opening) this.openingContinuations.delete(runId);
     });
+  }
+
+  /**
+   * Re-export the PR head for a continuation or live follow-up of a PR-checkout workflow.
+   * Switches to a PR URL in `followUpText` only when it names exactly one PR, else uses `record.task`.
+   * An unchanged or unreadable head keeps the existing export: `checkoutPr` wipes the folder first,
+   * which would pull the tree from under a running review. `live` (a follow-up into an open
+   * session) returns nothing unless the head actually moved.
+   */
+  private async refreshPrCheckout(
+    runId: string,
+    state: ActiveRun,
+    record: RunRecord,
+    followUpText?: string,
+    live = false,
+  ): Promise<string | undefined> {
+    if (!workflowChecksOutPr(record.workflowDef)) return undefined;
+    const named = followUpText
+      ? new Set(parsePrUrls(followUpText).map((p) => `${p.host}/${p.owner}/${p.repo}/${p.number}`.toLowerCase()))
+      : new Set<string>();
+    const pr = (named.size === 1 ? await pickPr(state.cwd, followUpText!) : undefined)
+      ?? await pickPr(state.cwd, record.task);
+    const note = (message: string, tone?: 'danger') =>
+      this.store.appendEvent(runId, { type: 'note', ...(tone ? { tone } : {}), message });
+    if (!pr) {
+      if (live) return undefined;
+      note('no GitHub pull request URL in the task to check out', 'danger');
+      return prCheckoutPromptNote(undefined, undefined);
+    }
+    const dir = prCheckoutDir(this.dataDir, runId);
+    const offline = process.env.CEZ_DRY_RUN === '1';
+    const existing = offline ? undefined : existingPrCheckout(dir, pr);
+    if (existing) {
+      const remoteHead = await remotePrHead(state.cwd, pr);
+      if (!remoteHead || remoteHead === existing.head) {
+        if (live) return undefined;
+        note(remoteHead
+          ? `PR #${pr.number} is still at ${existing.head.slice(0, 12)}; kept its checkout`
+          : `could not read PR #${pr.number}'s head; kept its checkout at ${existing.head.slice(0, 12)}`);
+        return prCheckoutPromptNote(pr, existing);
+      }
+    }
+    const res = await checkoutPr({
+      cwd: state.cwd,
+      dir,
+      copyTo: artifactsDir(this.dataDir, runId),
+      pr,
+      ...(record.baseBranch ? { baseBranch: record.baseBranch } : {}),
+      offline,
+      refPrefix: `refs/cezar/pr-checkouts/${runId}`,
+    });
+    for (const problem of res.problems) note(problem, 'danger');
+    if (res.checkedOut) note(`checked out PR #${pr.number} at ${res.head.slice(0, 12)} into ${res.tree}`);
+    return prCheckoutPromptNote(pr, res);
   }
 
   private async runContinuation(
@@ -6242,6 +6596,7 @@ export class RunManager {
     persistedImages: ContentBlock[] = [],
     persistedAttachments: PersistedAttachment[] = [],
     effectiveOwnerToken = Symbol('run-owner'),
+    freshContext = false,
   ): Promise<void> {
     // Continuation runs in the task's worktree when it still exists (spec
     // 006) — the resumed session sees exactly what the original run left.
@@ -6265,7 +6620,7 @@ export class RunManager {
       this.active.set(runId, preparing); this.starting.delete(runId);
       const preparationController = new AbortController();
       preparing.interrupt = () => preparationController.abort();
-      const pending = this.openingContinuations.get(runId) ?? { stepId, sessionId, backend, prompt, images };
+      const pending = this.openingContinuations.get(runId) ?? { stepId, sessionId, backend, prompt, images, ...(freshContext ? { freshContext: true as const } : {}) };
       const gate = await this.lifecycle.prepare(runId, beforePreparation.baseBranch ?? 'HEAD', {
         kind: 'continuation', runId, ...pending,
       }, preparationController.signal, {branch: beforePreparation.branch});
@@ -6282,7 +6637,7 @@ export class RunManager {
     // A provider/account switch cannot resume the old provider-owned session. Reconstruct the
     // portable context from Cezar's durable record + redacted event stream before this new turn's
     // user-message is appended. This works even when the interrupted agent never wrote HANDOFF.md.
-    const portableContext = record && sessionId === undefined
+    const portableContext = record && sessionId === undefined && !freshContext
       ? freshContinuationContext(record, this.store.readEvents(runId), this.attachmentsDir(runId))
       : undefined;
     // The record is mutated in place below; a missing-session fallback needs it as it was.
@@ -6360,6 +6715,8 @@ export class RunManager {
       sessionId: spawnSessionId,
       backend,
       ...(continuationReasoningEffort ? { reasoningEffort: continuationReasoningEffort } : {}),
+      // The instruction is the turn's user-message from here on.
+      freshPrompt: undefined,
     });
     this.store.appendEvent(runId, { type: 'step-start', stepId, name: 'Continue', kind: 'agent', iteration: 1 });
     // Attachments pasted into the follow-up composer, on the same terms as a live-session
@@ -6775,6 +7132,15 @@ export class RunManager {
       return;
     }
     const continuationTools = resolveAgentStepTools(state, toolsStep, savedTools);
+    // Re-export the PR head BEFORE `workflowLaunchSpec` checks whether `prCheckoutDir` exists:
+    // `github.pr-checkout` only runs at workflow start, so a continued, fresh-continued, retried
+    // or switched review task would otherwise read a stale head (or no checkout at all).
+    const prCheckoutNote = record ? await this.refreshPrCheckout(runId, state, record, prompt) : undefined;
+    if (this.disposed || state.cancelled || this.active.get(runId) !== state) {
+      this.dropActive(runId, state);
+      return;
+    }
+    const continueLaunch = workflowLaunchSpec(record?.workflowDef, state, { artifacts: artifactsDir(this.dataDir, runId), prCheckout: prCheckoutDir(this.dataDir, runId) });
     this.store.updateStep(runId, stepId, { toolPolicy: continuationTools });
     // The temp-directory preflight (#785) rides along with the account resolution: a resumed
     // turn hits the same broken `/tmp` a fresh one would, and an agent whose shell silently
@@ -6828,6 +7194,7 @@ export class RunManager {
     if (continueSkills.missingShared.length) this.store.appendEvent(runId, missingSharedSkillsEvent(stepId, continueSkills.missingShared));
     const expandedPrompt = [
       continueProfile.trackerContext,
+      prCheckoutNote,
       expandRegistrySlashSkillText(prompt, state.skills ?? [], continueBackend, continueSkills.missingShared),
       ...taskSkillNotes(continueSkills),
     ].filter(Boolean).join('\n\n');
@@ -6840,26 +7207,30 @@ export class RunManager {
     const askNotes = this.store.takeAskNotes(runId);
     const asksBlock = openAsksBlock(this.store.getRun(runId)?.asks);
     const treeBlocks = [treeReports, treeInbox, ...askNotes, asksBlock].filter((block): block is string => Boolean(block));
-    const openingPrompt = treeBlocks.length ? `${treeBlocks.join('\n\n')}\n\n---\n\n${expandedPrompt}` : expandedPrompt;
+    // A fresh read must not be anchored on earlier verdicts, the handoff's included (#2513).
+    const freshPrompt = freshContext ? `${FRESH_CONTEXT_NOTE}\n\n${expandedPrompt}` : expandedPrompt;
+    const openingPrompt = treeBlocks.length ? `${treeBlocks.join('\n\n')}\n\n---\n\n${freshPrompt}` : freshPrompt;
     // The previous runner's portable context (#954) opens the session first, then the tree
     // blocks above, then the instruction that prompted this continuation.
     const withContext = (context: string | undefined) => context
       ? `${context}\n\n---\n\n## New user instruction\n${openingPrompt}`
       : openingPrompt;
     state.grantedAttachmentLibrary = this.prepareAttachmentLibrary();
+    const recordedPrompt = await this.refreshedExtraPrompt(runId, record?.systemPrompt);
+    this.clearTestCommandRecord(runId);
     const planUsage = this.planUsageTracker(runId, continueProfile.planUsageAccount);
     const launch = (launchSessionId: string, resume: boolean, context: string | undefined): AgentSession => {
       const contextualOpeningPrompt = withContext(context);
       const started = runner.startSession(
         {
           // The Continue step is a fresh agent session on the same run — the
-          // run's extra system prompt (already resolved at execute time and
+          // run's extra system prompt (resolved at execute time, global part refreshed above,
           // echoed on the record) rides along with the handoff contract, and a
           // dispatch prompt rides along with both (spec 2026-09-10-dispatch).
           systemPrompt: composeSystemPrompt(
-            dispatchPromptPart(state.dispatchPrompt, record?.systemPrompt),
+            dispatchPromptPart(state.dispatchPrompt, recordedPrompt),
             state.automationsPrompt,
-            record?.systemPrompt,
+            recordedPrompt,
             artifactsPromptPart(artifactsDir(this.dataDir, runId)),
             generateFollowups ? HANDOFF_INSTRUCTIONS : HANDOFF_ONLY_INSTRUCTIONS,
           ),
@@ -6869,12 +7240,18 @@ export class RunManager {
           ...(openingImages.length ? { images: openingImages } : {}),
           cwd: state.cwd,
           ...continuationTools,
-          ...(state.bypassPermissions && !continuationTools.enforceReadOnly ? { bypassPermissions: true } : {}),
-          additionalDirectories: agentDirectories(
-            join(this.dataDir, 'runs'),
-            state.grantedAttachmentLibrary,
-            continueProfile.env,
-          ),
+          ...(state.bypassPermissions && !continuationTools.enforceReadOnly && !continueLaunch.readOnlyWorkflow ? { bypassPermissions: true } : {}),
+          ...(continueLaunch.artifactsWriteDir ? { artifactsWriteDir: continueLaunch.artifactsWriteDir } : {}),
+          ...(continueLaunch.readOnlyWorkflow ? { strictPermissions: true } : {}),
+          ...(continueLaunch.readOnlyPaths.length ? { readOnlyPaths: continueLaunch.readOnlyPaths } : {}),
+          additionalDirectories: [
+            ...agentDirectories(
+              join(this.dataDir, 'runs'),
+              state.grantedAttachmentLibrary,
+              continueProfile.env,
+            ),
+            ...continueLaunch.prDirs,
+          ],
           env: continuationTools.enforceReadOnly ? { ...continueProfile.env, ...readOnlyEnv() } : continueProfile.env,
           onUsageWindows: continueProfile.onUsageWindows,
           // A private server's tools are writes nothing here can vouch for.
@@ -6913,6 +7290,7 @@ export class RunManager {
       } catch (err) {
         // The backend lost the session this task resumes (#1193): continue in a fresh
         // session seeded with the task's persisted state instead of failing every Continue.
+        // That state is the whole record, so it also carries turns from before a `--fresh` Continue.
         const replay = state.cancelled || this.active.get(runId) !== state ? undefined : resumeGuard.takeFallback(err);
         if (!replay || !recordBeforeTurn || sessionId === undefined) throw err;
         sessionError = undefined;
@@ -7887,7 +8265,7 @@ export class RunManager {
         state.autosaveCheckpointBlocked = !checkpointSafe;
         if (checkpointSafe) this.autosaveCheckpointBlockedRuns.delete(runId);
         else this.autosaveCheckpointBlockedRuns.add(runId);
-        let checkResult: { ok: boolean; output: string; exitCode: number };
+        let checkResult: { ok: boolean; output: string; exitCode: number; recordedTests: string };
         state.checkInProgress = true;
         try {
           checkResult = await this.runCheckStep(runId, state, rendered, emit);
@@ -7899,9 +8277,9 @@ export class RunManager {
           // captureCheckArtifacts yields while reading git status.
           state.checkInProgress = false;
         }
-        const { ok, output, exitCode } = checkResult;
+        const { ok, output, exitCode, recordedTests } = checkResult;
         if (state.cancelled) return null;
-        outputs.set(node.id, { exitCode, output });
+        outputs.set(node.id, { exitCode, output, recordedTests });
         if (ok) {
           this.finishStep(runId, node.id, 'done', undefined, emit);
           port = 'pass';
@@ -8354,6 +8732,38 @@ export class RunManager {
         }
         note(`pushed ${run.branch}`);
         return 'done';
+      }
+      case 'github.pr-checkout': {
+        const run = record();
+        const pr = await pickPr(state.cwd, task);
+        // Rendered into prompts: a placeholder reads better than an empty path.
+        const NONE = '(none)';
+        if (!run || !pr) {
+          outputs.set(node.id, { number: NONE, head: NONE, tree: NONE, diff: NONE, meta: NONE, checkedOut: 'no — the task names no GitHub pull request URL' });
+          note('no GitHub pull request URL in the task to check out', 'danger');
+          return 'failed';
+        }
+        // Never into the task's tree: its branch, Changes and merge/push/PR gate stay the base's.
+        const res = await checkoutPr({
+          cwd: state.cwd,
+          dir: prCheckoutDir(this.dataDir, runId),
+          copyTo: artifactsDir(this.dataDir, runId),
+          pr,
+          ...(run.baseBranch ? { baseBranch: run.baseBranch } : {}),
+          offline: process.env.CEZ_DRY_RUN === '1',
+          refPrefix: `refs/cezar/pr-checkouts/${runId}`,
+        });
+        outputs.set(node.id, {
+          number: pr.number,
+          head: res.head || NONE,
+          tree: res.tree || NONE,
+          diff: res.diffPath || NONE,
+          meta: res.metaPath || NONE,
+          checkedOut: res.checkedOut ? 'yes' : 'no',
+        });
+        for (const problem of res.problems) note(problem, 'danger');
+        if (res.checkedOut) note(`checked out PR #${pr.number} at ${res.head.slice(0, 12)} into ${res.tree}`);
+        return res.checkedOut ? 'done' : 'failed';
       }
       case 'git.sync-base': {
         const base = record()?.baseBranch;
@@ -9423,10 +9833,13 @@ export class RunManager {
       if (refusal) return refusal;
     }
     const stepTools = resolveAgentStepTools(state, step, graphHooks?.savedTools);
+    const stepLaunch = workflowLaunchSpec(stepDef, state, { artifacts: artifactsDir(this.dataDir, runId), prCheckout: prCheckoutDir(this.dataDir, runId) });
     this.store.updateStep(runId, step.id, { toolPolicy: stepTools });
     const stepPrivateMcp = !stepDef || !isReadOnlyWorkflow(stepDef);
     const runner = createRunner(stepBackend);
     const stepMcp = stepPrivateMcp ? await this.privateMcpForLaunch(stepBackend, onEvent) : [];
+    const stepExtraPrompt = await this.refreshedExtraPrompt(runId, extraSystemPrompt);
+    this.clearTestCommandRecord(runId);
     let session: AgentSession;
     state.currentStepId = step.id;
     this.beginUsageInvocation(runId, state, step.id);
@@ -9442,9 +9855,9 @@ export class RunManager {
           // handoff/todos contract — every agent step.
           systemPrompt: composeSystemPrompt(
             systemPrompt,
-            dispatchPromptPart(state.dispatchPrompt, extraSystemPrompt),
+            dispatchPromptPart(state.dispatchPrompt, stepExtraPrompt),
             state.automationsPrompt,
-            extraSystemPrompt,
+            stepExtraPrompt,
             artifactsPromptPart(artifactsDir(this.dataDir, runId)),
             followupsEnabled() && input.generateFollowups !== false
               ? HANDOFF_INSTRUCTIONS
@@ -9454,13 +9867,19 @@ export class RunManager {
           images,
           cwd: state.cwd,
           ...stepTools,
-          ...(state.bypassPermissions && !stepTools.enforceReadOnly ? { bypassPermissions: true } : {}),
+          ...(state.bypassPermissions && !stepTools.enforceReadOnly && !stepLaunch.readOnlyWorkflow ? { bypassPermissions: true } : {}),
+          ...(stepLaunch.artifactsWriteDir ? { artifactsWriteDir: stepLaunch.artifactsWriteDir } : {}),
+          ...(stepLaunch.readOnlyWorkflow ? { strictPermissions: true } : {}),
+          ...(stepLaunch.readOnlyPaths.length ? { readOnlyPaths: stepLaunch.readOnlyPaths } : {}),
           // The handoff file lives outside the worktree — grant access.
-          additionalDirectories: agentDirectories(
-            join(this.dataDir, 'runs'),
-            state.grantedAttachmentLibrary,
-            stepProfile.env,
-          ),
+          additionalDirectories: [
+            ...agentDirectories(
+              join(this.dataDir, 'runs'),
+              state.grantedAttachmentLibrary,
+              stepProfile.env,
+            ),
+            ...stepLaunch.prDirs,
+          ],
           env: stepTools.enforceReadOnly ? { ...stepProfile.env, ...readOnlyEnv() } : stepProfile.env,
           onUsageWindows: stepProfile.onUsageWindows,
           mcpServers: stepTools.enforceReadOnly ? [] : stepMcp,
@@ -11173,6 +11592,7 @@ export class RunManager {
       CEZ_WORKTREE: state.cwd,
       CEZ_STEP_ID: stepId,
       CEZ_ATTEMPT: String(run?.steps.find((step) => step.id === stepId)?.iterations ?? 1),
+      CEZ_TEST_COMMAND_FILE: testCommandFile(this.dataDir, runId),
     };
     if (this.projectId) {
       context.CEZ_PROJECT_ID = this.projectId;
@@ -11212,16 +11632,25 @@ export class RunManager {
     state: ActiveRun,
     step: WorkflowStepDef,
     emit: (event: { type: string; stepId?: string; [k: string]: unknown }) => void,
-  ): Promise<{ ok: boolean; output: string; exitCode: number }> {
-    const command = step.command as string;
-    emit({ type: 'note', stepId: step.id, message: `$ ${command}` });
+  ): Promise<{ ok: boolean; output: string; exitCode: number; recordedTests: string }> {
     const env = await this.checkStepEnv(runId, state, step, emit);
+    // Global instructions reach a shell check through `resolveCheckCommand` (no-op without any).
+    const resolved = await this.instructedCheckCommand(runId, state, step.command as string);
+    const command = resolved.command;
+    // From what actually runs, so the gate never reports a record a rewritten command skipped.
+    const recordedTests = this.recordedTestCommand(runId, command);
+    if (!resolved.changed && resolved.note) emit({ type: 'note', stepId: step.id, message: resolved.note });
+    const preface = resolved.changed
+      ? `cezar: the global instructions changed this check from \`${step.command as string}\` to \`${command}\` (${resolved.reason}).\n`
+      : '';
+    if (preface) emit({ type: 'note', stepId: step.id, message: preface.trim() });
+    emit({ type: 'note', stepId: step.id, message: `$ ${command}` });
     // A cancel that landed during the read had no child to interrupt; do not spawn one now.
-    if (state.cancelled) return { ok: false, output: 'cancelled', exitCode: -1 };
+    if (state.cancelled) return { ok: false, output: 'cancelled', exitCode: -1, recordedTests };
     return new Promise((resolve) => {
       // Check steps run in the same cwd as the agent steps — the worktree.
-      const child = spawn('bash', ['-lc', command], { cwd: state.cwd, env });
-      state.interrupt = () => child.kill('SIGTERM');
+      const child = spawnCheck(command, state.cwd, env);
+      state.interrupt = () => signalCheck(child, 'SIGTERM');
 
       let output = '';
       const collect = (chunk: Buffer) => {
@@ -11236,19 +11665,55 @@ export class RunManager {
         state.interrupt = () => undefined;
         const message = `failed to spawn: ${err.message}`;
         emit({ type: 'check-output', stepId: step.id, command, text: message, exitCode: -1 });
-        resolve({ ok: false, output: message, exitCode: -1 });
+        resolve({ ok: false, output: message, exitCode: -1, recordedTests });
       });
       child.on('close', (code) => {
         state.interrupt = () => undefined;
-        const trimmed = output.trim() || '(no output)';
+        const trimmed = preface + (output.trim() || '(no output)');
         // `code` is null when a signal killed the child; -1 then, the same value an
         // unspawnable command reports, and one no `retryOn` list can name — neither
         // is a verdict on the diff, so neither buys the agent another attempt.
         const exitCode = code ?? -1;
         emit({ type: 'check-output', stepId: step.id, command, text: trimmed, exitCode });
-        resolve({ ok: code === 0, output: trimmed, exitCode });
+        resolve({ ok: code === 0, output: trimmed, exitCode, recordedTests });
       });
     });
+  }
+
+  /** A fork's head never steers its own checks (Phase 3): its file names are untrusted input. */
+  private async instructedCheckCommand(runId: string, state: ActiveRun, command: string): Promise<CheckCommandResolution> {
+    const run = this.store.getRun(runId);
+    if (run?.untrustedHead) return { command, changed: false };
+    const instructions = readGlobalInstructions();
+    if (!instructions || !instructionsConcernChecks(instructions) || !rewritableCheck(command, packageScriptReader(state.cwd))) return { command, changed: false };
+    const changedFiles = run?.baseBranch && state.cwd !== this.repoRoot
+      ? await worktreeChangedFiles(state.cwd, run.baseBranch, { taskBranch: run.branch, runStartedAt: run.startedAt }).catch(() => null)
+      : null;
+    // One call per (command, instructions, changed files) per run: an unchanged retry round reuses it.
+    const key = JSON.stringify([command, instructions, changedFiles]);
+    const memo = (state.checkResolutions ??= new Map());
+    const cached = memo.get(key);
+    if (cached) return cached;
+    const resolved = await resolveCheckCommand({ repoRoot: this.repoRoot, cwd: state.cwd, command, changedFiles, instructions });
+    // A transient failure (offline, timeout, unusable answer) is asked again next time.
+    if (!resolved.failed) memo.set(key, resolved);
+    return resolved;
+  }
+
+  /** The related-tests command a check that reads `$CEZ_TEST_COMMAND_FILE` is about to run ('' when none), for the gate. */
+  private recordedTestCommand(runId: string, command: string): string {
+    if (!command.includes('CEZ_TEST_COMMAND_FILE')) return '';
+    try {
+      const text = readFileSync(testCommandFile(this.dataDir, runId), 'utf8');
+      return text.split('\n').some((line) => !/^\s*(#.*)?$/.test(line)) ? this.store.redactRunText(runId, text.trim()).slice(0, 2_000) : '';
+    } catch {
+      return '';
+    }
+  }
+
+  /** Each agent round records its related-tests command afresh, so a stale narrow one never outlives it. */
+  private clearTestCommandRecord(runId: string): void {
+    rmSync(testCommandFile(this.dataDir, runId), { force: true });
   }
 
   private finishStep(
@@ -11282,6 +11747,7 @@ export const CHECK_CONTEXT_VARS = [
   'CEZ_BASE',
   'CEZ_STEP_ID',
   'CEZ_ATTEMPT',
+  'CEZ_TEST_COMMAND_FILE',
   'CEZ_SHARED_CACHE_DIR',
   'CEZ_GITHUB_REPO',
   'CEZ_GITHUB_NUMBER',

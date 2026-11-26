@@ -10,6 +10,7 @@ import { managerFallbackPolicy, putAgentFallbackPolicy, setManagerTaskAccountsLo
 import { WorkspaceSemaphore } from '../workspace/semaphore.ts';
 import { RunManager, setFallbackProviderCheck } from './run.ts';
 import { managerAccountLimit } from '../managers/account-limit.ts';
+import { REVIEW_PR } from './templates.ts';
 import type { WorkflowDef } from './types.ts';
 
 const run = promisify(execFile);
@@ -811,4 +812,183 @@ describe('automatic agent fallback', () => {
     await manager.recover();
     await until(() => store.getRun(id)?.agentProfile === 'third', 'third account takes over after restart');
   }, 40_000);
+
+  describe('a manager-routed queued task (spec 2026-11-25-manager-task-routing)', () => {
+    const startedByManager = { id: 'm1', name: 'Coding Manager' };
+    const both = [{ provider: 'claude' as const, profileId: 'default' }, { provider: 'claude' as const, profileId: 'second' }];
+    const routedTask = (task: string, routed = true) => manager!.startRun(workflow, {
+      task, worktree: false, agentProfile: 'default', startedByManager,
+      managerAgent: { note: 'chosen', fallback: both, ...(routed ? { routed: true as const } : {}) },
+    });
+
+    it('moves to an open Main account when its own already runs as many as the manager allows', async () => {
+      registerAccounts(['second']);
+      setManagerTaskAccountsLookup(() => ({ agents: [{ runner: 'claude', agentProfile: 'default', role: 'main' }, { runner: 'claude', agentProfile: 'second', role: 'main' }], maxRunning: 1 }));
+      manager = new RunManager(store, repoRoot);
+      const busy = manager.startRun(workflow, { task: 'hold the account mock:slow', worktree: false, agentProfile: 'default' });
+      await until(() => store.getRun(busy.id)?.status === 'running', 'the first task to run');
+      const moved = routedTask('quick one mock:done');
+      await until(() => store.getRun(moved.id)?.agentProfile === 'second', 'the routed task to move');
+      expect(messages(moved.id)).toContain('Routed to claude · second: claude · default is busy');
+      // Started on the other account (in-place tasks then share the working tree, which is not this test's).
+      await until(() => store.getRun(moved.id)?.status !== 'queued', 'the moved task to start');
+    }, 40_000);
+
+    it('waits, labelled, while every account is busy, and starts once one frees up', async () => {
+      setManagerTaskAccountsLookup(() => ({ agents: [{ runner: 'claude', agentProfile: 'default', role: 'main' }], maxRunning: 1 }));
+      manager = new RunManager(store, repoRoot);
+      const busy = manager.startRun(workflow, { task: 'hold the account mock:slow', worktree: false, agentProfile: 'default' });
+      await until(() => store.getRun(busy.id)?.status === 'running', 'the first task to run');
+      const waiting = routedTask('quick one mock:done');
+      await until(() => store.getRun(waiting.id)?.queueWaitReason?.kind === 'account-busy', 'the routed task to wait');
+      expect(store.getRun(waiting.id)?.status).toBe('queued');
+      manager.cancel(busy.id);
+      await until(() => store.getRun(waiting.id)?.status !== 'queued', 'the routed task to start');
+      expect(store.getRun(waiting.id)?.queueWaitReason).toBeUndefined();
+    }, 40_000);
+
+    /** A queue that never has a free slot, with `claude:default` already running `load` tasks elsewhere. */
+    const fullQueue = (load: number) => {
+      const semaphore = new WorkspaceSemaphore({ initial: { maxParallel: 1 } });
+      semaphore.register({ busySlots: () => 1, oldestQueuedAt: () => null, pump: () => {}, accountLoad: () => new Map([['claude:default', load]]) });
+      return semaphore;
+    };
+
+    it('spreads a burst queued in one sweep across Main accounts instead of piling onto one', async () => {
+      registerAccounts(['second']);
+      setManagerTaskAccountsLookup(() => ({ agents: [{ runner: 'claude', agentProfile: 'default', role: 'main' }, { runner: 'claude', agentProfile: 'second', role: 'main' }], maxRunning: 1 }));
+      manager = new RunManager(store, repoRoot);
+      const first = routedTask('quick one mock:slow');
+      const second = routedTask('quick two mock:slow');
+      await until(() => [first, second].every(({ id }) => store.getRun(id)?.status !== 'queued'), 'both tasks to start');
+      expect([first, second].map(({ id }) => store.getRun(id)?.agentProfile).sort()).toEqual(['default', 'second']);
+    }, 40_000);
+
+    it('never moves a routed task that already ran: it resumes where it ran', async () => {
+      registerAccounts(['second']);
+      setManagerTaskAccountsLookup(() => ({ agents: [{ runner: 'claude', agentProfile: 'default', role: 'main' }, { runner: 'claude', agentProfile: 'second', role: 'main' }], maxRunning: 1 }));
+      const semaphore = fullQueue(1);
+      manager = new RunManager(store, repoRoot, { semaphore });
+      const queued = routedTask('quick one mock:done');
+      // As a usage-limit auto-resume or a restart re-queues it: a step that already started.
+      const step = store.getRun(queued.id)?.steps[0];
+      expect(step).toBeDefined();
+      store.updateStep(queued.id, step!.id, { startedAt: new Date().toISOString() });
+      await semaphore.release();
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      expect(store.getRun(queued.id)).toMatchObject({ status: 'queued', agentProfile: 'default' });
+      expect(store.getRun(queued.id)?.queueWaitReason).toBeUndefined();
+      expect(messages(queued.id).some((m) => m.startsWith('Routed to'))).toBe(false);
+    }, 40_000);
+
+    it('"Start now" overrides the busy wait, and the label clears once its own account opens', async () => {
+      setManagerTaskAccountsLookup(() => ({ agents: [{ runner: 'claude', agentProfile: 'default', role: 'main' }], maxRunning: 1 }));
+      let load = 1;
+      const semaphore = new WorkspaceSemaphore({ initial: { maxParallel: 1 } });
+      semaphore.register({ busySlots: () => 1, oldestQueuedAt: () => null, pump: () => {}, accountLoad: () => new Map([['claude:default', load]]) });
+      manager = new RunManager(store, repoRoot, { semaphore });
+      const waiting = routedTask('quick one mock:done');
+      await until(() => store.getRun(waiting.id)?.queueWaitReason?.kind === 'account-busy', 'the routed task to wait');
+      load = 0;
+      await semaphore.release();
+      await until(() => store.getRun(waiting.id)?.queueWaitReason === undefined, 'the busy label to clear');
+      expect(store.getRun(waiting.id)?.status).toBe('queued');
+      load = 1;
+      await semaphore.release();
+      await until(() => store.getRun(waiting.id)?.queueWaitReason?.kind === 'account-busy', 'busy again');
+      expect(await manager.startNow(waiting.id)).toBe('started');
+      await until(() => store.getRun(waiting.id)?.status !== 'queued', 'Start now to start it');
+    }, 40_000);
+
+    it('a task without the routed flag, or a list without roles, starts as before', async () => {
+      registerAccounts(['second']);
+      setManagerTaskAccountsLookup(() => [{ runner: 'claude', agentProfile: 'default' }, { runner: 'claude', agentProfile: 'second' }]);
+      manager = new RunManager(store, repoRoot);
+      const busy = manager.startRun(workflow, { task: 'hold the account mock:slow', worktree: false, agentProfile: 'default' });
+      await until(() => store.getRun(busy.id)?.status === 'running', 'the first task to run');
+      const plain = routedTask('quick one mock:done', false);
+      await until(() => store.getRun(plain.id)?.status !== 'queued', 'the task to start');
+      expect(store.getRun(plain.id)?.agentProfile).toBe('default');
+      expect(messages(plain.id).some((m) => m.startsWith('Routed to'))).toBe(false);
+    }, 40_000);
+
+    it('never re-routes a queued read-only workflow onto an incompatible runner when its own account is held', async () => {
+      setManagerTaskAccountsLookup(() => ({
+        agents: [
+          { runner: 'claude', agentProfile: 'default', role: 'main' },
+          { runner: 'opencode', agentProfile: 'default', role: 'main' },
+        ],
+      }));
+      manager = new RunManager(store, repoRoot);
+      // Hold claude:default on a usage limit.
+      const held = manager.startRun(workflow, { task: 'mock:limit', worktree: false, agentProfile: 'default' });
+      await until(() => store.getRun(held.id)?.autoResumeAt !== undefined, 'claude:default held');
+      const queued = manager.startRun(REVIEW_PR, {
+        task: 'Review PR #1',
+        worktree: false,
+        runner: 'claude',
+        agentProfile: 'default',
+        startedByManager,
+        managerAgent: { note: 'chosen', fallback: [{ provider: 'claude', profileId: 'default' }], routed: true },
+      });
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      const record = store.getRun(queued.id);
+      expect(record?.status).toBe('queued');
+      expect(record?.runner).toBe('claude');
+      expect(record?.queueWaitReason?.kind).toBe('usage-reset');
+    }, 40_000);
+  });
+
+  describe('read-only workflow mid-run fallback', () => {
+    const startedByManager = { id: 'm1', name: 'Coding Manager' };
+    const readOnlyWorkflow: WorkflowDef = {
+      name: 'custom-review',
+      source: 'file',
+      steps: [{ id: 'review', name: 'Review', prompt: '{{task}}', allowedTools: ['Read', 'Grep', 'Glob', 'Bash'], bashAllowlist: ['gh pr diff'] }],
+    };
+
+    it('skips incompatible runners in mid-run fallback and continues on the next compatible account', async () => {
+      registerAccounts(['second']);
+      manager = new RunManager(store, repoRoot);
+      const started = manager.startRun(readOnlyWorkflow, {
+        task: 'review PR mock:limit',
+        worktree: false,
+        runner: 'claude',
+        agentProfile: 'default',
+        startedByManager,
+        managerAgent: {
+          note: 'chosen',
+          fallback: [
+            { provider: 'opencode', profileId: 'default' },
+            { provider: 'claude', profileId: 'second' },
+          ],
+        },
+      });
+      await until(() => store.getRun(started.id)?.fallbackEpisode?.current !== undefined, 'fallback to reserve compatible successor');
+      const record = store.getRun(started.id);
+      expect(record?.runner).toBe('claude');
+      expect(record?.agentProfile).toBe('second');
+      expect(messages(started.id).some((m) => m.includes('fallback skipped opencode') && m.includes('does not enforce'))).toBe(true);
+    }, 40_000);
+
+    it('keeps reset-time auto-resume when only incompatible runners remain in a manager fallback list', async () => {
+      manager = new RunManager(store, repoRoot);
+      const started = manager.startRun(readOnlyWorkflow, {
+        task: 'review PR mock:limit',
+        worktree: false,
+        runner: 'claude',
+        agentProfile: 'default',
+        startedByManager,
+        managerAgent: {
+          note: 'chosen',
+          fallback: [{ provider: 'opencode', profileId: 'default' }],
+        },
+      });
+      await until(() => store.getRun(started.id)?.autoResumeAt !== undefined, 'reset-time auto-resume armed');
+      const record = store.getRun(started.id);
+      expect(record?.runner).toBe('claude');
+      expect(record?.fallbackEpisode).toBeUndefined();
+      expect(record?.steps.some((step) => step.id.startsWith('continue-'))).toBe(false);
+    }, 40_000);
+  });
 });

@@ -178,7 +178,7 @@ describe('ThreadView', () => {
       ]
       renderView(<ThreadView run={run('running')} thread={reduceThread(events, { activeTurn: true })} />)
       expect(document.querySelector('[data-slot="working-elapsed"]')?.textContent).toBe('1m 00s')
-      expect(document.querySelector('[data-slot="working-last-activity"]')?.textContent).toContain('(20s ago)')
+      expect(document.querySelector('[data-slot="working-last-activity"]')?.textContent).toContain('last activity 20s ago')
 
       cleanup()
       renderView(<ThreadView run={run('done')} thread={reduceThread(events)} />)
@@ -270,8 +270,11 @@ describe('ThreadView', () => {
     expect(bubble?.textContent).not.toContain('**')
   })
 
-  it('dims lifecycle lines and shows the tool card + folded reasoning', () => {
+  it('folds lifecycle lines into one setup row and shows the tool card + folded reasoning', () => {
     renderView(<ThreadView run={run('waiting')} thread={reduceThread(EVENTS)} />)
+    expect(document.querySelector('[data-slot="note-group-summary"]')?.textContent)
+      .toBe('Set up: worktree cez/r1 from main · runner Claude')
+    fireEvent.click(screen.getByRole('button', { name: /^Set up: / }))
     const notes = [...document.querySelectorAll('[data-slot="note-line"]')]
     expect(notes.map((n) => n.getAttribute('data-tone'))).toEqual(['dim', 'dim'])
     expect(notes[1]!.textContent).toContain('worktree ready')

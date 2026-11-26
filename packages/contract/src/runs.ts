@@ -46,6 +46,8 @@ export const runAgentSwitchSchema = z.object({
   checkRepair: z.object({ checkId: z.string(), stepId: z.string() }).optional(),
   /** Fresh continuation to reconstruct if the server restarts before it launches. */
   continuationStepId: z.string().optional(),
+  /** Its instruction, secrets redacted (like a step's `freshPrompt`): only a switch revived after a
+   *  restart reads it and sees [REDACTED]; the live switch keeps the verbatim text in memory. */
   continuationInput: z.object({ prompt: z.string(), attachmentUrls: z.array(z.string()) }).optional(),
 });
 
@@ -171,6 +173,10 @@ export const stepStateSchema = z.object({
    *  that created it, so resume and Continue read this rather than the project's current
    *  selection. Absent on records written before accounts existed. */
   profileId: z.string().optional(),
+  /** A Continue opened in a new session with no prior conversation; absent otherwise. */
+  freshContext: z.literal(true).optional(),
+  /** A queued fresh Continue's instruction until its session opens. */
+  freshPrompt: z.string().optional(),
   toolPolicy: stepToolPolicySchema.optional(),
   /** Canonical provider/model identity resolved for this step; absent for auto-model steps and
    *  records written before per-step attribution existed. */
@@ -1400,6 +1406,8 @@ export const createRunInputBaseSchema = z
      *  accounts a usage limit falls back to. Honored only with `startedByManager`. */
     managerAgent: z.object({
       note: z.string().min(1).max(500),
+      /** Chosen by the manager's roles: the queue may move it to an account that frees up. */
+      routed: z.literal(true).optional(),
       fallback: z.array(z.object({
         provider: runnerSchema,
         profileId: z.string().min(1).max(64),
@@ -1468,6 +1476,8 @@ export const continueInputSchema = z.object({
   idempotencyKey: z.string().uuid().optional(),
   /** Sent from an ask card: answers that card (Questions inbox spec), as on `messageInputSchema`. */
   askRequestId: z.string().min(1).max(200).optional(),
+  /** Open a new agent session with no prior conversation; same task, worktree, branch and PR. */
+  freshContext: z.boolean().optional(),
 });
 export type ContinueInput = z.input<typeof continueInputSchema>;
 

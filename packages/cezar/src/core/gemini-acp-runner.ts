@@ -1,4 +1,5 @@
 import { readOnlyPermissionOutcome } from './junie-runner.ts';
+import { installHintCommand } from './agent-install.ts';
 import { spawn as nodeSpawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { statSync } from 'node:fs';
 import { dirname, resolve as resolvePath } from 'node:path';
@@ -193,7 +194,7 @@ class GeminiAcpSession implements AgentSession {
     this.child.on('error', (error: NodeJS.ErrnoException) => {
       this.spawnError =
         error.code === 'ENOENT'
-          ? new Error(`\`${bin}\` not found on PATH — install Gemini CLI (npm i -g @google/gemini-cli) and set GEMINI_API_KEY`)
+          ? new Error(`\`${bin}\` not found on PATH — install Gemini CLI (${installHintCommand('gemini')}) and set GEMINI_API_KEY`)
           : error;
     });
     this.child.stderr.setEncoding('utf8');

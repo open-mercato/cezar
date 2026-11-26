@@ -13,7 +13,7 @@ import { mergeWriteAgentAccounts } from '../workspace/agent-accounts.ts';
 import { WorkspaceSemaphore } from '../workspace/semaphore.ts';
 import { compileV1, graphIssues, graphToSteps } from './graph.ts';
 import { READ_ONLY_TOOLS } from './landing.ts';
-import { RunManager } from './run.ts';
+import { FRESH_CONTEXT_NOTE, RunManager } from './run.ts';
 import { DEFAULT_ALLOWED_TOOLS, type WorkflowDef } from './types.ts';
 
 const sessions = vi.hoisted(() => [] as Array<{
@@ -133,6 +133,7 @@ describe('switching a task agent', { timeout: 20_000 }, () => {
         fireAutoResume(runId: string): void;
       };
       clearTimeout(resumes.autoResumeTimers.get(id));
+      store.updateRun(id, { autoResumeAt: new Date(Date.now() - 1_000).toISOString() }); // the window has reopened
       resumes.fireAutoResume(id);
       expect(store.getRun(id)).toMatchObject({ status: 'queued', autoResumeAttempts: 1 });
       await restart();
@@ -580,6 +581,60 @@ describe('switching a task agent', { timeout: 20_000 }, () => {
     expect(sessions[0]!.spec.userPrompt).toContain('Focus on the tests');
     expect(store.listRuns()).toHaveLength(1);
     expect(store.getRun(id)?.steps.map((step) => step.id)).toEqual(['work', 'continue-1']);
+  });
+
+  it.each([false, true])('keeps a queued fresh Continue fresh through a switch (restart: %s, #2513)', async (withRestart) => {
+    const release = semaphore.register({ busySlots: () => 1, oldestQueuedAt: () => null, pump: () => undefined });
+    const id = finishedRun();
+    store.appendEvent(id, { type: 'text', text: 'Verdict: request changes.' });
+    expect(manager.continueRun(id, { text: 'Re-review PR 7 at abc123', freshContext: true }, true)).toEqual({ ok: true });
+    expect(manager.switchAgent(id, selection)).toHaveProperty('summary');
+    if (withRestart) {
+      manager.dispose();
+      store.flush();
+      release();
+      store = RunStore.open(join(root, '.ai/cezar'), { keepLive: true });
+      manager = new RunManager(store, root, { semaphore });
+      await manager.recover();
+    } else {
+      release();
+      await semaphore.release();
+    }
+    await vi.waitFor(() => expect(sessions).toHaveLength(1), wait);
+    expect(sessions[0]).toMatchObject({ backend: 'codex', spec: { resume: false } });
+    expect(sessions[0]!.spec.userPrompt.startsWith(FRESH_CONTEXT_NOTE)).toBe(true);
+    expect(sessions[0]!.spec.userPrompt).toContain('Re-review PR 7 at abc123');
+    expect(sessions[0]!.spec.userPrompt).not.toContain('Verdict: request changes.');
+    sessions[0]!.settle();
+    await expectFinished(id, ['work', 'continue-1']);
+  });
+
+  it.each([false, true])('saves a switched Continue\'s instruction redacted, yet the live switch sends it verbatim (restart: %s, #2526)', async (withRestart) => {
+    const secret = 'gho_thisisarealsecrettoken123456';
+    vi.stubEnv('GITHUB_TOKEN', secret);
+    vi.stubEnv('CEZ_REDACT_SECRETS', undefined);
+    const release = semaphore.register({ busySlots: () => 1, oldestQueuedAt: () => null, pump: () => undefined });
+    const id = finishedRun();
+    expect(manager.continueRun(id, { text: `Deploy with ${secret}`, images: [screenshot] }, true)).toEqual({ ok: true });
+    expect(manager.switchAgent(id, selection)).toHaveProperty('summary');
+    expect(store.getRun(id)?.agentSwitch?.continuationInput?.prompt).toBe('Deploy with [REDACTED]');
+    store.flush();
+    expect(readFileSync(join(root, '.ai/cezar/runs.json'), 'utf8')).not.toContain(secret);
+    if (withRestart) {
+      manager.dispose();
+      release();
+      store = RunStore.open(join(root, '.ai/cezar'), { keepLive: true });
+      expect(store.getRun(id)?.agentSwitch?.continuationInput?.prompt).toBe('Deploy with [REDACTED]');
+      manager = new RunManager(store, root, { semaphore });
+      await manager.recover();
+    } else {
+      release();
+      await semaphore.release();
+    }
+    await vi.waitFor(() => expect(sessions).toHaveLength(1), wait);
+    expect(sessions[0]!.spec.userPrompt).toContain(withRestart ? 'Deploy with [REDACTED]' : `Deploy with ${secret}`);
+    sessions[0]!.settle();
+    await expectFinished(id, ['work', 'continue-1']);
   });
 
   it.each([false, true])('recovers a pending switch after server restart (existing Continue: %s)', async (withContinue) => {
