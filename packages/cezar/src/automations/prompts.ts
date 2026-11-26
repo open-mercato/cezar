@@ -52,6 +52,7 @@ A GitHub poll:
     "agentProfile": "work",                          // optional: an agent account id of that runner; omitted = the project's selection at launch
     "model": "sonnet",                               // optional
     "reasoningEffort": "high",                       // optional, Codex/Claude tasks only; refused on other runners
+    "serviceTier": "priority",                       // optional, Codex only: a tier id the model advertises (Fast/Ultrafast); omit for the native default
     "variants": 1,                                   // 1 | 2 | 3 competing runs per match
     "worktree": true,                                // isolate each run in its own git worktree (recommended)
     "autonomous": true,                              // never park to ask — an automation has no one watching (recommended)
