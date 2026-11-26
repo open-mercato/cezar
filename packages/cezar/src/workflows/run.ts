@@ -5373,6 +5373,9 @@ export class RunManager {
       this.store.appendEvent(runId, { type: 'lifecycle', message: 'review accepted — finished without a PR' });
       return true;
     }
+    // Already finished (agent DONE, an earlier Finish, another cockpit tab): a stale button's
+    // Finish is the intent already met, not a 409 (6a3cecee).
+    if (run?.status === 'done' && !this.isActive(runId)) return true;
     return false;
   }
 
