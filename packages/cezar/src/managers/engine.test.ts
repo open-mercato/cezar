@@ -5381,4 +5381,59 @@ describe('ManagerEngine', () => {
       expect(store.state(id).chain?.holds).toEqual({});
     });
   });
+
+  describe('antigravity effort as a model variant', () => {
+    const agy = { runner: 'antigravity', source: 'live', stale: false, models: ['gemini-4-neon-low', 'gemini-4-neon-medium', 'gemini-4-neon-high', 'gemini-4-neon-xhigh', 'gemini-pro-orchestrator'].map((model) => ({ id: model, label: model, description: '' })) };
+    const withRuns = (runs: RunRecord[]) => makeEngine({
+      projects: async () => [{ ...connected, runs: () => runs }],
+      request: async (path, init) => {
+        requests.push({ path, method: init?.method ?? 'GET', ...(typeof init?.body === 'string' ? { body: JSON.parse(init.body) } : {}) });
+        if (path.startsWith('/api/v1/models')) return Response.json(path.includes('antigravity') ? agy : { models: [] });
+        if (path.endsWith('/runs')) return Response.json({ id: 'new-run' }, { status: 201 });
+        if (path.endsWith('/switch-agent')) return Response.json({ summary: 'Switched task agent' });
+        return Response.json({ ok: true });
+      },
+    });
+
+    it('task create maps --effort to the variant, max to the highest, and says so', async () => {
+      const engine = withRuns([]);
+      const id = await create(engine);
+      const created = await engine.createTask(id, { projectId: 'alpha', task: 'Fix it', runner: 'antigravity', model: 'gemini-4-neon', effort: 'max' });
+      expect(created).toMatchObject({ notice: 'effort max -> gemini-4-neon-xhigh', agent: { runner: 'antigravity' } });
+      const body = requests.find((request) => request.path.endsWith('/runs'))?.body;
+      expect(body).toMatchObject({ runner: 'antigravity', model: 'gemini-4-neon-xhigh' });
+      expect(body).not.toHaveProperty('reasoningEffort');
+    });
+
+    it('task create refuses a conflicting variant, a family without variants and an unknown family', async () => {
+      const engine = withRuns([]);
+      const id = await create(engine);
+      expect(await engine.createTask(id, { projectId: 'alpha', task: 'x', runner: 'antigravity', model: 'gemini-4-neon-high', effort: 'low' }))
+        .toMatchObject({ status: 400, error: expect.stringContaining('conflicts with --effort low') });
+      expect(await engine.createTask(id, { projectId: 'alpha', task: 'x', runner: 'antigravity', model: 'gemini-pro-orchestrator', effort: 'high' }))
+        .toMatchObject({ status: 400, error: expect.stringContaining('no effort variants') });
+      expect(requests.some((request) => request.path.endsWith('/runs'))).toBe(false);
+    });
+
+    it('task say continues on the task model family at the requested variant', async () => {
+      const engine = withRuns([run('done', { status: 'done', runner: 'antigravity', model: 'gemini-4-neon-medium' })]);
+      const id = await create(engine);
+      expect(await engine.taskMessage(id, { projectId: 'alpha', runId: 'done', text: 'again', effort: 'high' })).toMatchObject({ ok: true, notice: 'effort high -> gemini-4-neon-high' });
+      expect(requests.at(-1)).toMatchObject({ path: '/api/v1/p/alpha/runs/done/continue', body: { model: 'gemini-4-neon-high' } });
+      expect(requests.at(-1)?.body).not.toHaveProperty('reasoningEffort');
+    });
+
+    it('task switch to antigravity sends the variant, never the effort', async () => {
+      const engine = withRuns([run('old', { status: 'failed', runner: 'claude' })]);
+      const id = await create(engine);
+      store.update(id, (manager) => ({ ...manager, cancelAnyTask: true }));
+      const switched = await engine.switchTask(id, { projectId: 'alpha', runId: 'old', runner: 'antigravity', model: 'gemini-4-neon', effort: 'low' });
+      expect(switched).toMatchObject({ notice: 'Switched task agent (effort low -> gemini-4-neon-low)' });
+      expect(requests.at(-1)?.body).toMatchObject({ runner: 'antigravity', model: 'gemini-4-neon-low' });
+      expect(requests.at(-1)?.body).not.toHaveProperty('reasoningEffort');
+    });
+
+    const run = (id: string, over: Record<string, unknown> = {}) =>
+      ({ id, title: id, task: `do ${id}`, workflow: 'quick-task', status: 'running', steps: [], ...over }) as unknown as RunRecord;
+  });
 });

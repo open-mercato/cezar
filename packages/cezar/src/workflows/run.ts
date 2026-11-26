@@ -81,7 +81,8 @@ import { pausedAutomationHold } from '../automations/paused-work.ts';
 import { getTeamSkillsCached, materializeSkillDir, refreshTeamSkills, waitForTeamSkills } from '../skills-remote.ts';
 import { mentionsSkill, PROVISION_SKILL_DIRS, provisionSkills, skillClosure } from '../skills-provision.ts';
 import { seedAgentConfigLocalLayer } from '../agent-config/seed.ts';
-import { readAgentModelProvider } from '../agent-config/models.ts';
+import { readAgentModelProvider, readAgentModelSettings } from '../agent-config/models.ts';
+import { antigravityModelIds, resolveAntigravityEffort } from '../core/antigravity-effort.ts';
 import { loadConfig, type CezConfig } from '../config.ts';
 import { bypassPermissionsBlocked } from '../bypass-permissions.ts';
 import { isLifecycleConfigTracked } from '../worktree-lifecycle/config.ts';
@@ -312,7 +313,8 @@ export function reasoningEffortIssue(
 ): string | undefined {
   const agentSteps = workflow.steps.filter((step) => stepKind(step) === 'agent');
   const invalidStep = agentSteps.find(
-    (step) => step.reasoningEffort !== undefined && !runnerSupportsReasoningEffort(step.runner ?? taskBackend),
+    // Antigravity takes a step's effort as a model variant, picked at spawn (core/antigravity-effort.ts).
+    (step) => step.reasoningEffort !== undefined && !runnerSupportsReasoningEffort(step.runner ?? taskBackend) && (step.runner ?? taskBackend) !== 'antigravity',
   );
   if (invalidStep) {
     return `step "${invalidStep.id}": ${REASONING_EFFORT_UNSUPPORTED_ERROR}`;
@@ -9753,11 +9755,25 @@ export class RunManager {
     // unresolvable model (e.g. a bare id on opencode) returns the step error
     // instead of letting the backend silently substitute its default.
     let backendModel: string | undefined;
+    // The task's model was picked for the task's runner; a step on another runner gets its own default.
+    let stepModel = agentModelsLocked(this.repoRoot) ? undefined : step.model ?? (stepBackend === taskBackend ? input.model : undefined);
+    if (stepBackend === 'antigravity' && step.reasoningEffort && !agentModelsLocked(this.repoRoot)) {
+      const models = await antigravityModelIds();
+      if (state.cancelled) return 'cancelled';
+      const mapped = resolveAntigravityEffort({
+        effort: step.reasoningEffort,
+        model: stepModel,
+        defaultModel: stepModel ? undefined : (await readAgentModelSettings('antigravity', state.cwd).catch(() => undefined))?.model,
+        models,
+      });
+      if ('error' in mapped) return `step "${step.id}": ${mapped.error}`;
+      stepModel = mapped.model;
+      emit({ type: 'note', stepId: step.id, message: mapped.note });
+    }
     try {
       const normalized = normalizeModelForBackend(
         stepBackend,
-        // The task's model was picked for the task's runner; a step on another runner gets its own default.
-        agentModelsLocked(this.repoRoot) ? undefined : step.model ?? (stepBackend === taskBackend ? input.model : undefined),
+        stepModel,
         { configuredProvider: await configuredModelProvider(stepBackend, state.cwd) },
       );
       if (state.cancelled) return 'cancelled';

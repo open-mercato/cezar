@@ -600,6 +600,7 @@ export async function runManagerCommand(
           });
           io.log(values.fresh ? `continued ${runId} in a fresh session` : `sent to ${runId}`);
           if (sent.forwarded) io.log(forwardedLine(sent.forwarded));
+          if (sent.notice) io.log(sent.notice);
           return 0;
         }
         if (sub === 'cancel') {
