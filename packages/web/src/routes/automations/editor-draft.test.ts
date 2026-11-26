@@ -166,6 +166,14 @@ describe('fromDefinition / toBody', () => {
     expect(body).not.toHaveProperty('intervalSeconds')
   })
 
+  it('round-trips a stored service tier, and omits it when none was picked (#1946)', () => {
+    const saved = { id: 'a', name: 'x', kind: 'schedule' as const, enabled: true, schedule: { type: 'daily' as const, hour: 4, minute: 0 }, task: { prompt: 'p', runner: 'codex' as const, model: 'gpt-fast', serviceTier: 'priority' }, createdAt: '', updatedAt: '', revision: 1 }
+    const draft = fromDefinition(saved as unknown as AutomationDefinition)
+    expect(draft.serviceTier).toBe('priority')
+    expect(toBody(draft).task.serviceTier).toBe('priority')
+    expect(toBody({ ...newDraft(), name: 'x', prompt: 'p' }).task).not.toHaveProperty('serviceTier')
+  })
+
   it('round-trips a stored reasoning effort, and omits it when none was picked', () => {
     const saved = { id: 'a', name: 'x', kind: 'schedule' as const, enabled: true, schedule: { type: 'daily' as const, hour: 4, minute: 0 }, task: { prompt: 'p', runner: 'codex' as const, model: 'gpt-future', reasoningEffort: 'high' }, createdAt: '', updatedAt: '', revision: 1 }
     const draft = fromDefinition(saved as unknown as AutomationDefinition)

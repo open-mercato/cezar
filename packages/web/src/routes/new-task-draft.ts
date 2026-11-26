@@ -30,6 +30,8 @@ export interface NewTaskDraft {
   model: string | null
   /** Per-task Codex effort. `null` means leave the native default untouched. */
   reasoningEffort: string | null
+  /** Per-task Codex service tier id (#1946). `null` leaves the native default untouched. */
+  serviceTier?: string | null
   variants: number
   /** Worktree opt-out (#worktree-toggle): false runs in the repo working tree. null → the
    *  remembered `lastWorktree` / default (isolated worktree). */
@@ -260,6 +262,7 @@ function normalize(raw: unknown): NewTaskDraft {
     agentProfile: typeof obj.agentProfile === 'string' ? obj.agentProfile : null,
     model: typeof obj.model === 'string' ? obj.model : null,
     reasoningEffort: typeof obj.reasoningEffort === 'string' ? obj.reasoningEffort : null,
+    ...(typeof obj.serviceTier === 'string' ? { serviceTier: obj.serviceTier } : {}),
     variants: obj.variants === 2 || obj.variants === 3 ? obj.variants : 1,
     worktree: typeof obj.worktree === 'boolean' ? obj.worktree : null,
     ...(typeof obj.worktreeBasis === 'string' ? { worktreeBasis: obj.worktreeBasis } : {}),

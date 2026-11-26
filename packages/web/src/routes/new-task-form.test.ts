@@ -16,6 +16,8 @@ import {
   pushRecentSource,
   reasoningEffortsForModel,
   resolveReasoningEffort,
+  resolveServiceTier,
+  serviceTiersForModel,
   resolveModel,
   resolveRunner,
   resolveSource,
@@ -372,6 +374,41 @@ describe('resolveSource (the draft pick, validated — no cold default)', () => 
     // A workflow name does not validate a skill ref, and vice versa.
     expect(sourceExists({ source: 'skill', ref: 'quick-task' }, skills, workflows)).toBe(false)
     expect(sourceExists({ source: 'workflow', ref: 'om-fix' }, skills, workflows)).toBe(false)
+  })
+})
+
+describe('Codex service tier resolution (#1946)', () => {
+  const tiers = [{ id: 'priority', name: 'Fast', description: 'Faster, uses limits sooner' }]
+  const catalog = {
+    runner: 'codex' as const,
+    models: [
+      { id: 'gpt-fast', label: 'Fast', description: '', serviceTiers: tiers },
+      { id: 'gpt-plain', label: 'Plain', description: '' },
+    ],
+    source: 'live' as const,
+    stale: false,
+  }
+
+  it('offers tiers only for a Codex model that advertises them', () => {
+    expect(serviceTiersForModel('codex', 'gpt-fast', catalog)).toEqual(tiers)
+    expect(serviceTiersForModel('codex', 'gpt-plain', catalog)).toEqual([])
+    expect(serviceTiersForModel('codex', '', catalog)).toEqual([])
+    expect(serviceTiersForModel('claude', 'gpt-fast', catalog)).toEqual([])
+  })
+
+  it('keeps an advertised pick and drops a stale one back to the native default', () => {
+    expect(resolveServiceTier('priority', 'codex', 'gpt-fast', catalog)).toBe('priority')
+    expect(resolveServiceTier('priority', 'codex', 'gpt-plain', catalog)).toBe('')
+    expect(resolveServiceTier('ultra', 'codex', 'gpt-fast', catalog)).toBe('')
+    expect(resolveServiceTier(null, 'codex', 'gpt-fast', catalog)).toBe('')
+  })
+
+  it('sends serviceTier only when chosen and never under a models lock', () => {
+    const base = { task: 't', source: null, model: 'gpt-fast', runner: 'codex' as const, variants: 1, images: [] }
+    expect(buildCreateRunBody({ ...base, serviceTier: 'priority' })).toMatchObject({ serviceTier: 'priority' })
+    expect(buildCreateRunBody({ ...base, serviceTier: '' })).not.toHaveProperty('serviceTier')
+    expect(buildCreateRunBody(base)).not.toHaveProperty('serviceTier')
+    expect(buildCreateRunBody({ ...base, serviceTier: 'priority', modelsLocked: true })).not.toHaveProperty('serviceTier')
   })
 })
 

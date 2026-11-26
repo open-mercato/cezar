@@ -21,6 +21,13 @@ describe('reasoning effort request contract', () => {
     expect(createRunInputSchema.safeParse({ workflow: 'quick-task', task: 'x', reasoningEffort: '  ' }).success).toBe(false);
   });
 
+  it('accepts an optional service tier on create-run, never required (#1946)', () => {
+    expect(createRunInputSchema.parse({ workflow: 'quick-task', task: 'x', serviceTier: 'priority' }))
+      .toMatchObject({ serviceTier: 'priority' });
+    expect(createRunInputSchema.parse({ workflow: 'quick-task', task: 'x' }).serviceTier).toBeUndefined();
+    expect(createRunInputSchema.safeParse({ workflow: 'quick-task', task: 'x', serviceTier: ' ' }).success).toBe(false);
+  });
+
   it('accepts an effort for an individual workflow step', () => {
     expect(
       workflowStepDefSchema.parse({ id: 'implement', prompt: '{{task}}', reasoningEffort: 'xhigh' }),

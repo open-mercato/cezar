@@ -58,6 +58,8 @@ export const automationTaskSchema = z
     model: z.string().trim().min(1).max(200).optional(),
     /** Codex/Claude effort of the launched runs — `POST /runs`' own `reasoningEffort`. */
     reasoningEffort: z.string().trim().min(1).max(64).optional(),
+    /** Codex service tier of the launched runs — `POST /runs`' own `serviceTier` (#1946). */
+    serviceTier: z.string().trim().min(1).max(64).optional(),
     variants: z.union([z.literal(1), z.literal(2), z.literal(3)]).optional(),
     worktree: z.boolean().optional(),
     generateFollowups: z.boolean().optional(),

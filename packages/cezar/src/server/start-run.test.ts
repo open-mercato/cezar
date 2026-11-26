@@ -80,6 +80,22 @@ describe('POST /api/v1/runs systemPrompt', () => {
     expect(captured?.reasoningEffort).toBe('high');
   });
 
+  it('passes a Codex service tier through, and sends nothing when omitted (#1946)', async () => {
+    const res = await post({ ...base, runner: 'codex', serviceTier: 'priority' });
+    expect(res.status).toBe(201);
+    expect(captured?.serviceTier).toBe('priority');
+    const none = await post({ ...base, runner: 'codex' });
+    expect(none.status).toBe(201);
+    expect(captured?.serviceTier).toBeUndefined();
+  });
+
+  it('rejects a service tier for a non-Codex runner with a 400 (#1946)', async () => {
+    const res = await post({ ...base, runner: 'claude', serviceTier: 'priority' });
+    expect(res.status).toBe(400);
+    expect(((await res.json()) as { error: string }).error).toContain('service tier');
+    expect(captured).toBeUndefined();
+  });
+
   it('forwards an explicit generateFollowups=false choice', async () => {
     const res = await post({ ...base, generateFollowups: false });
     expect(res.status).toBe(201);

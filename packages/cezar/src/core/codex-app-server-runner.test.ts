@@ -891,3 +891,41 @@ describe('userInputAnswers — the ask card answer read back for requestUserInpu
     expect(userInputAnswers(questions, `Library: ${more}\nParts: A`).library).toEqual({ answers: [more] });
   });
 });
+
+describe('Codex service tier App Server mapping (#1946)', () => {
+  async function capture(spec: Record<string, unknown>): Promise<ReturnType<typeof requestsFrom>> {
+    const dir = mkdtempSync(join(tmpdir(), 'cezar-codex-tier-'));
+    const file = join(dir, 'requests.ndjson');
+    const session = new CodexAppServerRunner({ bin: MOCK_BIN, timeoutMs: 0 }).startSession(
+      { userPrompt: 'go', cwd: process.cwd(), env: { CEZ_MOCK_CODEX_REQUESTS_FILE: file }, ...spec },
+      undefined,
+      { autoEndAfterFirstTurn: true },
+    );
+    try {
+      await session.result;
+      return requestsFrom(file);
+    } finally {
+      session.interrupt();
+      await session.result.catch(() => undefined);
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
+
+  it('sends the chosen tier on thread/start and turn/start', async () => {
+    const requests = await capture({ serviceTier: 'priority' });
+    expect(paramsFor(requests, 'thread/start')).toMatchObject({ serviceTier: 'priority' });
+    expect(paramsFor(requests, 'turn/start')).toMatchObject({ serviceTier: 'priority' });
+  }, 15_000);
+
+  it('sends the tier on thread/resume and turn/start for a continuation', async () => {
+    const requests = await capture({ serviceTier: 'flex', sessionId: 'th_saved', resume: true });
+    expect(paramsFor(requests, 'thread/resume')).toMatchObject({ serviceTier: 'flex' });
+    expect(paramsFor(requests, 'turn/start')).toMatchObject({ serviceTier: 'flex' });
+  }, 15_000);
+
+  it('sends nothing when no tier is chosen, keeping the native default', async () => {
+    const requests = await capture({});
+    expect(paramsFor(requests, 'thread/start')).not.toHaveProperty('serviceTier');
+    expect(paramsFor(requests, 'turn/start')).not.toHaveProperty('serviceTier');
+  }, 15_000);
+});

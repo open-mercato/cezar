@@ -5,6 +5,12 @@ export interface ReasoningEffortOption {
   description: string;
 }
 
+export interface ServiceTierOption {
+  id: string;
+  name: string;
+  description: string;
+}
+
 export interface ModelOption {
   id: string;
   label: string;
@@ -13,6 +19,9 @@ export interface ModelOption {
   reasoningEfforts?: ReasoningEffortOption[];
   /** Native runner's suggested value; never a cezar-generated default. */
   defaultReasoningEffort?: string;
+  /** Codex service tiers this model advertises (#1946); absent on older CLIs. */
+  serviceTiers?: ServiceTierOption[];
+  defaultServiceTier?: string;
 }
 
 export type ModelCatalogSource = 'live' | 'cache' | 'unavailable';

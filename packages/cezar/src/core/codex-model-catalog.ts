@@ -8,7 +8,7 @@ import {
   spawnCodexAppServer,
   type CodexAppServerMessage,
 } from './codex-app-server-transport.ts';
-import type { ModelOption, ReasoningEffortOption } from './runner-model-catalog.ts';
+import type { ModelOption, ReasoningEffortOption, ServiceTierOption } from './runner-model-catalog.ts';
 
 export interface CodexModelDiscoveryOptions {
   cwd: string;
@@ -26,6 +26,9 @@ const modelSchema = z.object({
   // opaque at the page boundary so one malformed capability never drops the whole model catalog.
   supportedReasoningEfforts: z.unknown().optional(),
   defaultReasoningEffort: z.unknown().optional(),
+  // Added in newer CLIs (#1946); opaque here so a malformed entry drops only the tiers.
+  serviceTiers: z.unknown().optional(),
+  defaultServiceTier: z.unknown().optional(),
 }).passthrough();
 
 const pageSchema = z.object({
@@ -115,12 +118,16 @@ async function discoverPages(rpc: CodexAppServerRpc): Promise<ModelOption[]> {
       ids.add(id);
       const reasoningEfforts = normalizeReasoningEfforts(model.supportedReasoningEfforts);
       const defaultReasoningEffort = normalizeReasoningEffort(model.defaultReasoningEffort);
+      const serviceTiers = normalizeServiceTiers(model.serviceTiers);
+      const defaultServiceTier = typeof model.defaultServiceTier === 'string' && model.defaultServiceTier.trim() ? model.defaultServiceTier.trim() : undefined;
       models.push({
         id,
         label: model.displayName?.trim() || id,
         description: model.description ?? '',
         ...(reasoningEfforts.length ? { reasoningEfforts } : {}),
         ...(defaultReasoningEffort ? { defaultReasoningEffort } : {}),
+        ...(serviceTiers.length ? { serviceTiers } : {}),
+        ...(serviceTiers.length && defaultServiceTier ? { defaultServiceTier } : {}),
       });
     }
 
@@ -134,6 +141,19 @@ async function discoverPages(rpc: CodexAppServerRpc): Promise<ModelOption[]> {
   }
 
   throw new Error('Codex model discovery exceeded the page limit');
+}
+
+/** `model/list.serviceTiers` entries (`id`, `name`, `description`); anything malformed is skipped. */
+function normalizeServiceTiers(value: unknown): ServiceTierOption[] {
+  if (!Array.isArray(value)) return [];
+  const tiers: ServiceTierOption[] = [];
+  for (const entry of value) {
+    if (!entry || typeof entry !== 'object') continue;
+    const { id, name, description } = entry as Record<string, unknown>;
+    if (typeof id !== 'string' || !id.trim() || tiers.some((t) => t.id === id.trim())) continue;
+    tiers.push({ id: id.trim(), name: typeof name === 'string' && name.trim() ? name.trim() : id.trim(), description: typeof description === 'string' ? description : '' });
+  }
+  return tiers;
 }
 
 /** Normalize both App Server effort-list formats without treating malformed metadata as fatal. */

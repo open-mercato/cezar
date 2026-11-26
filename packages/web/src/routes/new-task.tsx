@@ -54,6 +54,7 @@ import { ghostChip, useOnboardingWrite } from '@/components/onboarding-kit'
 import { PickerPill, RunnerPill, chevron, chipClass, engineLeftClass, engineRightClass, modelPillClass } from '@/components/picker-pill'
 import { PromptTemplateMenu } from '@/components/prompt-template-menu'
 import { ReasoningEffortPill, reasoningEffortOffered } from '@/components/reasoning-effort-pill'
+import { ServiceTierPill, serviceTierOffered } from '@/components/service-tier-pill'
 import { SourcePill } from '@/components/source-pill'
 import {
   Command,
@@ -108,6 +109,8 @@ import {
   pushRecentSource,
   reasoningEffortsForModel,
   resolveReasoningEffort,
+  resolveServiceTier,
+  serviceTiersForModel,
   resolveModel,
   resolveRunner,
   looksLikeQuestion,
@@ -206,7 +209,7 @@ export function NewTaskRoute() {
     const stored = readDraft(draftProjectId)
     return {
       ...stored,
-      ...(requestedRunner ? { runner: requestedRunner, agentProfile: null, model: null, reasoningEffort: null } : {}),
+      ...(requestedRunner ? { runner: requestedRunner, agentProfile: null, model: null, reasoningEffort: null, serviceTier: null } : {}),
       ...(deepLink.ref !== '' ? { text: deepLink.ref } : {}),
       ...(deepLink.skill !== ''
         ? { source: { source: 'skill', ref: deepLink.skill } as TaskSource }
@@ -331,6 +334,8 @@ export function NewTaskRoute() {
   const reasoningEfforts = runner === null
     ? []
     : reasoningEffortsForModel(runner, model, catalog.data)
+  const serviceTier = runner === null ? '' : resolveServiceTier(draft.serviceTier ?? null, runner, model, catalog.data)
+  const serviceTiers = runner === null ? [] : serviceTiersForModel(runner, model, catalog.data)
   // Agent accounts (spec 2026-07-29-agent-profiles). These are rows of the RUNNER pill rather than
   // a pill of their own — `claude · Default` / `claude · Klaudiusz` / `codex` — so what will run is
   // readable at a glance instead of assembled from two controls. An agent with a single login stays
@@ -630,6 +635,7 @@ export function NewTaskRoute() {
         source,
         model,
         reasoningEffort,
+        serviceTier,
         modelsLocked,
         runner: runner ?? defaultRunner ?? 'claude',
         runnerExplicit: draft.runner !== null,
@@ -759,7 +765,7 @@ export function NewTaskRoute() {
             update({
               runner: next,
               agentProfile: picked,
-              ...(next === displayRunner ? {} : { model: null, reasoningEffort: null }),
+              ...(next === displayRunner ? {} : { model: null, reasoningEffort: null, serviceTier: null }),
             })
           }
           disabled={!providersReady}
@@ -781,7 +787,7 @@ export function NewTaskRoute() {
             ? 'Model selection is locked to native coding-agent settings.'
             : undefined
         }
-        onPick={(next) => update({ model: next, reasoningEffort: null })}
+        onPick={(next) => update({ model: next, reasoningEffort: null, serviceTier: null })}
         options={models.map((m) => ({ value: m.id, label: m.label, desc: m.desc }))}
         searchPlaceholder="Search models…"
         status={modelCatalogStatus(displayRunner, catalog.data, catalog.isError)}
@@ -804,6 +810,7 @@ export function NewTaskRoute() {
   const logins = accountChoices.filter((choice) => choice.provider === displayRunner)
   const selectedAccount = agentProfile ?? repoAccount?.[displayRunner] ?? DEFAULT_AGENT_ACCOUNT_ID
   const effortOffered = runner !== null && reasoningEffortOffered(displayRunner, model, reasoningEfforts)
+  const tierOffered = runner !== null && serviceTierOffered(displayRunner, model, serviceTiers)
   const isolationShown = worktreeToggleShown && (!askOn || dispatchAvailable)
   const optionsSummary = composerOptionsSummary({
     variants,
@@ -852,6 +859,24 @@ export function NewTaskRoute() {
               disabled={!providersReady}
               modelsLocked={modelsLocked}
               onPick={(next) => update({ reasoningEffort: next || null })}
+              bare
+            />
+          ),
+        }]
+      : []),
+    ...(tierOffered
+      ? [{
+          id: 'service-tier',
+          label: 'Speed',
+          control: (
+            <ServiceTierPill
+              runner={displayRunner}
+              model={model}
+              value={serviceTier}
+              options={serviceTiers}
+              disabled={!providersReady}
+              modelsLocked={modelsLocked}
+              onPick={(next) => update({ serviceTier: next || null })}
               bare
             />
           ),
