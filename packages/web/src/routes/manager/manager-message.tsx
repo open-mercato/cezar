@@ -278,6 +278,7 @@ function ManagerQuestions({
       tabIndex={-1}
       data-slot="manager-ask"
       data-resolved="false"
+      data-message-id={messageId}
       icon={<MessageCircleQuestionIcon aria-hidden="true" className="size-4 shrink-0 text-muted-foreground" />}
       title="Your decision"
       status={<><StatusDot tone="info" />Open</>}
