@@ -43,7 +43,7 @@ removed from cezar, and ending or cancelling that task never answers 500.
 
 ### Phase 1: Removal of a project whose root is gone
 
-- [ ] 1.1 Remove route cancels active runs when the root is gone
+- [x] 1.1 Remove route cancels active runs when the root is gone — 94cfc436
 
 ### Phase 2: End session on a deleted root
 
