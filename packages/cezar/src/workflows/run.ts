@@ -111,7 +111,7 @@ import { loadWorkflows, newerCatalogWorkflow } from './load.ts';
 import type { QueuedMessage, RunRecord, RunStore, StepState } from '../runs/store.ts';
 import { switchedWorkflowAgent, taskAgentSelection, workflowAgentSwitch } from '../runs/agent-selection.ts';
 import { GLOBAL_INSTRUCTIONS_HEADING, readGlobalInstructions } from '../core/global-instructions.ts';
-import { resolveCheckCommand, type CheckCommandResolution } from './check-instructions.ts';
+import { instructionsConcernChecks, resolveCheckCommand, rewritableCheck, type CheckCommandResolution } from './check-instructions.ts';
 import { artifactsDir, authParkForAccount, FRESH_PROMPT_MAX, isIdleParked, prCheckoutDir, testCommandFile } from '../runs/store.ts';
 import { checkoutPr, pickPr } from './pr-checkout.ts';
 import { artifactsPromptPart, scanArtifacts, watchArtifacts } from '../runs/artifacts.ts';
@@ -608,6 +608,8 @@ interface ContinueRunOptions {
 class AgentAccountUnavailableError extends Error {}
 
 interface ActiveRun {
+  /** `instructedCheckCommand`'s answers this session; lazily created, so neither construction site has to know. */
+  checkResolutions?: Map<string, CheckCommandResolution>;
   /** The actual definition this owner is walking, including the dequeue-time refresh. */
   workflow?: WorkflowDef;
   /** A successor already recorded and waiting for this owner to release its session and lease. */
@@ -11504,10 +11506,11 @@ export class RunManager {
     emit: (event: { type: string; stepId?: string; [k: string]: unknown }) => void,
   ): Promise<{ ok: boolean; output: string; exitCode: number; recordedTests: string }> {
     const env = await this.checkStepEnv(runId, state, step, emit);
-    const recordedTests = this.recordedTestCommand(runId, step.command as string);
     // Global instructions reach a shell check through `resolveCheckCommand` (no-op without any).
     const resolved = await this.instructedCheckCommand(runId, state, step.command as string);
     const command = resolved.command;
+    // From what actually runs, so the gate never reports a record a rewritten command skipped.
+    const recordedTests = this.recordedTestCommand(runId, command);
     if (!resolved.changed && resolved.note) emit({ type: 'note', stepId: step.id, message: resolved.note });
     const preface = resolved.changed
       ? `cezar: the global instructions changed this check from \`${step.command as string}\` to \`${command}\` (${resolved.reason}).\n`
@@ -11553,11 +11556,19 @@ export class RunManager {
   private async instructedCheckCommand(runId: string, state: ActiveRun, command: string): Promise<CheckCommandResolution> {
     const run = this.store.getRun(runId);
     if (run?.untrustedHead) return { command, changed: false };
-    if (!readGlobalInstructions()) return { command, changed: false };
+    const instructions = readGlobalInstructions();
+    if (!instructions || !instructionsConcernChecks(instructions) || !rewritableCheck(command)) return { command, changed: false };
     const changedFiles = run?.baseBranch && state.cwd !== this.repoRoot
       ? await worktreeChangedFiles(state.cwd, run.baseBranch, { taskBranch: run.branch, runStartedAt: run.startedAt }).catch(() => null)
       : null;
-    return resolveCheckCommand({ repoRoot: this.repoRoot, command, changedFiles });
+    // One call per (command, instructions, changed files) per run: an unchanged retry round reuses it.
+    const key = JSON.stringify([command, instructions, changedFiles]);
+    const memo = (state.checkResolutions ??= new Map());
+    const cached = memo.get(key);
+    if (cached) return cached;
+    const resolved = await resolveCheckCommand({ repoRoot: this.repoRoot, command, changedFiles, instructions });
+    memo.set(key, resolved);
+    return resolved;
   }
 
   /** The related-tests command a check that reads `$CEZ_TEST_COMMAND_FILE` is about to run ('' when none), for the gate. */

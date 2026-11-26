@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { GLOBAL_INSTRUCTIONS_HEADING, instructSpec, readGlobalInstructions, withGlobalInstructions } from './global-instructions.ts';
+import { FORMAT_BOUND_GLOBAL_HEADING, GLOBAL_INSTRUCTIONS_HEADING, instructSpec, readGlobalInstructions, withGlobalInstructions } from './global-instructions.ts';
 import { ClaudeCliRunner } from './claude-cli-runner.ts';
 import { CodexAppServerRunner } from './codex-app-server-runner.ts';
 import { createRunner } from './runner-factory.ts';
@@ -43,6 +43,20 @@ describe('global instructions for every model call', () => {
     expect(withGlobalInstructions(composed, RULE)).toBe(composed);
     expect(withGlobalInstructions('Write JSON.', undefined)).toBe('Write JSON.');
     expect(GLOBAL_INSTRUCTIONS_HEADING).toMatch(/subagent/);
+  });
+
+  it('adds a block for a short rule quoted elsewhere, and never a second one beside a composed block', () => {
+    expect(withGlobalInstructions('Answer as JSON. Be concise.', 'Be concise.')).toContain(`${GLOBAL_INSTRUCTIONS_HEADING}\n\nBe concise.`);
+    // Settings saved between the step composer's read and this one: the older block stays alone.
+    const composedOld = `Skill body\n\n---\n\n## Global instructions\n\nThese user instructions apply…\n\nOld rule.`;
+    expect(withGlobalInstructions(composedOld, 'New rule.')).toBe(composedOld);
+    const manager = `You are a manager.\n\nGlobal instructions from the user's cezar settings. They apply…\nRule.`;
+    expect(withGlobalInstructions(manager, 'Rule.')).toBe(manager);
+  });
+
+  it('keeps a parsed helper\'s answer format: format-bound specs get the softer heading', () => {
+    const spec = instructSpec({ systemPrompt: 'Respond with ONLY JSON.', userPrompt: 'x', cwd: '/', globalInstructions: 'format-bound' }, () => 'Answer in bullet points.');
+    expect(spec.systemPrompt).toBe(`${FORMAT_BOUND_GLOBAL_HEADING}\n\nAnswer in bullet points.\n\n---\n\nRespond with ONLY JSON.`);
   });
 
   it('skips a spec that opted out — a probe, a tool call the user approved verbatim', () => {

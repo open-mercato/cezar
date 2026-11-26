@@ -73,8 +73,9 @@ export interface AgentRunSpec {
   /** Appended to the CLI's default system prompt (`--append-system-prompt`). */
   systemPrompt?: string;
   /** `false` only for a call that must not be steered: a health probe, a tool call the user
-   *  approved verbatim. Every other spec gets Settings → Global instructions (`createRunner`). */
-  globalInstructions?: false;
+   *  approved verbatim. `'format-bound'`: a helper whose answer is parsed (they may not change
+   *  its format). Every other spec gets Settings → Global instructions (`createRunner`). */
+  globalInstructions?: false | 'format-bound';
   userPrompt: string;
   /** Image blocks delivered with the first user message — screenshots pasted
    *  into the new-task form (spec 002's paste path, at task start). */

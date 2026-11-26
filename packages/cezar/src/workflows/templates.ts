@@ -22,14 +22,15 @@ import type { WorkflowDef } from './types.ts';
  * input: an agent can narrow it or neuter it, just as it could edit the tests, so the check
  * prints it first and `implement-review-pr`'s gate shows it (`recordedTests`). cezar clears it at
  * every agent round (`clearTestCommandRecord`), so a stale narrow command never outlives its round.
- * `bash -l` like the outer `bash -lc` (profile functions such as nvm), `-e -o pipefail` so a
- * failing line or a failing stage of `… | tail` fails the check.
+ * Sourced in a subshell of the outer `bash -lc`, so profile functions such as nvm are there and the
+ * profile is loaded once, never under errexit; `-eo pipefail` then makes a failing line or a failing
+ * stage of `… | tail` fail the check.
  */
 export const RELATED_TESTS_COMMAND =
   'f="${CEZ_TEST_COMMAND_FILE:-}"; ' +
   'if [ -n "$f" ] && [ -f "$f" ] && grep -qvE \'^[[:space:]]*(#.*)?$\' "$f"; then ' +
   'echo "Related-tests command recorded by the agent ($f):"; sed \'s/^/  | /\' "$f"; echo; ' +
-  'bash -l -e -o pipefail "$f"; ' +
+  '( set -eo pipefail; . "$f" ); ' +
   'else echo \'No related-tests command recorded in $CEZ_TEST_COMMAND_FILE: running the whole suite (npm test).\'; npm test; fi';
 
 export const RECORD_TESTS_PROMPT =
