@@ -1,7 +1,8 @@
 import { RUN_PR_REF_RANK, stepToolPolicySchema, deferredBindingSchema, modelUsageSchema, queueWaitReasonSchema, runAgentSwitchSchema, taskAskRecordSchema, trackerAccessSchema, type QuestionClosed, type QuestionStale, type TaskAskRecord } from '@open-mercato/cezar-contract';
 import { EventEmitter } from 'node:events';
 import { runLifecycleSnapshot, type RunLifecycleObserver, type RunLifecycleSnapshot } from './lifecycle.ts';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
+import { cezarHomeDir } from '../paths.ts';
 import { threadId } from 'node:worker_threads';
 import { hostname, uptime } from 'node:os';
 import {
@@ -19,7 +20,7 @@ import {
   statSync,
   writeFileSync,
 } from 'node:fs';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { z } from 'zod';
 import { StreamRedaction } from './stream-redaction.ts';
 import { renameSyncWithRetry } from '../fs-rename.ts';
@@ -668,6 +669,13 @@ export type RepoHandle = { owner: string; name: string };
  *  the worktree, so it never reaches autosave, Changes or a PR, and survives Discard. */
 export function artifactsDir(dataDir: string, runId: string): string {
   return join(dataDir, 'artifacts', runId);
+}
+
+/** A `github.pr-checkout` node's PR head, diff and metadata (`workflows/pr-checkout.ts`). Under
+ *  `~/.cezar`, outside every working directory — an in-place run's included — so Claude never
+ *  picks up the PR's nested CLAUDE.md or skills; read-only to the run's agents. */
+export function prCheckoutDir(dataDir: string, runId: string): string {
+  return join(cezarHomeDir(), 'pr-checkouts', createHash('sha256').update(resolve(dataDir)).digest('hex').slice(0, 16), runId);
 }
 
 /** `https://github.com/open-mercato/cezar/pull/402` → `open-mercato/cezar`, lowercased.
@@ -2470,6 +2478,16 @@ export class RunStore extends EventEmitter {
     }
   }
 
+  /** Where a run's PR review export lives (`prCheckoutDir`). */
+  prCheckoutDir(runId: string): string {
+    return prCheckoutDir(this.dataDir, runId);
+  }
+
+  /** A run's artifacts directory (`artifactsDir`). */
+  artifactsDir(runId: string): string {
+    return artifactsDir(this.dataDir, runId);
+  }
+
   /** The event log's mtime in ms, or undefined when it has none — age retention's activity clock. */
   eventsMtimeMs(runId: string): number | undefined {
     try { return statSync(this.eventsPath(runId)).mtimeMs; } catch { return undefined; }
@@ -2576,6 +2594,7 @@ export class RunStore extends EventEmitter {
       rmSync(this.handoffPath(id), { force: true }); // spec 007: the journal goes with the task
       rmSync(this.imagesDir(id), { recursive: true, force: true }); // agent screenshots
       rmSync(artifactsDir(this.dataDir, id), { recursive: true, force: true });
+      rmSync(prCheckoutDir(this.dataDir, id), { recursive: true, force: true });
       // Unsent drafts go with the task (#939): a draft for a run that no longer exists is
       // unreachable by definition, and it may be holding megabytes of pasted screenshots.
       deleteRunDrafts(this.dataDir, id);

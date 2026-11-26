@@ -429,7 +429,7 @@ Breaking: any change that makes an existing file unparseable, silently discarded
 Users commit these files (`.ai/cezar/workflows/*.yaml`) and share them across repos — the compact `skills:` form exists specifically to be portable. Protected shape: `name`, `description?`, and `steps` XOR `skills`; per step `id`, `name?`, agent fields (`prompt`, `skill`, `model`, `runner`, `allowedTools`, `bashAllowlist`) XOR check fields (`command`, `onFail: {retry, max}`); the `{{task}}` token; `onFail.retry` referencing an earlier step; the built-in `quick-task` name.
 
 Additive for #581: a step's `runner:` accepts `gemini`; no value is removed.
-The `version: 2` graph format (spec `2026-09-30-workflow-node-editor`, `packages/cezar/src/workflows/graph.ts`) is protected the same way once it ships: `version: 2`, `name`, `description?`, `nodes` (`id`, `name?`, `type` ∈ `start`/`end`/`loop`/`agent`/`check`/`gate.human`/`ask-user`/`dispatch`/`git.commit`/`github.draft-pr`/`github.wait-ci`/`github.pr-comment`/`parallel`/`workflow`/`if`/`git.push`/`git.sync-base`/`github.pr-update`/`github.issue-comment`/`notify.webhook` with their fields — `end.status`, `loop.max`, agent `verdicts`/`session.continue`, check `command`, the wait nodes' `timeoutMs`/`pollMs`, `parallel.branches[].id`/`wait`, `if.condition` kinds); the built-in names `implement-and-verify`, `implement-review-pr`, `review-council`, `review-pr`, `fix-ci`, `edges` (`from: <node>[.<port>]`, `to`), `layout?`; the port names; the `{{nodes.<id>.<field>}}` token; the `CEZ:VERDICT <name>` marker. A file without `version: 2` is always read as the format above.
+The `version: 2` graph format (spec `2026-09-30-workflow-node-editor`, `packages/cezar/src/workflows/graph.ts`) is protected the same way once it ships: `version: 2`, `name`, `description?`, `nodes` (`id`, `name?`, `type` ∈ `start`/`end`/`loop`/`agent`/`check`/`gate.human`/`ask-user`/`dispatch`/`git.commit`/`github.draft-pr`/`github.wait-ci`/`github.pr-comment`/`parallel`/`workflow`/`if`/`git.push`/`github.pr-checkout`/`git.sync-base`/`github.pr-update`/`github.issue-comment`/`notify.webhook` with their fields — `end.status`, `loop.max`, agent `verdicts`/`session.continue`, check `command`, the wait nodes' `timeoutMs`/`pollMs`, `parallel.branches[].id`/`wait`, `if.condition` kinds); the built-in names `implement-and-verify`, `implement-review-pr`, `review-council`, `review-pr`, `fix-ci`, `edges` (`from: <node>[.<port>]`, `to`), `layout?`; the port names; the `{{nodes.<id>.<field>}}` token; the `CEZ:VERDICT <name>` marker. A file without `version: 2` is always read as the format above.
 
 Breaking: renaming a key, tightening a refinement so previously valid files fail to load, changing `{{task}}` substitution, changing `onFail` semantics (retry target, `max` default of 2), or removing a `runner` value. Note the loader already degrades per file (bad files are reported in `issues` and skipped, `cezar run` prints `! skipped …`) — but "your existing workflow is now skipped" is still a break. Required path: accept the old spelling alongside the new, and have `POST /api/workflows` keep writing the most portable form.
 
@@ -699,6 +699,30 @@ The workspace migration cursor is now 2. Migration 002 is the compatibility
 path for the reading-width default: it removes the legacy workspace-owned
 appearance.width value narrow once, while preserving accent, density and
 unknown ui-state keys. It does not touch per-repo files.
+
+## Workflows — review-pr checks the PR out first, 2026-11-25
+
+- **Additive node type**: `github.pr-checkout` (ports `done`, `failed`). A graph that does not use it
+  is unchanged.
+- **Changed built-in**: `review-pr` starts with a `checkout` node that exports the PR under
+  `~/.cezar/pr-checkouts/<repo>/<run>/` (new state outside every working directory; `tree/` is
+  reclaimed on the idle-worktree schedule and the folder is deleted with the task); its reviewers
+  read the PR there and run in the task's untouched tree. A saved copy of `review-pr` keeps the
+  graph it was saved with.
+- **Wider grant, read-only workflows only**: a Claude agent step (and its Continue) in any workflow
+  whose capabilities are all false and that grants no file-writing tool (Edit, Write, MultiEdit,
+  NotebookEdit, unrestricted Bash) may now write its own run's artifacts directory
+  (`Edit(//<artifacts>/**)`). Ask tasks and every other workflow are unchanged.
+- **Narrower permission**: such a workflow's Claude steps always run in `dontAsk` — never the
+  project's `bypassPermissions` (as Ask tasks already did not) and never `acceptEdits` under
+  `CEZ_APPROVAL_GATE=1`. A workflow that can only Read/Edit/Write keeps both.
+- **New deny rules**: every Claude step of a workflow with a `github.pr-checkout` node gets
+  `--disallowedTools` `Edit(//<pr folder>/**)`, `Edit(//<artifacts>/pr-*.diff)` and
+  `Edit(//<artifacts>/pr-*.json)`, and those files are written read-only (`0444`). A user's own
+  file named `pr-<n>.diff` in such a run's artifacts is no longer writable by its agents.
+- **Narrower PR choice**: the checkout uses the first PR URL of a repository the checkout has a
+  remote for, and fetches nothing for a repository it has none for (it used to fetch that
+  repository's URL). Reviewers then read the PR through `gh`.
 
 ## Workflows — a human gate before every review-council PR, 2026-11-12
 

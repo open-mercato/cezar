@@ -504,6 +504,7 @@ whose counter never resets within a run, so every run is finite.
 | `workflow` (`workflow`, `prompt?`, `runner?`, `budgetUsd?`) | `done`, `failed` | `runId`, `status`, `summary` |
 | `if` (`condition`) | `true`, `false` | `result`, `value` |
 | `git.push` | `done`, `failed` | — |
+| `github.pr-checkout` | `done`, `failed` | `number`, `head`, `tree`, `diff`, `meta`, `checkedOut` |
 | `git.sync-base` | `done`, `conflict`, `failed` | `conflicts` |
 | `github.pr-update` (`ready?`, `addLabels?`, `reviewers?`) | `done`, `failed` | — |
 | `github.issue-comment` (`body`, `issue?` — default: the task's issue) | `done`, `failed` | `issue` |
@@ -520,6 +521,33 @@ whose counter never resets within a run, so every run is finite.
   `paths-changed` (`glob`: `*` within a folder, `**` across), `output` (`ref:
   <node>.<field>`, `op`, `value` — numeric when both sides are numbers) and `branch`
   (`equals` / `matches` on the base branch).
+- **`github.pr-checkout`** takes the first PR URL in the task whose repository this checkout has a
+  remote for (same owner/repo on the PR's host, or an SSH URL on a host alias such as
+  `git@github-work:o/r` that is no other forge — used only when GitHub names the PR's head), and
+  fetches its `pull/<n>/head` from that remote into a private ref deleted afterwards (never
+  `FETCH_HEAD`); with no such remote it fetches nothing. SSH runs with `-o BatchMode=yes` appended
+  to your own `GIT_SSH_COMMAND` or `core.sshCommand` (a `GIT_SSH` program is left as it is). When GitHub
+  reports the PR's head, the two must agree (one re-fetch after a short wait if
+  `refs/pull/<n>/head` lags a push). It exports that head under
+  `~/.cezar/pr-checkouts/<repo>/<run>/tree` (symlinks as plain files, no LFS download, and on git
+  2.42+ none of the PR's `.gitattributes` filter drivers), outside every working directory —
+  in-place runs included — so the task's branch, files, Changes and merge/push/PR actions stay the
+  base's. Beside the tree it saves read-only `pr-<n>.json` and `pr-<n>.diff` (`gh pr diff`, else a
+  diff against the PR's base fetched fresh; `headVerified` and `diffBase` say how much GitHub
+  confirmed, and `diffBase` names the task's base when GitHub did not name the PR's); the run's
+  artifacts get read-only copies. Every Claude step can read that folder once it exists (added at
+  the folder root, never `tree/`) and may write none of it, nor the artifacts copies (deny rules,
+  in every permission mode). No step runs in it, so the PR's `.claude`/`.pi` settings, hooks and
+  `.mcp.json` never load; a check against Claude Code 2.1.328 also found that a `CLAUDE.md` or
+  `.claude/skills` nested in `tree/` did not load on reading files there, and review steps have no
+  Skill tool. The exported `tree/` is freed on the idle-worktree schedule (default 7 days), on
+  archive and on a manual reclaim (`pr-<n>.json` and its artifacts copy then say `checkedOut: false`; a re-run exports
+  it again), and the whole folder is deleted with the task. It never throws: a disk error, no
+  remote, an old git without `--no-write-fetch-head` (2.29+) or a private repo the remote cannot
+  reach leaves by `failed`, and the reviewers fall back to `gh pr view`/`gh pr diff`. It posts
+  nothing, and under `CEZ_DRY_RUN=1` fetches nothing.
+  Your own Claude settings still apply to these steps: a broad allow rule there (say
+  `Bash(npm run:*)`) widens what a reviewer may run, now with the PR's code on disk.
 - **`git.sync-base`** merges the freshest base into the task branch. On a conflict it
   leaves the merge in progress and leaves by `conflict` — wire that to an agent to
   resolve it (`{{nodes.<id>.conflicts}}` lists the files).

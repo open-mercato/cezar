@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { currentTaskPr } from '../attention/list.ts';
 import { readRunIndexFromDisk } from './run-index.ts';
-import { reconcileLoadedRun, RunStore } from './store.ts';
+import { prCheckoutDir, reconcileLoadedRun, RunStore } from './store.ts';
 
 import type { RunRecord } from './store.ts';
 
@@ -2411,8 +2411,11 @@ describe('RunStore — per-record salvage of records this version cannot read (P
     write([unreadable, readable]);
     const store = RunStore.open(dataDir); // creates <dataDir>/runs
     writeFileSync(join(dataDir, 'runs', 'future-1.ndjson'), '{"type":"note"}\n', 'utf8');
+    mkdirSync(join(prCheckoutDir(dataDir, 'future-1'), 'tree'), { recursive: true });
     expect(store.deleteRun('future-1')).toBe(true);
     expect(existsSync(join(dataDir, 'runs', 'future-1.ndjson'))).toBe(false);
+    // A review's exported PR goes with the task.
+    expect(existsSync(prCheckoutDir(dataDir, 'future-1'))).toBe(false);
     store.flush();
     expect(onDisk().map((r) => r.id)).toEqual(['good-1']);
     expect(store.deleteRun('future-1')).toBe(false);
