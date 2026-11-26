@@ -9,7 +9,7 @@ export const NODE_OUTPUTS: Record<GraphNodeType, string[]> = {
   end: [],
   loop: ['iteration', 'max'],
   agent: ['summary', 'verdict', 'costUsd'],
-  check: ['exitCode', 'output'],
+  check: ['exitCode', 'output', 'recordedTests'],
   'gate.human': ['comment'],
   'ask-user': ['answer'],
   dispatch: ['runId', 'status', 'summary'],

@@ -681,6 +681,13 @@ export function artifactsDir(dataDir: string, runId: string): string {
   return join(dataDir, 'artifacts', runId);
 }
 
+/** Where an agent records the command that runs the tests related to its change, for the built-in
+ *  `Run tests` check (`workflows/templates.ts`). A dotfile, so the Assets listing never shows it, in
+ *  a directory every backend's sandbox already grants. */
+export function testCommandFile(dataDir: string, runId: string): string {
+  return join(artifactsDir(dataDir, runId), '.test-command');
+}
+
 /** A `github.pr-checkout` node's PR head, diff and metadata (`workflows/pr-checkout.ts`). Under
  *  `~/.cezar`, outside every working directory — an in-place run's included — so Claude never
  *  picks up the PR's nested CLAUDE.md or skills; read-only to the run's agents. */

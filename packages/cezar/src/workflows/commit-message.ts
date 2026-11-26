@@ -93,6 +93,8 @@ export async function generateCommitMessage(
         systemPrompt: COMMIT_MESSAGE_SYSTEM_PROMPT,
         userPrompt,
         cwd: repoRoot,
+        // Parsed answer: global instructions shape its content, never its format.
+        globalInstructions: 'format-bound',
         allowedTools: [],
         model: choice.model,
         ...(choice.reasoningEffort ? { reasoningEffort: choice.reasoningEffort } : {}),
