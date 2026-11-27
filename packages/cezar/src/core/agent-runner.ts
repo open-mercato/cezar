@@ -27,6 +27,7 @@ import {
   type Runner,
 } from '@open-mercato/cezar-contract';
 import type { UsageWindowsObservation } from '@open-mercato/cezar-contract';
+import type { AgentProviderLaunch } from './agent-provider-env.ts';
 import type { UiEvent } from './ui-events.ts';
 import type { PrivateMcpServer } from './private-mcp.ts';
 
@@ -120,6 +121,8 @@ export interface AgentRunSpec {
   /** Extra env vars for the agent process (merged over `process.env`) —
    *  e.g. CEZ_HANDOFF_FILE / CEZ_TODOS_FILE / CEZ_TASK_ID (spec 007). */
   env?: Record<string, string>;
+  /** Ephemeral provider credentials/config. Never include these in tool broker env or run state. */
+  provider?: AgentProviderLaunch;
   /** The project's private MCP servers (`.ai/cezar/mcp.local.json`), injected at launch through
    *  each backend's own channel — never written into `cwd` (spec 2026-10-07-private-project-mcp). */
   mcpServers?: PrivateMcpServer[];
@@ -341,6 +344,10 @@ export interface AgentSession {
   readonly processExited?: Promise<void>;
   /** True while the session still accepts messages. */
   readonly open: boolean;
+}
+
+export class AgentProviderUnavailable extends Error {
+  constructor(message: string, readonly methodId?: string) { super(message); }
 }
 
 export interface AgentRunner {

@@ -1,7 +1,7 @@
 import { spawn as nodeSpawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve as resolvePath } from 'node:path';
-import { trackChildExit } from './agent-runner.ts';
+import { type AgentRunSpec, trackChildExit } from './agent-runner.ts';
 import { buildChildEnv } from './agent-env.ts';
 import { EOF_KILL_GRACE_MS, EOF_TERM_GRACE_MS, KILL_GRACE_MS } from './claude-cli-runner.ts';
 import { spawnableCommand } from './windows-shim.ts';
@@ -36,8 +36,8 @@ function mockJuniePath(): string {
   return resolvePath(here, '..', '..', 'scripts', 'mock-junie-acp.mjs');
 }
 
-export function buildJunieAcpEnv(extraEnv?: Record<string, string>): NodeJS.ProcessEnv {
-  return buildChildEnv({ backend: 'junie', extraEnv });
+export function buildJunieAcpEnv(extraEnv?: Record<string, string>, provider?: AgentRunSpec['provider']): NodeJS.ProcessEnv {
+  return buildChildEnv({ backend: 'junie', extraEnv, provider });
 }
 
 /**
@@ -53,13 +53,14 @@ export function spawnJunieAcp(
   bin: string,
   cwd: string,
   extraEnv?: Record<string, string>,
+  provider?: AgentRunSpec['provider'],
 ): ChildProcessWithoutNullStreams {
   try {
     // npm installs junie as `junie.cmd` on Windows (a330744e).
     const [file, argv] = spawnableCommand(bin, ['--acp=true', '-p', cwd]);
     return nodeSpawn(file, argv, {
       cwd,
-      env: buildJunieAcpEnv(extraEnv),
+      env: buildJunieAcpEnv(extraEnv, provider),
     });
   } catch (error) {
     throw junieSpawnError(error, bin);

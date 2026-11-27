@@ -12,6 +12,11 @@ import { PiRunner } from './pi-runner.ts';
 import { OmpRpcRunner } from './omp-rpc-runner.ts';
 import { AntigravityRunner } from './antigravity-runner.ts';
 import { diskFloorRefusal } from '../disk-space.ts';
+import { oneShotProvider, AgentProviderUnavailable, verifyProviderLogin } from './agent-provider-env.ts';
+import { redactDeep, redactSecrets } from './secret-redaction.ts';
+import { StreamRedaction } from '../runs/stream-redaction.ts';
+import type { UiEvent } from './ui-events.ts';
+import { agentModelsLocked } from './agent-model-policy.ts';
 import { instructSpec } from './global-instructions.ts';
 
 /**
@@ -107,15 +112,49 @@ function guardWorkingDirectory(runner: AgentRunner): AgentRunner {
   guarded.startSession = function (spec, onEvent, opts) {
     check(spec);
     // The one place every model call passes, so no caller can forget Settings → Global instructions.
-    return runner.startSession.call(this, instructSpec(spec), onEvent, opts);
-  };
-  guarded.run = function (spec, onEvent) {
+    const input = instructSpec(spec.provider?.model ? { ...spec, model: spec.provider.model } : spec);
+    const key = input.provider?.secret;
+    if (!key) return runner.startSession.call(this, input, onEvent, opts);
+    // CLI errors, tool results and streamed text can echo arbitrary gateway keys (even short ones).
+    const secrets = [key];
+    const stream = new StreamRedaction();
+    const scrubError = (error: unknown): never => {
+      if (error instanceof AgentProviderUnavailable) throw error;
+      throw new Error(redactSecrets(error instanceof Error ? error.message : String(error), secrets));
+    };
     try {
-      check(spec);
-    } catch (err) {
-      return Promise.reject(err);
-    }
-    return runner.run.call(this, instructSpec(spec), onEvent);
+      const session = runner.startSession.call(this, input, onEvent && (event => onEvent(redactDeep(event, secrets))), {
+        ...opts,
+        onUiEvent: opts?.onUiEvent && (event => {
+          const { model, catalogModel } = input.provider!;
+          if (model && catalogModel && model !== catalogModel) {
+            if (event.type === 'session.started' && event.model === model) event = { ...event, model: catalogModel };
+            if (event.type === 'turn.completed' && event.models) event = { ...event, models: event.models.map(
+              share => share.model === model ? { ...share, model: catalogModel } : share,
+            ) };
+          }
+          const frame = { ...event };
+          for (const tail of stream.drain('', frame)) opts.onUiEvent!(tail as UiEvent);
+          opts.onUiEvent!(redactDeep(stream.transform('', frame, secrets), secrets));
+        }),
+      });
+      session.result = session.result.then(result => redactDeep(result, secrets), scrubError);
+      return session;
+    } catch (error) { return scrubError(error); }
+  };
+  guarded.run = async function (spec, onEvent) {
+    check(spec);
+    // Namer, planner, commit subjects and check selection are one-shot calls on their own runner.
+    const backend = runner.backend === 'claude-cli' ? 'claude' : runner.backend;
+    const provider = 'provider' in spec ? spec.provider : await oneShotProvider(backend, spec.cwd, { model: spec.model });
+    await verifyProviderLogin(backend, provider, spec.cwd, spec.env);
+    const input = provider ? {
+      ...spec,
+      provider,
+      model: agentModelsLocked(spec.cwd) ? undefined : provider.model ?? spec.model,
+      onUsageWindows: provider.secret ? undefined : spec.onUsageWindows,
+    } : spec;
+    return runner.run.call(this, instructSpec(input), onEvent);
   };
   return guarded;
 }

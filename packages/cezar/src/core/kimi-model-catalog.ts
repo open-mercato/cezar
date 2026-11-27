@@ -49,3 +49,19 @@ function contextLabel(tokens: number): string | undefined {
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
+
+/** Only the vendor-managed OAuth provider may serve an explicitly selected subscription.
+ * Kimi can remember a different model on resume, so the runner supplies its effective ACP alias. */
+export async function kimiSubscriptionModel(env: NodeJS.ProcessEnv, alias: string): Promise<boolean> {
+  try {
+    const config = parseToml(await readFile(join(kimiHome(env), 'config.toml'), 'utf8'));
+    if (!isRecord(config.models) || !isRecord(config.providers)) return false;
+    const model = config.models[alias];
+    const provider = config.providers['managed:kimi-code'];
+    if (!isRecord(model) || model.provider !== 'managed:kimi-code' || !isRecord(provider) || provider.type !== 'kimi') return false;
+    const allowed = (row: Record<string, unknown>) => !row.api_key && !row.api_key_env && !row.env && !row.custom_headers
+      && !row.protocol && !row.base_url;
+    const { base_url, ...rest } = provider;
+    return allowed(model) && allowed(rest) && (!base_url || (typeof base_url === 'string' && /^https:\/\/api\.kimi\.(?:com|ai)\/coding\/v1\/?$/.test(base_url)));
+  } catch { return false; }
+}

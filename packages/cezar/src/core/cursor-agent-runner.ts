@@ -184,8 +184,8 @@ export class CursorAgentRunner implements AgentRunner {
     try {
       const isNodeScript = /\.[cm]?js$/.test(this.bin);
       const launch = isNodeScript
-        ? { program: process.execPath, args: [this.bin, ...args], env: buildChildEnv({ backend: this.backend, extraEnv: spec.env }) }
-        : cursorLaunch(this.bin, args, buildChildEnv({ backend: this.backend, extraEnv: spec.env }));
+        ? { program: process.execPath, args: [this.bin, ...args], env: buildChildEnv({ backend: this.backend, extraEnv: spec.env, provider: spec.provider }) }
+        : cursorLaunch(this.bin, args, buildChildEnv({ backend: this.backend, extraEnv: spec.env, provider: spec.provider }));
       const env = launch.env;
       const [file, argv] = disclaimedCommand(launch.program, launch.args, env, { name: 'cursor-agent' });
       child = nodeSpawn(file, argv, { cwd: spec.cwd, env });

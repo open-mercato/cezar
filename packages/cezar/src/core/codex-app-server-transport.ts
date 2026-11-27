@@ -2,7 +2,7 @@ import { spawn as nodeSpawn, type ChildProcessWithoutNullStreams } from 'node:ch
 import { installHintCommand } from './agent-install.ts';
 import { dirname, resolve as resolvePath } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { trackChildExit } from './agent-runner.ts';
+import { type AgentRunSpec, trackChildExit } from './agent-runner.ts';
 import { buildChildEnv } from './agent-env.ts';
 import { disclaimedCommand } from './disclaim-spawn.ts';
 import { EOF_KILL_GRACE_MS, EOF_TERM_GRACE_MS, KILL_GRACE_MS } from './claude-cli-runner.ts';
@@ -32,8 +32,8 @@ export function mockCodexPath(): string {
   return resolvePath(dirname(fileURLToPath(import.meta.url)), '..', '..', 'scripts', 'mock-codex-app-server.mjs');
 }
 
-export function buildCodexAppServerEnv(extraEnv?: Record<string, string>): NodeJS.ProcessEnv {
-  return buildChildEnv({ backend: 'codex', extraEnv });
+export function buildCodexAppServerEnv(extraEnv?: Record<string, string>, provider?: AgentRunSpec['provider']): NodeJS.ProcessEnv {
+  return buildChildEnv({ backend: 'codex', extraEnv, provider });
 }
 
 /** Spawn the authenticated host's app-server with the same least-privilege env used by runs. */
@@ -42,9 +42,10 @@ export function spawnCodexAppServer(
   cwd: string,
   extraEnv?: Record<string, string>,
   isolatedEnv?: NodeJS.ProcessEnv,
+  provider?: AgentRunSpec['provider'],
 ): ChildProcessWithoutNullStreams {
   try {
-    const env = isolatedEnv ?? buildCodexAppServerEnv(extraEnv);
+    const env = isolatedEnv ?? buildCodexAppServerEnv(extraEnv, provider);
     const [file, argv] = disclaimedCommand(bin, ['app-server', ...(isolatedEnv ? ['--strict-config'] : [])], env);
     return nodeSpawn(file, argv, { cwd, env });
   } catch (error) {

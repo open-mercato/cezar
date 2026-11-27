@@ -4,6 +4,7 @@ import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { parse, stringify } from 'smol-toml';
 import { assertCezarHomeWriteIsSandboxed, cezarHomeDir } from '../paths.ts';
+import { withoutEnv } from './agent-env.ts';
 import type { AgentRunSpec } from './agent-runner.ts';
 import { CODEX_DISABLED_FEATURES } from './codex-restricted-policy.ts';
 import { CodexToolPolicyError } from './codex-tool-policy.ts';
@@ -28,20 +29,20 @@ function record(value: unknown): Record<string, unknown> {
 }
 
 /** Only model transport settings travel from the selected account. No instruction or execution config does. */
-export function restrictedCodexModelConfig(text: string): { config: Record<string, unknown>; authEnv: string[] } {
+export function restrictedCodexModelConfig(text: string, overrideProvider = false): { config: Record<string, unknown>; authEnv: string[] } {
   let root: Record<string, unknown>;
   try { root = record(parse(text)); } catch { throw new Error('codex: cannot parse the selected account config for restricted execution'); }
   const profile = typeof root.profile === 'string' ? record(record(root.profiles)[root.profile]) : {};
   const selected = { ...root, ...profile };
   const config: Record<string, unknown> = {};
-  for (const key of ['model', 'model_provider', 'model_reasoning_effort']) {
+  for (const key of overrideProvider ? ['model', 'model_reasoning_effort'] : ['model', 'model_provider', 'model_reasoning_effort']) {
     if (selected[key] !== undefined) {
       if (typeof selected[key] !== 'string') throw new Error(`codex: invalid isolated model setting ${key}`);
       config[key] = selected[key];
     }
   }
   const authEnv: string[] = [];
-  if (typeof selected.model_provider === 'string' && selected.model_provider !== 'openai') {
+  if (!overrideProvider && typeof selected.model_provider === 'string' && selected.model_provider !== 'openai') {
     const name = selected.model_provider;
     const provider = record(record(selected.model_providers)[name]);
     if (!Object.keys(provider).length || Object.keys(provider).some(k => !PROVIDER_KEYS.has(k))) {
@@ -71,16 +72,17 @@ function credentialLink(source: string, target: string): void {
 
 /** Separate state per account and working directory keeps restricted resumes away from native threads. */
 export function prepareRestrictedCodexHome(
-  spec: Pick<AgentRunSpec, 'cwd' | 'env'>,
+  spec: Pick<AgentRunSpec, 'cwd' | 'env' | 'provider'>,
   hostEnv: NodeJS.ProcessEnv = process.env,
 ): RestrictedCodexHome {
   if (existsSync('/etc/codex') && readdirSync('/etc/codex').length) throw new CodexToolPolicyError('system Codex policies cannot be isolated');
-  const inherited = { ...hostEnv, ...spec.env };
+  const inherited = withoutEnv({ ...hostEnv, ...spec.env }, spec.provider?.unsetEnv);
   const dry = hostEnv.CEZ_DRY_RUN === '1';
   const originalHome = inherited.HOME || homedir();
   const nativeHome = dry ? join(cezarHomeDir(hostEnv), 'codex-restricted-dry-source') : resolve(inherited.CODEX_HOME || join(originalHome, '.codex'));
   const cwd = realpathSync(spec.cwd);
-  const key = createHash('sha256').update(`${nativeHome}\0${cwd}`).digest('hex').slice(0, 32);
+  const method = spec.provider ? '\0' + spec.provider.methodId : '';
+  const key = createHash('sha256').update(`${nativeHome}\0${cwd}${method}`).digest('hex').slice(0, 32);
   const directory = join(cezarHomeDir(hostEnv), 'codex-restricted', key);
   assertCezarHomeWriteIsSandboxed(directory, hostEnv);
   // No writable parent may be shared with the repository. This state is managed by cezar.
@@ -98,7 +100,7 @@ export function prepareRestrictedCodexHome(
   try { text = readFileSync(join(nativeHome, 'config.toml'), 'utf8'); } catch (err) {
     if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
   }
-  const model = restrictedCodexModelConfig(text);
+  const model = restrictedCodexModelConfig(text, !!spec.provider?.codexConfig);
   const config: Record<string, unknown> = {
     ...model.config,
     cli_auth_credentials_store: 'file',
@@ -135,6 +137,8 @@ export function prepareRestrictedCodexHome(
   for (const name of ['PATH', 'LANG', 'LC_ALL', 'TZ', 'SYSTEMROOT', 'SYSTEMDRIVE', 'WINDIR', 'TEMP', 'TMP', 'TMPDIR', ...(!dry ? AUTH_ENV : []), ...model.authEnv]) {
     if (inherited[name] !== undefined) env[name] = inherited[name];
   }
+  // Only the app-server receives provider auth. Its broker and isolated config stay key-free.
+  Object.assign(env, spec.provider?.env);
   env.HOME = shellHome;
   env.USERPROFILE = shellHome;
   env.CODEX_HOME = path;

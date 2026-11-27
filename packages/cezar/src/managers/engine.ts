@@ -1,3 +1,5 @@
+import { agentProviderEnv, verifyProviderLogin, type AgentProviderLaunch } from '../core/agent-provider-env.ts';
+import { withoutEnv } from '../core/agent-env.ts';
 import { randomUUID } from 'node:crypto';
 import { chmodSync, closeSync, existsSync, fstatSync, mkdirSync, openSync, readFileSync, readSync, realpathSync, writeFileSync } from 'node:fs';
 import { delimiter, join, resolve } from 'node:path';
@@ -2456,7 +2458,14 @@ export class ManagerEngine {
   ): Promise<DriveResult> {
     const { store } = this.deps;
     const runner = await this.runnerOf(manager);
-    const sessionKey = `${runner}|${manager.agentProfile ?? ''}`;
+    const locked = agentModelsLocked();
+    let provider: AgentProviderLaunch | undefined;
+    try {
+      provider = await agentProviderEnv(runner, { model: locked ? undefined : manager.model, modelsLocked: locked });
+    } catch (error) {
+      return { text: '', commands: [], costUsd: 0, runner, error: error instanceof Error ? error.message : String(error) };
+    }
+    const sessionKey = `${runner}|${manager.agentProfile ?? ''}${provider ? `|${provider.methodId}` : ''}`;
     // A chain keeps each row's transcript, so going back to #1 resumes it while it is still young.
     if (hasChain(manager)) this.swapSessions(id, sessionKey);
     const state = store.state(id);
@@ -2467,7 +2476,7 @@ export class ManagerEngine {
     const profile = supportsProfiles(runner) ? await resolveProfileEnvForRoot(undefined, runner, manager.agentProfile) : { env: {} };
     const planProvider = runner === 'claude' || runner === 'codex' ? runner : undefined;
     const planProfile = 'profile' in profile ? profile.profile : undefined;
-    turn.planAccount = planProvider && planProfile
+    turn.planAccount = !provider?.secret && planProvider && planProfile
       ? await ledgerAccountRef(planProvider, planProfile).catch(() => undefined)
       : undefined;
     const planAccount = turn.planAccount;
@@ -2480,7 +2489,6 @@ export class ManagerEngine {
     } catch (error) {
       console.warn(`[cezar] manager shim: ${error instanceof Error ? error.message : String(error)}`);
     }
-    const locked = agentModelsLocked();
     let writable: string | undefined;
     if (runner === 'claude' && turn.kind !== 'watch') {
       try {
@@ -2506,6 +2514,7 @@ export class ManagerEngine {
     // Read per turn, so an edit in Settings reaches a resumed session too.
     const globalInstructions = (await loadWorkspaceConfig().catch(() => null))?.systemPrompt;
     const base: AgentRunSpec = {
+      provider,
       systemPrompt: managerSystemPrompt(
         manager,
         sources.map((source) => ({ id: source.id, name: source.name, access: managerAccessOf(manager, source.id) })),
@@ -2551,7 +2560,7 @@ export class ManagerEngine {
       ...(manager.effort && runnerSupportsReasoningEffort(runner) ? { reasoningEffort: manager.effort } : {}),
     };
     // Claude's Bash inherits the cockpit's env plus the turn's; the broker runs Codex's commands in the same.
-    if (runner === 'codex') base.brokeredShell = codexManagerShell(manager.bashAllow, { ...process.env, ...base.env });
+    if (runner === 'codex') base.brokeredShell = codexManagerShell(manager.bashAllow, withoutEnv({ ...process.env, ...base.env }, provider?.unsetEnv));
     // A retry is the same user turn: it counts once, measured from the session as it stood before.
     const origin: TurnOrigin = { startedAt: this.now(), ...(resumeId && state.sessions[turn.kind] ? { prior: state.sessions[turn.kind]! } : {}) };
     const first = await this.session(id, base, sessionKey, runner, resumeId, turn, onProgress, origin);
@@ -2562,10 +2571,10 @@ export class ManagerEngine {
     if (plan === 'again') {
       await new Promise((resolve) => setTimeout(resolve, this.deps.retryDelayMs ?? RETRY_BACKOFF_MS).unref?.());
       if (turn.stopped || !store.get(id)) return { ...first, runner };
-      const again = await this.session(id, base, sessionKey, runner, resumeId, turn, onProgress, origin);
+      const again = await this.session(id, base, sessionKey, runner, resumeId, turn, onProgress, origin, true);
       return { ...again, costUsd: again.costUsd + first.costUsd, runner };
     }
-    const fresh = await this.session(id, { ...base, userPrompt: freshPrompt }, sessionKey, runner, undefined, turn, onProgress, { startedAt: origin.startedAt });
+    const fresh = await this.session(id, { ...base, userPrompt: freshPrompt }, sessionKey, runner, undefined, turn, onProgress, { startedAt: origin.startedAt }, true);
     return { ...fresh, costUsd: fresh.costUsd + first.costUsd, runner };
   }
 
@@ -2578,6 +2587,7 @@ export class ManagerEngine {
     turn: ActiveTurn,
     onProgress: (progress: Progress) => void,
     origin: TurnOrigin = { startedAt: this.now() },
+    retry = false,
   ): Promise<DriveResult> {
     const { store } = this.deps;
     // Claude takes an id we mint; every other backend mints its own and reports it (`session`).
@@ -2670,6 +2680,16 @@ export class ManagerEngine {
       id: managerConsumerId(id), kind: 'manager', title: store.get(id)?.name ?? id, managerId: id,
     }, { part: turn.kind, ...(turn.ledgerMessageId ? { messageId: turn.ledgerMessageId } : {}), endOnClose: true }) : undefined;
     try {
+      if (retry && base.provider) {
+        // A retry can outlive a key rotation or removal. Read the same method again.
+        spec.provider = await agentProviderEnv(runnerId, { saved: base.provider.methodId, savedHost: base.provider.hostKey, model: base.model, modelsLocked: agentModelsLocked() });
+      }
+      spec.model = spec.provider?.model ?? base.model;
+      await verifyProviderLogin(runnerId, spec.provider, spec.cwd, spec.env);
+      if (turn.stopped) {
+        planUsage?.close();
+        return { text: '', commands, costUsd };
+      }
       const runner = (this.deps.runnerFor ?? createRunner)(runnerId);
       const session = runner.startSession(spec, (event) => { planUsage?.event(event); onEvent(event); }, {
         autoEndAfterFirstTurn: true,
@@ -3131,7 +3151,10 @@ export class ManagerEngine {
       else session.interrupt();
     };
     try {
+      const provider = await agentProviderEnv(runner, { modelsLocked: agentModelsLocked() });
+      await verifyProviderLogin(runner, provider, this.deps.store.workdir(id), profile.env);
       session = (this.deps.runnerFor ?? createRunner)(runner).startSession({
+        provider,
         userPrompt: 'Reply with OK.',
         // A connector probe: it answers nothing the user reads, so nothing can steer it.
         globalInstructions: false,
@@ -3185,7 +3208,10 @@ export class ManagerEngine {
       else session.interrupt();
     };
     try {
+      const provider = await agentProviderEnv(runner, { model: agentModelsLocked() ? undefined : manager.model, modelsLocked: agentModelsLocked() });
+      await verifyProviderLogin(runner, provider, this.deps.store.workdir(id), profile.env);
       session = (this.deps.runnerFor ?? createRunner)(runner).startSession({
+        provider,
         systemPrompt: 'You run one tool call the user approved in cezar, exactly as approved, and nothing else.',
         userPrompt: connectorCallPrompt(tool, action.args),
         // The user approved this exact call; instructions must not rewrite it after the fact.

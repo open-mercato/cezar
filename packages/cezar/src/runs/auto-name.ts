@@ -1,3 +1,4 @@
+import { oneShotProvider, type MethodSelection } from '../core/agent-provider-env.ts';
 import type { AgentRunSpec, RunnerId } from '../core/agent-runner.ts';
 import { z } from 'zod';
 import { loadConfig } from '../config.ts';
@@ -76,6 +77,7 @@ const namerResponseSchema = z.object({
 });
 
 export interface NamerContext {
+  providerSelection?: { runner: RunnerId; method: MethodSelection };
   task: string;
   skillName?: string;
   skillDescription?: string;
@@ -224,10 +226,12 @@ export async function generateRunName(repoRoot: string, ctx: NamerContext, execu
     // Its own ledger consumer, so naming never lands in the task's plan-limit share.
     const planAccount = execution ? execution.planUsageAccount : await oneShotAccountRef(runnerId, resolved?.profile);
     for (let attempt = 0; attempt < 2; attempt++) {
-      const tracked = trackOneShot(runnerId, planAccount, INTERNAL_CONSUMERS.naming);
+      const provider = await oneShotProvider(runnerId, repoRoot, { ...(ctx.providerSelection?.runner === runnerId ? ctx.providerSelection.method : {}), model: choice?.model });
+      const tracked = trackOneShot(runnerId, provider?.secret ? undefined : planAccount, INTERNAL_CONSUMERS.naming);
       let result: Awaited<ReturnType<typeof runner.run>> | undefined;
       try {
       result = await runner.run({
+        provider,
         systemPrompt: ctx.branchNaming ? NAMER_SYSTEM_PROMPT + NAMER_BRANCH_PROMPT : NAMER_SYSTEM_PROMPT,
         userPrompt: buildNamerPrompt(ctx),
         // Parsed answer: global instructions shape its content, never its format.

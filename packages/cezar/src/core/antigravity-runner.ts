@@ -91,7 +91,7 @@ export class AntigravityRunner implements AgentRunner {
 
   startSession(spec: AgentRunSpec, onEvent?: (event: AgentEvent) => void, opts: SessionOptions = {}): AgentSession {
     assertReasoningEffortSupported('antigravity', spec.reasoningEffort);
-    const env = buildChildEnv({ backend: this.backend, extraEnv: spec.env });
+    const env = buildChildEnv({ backend: this.backend, extraEnv: spec.env, provider: spec.provider });
     const guard = createAntigravityToolGuard(spec);
     const args = buildAntigravityArgs(spec, guard);
     // The dry-run mock is a node script; on Windows `disclaimedCommand` already routes scripts to

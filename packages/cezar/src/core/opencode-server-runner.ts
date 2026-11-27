@@ -523,7 +523,7 @@ class OpencodeSession implements AgentSession {
   private spawnServer(port: number): void {
     let child: ChildProcessWithoutNullStreams;
     try {
-      const env = buildChildEnv({ backend: 'opencode', extraEnv: this.spec.env });
+      const env = buildChildEnv({ backend: 'opencode', extraEnv: this.spec.env, provider: this.spec.provider });
       env.OPENCODE_SERVER_PASSWORD = this.password;
       // V2 prefers this alias over SERVER_PASSWORD; neither may inherit a shared service's credential.
       env.OPENCODE_PASSWORD = this.password;
@@ -727,7 +727,8 @@ class OpencodeSession implements AgentSession {
 
   private async createSession(): Promise<Record<string, unknown>> {
     const id = parseModelIdentity(this.spec.model);
-    const model = id ? v2Model(id.provider, id.model) : undefined;
+    const model = id && this.spec.provider?.catalogModel ? { providerID: id.provider, id: this.spec.provider.catalogModel }
+      : id ? v2Model(id.provider, id.model) : undefined;
     const body = this.apiVersion === 2 ? {
       title: 'cezar task', location: { directory: this.spec.cwd },
       permissions: [{ action: '*', resource: '*', effect: 'allow' }],

@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+import { stripJsonComments } from '../agent-config/validate.ts';
 
 /**
  * The auth methods a user can have configured that still work for Gemini CLI. Google sign-in
@@ -75,4 +76,27 @@ function readText(path: string): string | undefined {
 
 function present(value: string | undefined): boolean {
   return typeof value === 'string' && value.trim() !== '';
+}
+
+/** ACP loads settings before it considers the key. Never overwrite a native or admin login choice. */
+export function geminiAllowsProviderKey(cwd: string, env: NodeJS.ProcessEnv): boolean {
+  const system = env.GEMINI_CLI_SYSTEM_SETTINGS_PATH || (process.platform === 'darwin'
+    ? '/Library/Application Support/GeminiCli/settings.json'
+    : process.platform === 'win32' ? 'C:\\ProgramData\\gemini-cli\\settings.json' : '/etc/gemini-cli/settings.json');
+  const paths = new Set([
+    env.GEMINI_CLI_SYSTEM_DEFAULTS_PATH || join(dirname(system), 'system-defaults.json'),
+    join(env.GEMINI_CLI_HOME || env.HOME || homedir(), '.gemini', 'settings.json'),
+    join(cwd, '.gemini', 'settings.json'),
+    system,
+  ]);
+  for (const path of paths) {
+    try {
+      const { security } = JSON.parse(stripJsonComments(readFileSync(path, 'utf8')));
+      const auth = security?.auth;
+      if (auth && (auth.useExternal || [auth.selectedType, auth.enforcedType].some(type => type && type !== 'gemini-api-key'))) return false;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') return false;
+    }
+  }
+  return true;
 }

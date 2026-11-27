@@ -429,3 +429,27 @@ describe('buildChildEnv — gemini (#581)', () => {
     }
   });
 });
+
+// The starting point for provider selection (#2548). A host-only installation keeps
+// its native CLI login and the same provider variables, including multi-provider CLIs.
+describe('unconfigured agent provider environment', () => {
+  const source = {
+    HOME: '/fixture',
+    ANTHROPIC_API_KEY: 'fixture-anthropic',
+    OPENAI_API_KEY: 'fixture-openai',
+    OPENROUTER_API_KEY: 'fixture-openrouter',
+    GEMINI_API_KEY: 'fixture-gemini',
+    CURSOR_API_KEY: 'fixture-cursor',
+    KIMI_API_KEY: 'fixture-kimi',
+  };
+  const multi = ['ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'OPENROUTER_API_KEY', 'GEMINI_API_KEY'];
+  it.each([
+    ['claude', ['ANTHROPIC_API_KEY']], ['claude-cli', ['ANTHROPIC_API_KEY']],
+    ['codex', ['OPENAI_API_KEY']], ['cursor', ['CURSOR_API_KEY']], ['kimi', ['KIMI_API_KEY']],
+    ['opencode', multi], ['pi', multi], ['omp', multi], ['gemini', ['GEMINI_API_KEY']],
+    ['copilot', []], ['antigravity', []], ['junie', []],
+  ] as const)('preserves %s host authentication', (backend, keys) => {
+    const env = buildChildEnv({ backend, source });
+    expect(env).toEqual(Object.fromEntries(['HOME', ...keys].map(key => [key, source[key as keyof typeof source]])));
+  });
+});

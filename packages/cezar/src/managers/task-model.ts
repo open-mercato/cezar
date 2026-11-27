@@ -10,7 +10,7 @@ import { KNOWN_PRESETS_BY_RUNNER, modelConflictsWithRunner } from '../core/model
 
 /** The slice of `GET /models` this reads. */
 export interface TaskModelCatalog {
-  models: Array<{ id: string; reasoningEfforts?: Array<{ id: string }> }>;
+  models: Array<{ id: string; via?: { methodId: string }; reasoningEfforts?: Array<{ id: string }> }>;
 }
 
 /** Native levels when the catalog names none: Claude's `--effort`, Codex's `turn/start.effort`. */
@@ -29,7 +29,8 @@ export function taskModelIssue(input: { runner: RunnerId; model?: string | undef
   const catalog = input.catalog && input.catalog.models.length > 0 ? input.catalog : undefined;
   const valid = [...new Set([...(KNOWN_PRESETS_BY_RUNNER[runner] ?? []), ...(catalog?.models.map((entry) => entry.id) ?? [])])];
   if (model) {
-    if (modelConflictsWithRunner(model, runner)) {
+    const gateway = catalog?.models.some(option => option.id === model && (option.via?.methodId === 'custom' || option.via?.methodId === 'openrouter'));
+    if (!gateway && modelConflictsWithRunner(model, runner)) {
       return `model '${model}' is not a ${runner} model${valid.length > 0 ? `. Valid for ${runner}: ${listed(valid)}` : ''}. Pick another, or pass --runner`;
     }
     if (catalog && !valid.includes(model)) return `unknown model '${model}' for ${runner}. Valid: ${listed(valid)}`;

@@ -183,6 +183,34 @@ describe('ManagerEngine', () => {
   });
 
   describe('turns', () => {
+    it('starts a new conversation when the configured billing method changes', async () => {
+      vi.stubEnv('CEZ_DRY_RUN', '1');
+      vi.stubEnv('HOME', home);
+      try {
+        const save = (active: string) => writeFileSync(join(home, 'agent-providers.json'), JSON.stringify({
+          version: 1, agents: { claude: { active, methods: { custom: {
+            kind: 'custom', baseUrl: 'https://example.test', keyHint: '…1234', addedAt: '',
+            models: { fetchedAt: '', ids: [{ id: 'gateway-model' }] },
+          } } } },
+        }), { mode: 0o600 });
+        const engine = makeEngine();
+        const id = await create(engine, 0);
+        backend.scripts.push(say('One'), say('Two'));
+        save('custom');
+        engine.send(id, 'first');
+        await settled(engine);
+        save('subscription');
+        engine.send(id, 'second');
+        await settled(engine);
+        expect(backend.specs.map(spec => spec.provider?.methodId)).toEqual(['custom', 'subscription']);
+        expect(backend.specs[0]?.model).toBe('gateway-model');
+        expect(backend.specs[1]?.resume).toBeUndefined();
+        expect(JSON.stringify([store.state(id), store.messages(id)])).not.toContain('cezar-dry-run-provider-key');
+      } finally {
+        vi.unstubAllEnvs();
+      }
+    });
+
     it('answers a message and resumes the same session next time', async () => {
       const engine = makeEngine();
       const id = await create(engine);
