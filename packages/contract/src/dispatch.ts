@@ -154,6 +154,8 @@ export const dispatchInputSchema = z
     model: z.string().max(200).optional(),
     /** The child's agent account (`default` or a stored id). Absent = the parent's, on the same runner. */
     account: z.string().max(64).optional(),
+    /** A workflow name (or skill) the child runs instead of the single planned step (#2098). Absent = unchanged. */
+    workflow: z.string().min(1).max(200).optional(),
   })
   .strict();
 export type DispatchInput = z.infer<typeof dispatchInputSchema>;

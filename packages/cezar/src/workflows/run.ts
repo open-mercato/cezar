@@ -3776,6 +3776,8 @@ export class RunManager {
      *  the single synthetic step an agent's order gets. */
     opts: {
       workflow?: WorkflowDef;
+      /** The agent's `--workflow`, already resolved by the route (#2098). Unlike `workflow` it keeps the paused-automation hold. */
+      namedWorkflow?: WorkflowDef;
       /** Live read of the automation store (#1980): an agent's own dispatch under a tree its
        *  automation launched is refused while that automation is paused. Graph nodes are exempt. */
       automationPaused?: (automationId: string) => boolean;
@@ -3858,7 +3860,7 @@ export class RunManager {
       ?? (parent.model && sameRunner(parent.runner) ? parent.model : undefined);
     // Like the model: the parent's account only follows its own runner; `--account` overrides.
     const childAccount = input.account ?? (sameRunner(parent.runner) ? parent.agentProfile : undefined);
-    const record = this.startRun(opts.workflow ?? workflow, {
+    const record = this.startRun(opts.workflow ?? opts.namedWorkflow ?? workflow, {
       // The tree directory lines are composed against the id the run is ABOUT to get: `startRun`
       // mints it, so the envelope is finished below once it exists.
       task: childTaskEnvelope(input, { id: parentId, branch: parent.branch }, ['{{TREE_PATHS}}']),

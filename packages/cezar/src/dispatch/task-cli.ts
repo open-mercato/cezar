@@ -29,6 +29,7 @@ const USAGE = `cez task — dispatch cezar tasks from inside a task (on by defau
   cez task create "<objective>" [--title "…"] [--kind implement|review] [--review-of <branch|run>]
                   [--scope "…"] [--budget <usd>] [--success "…"] [--evidence "…"] [--tools A,B]
                   [--runner ${RUNNER_IDS.join('|')}] [--model <model>] [--account <profile>] [--retry-limit <0-3>]
+                  [--workflow <name>]
   cez task report --status done|partial|failed|blocked --result "…" [--evidence "…"]…
                   [--verdict approve|changes|reject] [--suggestions "…"]… [--confidence <0-1>]
                   [--side-effect "…"]… [--error "…"]… [--next "…"]
@@ -103,6 +104,7 @@ export async function runTaskCommand(
             model: { type: 'string' },
             account: { type: 'string' },
             'retry-limit': { type: 'string' },
+            workflow: { type: 'string' },
           },
         });
         const objective = positionals.join(' ').trim();
@@ -121,6 +123,7 @@ export async function runTaskCommand(
           ...(values.runner ? { runner: values.runner } : {}),
           ...(values.model ? { model: values.model } : {}),
           ...(values.account ? { account: values.account } : {}),
+          ...(values.workflow ? { workflow: values.workflow } : {}),
           ...(values['retry-limit'] !== undefined ? { retry_limit: number(values['retry-limit'], 'retry-limit') } : {}),
         };
         const response = await io.fetch(`${api.scope}/runs/${encodeURIComponent(env.CEZ_TASK_ID)}/dispatch`, {
