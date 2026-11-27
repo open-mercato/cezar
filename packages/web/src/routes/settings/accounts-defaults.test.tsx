@@ -7,6 +7,8 @@ import { queryKeys, workspaceQueryKeys } from '@/api/queries'
 import { createQueryClient } from '@/api/query-client'
 import type {
   AgentProfilesResponse,
+  AgentProvidersResponse,
+  RunnerModelCatalogResponse,
   WorkspaceConfigResponse,
 } from '@open-mercato/cezar-api-client'
 import { Toaster, resetToasts } from '@/components/ui/toaster'
@@ -73,9 +75,13 @@ function serve({
   agentDefaults = {},
   accounts = ACCOUNTS,
   checks = [],
+  methods = { editable: true, agents: [] },
+  catalog,
 }: {
   agentDefaults?: WorkspaceConfigResponse['agentDefaults']
   accounts?: AgentProfilesResponse
+  methods?: AgentProvidersResponse
+  catalog?: RunnerModelCatalogResponse
   checks?: Array<{ name: string; available: boolean }>
 } = {}) {
   requests = []
@@ -115,6 +121,7 @@ function serve({
       const method = init?.method ?? 'GET'
       const body = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : undefined
       requests.push({ method, url, body })
+      if (url === '/api/v1/agent-providers' && methods) return json(methods)
       if (url === '/api/v1/workspace/config' && method === 'GET') return json(state)
       if (url === '/api/v1/workspace/config' && method === 'PUT') {
         const patch = (body?.agentDefaults ?? {}) as { runner?: string; models?: Record<string, string | null> }
@@ -139,6 +146,7 @@ function serve({
       if (url === '/api/v1/health' && method === 'GET') return json({ checks, bootProject: 'boot' })
       if (url.startsWith('/api/v1/open-targets')) return json({ targets: [] })
       if (url.startsWith('/api/v1/models?runner=')) {
+        if (catalog && url.endsWith('runner=' + catalog.runner)) return json(catalog)
         const runner = url.includes('cursor') ? 'cursor' : 'codex'
         return json({ runner, models: [], source: 'unavailable', stale: false })
       }
@@ -167,23 +175,11 @@ function renderAccounts(checks?: Array<{ name: string; available: boolean }>) {
   )
 }
 
-const defaults = () => document.querySelector('[data-slot="accounts-defaults"]')
-const rows = () => [...document.querySelectorAll('[data-slot="agents-runner"] [role="radio"]')]
-const rowFor = (runner: string, account = '') =>
-  document.querySelector<HTMLButtonElement>(
-    `[data-slot="agents-runner"] [data-value="${runner}"][data-account="${account}"]`,
-  )
-/** A row is rendered as soon as the profiles answer, but ENABLED only once the provider-status
- *  query has resolved — clicking before that hits a disabled button and writes nothing. The two
- *  answers race, and request order (the settings sidebar fetches its own branding first) decides
- *  which lands first, so wait for the row itself rather than for the list. */
-const enabledRow = (runner: string, account = '') =>
-  waitFor(() => {
-    const el = rowFor(runner, account)
-    expect(el).not.toBeNull()
-    expect(el!.disabled).toBe(false)
-    return el!
-  })
+const accountMenu = async () => {
+  fireEvent.keyDown(await screen.findByRole('button', { name: 'Account for Claude Code' }), { key: 'ArrowDown' })
+  await screen.findByRole('menuitemradio', { name: 'Default' })
+}
+
 const configPuts = () => requests.filter((r) => r.method === 'PUT' && r.url === '/api/v1/workspace/config')
 const selections = () =>
   requests.filter((r) => r.url === '/api/v1/workspace/agent-profiles/selection')
@@ -196,6 +192,42 @@ afterEach(() => {
 })
 
 describe('Agent accounts → Defaults for new projects', () => {
+  it('groups additive provider models and marks a vanished workspace default', async () => {
+    Element.prototype.scrollIntoView = vi.fn()
+    vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} })
+    serve({ agentDefaults: { models: { pi: 'retired' } },
+      methods: { editable: true, agents: [{ runner: 'pi', mode: 'any', configured: true, methods: [
+        { id: 'custom', label: 'Gateway', kind: 'custom', state: 'connected' },
+        { id: 'openrouter', label: 'OpenRouter', kind: 'openrouter', state: 'connected' },
+      ] }] }, catalog: { runner: 'pi', source: 'live', stale: false, models: [
+        { id: 'one', label: 'Model one', description: '', via: { methodId: 'custom', label: 'Gateway' } },
+        { id: 'two', label: 'Model two', description: '', via: { methodId: 'openrouter', label: 'OpenRouter' } },
+      ] } })
+    renderAccounts()
+    fireEvent.click(await screen.findByRole('button', { name: /pi.*Any combination/i }))
+    const select = await screen.findByRole('combobox', { name: 'Default model for pi' })
+    fireEvent.keyDown(select, { key: 'ArrowDown' })
+    expect(await screen.findByRole('group', { name: 'Gateway' })).toBeTruthy()
+    expect(screen.getByRole('group', { name: 'OpenRouter' })).toBeTruthy()
+    expect(screen.getByRole('option', { name: 'retired · no longer offered' }).getAttribute('aria-disabled')).toBe('true')
+  })
+
+  it('moves the workspace default star without changing either account or project defaults', async () => {
+    serve({ methods: { editable: true, agents: ['claude', 'codex'].map(id => ({
+      runner: id as 'claude' | 'codex', mode: 'one', active: 'subscription',
+      methods: [{ id: 'subscription', kind: 'subscription', label: 'Subscription', state: 'connected' }],
+    })) } })
+    renderAccounts()
+    const star = await screen.findByRole('button', { name: 'Start new projects with Codex' })
+    await waitFor(() => expect(star.hasAttribute('disabled')).toBe(false))
+    fireEvent.click(star)
+    await waitFor(() => expect(star.getAttribute('aria-pressed')).toBe('true'))
+    expect(screen.getByRole('button', { name: 'Start new projects with Claude Code' }).getAttribute('aria-pressed')).toBe('false')
+    expect(configPuts().map(r => r.body)).toEqual([{ agentDefaults: { runner: 'codex' } }])
+    expect(selections()).toHaveLength(0)
+    expect(repoConfigWrites()).toHaveLength(0)
+  })
+
   it('survives a server that has never heard of agent defaults', async () => {
     // Version skew, and it crashed this page for real: Vite serves this bundle while `dist/` or
     // another process serves the API, so an older server answers `/workspace/config` with no
@@ -243,54 +275,26 @@ describe('Agent accounts → Defaults for new projects', () => {
     )
     renderAccounts()
 
-    await waitFor(() => expect(rows()).toHaveLength(12))
-    // The built-in fallback, rendered rather than thrown.
-    expect(rowFor('claude', '')?.getAttribute('aria-checked')).toBe('true')
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Start new projects with Claude Code' }).getAttribute('aria-pressed')).toBe('true'))
   })
 
-  it('lists agents and logins as one flat list, same as everywhere else', async () => {
-    serve()
+  it('changing the default runner preserves the named account for the previous runner', async () => {
+    serve({ accounts: { ...ACCOUNTS, defaults: { claude: 'klaudiusz' } } })
     renderAccounts()
-
-    await waitFor(() => expect(rows()).toHaveLength(12))
-    expect(rows().map((r) => r.getAttribute('data-value'))).toEqual([
-      'claude', 'claude', 'codex', 'junie', 'opencode', 'cursor', 'pi', 'copilot', 'omp', 'antigravity', 'gemini', 'kimi',
-    ])
-    expect(rows()[1]?.textContent).toContain('~/.claude-klaudiusz')
-  })
-
-  it('shows claude checked when the machine has no opinion — what an unconfigured repo runs', async () => {
-    serve()
-    renderAccounts()
-
-    await waitFor(() => expect(rows()).toHaveLength(12))
-    expect(rowFor('claude', '')?.getAttribute('aria-checked')).toBe('true')
-  })
-
-  it('writes the runner to the WORKSPACE config, never the committable repo one', async () => {
-    serve()
-    renderAccounts()
-
-    await waitFor(() => expect(rows()).toHaveLength(12))
-    // Rows render before provider status answers and stay disabled until it does — wait for
-    // the row to be clickable, not merely present.
-    await waitFor(() => expect(rowFor('codex')!.disabled).toBe(false))
-    fireEvent.click(await enabledRow('codex'))
-
-    await waitFor(() => expect(configPuts()).toHaveLength(1))
-    expect(configPuts()[0]?.body).toEqual({ agentDefaults: { runner: 'codex' } })
-    // codex has one login, so nothing is written to the accounts store.
+    const star = await screen.findByRole('button', { name: 'Start new projects with Codex' })
+    await waitFor(() => expect(star.hasAttribute('disabled')).toBe(false))
+    fireEvent.click(star)
+    await waitFor(() => expect(star.getAttribute('aria-pressed')).toBe('true'))
+    expect(configPuts().map((r) => r.body)).toEqual([{ agentDefaults: { runner: 'codex' } }])
     expect(selections()).toHaveLength(0)
-    expect(repoConfigWrites()).toHaveLength(0)
   })
 
   it('writes the account to the accounts store with projectId null — the machine default', async () => {
     serve()
     renderAccounts()
 
-    await waitFor(() => expect(rows()).toHaveLength(12))
-    await waitFor(() => expect(rowFor('claude', 'klaudiusz')!.disabled).toBe(false))
-    fireEvent.click(await enabledRow('claude', 'klaudiusz'))
+    await accountMenu()
+    fireEvent.click(screen.getByRole('menuitemradio', { name: 'Klaudiusz' }))
 
     await waitFor(() => expect(selections()).toHaveLength(1))
     // `null` is what makes this the machine-wide default rather than one repo's selection.
@@ -309,16 +313,16 @@ describe('Agent accounts → Defaults for new projects', () => {
     serve({ accounts: { ...ACCOUNTS, defaults: { claude: 'klaudiusz' } } })
     renderAccounts()
 
-    await waitFor(() => expect(rowFor('claude', 'klaudiusz')?.getAttribute('aria-checked')).toBe('true'))
+    await accountMenu()
+    expect(screen.getByRole('menuitemradio', { name: 'Klaudiusz' }).getAttribute('aria-checked')).toBe('true')
   })
 
   it('clears an account back to the discovered one with null, never the reserved id', async () => {
     serve({ accounts: { ...ACCOUNTS, defaults: { claude: 'klaudiusz' } } })
     renderAccounts()
 
-    await waitFor(() => expect(rows()).toHaveLength(12))
-    await waitFor(() => expect(rowFor('claude', '')!.disabled).toBe(false))
-    fireEvent.click(await enabledRow('claude', ''))
+    await accountMenu()
+    fireEvent.click(screen.getByRole('menuitemradio', { name: 'Default' }))
 
     await waitFor(() => expect(selections()).toHaveLength(1))
     expect(selections()[0]?.body).toEqual({
@@ -341,6 +345,7 @@ describe('Agent accounts → Defaults for new projects', () => {
     expect(trigger()!.getAttribute('data-value')).toBe('opus')
     expect(trigger()!.textContent).toContain('opus')
 
+    await waitFor(() => expect(trigger()?.disabled).toBe(false))
     fireEvent.keyDown(trigger()!, { key: 'ArrowDown' })
     const auto = await screen.findByRole('option', { name: 'auto' })
     fireEvent.click(auto)
@@ -368,19 +373,11 @@ describe('Agent accounts → Defaults for new projects', () => {
     // The not-installed fold opens on its own: the stale value still seeds every new project.
     await waitFor(() => expect(trigger()).not.toBeNull())
     expect(trigger()!.getAttribute('data-value')).toBe('gpt-5-codex')
+    await waitFor(() => expect(trigger()?.disabled).toBe(false))
     fireEvent.keyDown(trigger()!, { key: 'ArrowDown' })
     fireEvent.click(await screen.findByRole('option', { name: 'auto' }))
     await waitFor(() => expect(configPuts()).toHaveLength(1))
     expect(configPuts()[0]?.body).toEqual({ agentDefaults: { models: { codex: null } } })
   })
 
-  it('says these are defaults a project can override, not a setting it imposes', async () => {
-    serve()
-    renderAccounts()
-
-    await waitFor(() => expect(rows()).toHaveLength(12))
-    const pane = defaults()
-    expect(pane?.textContent).toContain('has not chosen for itself')
-    expect(pane?.textContent).toContain('keeps its own')
-  })
 })

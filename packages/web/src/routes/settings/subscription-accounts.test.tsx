@@ -87,6 +87,9 @@ function serve(
       const method = init?.method ?? 'GET'
       const body = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : undefined
       requests.push({ method, url, body })
+      if (url === '/api/v1/agent-providers') return json({ editable: response.editable && response.hostPaths !== false, agents:
+        [...new Set(state.profiles.map(p => p.provider))].map(runner => ({ runner, mode: 'one', active: 'subscription',
+          methods: [{ id: 'subscription', kind: 'subscription', label: 'Subscription', state: 'connected' }] })) })
       if (url === '/api/v1/providers/status') return json({ providers: state.profiles.map((p) => p.status ?? { provider: p.provider, status: 'unknown' }) })
       if (url === '/api/v1/workspace/agent-profiles' && method === 'GET') return json(state)
       if (url.startsWith('/api/v1/workspace/agent-profiles/') && method === 'DELETE') {
@@ -274,7 +277,8 @@ describe('Cursor connection', () => {
       connect: { status: 200, body: { opened: true, command: 'cursor-agent login' } },
       cursorModels: { source: 'live', stale: false, models: [{ id: 'composer-2.5', label: 'Composer 2.5', description: '' }] },
     })
-    renderAccounts()
+    renderAccounts('/settings/global/agents#agent-cursor')
+    fireEvent.click(await screen.findByText('Manage logins'))
     fireEvent.click(await screen.findByRole('button', { name: 'Sign in again' }))
     await screen.findByText(/Finish signing in with Cursor/)
     expect(requests.find((r) => r.url === '/api/v1/providers/connect')?.body).toEqual({ provider: 'cursor', reconnect: true })
@@ -289,7 +293,8 @@ describe('Cursor connection', () => {
 
   it.each(['disconnected', 'unknown'] as const)('offers sign-in for a %s CLI and retains the manual command on failure', async (state) => {
     serveCursor(state, { connect: { status: 409, body: { error: 'No terminal emulator could be opened. Run this command manually.', command: '/opt/cursor-agent login' } } })
-    renderAccounts()
+    renderAccounts('/settings/global/agents#agent-cursor')
+    fireEvent.click(await screen.findByText('Manage logins'))
     fireEvent.click(await screen.findByRole('button', { name: 'Connect Cursor account' }))
     expect(await screen.findByText('/opt/cursor-agent login')).toBeTruthy()
     expect(screen.getByText(/No terminal emulator could be opened/)).toBeTruthy()
@@ -298,7 +303,8 @@ describe('Cursor connection', () => {
 
   it('explains installation when CLI is missing without opening a doomed login', async () => {
     serveCursor('not-installed')
-    renderAccounts()
+    renderAccounts('/settings/global/agents#agent-cursor')
+    fireEvent.click(await screen.findByText('Manage logins'))
     expect(await screen.findByRole('link', { name: 'Installation help' })).toBeTruthy()
     expect(screen.getByText(/Install Cursor CLI on the machine running Cezar/)).toBeTruthy()
     expect(screen.queryByRole('button', { name: 'Connect Cursor account' })).toBeNull()
@@ -306,7 +312,8 @@ describe('Cursor connection', () => {
 
   it('keeps verification useful when models are unavailable', async () => {
     serveCursor()
-    renderAccounts()
+    renderAccounts('/settings/global/agents#agent-cursor')
+    fireEvent.click(await screen.findByText('Manage logins'))
     expect(await screen.findByText(/Models could not be verified/)).toBeTruthy()
     expect(screen.getByRole('button', { name: 'Verify connection' })).toBeTruthy()
     expect(screen.getByRole('link', { name: 'Sign-in help' }).getAttribute('href')).toContain('/authentication')
@@ -316,7 +323,8 @@ describe('Cursor connection', () => {
     serve({ editable: true, profileCapableProviders: [], selections: {}, defaults: {}, profiles: [
       profile({ id: 'default', provider: 'cursor', isDefault: true, status: { provider: 'cursor', status: 'connected', enabled: false } }),
     ] })
-    renderAccounts()
+    renderAccounts('/settings/global/agents#agent-cursor')
+    fireEvent.click(await screen.findByText('Manage logins'))
     expect(await screen.findByText(/Cursor is disabled for tasks/)).toBeTruthy()
     expect(screen.queryByRole('link', { name: 'New task with Cursor' })).toBeNull()
     expect(screen.getByRole('link', { name: 'Open task agent settings' }).getAttribute('href')).toBe('/settings/agents')
@@ -324,7 +332,8 @@ describe('Cursor connection', () => {
 
   it('shows host-side login instructions when local handoff is unavailable', async () => {
     serveCursor('disconnected')
-    renderAccounts('/settings/global/accounts', null, false)
+    renderAccounts('/settings/global/agents#agent-cursor', null, false)
+    fireEvent.click(await screen.findByText('Manage logins'))
     expect(await screen.findByText(/Sign in on the machine hosting Cezar/)).toBeTruthy()
     expect(screen.queryByRole('button', { name: 'Connect Cursor account' })).toBeNull()
     expect(requests.some((r) => r.url === '/api/v1/providers/connect')).toBe(false)
@@ -348,6 +357,16 @@ const openDetails = async (id: string) => {
 }
 
 describe('the agent accounts section', () => {
+  it('keeps identity private until Manage is opened on the requested login', async () => {
+    serve({ editable: true, profileCapableProviders: ['claude'], defaults: {}, selections: {},
+      profiles: [DEFAULTS[0]!, profile({ id: 'work' })] })
+    renderAccounts()
+    await waitFor(() => expect(rows()).toHaveLength(2))
+    expect(detailReads).toEqual([])
+    await openDetails('work')
+    await waitFor(() => expect(detailReads).toEqual(['/api/v1/workspace/agent-profiles/work/details']))
+  })
+
   it('unfolds the not-installed agent named by ?agent= — the Tools menu\'s "Set up" deep link', async () => {
     serve({ editable: true, profileCapableProviders: ['claude', 'codex'], defaults: {}, selections: {}, profiles: DEFAULTS })
     renderAccounts('/settings/global/accounts?agent=codex')
@@ -396,9 +415,8 @@ describe('the agent accounts section', () => {
       selections: {}, profiles: DEFAULTS })
     renderAccounts()
 
-    // Every agent's logins on one card: the claude and codex discovered accounts.
-    await waitFor(() => expect(rows()).toHaveLength(2))
-    expect(rows().map((row) => row.getAttribute('data-provider'))).toEqual(['claude', 'codex'])
+    await waitFor(() => expect(rows()).toHaveLength(1))
+    expect(rows()[0]?.getAttribute('data-provider')).toBe('claude')
     expect(document.body.textContent).toContain('discovered')
     // The discovered profile is what cezar found — a Rename or Remove would imply a setting. Checked
     // with the panel OPEN, since that is now the only place either could appear.
@@ -1022,18 +1040,14 @@ describe('the agent accounts section', () => {
     expect(showNotInstalled()?.textContent).toBe('Hide 1 not installed')
   })
 
-  it('offers one Add account, and says why some agents can only hold one login', async () => {
-    serve({ editable: true, profileCapableProviders: ['claude', 'codex'],
-      defaults: {},
-      selections: {}, profiles: DEFAULTS })
+  it('folds account creation into the subscription menu', async () => {
+    serve({ editable: true, profileCapableProviders: ['claude', 'codex'], defaults: {}, selections: {}, profiles: DEFAULTS })
     renderAccounts()
-
-    await waitFor(() => expect(rows()).toHaveLength(2))
-    expect(document.querySelectorAll('[data-action="accounts-add"]')).toHaveLength(1)
-    expect(document.querySelector('[data-slot="accounts-single-only"]')?.textContent).toContain('OpenCode')
-    expect(document.querySelector('[data-slot="accounts-single-only"]')?.textContent).toContain(
-      'credentials outside their config folder',
-    )
+    const menu = await screen.findByRole('button', { name: 'Account for Claude Code' })
+    expect(screen.queryByRole('heading', { name: 'Accounts' })).toBeNull()
+    fireEvent.keyDown(menu, { key: 'ArrowDown' })
+    expect(await screen.findByRole('menuitemradio', { name: 'Default' })).toBeTruthy()
+    expect(screen.getByRole('menuitem', { name: 'Add another account' })).toBeTruthy()
   })
 })
 
@@ -1045,7 +1059,8 @@ describe('the agent accounts section', () => {
 describe('the add-account dialog', () => {
   // The folder field is the wizard's Advanced choice now (spec 2026-11-24-add-account-in-cockpit).
   const openDialog = async () => {
-    await waitFor(() => expect(document.querySelector<HTMLButtonElement>('[data-action="accounts-add"]')?.disabled).toBe(false))
+    fireEvent.keyDown(await screen.findByRole('button', { name: 'Account for Claude Code' }), { key: 'ArrowDown' })
+    await screen.findByRole('menuitem', { name: 'Add another account' })
     fireEvent.click(document.querySelector('[data-action="accounts-add"]')!)
     await waitFor(() => expect(document.querySelector('[data-action="add-account-advanced"]')).not.toBeNull())
     fireEvent.click(document.querySelector('[data-action="add-account-advanced"]')!)
@@ -1166,7 +1181,8 @@ describe('the add-account dialog', () => {
 describe('the add-account wizard', () => {
   const PROFILES = { editable: true, profileCapableProviders: ['claude', 'codex'], defaults: {}, selections: {}, profiles: DEFAULTS } as AgentProfilesResponse
   const openWizard = async () => {
-    await waitFor(() => expect(document.querySelector<HTMLButtonElement>('[data-action="accounts-add"]')?.disabled).toBe(false))
+    fireEvent.keyDown(await screen.findByRole('button', { name: 'Account for Claude Code' }), { key: 'ArrowDown' })
+    await screen.findByRole('menuitem', { name: 'Add another account' })
     fireEvent.click(document.querySelector('[data-action="accounts-add"]')!)
     await waitFor(() => expect(document.querySelector('[data-slot="add-account-wizard"]')).not.toBeNull())
   }

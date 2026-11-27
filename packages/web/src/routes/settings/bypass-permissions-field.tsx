@@ -1,6 +1,6 @@
 import type { ConfigResponse } from '@open-mercato/cezar-api-client'
 import { Switch } from '@/components/ui/switch'
-import { FormRow, SettingsCard } from './form-row'
+import { FormRow } from './form-row'
 import { useConfigSave } from './use-config-save'
 
 const LABEL = 'Skip all permission prompts (Claude Code)'
@@ -12,8 +12,7 @@ const LABEL = 'Skip all permission prompts (Claude Code)'
 export function BypassPermissionsField({ config }: { config: ConfigResponse }) {
   const save = useConfigSave()
   return (
-    <SettingsCard id="permissions" slot="agents-permissions" title="Permissions">
-      <FormRow
+      <FormRow id="permissions" slot="agents-permissions"
         saved={save.savedFor('bypassPermissions')}
         htmlFor="agents-bypass-permissions"
         label={LABEL}
@@ -41,6 +40,5 @@ export function BypassPermissionsField({ config }: { config: ConfigResponse }) {
           onCheckedChange={(checked) => save.mutate({ bypassPermissions: checked ? true : null })}
         />
       </FormRow>
-    </SettingsCard>
   )
 }

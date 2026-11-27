@@ -2,10 +2,15 @@ import { closestCenter, DndContext, KeyboardSensor, PointerSensor, useSensor, us
 import { SortableContext, sortableKeyboardCoordinates, useSortable, verticalListSortingStrategy } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
 import { ArrowDownIcon, ArrowUpIcon, BotIcon, GripVerticalIcon, PlusIcon, XIcon } from 'lucide-react'
+import { Link, useLocation } from 'react-router'
+import type { AgentProviderEntry, ProviderStatus } from '@open-mercato/cezar-api-client'
+import { agentProvidersPath, canUseAgent, servingMethods } from '@/lib/agent-providers'
 import { useRef, useState, type ReactNode } from 'react'
 
 import {
   useAgentProfiles,
+  useAgentProviders,
+  useWorkspaceConfig,
   useAgentSetup,
   useAgentFallbackPolicy,
   useSaveAgentFallbackPolicy,
@@ -26,7 +31,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Switch } from '@/components/ui/switch'
 import { toast } from '@/components/ui/toaster'
 import { LoadingState, SettingsSkeleton } from '@/components/loading-state'
-import { providerRowRunnable, providerStatusFor } from '@/lib/provider-status'
+import { providerStatusFor } from '@/lib/provider-status'
 import {
   DefaultAgentPicker,
   agentPickerRows,
@@ -54,8 +59,19 @@ import { BypassPermissionsField } from './bypass-permissions-field'
 
 /** Radix Select refuses an empty item value, and `''` IS cezar's "auto" (no `--model`). */
 const AUTO_MODEL = '__auto__'
+const INHERIT_MODEL = '__inherit__'
 /** The catalog-status line rendered as a disabled item — never a pickable value. */
 const CATALOG_STATUS = '__status__'
+
+function ProviderLine({ entry, login }: { entry?: AgentProviderEntry; login?: ProviderStatus }) {
+  if (!entry) return null
+  const serving = servingMethods(entry).filter(method => method.state === 'connected')
+  const runnable = canUseAgent(entry, login)
+  return <Link to={agentProvidersPath(entry.runner)} className={`block w-fit text-label underline underline-offset-2 ${runnable ? 'text-muted-foreground' : 'text-pending-strong'}`}>
+    {serving.length ? `via ${serving.map(m => m.label).join(', ')} · Manage providers`
+      : runnable ? 'Provider unverified · Manage providers' : 'No provider · Configure providers'}
+  </Link>
+}
 
 export function AgentsSection() {
   const config = useConfig()
@@ -93,6 +109,10 @@ function AgentsForm({
   providerStatus: ReturnType<typeof useProviderStatus>
 }) {
   const save = useConfigSave()
+  const { hash } = useLocation()
+  const entries = useAgentProviders().data?.agents
+  const globalModels = useWorkspaceConfig().data?.agentDefaults.models
+  const overrides = config.projectDefaultModels
   const scope = useProjectScope()
   const fallbackProjectId = scope.projectId ?? 'default'
   const fallback = useAgentFallbackPolicy(fallbackProjectId)
@@ -108,19 +128,117 @@ function AgentsForm({
       data-slot="agents-section"
       className="flex w-full flex-col gap-5"
     >
-      <ProviderSettings />
-
       <DefaultAgentField
         defaultRunner={config.defaultRunner}
+        entries={entries}
         providerStatus={providerStatus}
         saving={save.isPending}
         saved={save.savedFor('defaultRunner')}
         onPick={(runner) => save.mutate({ defaultRunner: runner })}
-      />
+      >
+        <ProviderSettings folded open={hash === '#providers'} />
+        <BypassPermissionsField config={config} />
+      </DefaultAgentField>
 
-      <BypassPermissionsField config={config} />
-
+      <SettingsCard
+        id="default-models"
+        slot="agents-default-models"
+        title="Default models"
+        description={
+          config.modelsLocked
+            ? 'Models are locked to the defaults configured in the native coding-agent settings.'
+            : 'The model preselected in the composer for each runner. Auto lets the runner decide per task.'
+        }
+      >
+        {RUNNERS.map((runner) => {
+          const provider = providerStatusFor(providerStatus.data, runner.id)
+          const entry = entries?.find(e => e.runner === runner.id)
+          const providerConnected =
+            !providerStatus.isPending &&
+            !providerStatus.isError &&
+            canUseAgent(entry, provider)
+          const providerReason = providerStatus.isPending
+            ? 'Checking provider authentication…'
+            : providerStatus.isError
+              ? 'Provider authentication could not be verified.'
+              : provider?.enabled === false
+                ? 'This provider is disabled. Open agent sign-in and enablement to turn it on.'
+              : providerConnected
+                ? undefined
+                : 'Connect this provider before selecting it.'
+          const catalog = catalogs[runner.id]
+          const catalogStatus = modelCatalogStatus(runner.id, catalog.data, catalog.isError)
+          const modelOptions = modelsForRunner(runner.id, catalog.data, [
+            config.defaultModels[runner.id],
+          ], entry)
+          const configuredModel = config.defaultModels[runner.id] ?? ''
+          const inherited = overrides !== undefined && overrides[runner.id] === undefined
+          const missing = configuredModel && !modelOptions.some(m => m.id === configuredModel)
+          const configuredModelLabel =
+            modelOptions.find((model) => model.id === configuredModel)?.label ??
+            configuredModel ??
+            'auto (default)'
+          return (
+            <FormRow
+              key={runner.id}
+              slot="agents-model-row"
+              saved={save.savedFor('defaultModels')}
+              label={<span className="text-ui font-mono">{runner.label}</span>}
+              description={entry ? <ProviderLine entry={entry} login={provider} /> : providerReason ? `${runner.desc} — ${providerReason}` : runner.desc}
+            >
+              {config.modelsLocked ? (
+                <output
+                  aria-label={`Default model for ${runner.label}`}
+                  data-slot="agents-model"
+                  data-runner={runner.id}
+                  className="block h-8 min-w-44 rounded-md border border-input bg-card px-3 py-1.5 text-ui shadow-xs"
+                >
+                  {configuredModelLabel}
+                </output>
+              ) : (
+                <Select
+                  value={inherited ? INHERIT_MODEL : configuredModel === '' ? AUTO_MODEL : configuredModel}
+                  disabled={save.isPending || !providerConnected}
+                  onValueChange={(value) => {
+                    const picked = value === AUTO_MODEL || value === INHERIT_MODEL ? '' : value
+                    // Picking auto is a CHOICE, not the absence of one (#906): clearing the
+                    // preset alone let the coding agent's own settings file show through again,
+                    // so the select snapped straight back to the model it names. The additive
+                    // override says "ignore that default"; picking a real model clears it.
+                    save.mutate({
+                      defaultModels: { [runner.id]: picked || null } as Partial<Record<Runner, string | null>>,
+                      defaultModelsAuto: { [runner.id]: value === AUTO_MODEL } as Partial<Record<Runner, boolean>>,
+                    })
+                  }}
+                >
+                  <SelectTrigger
+                    size="sm"
+                    aria-label={`Default model for ${runner.label}`}
+                    data-slot="agents-model"
+                    data-runner={runner.id}
+                    data-value={configuredModel}
+                    className="min-w-44 max-w-64"
+                  >
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent position="popper">
+                    {overrides && <SelectItem value={INHERIT_MODEL}>Inherit ({globalModels?.[runner.id] || (inherited ? configuredModel || 'auto' : 'workspace default')}){inherited && missing && ' · no longer offered'}</SelectItem>}
+                    {missing && <SelectItem value={configuredModel} disabled>{configuredModel} · no longer offered</SelectItem>}
+                    {modelOptions.map((model) => (
+                      <SelectItem key={model.id || AUTO_MODEL} value={model.id || AUTO_MODEL}>
+                        {model.id === '' ? 'auto (default)' : model.label}
+                      </SelectItem>
+                    ))}
+                    {catalogStatus ? <SelectItem value={CATALOG_STATUS} disabled>{catalogStatus}</SelectItem> : null}
+                  </SelectContent>
+                </Select>
+              )}
+            </FormRow>
+          )
+        })}
+      </SettingsCard>
       <FallbackField
+        entries={entries}
         policy={fallback.data}
         loadError={fallback.isError ? fallback.error : null}
         profiles={(profiles.data?.profiles ?? []).filter((profile) => !profile.pending)}
@@ -158,99 +276,6 @@ function AgentsForm({
         }}
       />
 
-      <SettingsCard
-        id="default-models"
-        slot="agents-default-models"
-        title="Default models"
-        description={
-          config.modelsLocked
-            ? 'Models are locked to the defaults configured in the native coding-agent settings.'
-            : 'The model preselected in the composer for each runner. Auto lets the runner decide per task.'
-        }
-      >
-        {RUNNERS.map((runner) => {
-          const provider = providerStatusFor(providerStatus.data, runner.id)
-          const providerConnected =
-            !providerStatus.isPending &&
-            !providerStatus.isError &&
-            provider?.enabled === true &&
-            providerRowRunnable(provider)
-          const providerReason = providerStatus.isPending
-            ? 'Checking provider authentication…'
-            : providerStatus.isError
-              ? 'Provider authentication could not be verified.'
-              : provider?.enabled === false
-                ? 'This provider is disabled. Enable it above or choose another provider.'
-              : providerConnected
-                ? undefined
-                : 'Connect this provider before selecting it.'
-          const catalog = catalogs[runner.id]
-          const catalogStatus = modelCatalogStatus(runner.id, catalog.data, catalog.isError)
-          const modelOptions = modelsForRunner(runner.id, catalog.data, [
-            config.defaultModels[runner.id],
-          ])
-          const configuredModel = config.defaultModels[runner.id] ?? ''
-          const configuredModelLabel =
-            modelOptions.find((model) => model.id === configuredModel)?.label ??
-            configuredModel ??
-            'auto (default)'
-          return (
-            <FormRow
-              key={runner.id}
-              slot="agents-model-row"
-              saved={save.savedFor('defaultModels')}
-              label={<span className="text-ui font-mono">{runner.label}</span>}
-              description={providerReason ? `${runner.desc} — ${providerReason}` : runner.desc}
-            >
-              {config.modelsLocked ? (
-                <output
-                  aria-label={`Default model for ${runner.label}`}
-                  data-slot="agents-model"
-                  data-runner={runner.id}
-                  className="block h-8 min-w-44 rounded-md border border-input bg-card px-3 py-1.5 text-ui shadow-xs"
-                >
-                  {configuredModelLabel}
-                </output>
-              ) : (
-                <Select
-                  value={configuredModel === '' ? AUTO_MODEL : configuredModel}
-                  disabled={save.isPending || !providerConnected}
-                  onValueChange={(value) => {
-                    const picked = value === AUTO_MODEL ? '' : value
-                    // Picking auto is a CHOICE, not the absence of one (#906): clearing the
-                    // preset alone let the coding agent's own settings file show through again,
-                    // so the select snapped straight back to the model it names. The additive
-                    // override says "ignore that default"; picking a real model clears it.
-                    save.mutate({
-                      defaultModels: { [runner.id]: picked || null } as Partial<Record<Runner, string | null>>,
-                      defaultModelsAuto: { [runner.id]: picked === '' } as Partial<Record<Runner, boolean>>,
-                    })
-                  }}
-                >
-                  <SelectTrigger
-                    size="sm"
-                    aria-label={`Default model for ${runner.label}`}
-                    data-slot="agents-model"
-                    data-runner={runner.id}
-                    data-value={configuredModel}
-                    className="min-w-44 max-w-64"
-                  >
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent position="popper">
-                    {modelOptions.map((model) => (
-                      <SelectItem key={model.id || AUTO_MODEL} value={model.id || AUTO_MODEL}>
-                        {model.id === '' ? 'auto (default)' : model.label}
-                      </SelectItem>
-                    ))}
-                    {catalogStatus ? <SelectItem value={CATALOG_STATUS} disabled>{catalogStatus}</SelectItem> : null}
-                  </SelectContent>
-                </Select>
-              )}
-            </FormRow>
-          )
-        })}
-      </SettingsCard>
     </div>
   )
 }
@@ -286,6 +311,7 @@ const MAX_FALLBACK_AGENTS = 10
  */
 function FallbackField({
   policy,
+  entries,
   loadError,
   profiles,
   providerStatus,
@@ -297,6 +323,7 @@ function FallbackField({
   onSave,
   onRetry,
 }: {
+  entries?: AgentProviderEntry[]
   policy?: AgentFallbackPolicy
   loadError: Error | null
   profiles: Array<{ id: string; provider: string; label: string }>
@@ -335,7 +362,9 @@ function FallbackField({
   const [pickedModel, setPickedModel] = useState('')
   /** Polite announcement of the last saved edit, for screen readers. */
   const [announcement, setAnnouncement] = useState('')
-  const selected = addable.find((option) => option.key === picked) ?? addable[0]
+  const optionDisabled = (option: FallbackOption) => entries !== undefined &&
+    !canUseAgent(entries.find(e => e.runner === option.provider), providerStatusFor(providerStatus.data, option.provider))
+  const selected = addable.find(option => option.key === picked && !optionDisabled(option)) ?? addable.find(option => !optionDisabled(option))
 
   if (loadError) {
     const localOnly = loadError instanceof ApiError && loadError.status === 409
@@ -377,7 +406,7 @@ function FallbackField({
     if (modelsLocked && candidate.model) return 'Model selection is locked — remove and add this agent again to use native settings.'
     const status = providerStatusFor(providerStatus.data, candidate.provider as Runner)
     if (status?.enabled === false) return 'Provider disabled — will be skipped'
-    if (status && status.status !== 'connected') return 'Not connected — will be skipped'
+    if (status && !canUseAgent(entries?.find(e => e.runner === candidate.provider), status)) return 'Not connected — will be skipped'
     return undefined
   }
   /** The project's default agent is skipped for tasks it starts — a task never falls back to itself. */
@@ -488,6 +517,7 @@ function FallbackField({
                       <span className="min-w-0 flex-1">
                         <span className="text-label text-muted-foreground">{index + 1}.</span> {label}
                         <span className="text-muted-foreground"> · {candidate.model ?? 'auto model'}</span>
+                        <ProviderLine entry={entries?.find(e => e.runner === candidate.provider)} login={providerStatusFor(providerStatus.data, candidate.provider)} />
                         {problem ? <span className="block text-label text-danger">{problem}</span> : null}
                         {note ? <span className="block text-label text-muted-foreground">{note}</span> : null}
                       </span>
@@ -526,7 +556,7 @@ function FallbackField({
               <SelectValue placeholder="Every agent is already listed" />
             </SelectTrigger>
             <SelectContent position="popper">
-              {addable.map((option) => <SelectItem key={option.key} value={option.key}>{option.label}</SelectItem>)}
+              {addable.map((option) => <SelectItem key={option.key} value={option.key} disabled={optionDisabled(option)}>{option.label}{optionDisabled(option) && ' · unavailable'}</SelectItem>)}
             </SelectContent>
           </Select>
           {modelsLocked ? (
@@ -553,7 +583,7 @@ function FallbackField({
               </SelectTrigger>
               <SelectContent position="popper">
                 <SelectItem value={AUTO_MODEL}>auto model</SelectItem>
-                {modelsForRunner(modelRunner, modelCatalog?.data, []).map((model) =>
+                {modelsForRunner(modelRunner, modelCatalog?.data, [], entries?.find(e => e.runner === modelRunner)).map((model) =>
                   model.id ? <SelectItem key={model.id} value={model.id}>{model.label}</SelectItem> : null,
                 )}
                 {modelStatus ? <SelectItem value={CATALOG_STATUS} disabled>{modelStatus}</SelectItem> : null}
@@ -604,13 +634,17 @@ function FallbackField({
  * works under. Hence two writes for one click, and the copy says so.
  */
 function DefaultAgentField({
+  children,
   defaultRunner,
+  entries,
   providerStatus,
   saving,
   saved,
   onPick,
 }: {
   defaultRunner: Runner
+  entries?: AgentProviderEntry[]
+  children: ReactNode
   providerStatus: ReturnType<typeof useProviderStatus>
   saving: boolean
   saved: boolean
@@ -651,6 +685,7 @@ function DefaultAgentField({
       <FormRow stacked saved={saved} label={hasAccounts ? 'Agent and account' : 'Runner'}>
         <DefaultAgentPicker
           rows={rows}
+          entries={entries}
           runner={defaultRunner}
           accountFor={(id) => selection?.[id] ?? machine?.[id] ?? null}
           providerStatus={providerStatus}
@@ -672,11 +707,12 @@ function DefaultAgentField({
             }
           }}
         />
+        <ProviderLine entry={entries?.find(e => e.runner === defaultRunner)} login={providerStatusFor(providerStatus.data, defaultRunner)} />
         {!providerStatus.isPending &&
         !providerStatus.isError &&
         providerStatusFor(providerStatus.data, defaultRunner)?.enabled === false ? (
           <p className="text-ui text-muted-foreground">
-            This provider is disabled. Enable it above or choose another provider.
+            This provider is disabled. Open agent sign-in and enablement to turn it on.
           </p>
         ) : null}
         {hasAccounts ? (
@@ -687,6 +723,7 @@ function DefaultAgentField({
         ) : null}
         {sheet.element}
       </FormRow>
+      {children}
     </SettingsCard>
   )
 }

@@ -1,3 +1,4 @@
+import { agentProviderEntrySchema, agentProviderMethodSchema, agentProvidersResponseSchema, providerMethodInputSchema, providerModelsResponseSchema, runnerModelCatalogResponseSchema } from '@open-mercato/cezar-api-client'
 import type { GithubAssetResponse } from '@open-mercato/cezar-api-client'
 import type { z } from 'zod'
 import type {
@@ -153,7 +154,6 @@ import type {
   RepoResponse,
   RepoTree,
   Runner,
-  ModelDiscoveryRunner,
   RunnerModelCatalogResponse,
   RunRecord,
   RunsIndexResponse,
@@ -562,15 +562,41 @@ export async function putTelemetryConsent(input: SetTelemetryConsentInput): Prom
   return unwrap(await cez.api.v1.telemetry.consent.$put({ json: input }), '/telemetry/consent')
 }
 
-/** Host-local catalog for one discovery runner (`claude`, `codex`, `opencode`, `cursor` — #794, #784).
- *  Workspace-level: one CLI/account serves every project. */
-export async function getRunnerModels(
-  runner: ModelDiscoveryRunner,
-  opts?: ReadOptions & { refresh?: boolean },
-): Promise<RunnerModelCatalogResponse> {
-  const query: { runner: ModelDiscoveryRunner; refresh?: string } = { runner }
-  if (opts?.refresh) query.refresh = '1'
-  return unwrap(await cez.api.v1.models.$get({ query }, init(opts)), '/models')
+async function workspaceRequest(path: string, init: RequestInit = {}): Promise<unknown> {
+  const response = await fetchOrThrow(withApiBase(`${API_PREFIX}${path}`), { method: 'GET', ...init })
+  const body = await readBody(response)
+  if (!response.ok) throw errorFor(response.status, response.statusText, body)
+  return response.status === 204 ? undefined : parseJson(body)
+}
+
+export async function getAgentProviders(opts?: ReadOptions) {
+  return agentProvidersResponseSchema.parse(await workspaceRequest('/agent-providers', opts))
+}
+
+const methodPath = (runner: Runner, id: string) => `/agent-providers/${runner}/methods/${encodeURIComponent(id)}`
+const putJson = (value: unknown): RequestInit => ({
+  method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify(value),
+})
+
+export async function setActiveMethod(runner: Runner, methodId: string | null) {
+  return agentProviderEntrySchema.parse(await workspaceRequest(`/agent-providers/${runner}/active`, putJson({ methodId })))
+}
+
+export async function saveProviderMethod(runner: Runner, id: string, input: z.infer<typeof providerMethodInputSchema>) {
+  return agentProviderMethodSchema.parse(await workspaceRequest(methodPath(runner, id), putJson(providerMethodInputSchema.parse(input))))
+}
+
+export async function removeProviderMethod(runner: Runner, id: string) {
+  await workspaceRequest(methodPath(runner, id), { method: 'DELETE' })
+}
+
+export async function refreshProviderMethod(runner: Runner, id: string) {
+  return providerModelsResponseSchema.parse(await workspaceRequest(`${methodPath(runner, id)}/models`, { method: 'POST' }))
+}
+
+export async function getRunnerModels(runner: Runner, opts?: ReadOptions & { refresh?: boolean }): Promise<RunnerModelCatalogResponse> {
+  const path = `/models?runner=${runner}${opts?.refresh ? '&refresh=1' : ''}`
+  return runnerModelCatalogResponseSchema.parse(await workspaceRequest(path, { signal: opts?.signal }))
 }
 
 /** Host-local authentication state shared by every project. */

@@ -159,9 +159,11 @@ let requests: Recorded[]
 function serve({
   registry = REGISTRY,
   health = HEALTH,
+  withMethods = false,
 }: {
   registry?: ProjectsResponse
   health?: HealthResponse
+  withMethods?: boolean
 } = {}) {
   requests = []
   const json = (payload: unknown, status = 200) =>
@@ -175,6 +177,13 @@ function serve({
       requests.push({ method, url, body })
 
       // Workspace-level: never scoped (project-scope.ts `WORKSPACE_LEVEL`).
+      if (withMethods && url === '/api/v1/agent-providers') return json({ editable: true, agents: [
+        { runner: 'claude', configured: true, mode: 'one', active: 'custom', methods: [
+          { id: 'custom', kind: 'custom', label: 'Test gateway', state: 'connected' },
+        ] },
+      ] })
+      if (withMethods && url === '/api/v1/models?runner=claude') return json({ runner: 'claude', source: 'live', stale: false,
+        models: ['sonnet', 'opus'].map(id => ({ id, label: id, description: '', via: { methodId: 'custom', label: 'Test gateway' } })) })
       if (url === '/api/v1/projects') return json(registry)
       if (url === '/api/v1/health') return json(health)
       if (url === '/api/v1/providers/status') return json(PROVIDERS)
@@ -316,6 +325,21 @@ describe('the new-task project pill', () => {
 // ---- scope swap ------------------------------------------------------------------------------
 
 describe('switching project', () => {
+  it('starts with the destination project model and the workspace provider after switching projects', async () => {
+    serve({ withMethods: true })
+    renderAt(`/p/${BOOT}/new`)
+    await composerReady()
+    await switchProject(OTHER)
+    await waitFor(() => expect(pathname()).toBe(`/p/${OTHER}/new`))
+    await composerReady()
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Model' }).textContent).toContain('opus'))
+    fireEvent.change(textarea(), { target: { value: 'Run in the other project' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Start task' }))
+    await waitFor(() => expect(requests.find(r => r.url === `/api/v1/p/${OTHER}/runs` && r.method === 'POST')?.body)
+      .toMatchObject({ model: 'opus', agentMethod: 'custom' }))
+    expect(requests.some(r => r.url.includes(`/p/${OTHER}/agent-providers`))).toBe(false)
+  })
+
   it('re-resolves the skills, workflows and config pickers against the new project', async () => {
     serve()
     renderAt(`/p/${BOOT}/new`)

@@ -74,6 +74,16 @@ describe('model option resolution', () => {
     expect(modelsForRunner('claude').some((m) => /^claude-\w+-\d/.test(m.id))).toBe(false)
   })
 
+  it('falls back to auto when a configured subscription drops the default model', () => {
+    const catalog = { runner: 'claude' as const, source: 'live' as const, stale: false,
+      models: [{ id: 'new-model', label: 'New model', description: '', via: { methodId: 'subscription', label: 'Subscription' } }] }
+    expect(resolveModel(null, 'claude', { claude: 'retired-model' }, catalog, {
+      runner: 'claude', mode: 'one', configured: true, active: 'subscription', methods: [
+        { id: 'subscription', kind: 'subscription', label: 'Subscription', state: 'connected' },
+      ],
+    })).toBe('')
+  })
+
   it('claude: a live catalog REPLACES the fallback aliases, keeping auto and the CLI order', () => {
     const catalog = {
       runner: 'claude' as const,
@@ -185,22 +195,22 @@ describe('model option resolution', () => {
     expect(modelCatalogStatus('cursor', undefined, true)).toBe('Latest Cursor models unavailable')
   })
 
-  it('copilot stays OUT of discovery: free text plus its own presets, and no /models request', () => {
+  it('copilot has no native catalog but accepts models served by a provider', () => {
     // Copilot's catalog is fetched from GitHub per account, so cezar cannot list it truthfully and
     // `GET /models?runner=copilot` would 400. The picker therefore offers Copilot's own documented
     // `auto` and whatever the user types (#582; spec § API Contracts, same rule as pi).
     expect(runnerDiscoversModels('copilot')).toBe(false)
     expect(MODEL_DISCOVERY_RUNNERS).not.toContain('copilot')
     expect(modelsForRunner('copilot').map((m) => m.id)).toEqual([''])
-    // …and a host catalog handed in anyway is ignored rather than rendered.
+    // Provider-served models can arrive on any runner.
     expect(
       modelsForRunner('copilot', {
         runner: 'copilot',
-        models: [{ id: 'gpt-5.4', label: 'gpt-5.4', description: 'via GitHub' }],
+        models: [{ id: 'gpt-5.4', label: 'gpt-5.4', description: '', via: { methodId: 'sample', label: 'Example' } }],
         source: 'live',
         stale: false,
       }).map((m) => m.id),
-    ).toEqual([''])
+    ).toEqual(['', 'gpt-5.4'])
   })
 
   it('gemini stays OUT of discovery: its presets plus free text, and no /models request', () => {

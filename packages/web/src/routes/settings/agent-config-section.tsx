@@ -1,3 +1,4 @@
+import { useSearchParams } from 'react-router'
 import { FileCogIcon } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
 
@@ -85,7 +86,8 @@ export function AgentConfigSection() {
 }
 
 function AgentConfigView({ listing, installed }: { listing: AgentConfigListing; installed: Runner[] }) {
-  const [agentId, setAgentId] = useState<Runner>('claude')
+  const [params] = useSearchParams()
+  const [agentId, setAgentId] = useState<Runner>(() => AGENT_DESCRIPTORS.find(d => d.id === params.get('agent'))?.id ?? 'claude')
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const agent = descriptorFor(agentId)
   const selected = listing.files.find((f) => f.id === selectedId) ?? null

@@ -1,3 +1,4 @@
+import { Link } from 'react-router'
 import { SearchIcon } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { Virtualizer } from 'virtua'
@@ -7,6 +8,7 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuLabel,
   DropdownMenuRadioGroup,
   DropdownMenuRadioItem,
   DropdownMenuTrigger,
@@ -49,12 +51,13 @@ export function PickerPill({
   searchPlaceholder,
   className,
   action,
+  footerLink,
 }: {
   slot: string
   ariaLabel: string
   label: ReactNode
   value: string
-  options: ReadonlyArray<{ value: string; label: string; desc?: string }>
+  options: ReadonlyArray<{ value: string; label: string; desc?: string; group?: string }>
   onPick: (value: string) => void
   disabled?: boolean
   /** Display the resolved value without presenting a selector. */
@@ -68,6 +71,7 @@ export function PickerPill({
   searchPlaceholder?: string
   /** Extra trigger classes — the composer joins two pills into one `agent · model` chip. */
   className?: string
+  footerLink?: { label: string; to: string }
   /** One command below the options (the runner pill's "Add account…", model pill's "Refresh models…"). */
   action?: { label: string; slot: string; disabled?: boolean; onSelect: () => void } | undefined
 }) {
@@ -108,17 +112,20 @@ export function PickerPill({
       </span>
     )
   }
-  const renderOption = (option: { value: string; label: string; desc?: string }) => (
-    <DropdownMenuRadioItem key={option.value} value={option.value} className="gap-2.5">
-      <span className="flex min-w-0 flex-col">
-        <span className="text-label font-medium">{option.label}</span>
-        {option.desc ? (
-          <span className="max-w-[calc(100vw-3rem)] whitespace-normal break-words text-meta text-muted-foreground md:max-w-96">
-            {option.desc}
-          </span>
-        ) : null}
-      </span>
-    </DropdownMenuRadioItem>
+  const renderOption = (option: (typeof options)[number], index: number) => (
+    <div key={option.value}>
+      {option.group && option.group !== visibleOptions[index - 1]?.group && <DropdownMenuLabel>{option.group}</DropdownMenuLabel>}
+      <DropdownMenuRadioItem value={option.value} className="gap-2.5">
+        <span className="flex min-w-0 flex-col">
+          <span className="text-label font-medium">{option.label}</span>
+          {option.desc ? (
+            <span className="max-w-[calc(100vw-3rem)] whitespace-normal break-words text-meta text-muted-foreground md:max-w-96">
+              {option.desc}
+            </span>
+          ) : null}
+        </span>
+      </DropdownMenuRadioItem>
+    </div>
   )
   const trigger = (
     <button
@@ -230,6 +237,7 @@ export function PickerPill({
             {action.label}
           </DropdownMenuItem>
         ) : null}
+        {footerLink && <DropdownMenuItem asChild className="border-t border-border text-label"><Link to={footerLink.to}>{footerLink.label}</Link></DropdownMenuItem>}
       </DropdownMenuContent>
     </DropdownMenu>
   )

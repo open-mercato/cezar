@@ -1,5 +1,6 @@
-import type { AgentProfile, AgentSetupEntry, ProviderStatusResponse, Runner } from '@open-mercato/cezar-api-client'
+import type { AgentProviderEntry, AgentProfile, AgentSetupEntry, ProviderStatusResponse, Runner } from '@open-mercato/cezar-api-client'
 import { AGENT_ROW_ACTION_LABEL, agentRowAction, agentVersionChip, type AgentRowAction } from '@/lib/agent-setup'
+import { canUseAgent, servingMethods } from '@/lib/agent-providers'
 import { cn } from '@/lib/utils'
 import { providerStatusFor } from '@/lib/provider-status'
 import { RUNNERS } from '@/routes/new-task-form'
@@ -60,6 +61,7 @@ export function DefaultAgentPicker({
   runner,
   accountFor,
   providerStatus,
+  entries,
   disabled = false,
   accountDisabled = false,
   setup,
@@ -75,6 +77,7 @@ export function DefaultAgentPicker({
     isPending: boolean
     isError: boolean
   }
+  entries?: AgentProviderEntry[]
   disabled?: boolean
   /** Account rows only: the write target is not known yet (e.g. the project registry is loading). */
   accountDisabled?: boolean
@@ -88,13 +91,13 @@ export function DefaultAgentPicker({
   const ready = !providerStatus.isPending && !providerStatus.isError
   const connected = (id: Runner) => {
     const provider = providerStatusFor(providerStatus.data, id)
-    return ready && provider?.enabled === true && provider.status === 'connected'
+    return ready && canUseAgent(entries?.find(entry => entry.runner === id), provider)
   }
   const isChecked = (row: AgentPickerRow) => row.runner.id === runner && row.account === accountFor(row.runner.id)
   // With the setup catalog, the strip holds only what can be picked; every agent that needs a step
   // gets a row in the grouped list below (spec 2026-11-25-agent-cli-install-and-update).
   const setupAware = setup !== undefined && onAgentAction !== undefined && ready
-  const shown = setupAware ? rows.filter((row) => connected(row.runner.id) || isChecked(row)) : rows
+  const shown = setupAware && !entries ? rows.filter((row) => connected(row.runner.id) || isChecked(row)) : rows
   const strip = (
     <div
       role="radiogroup"
@@ -109,6 +112,7 @@ export function DefaultAgentPicker({
     >
       {shown.map((row) => {
         const provider = providerStatusFor(providerStatus.data, row.runner.id)
+        const entry = entries?.find(e => e.runner === row.runner.id)
         const providerConnected = connected(row.runner.id)
         const providerReason = providerStatus.isPending
           ? 'Checking provider authentication…'
@@ -139,7 +143,7 @@ export function DefaultAgentPicker({
               checked ? 'bg-muted text-foreground' : 'text-muted-foreground hover:text-foreground',
             )}
           >
-            {row.label}
+            {row.label}{entry && !providerConnected && !servingMethods(entry).length && ' · no provider'}
             {stacked ? (
               <span
                 data-slot={row.missing ? 'agents-account-missing' : 'agents-account-dir'}
@@ -158,7 +162,7 @@ export function DefaultAgentPicker({
   return (
     <div className="flex flex-col gap-4">
       {strip}
-      <AgentSetupGroups setup={setup} providerStatus={providerStatus.data} onAgentAction={onAgentAction} />
+      <AgentSetupGroups setup={setup} entries={entries} providerStatus={providerStatus.data} onAgentAction={onAgentAction} />
     </div>
   )
 }
@@ -176,10 +180,12 @@ const GROUP_TITLE: Record<GroupId, string> = {
  *  button on the right. */
 function AgentSetupGroups({
   setup,
+  entries,
   providerStatus,
   onAgentAction,
 }: {
   setup: readonly AgentSetupEntry[]
+  entries?: AgentProviderEntry[]
   providerStatus: ProviderStatusResponse | undefined
   onAgentAction: (runner: Runner, action: AgentRowAction) => void
 }) {
@@ -198,7 +204,7 @@ function AgentSetupGroups({
       const chip = agentVersionChip(entry)
       const detail = chip?.tone === 'danger' ? `${entry?.version} installed, ${chip.label}` : `${entry?.version} → ${entry?.latestVersion}`
       groups.update.push({ runner, action, detail, runs: entry?.update?.runnable === true })
-    } else if (action === 'sign-in') {
+    } else if (action === 'sign-in' && !canUseAgent(entries?.find(e => e.runner === runner.id), status)) {
       groups['sign-in'].push({ runner, action, detail: `${entry?.version ? `${entry.version} installed` : 'Installed'}, not signed in` })
     } else if (action === 'install' || action === 'how-to-install') {
       groups.install.push({ runner, action, detail: action === 'install' ? runner.desc : `${runner.desc} · install it yourself`, runs: action === 'install' })

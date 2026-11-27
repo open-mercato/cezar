@@ -3,6 +3,8 @@
 // disagree about who has discovery. It narrows `Runner` to `ModelDiscoveryRunner`.
 import { runnerDiscoversModels, runnerSupportsReasoningEffort } from '@open-mercato/cezar-api-client'
 import type {
+  AgentProviderEntry,
+  RunnerModelOption,
   BackendCheck,
   CreateRunInput,
   CreateRunResponse,
@@ -64,6 +66,7 @@ export const RUNNERS: readonly RunnerOption[] = [
 ]
 
 export interface ModelPreset {
+  via?: RunnerModelOption['via']
   id: string
   label: string
   desc: string
@@ -198,24 +201,29 @@ export function modelsForRunner(
   runner: Runner,
   catalog?: RunnerModelCatalogResponse,
   customIds: readonly (string | null | undefined)[] = [],
+  entry?: AgentProviderEntry,
 ): readonly ModelPreset[] {
   const presets = MODELS_BY_RUNNER[runner] ?? MODELS_BY_RUNNER.claude
-  const discovered = runnerDiscoversModels(runner) ? (catalog?.models ?? []) : []
+  const listed = catalog?.models ?? []
+  const methodCatalog = !!entry?.configured && (listed.length > 0 || entry.methods.some(method =>
+    (entry.mode === 'any' || entry.active === method.id) && method.state === 'connected' &&
+    (method.kind === 'custom' || method.kind === 'openrouter') && method.origin !== 'host',
+  ))
   // A live catalog REPLACES the presets rather than extending them: the whole point is that the
   // host CLI, not this file, decides which models exist. The presets come back the moment
   // discovery has nothing — a missing, old or logged-out CLI leaves a usable picker, never an
   // `auto`-only one (#784).
-  const base = discovered.length > 0 ? [autoPreset(presets)] : [...presets]
+  const base = listed.length > 0 || methodCatalog ? [autoPreset(presets)] : [...presets]
   const seen = new Set(base.map((model) => model.id))
-  // `discovered` is already empty for a runner without discovery, so no second gate is needed.
-  for (const model of discovered) {
+  for (const model of listed) {
     if (!model.id || seen.has(model.id)) continue
     seen.add(model.id)
-    base.push({ id: model.id, label: model.label || model.id, desc: model.description })
+    base.push({ id: model.id, label: model.label || model.id, desc: model.description, ...(model.via && { via: model.via }) })
   }
   // Native settings may contain a provider-specific/custom id that is not in
   // cezar's static catalog. Keep it representable so the initial selection
   // matches the agent's own configured default on every backend.
+  if (methodCatalog) return base
   for (const id of customIds) {
     if (!id || seen.has(id) || modelConflictsWithRunner(id, runner)) continue
     seen.add(id)
@@ -323,8 +331,9 @@ export function resolveModel(
   runner: Runner,
   defaults?: Partial<Record<Runner, string>>,
   catalog?: RunnerModelCatalogResponse,
+  entry?: AgentProviderEntry,
 ): string {
-  const models = modelsForRunner(runner, catalog, [picked, defaults?.[runner]])
+  const models = modelsForRunner(runner, catalog, [picked, defaults?.[runner]], entry)
   if (picked !== null && models.some((m) => m.id === picked)) return picked
   const preset = defaults?.[runner]
   if (preset !== undefined && models.some((m) => m.id === preset)) return preset
@@ -386,6 +395,7 @@ export function buildCreateRunBody(opts: {
   /** `null` — nothing picked — runs the built-in `quick-task`. */
   source: TaskSource | null
   model: string
+  agentMethod?: string
   /** Empty means the selected Codex model's native default; it is omitted on the wire. */
   reasoningEffort?: string
   /** Native coding-agent settings stay visible, but a locked model is never a request override. */
@@ -454,6 +464,7 @@ export function buildCreateRunBody(opts: {
     ...(source?.source === 'skill'
       ? { steps: [{ id: 'task', name: source.ref, skill: source.ref, prompt: '{{task}}' }] }
       : { workflow: source?.ref ?? QUICK_TASK }),
+    ...(opts.agentMethod ? { agentMethod: opts.agentMethod } : {}),
     model: modelsLocked ? undefined : model || undefined,
     ...(modelsLocked || !reasoningEffort ? {} : { reasoningEffort }),
     runner: runnerOverride(runner, defaultRunner, runnerExplicit),

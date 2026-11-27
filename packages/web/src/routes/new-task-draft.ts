@@ -27,6 +27,7 @@ export interface NewTaskDraft {
    *  selection, which is what every draft that never touched the control means. Sticky like the
    *  other pickers — which login a repo's work runs under is a way of working, not a whim. */
   agentProfile: string | null
+  agentMethod?: string
   model: string | null
   /** Per-task Codex effort. `null` means leave the native default untouched. */
   reasoningEffort: string | null
@@ -258,6 +259,7 @@ function normalize(raw: unknown): NewTaskDraft {
     source: isSource(obj.source) ? obj.source : null,
     runner: typeof obj.runner === 'string' ? (obj.runner as Runner) : null,
     agentProfile: typeof obj.agentProfile === 'string' ? obj.agentProfile : null,
+    ...(typeof obj.agentMethod === 'string' && { agentMethod: obj.agentMethod }),
     model: typeof obj.model === 'string' ? obj.model : null,
     reasoningEffort: typeof obj.reasoningEffort === 'string' ? obj.reasoningEffort : null,
     variants: obj.variants === 2 || obj.variants === 3 ? obj.variants : 1,
