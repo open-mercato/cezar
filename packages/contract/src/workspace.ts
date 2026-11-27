@@ -689,6 +689,7 @@ export function runnerDiscoversModels(runner: Runner): runner is ModelDiscoveryR
 }
 
 export const runnerModelOptionSchema = z.object({
+  via: z.object({ methodId: z.string(), label: z.string() }).optional(),
   id: z.string(),
   label: z.string(),
   description: z.string(),

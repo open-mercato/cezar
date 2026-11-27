@@ -16,6 +16,7 @@ export * from './workflows.ts';
 export * from './skills.ts';
 export * from './agent-config.ts';
 export * from './agent-profiles.ts';
+export * from './agent-providers.ts';
 export * from './agent-login.ts';
 export * from './zoned-time.ts';
 export * from './automation-schedule.ts';

@@ -1,3 +1,4 @@
+import { providerMethodIdSchema } from './agent-providers.ts';
 import { trackerAccessSchema } from './tracker-operations.ts';
 import { deferredBindingSchema, queueWaitReasonSchema } from './deferred-start-state.ts';
 import { z } from 'zod';
@@ -273,6 +274,7 @@ export const runRecordSchema = z.object({
   /** Every model the run's steps reported, first-seen order (a model switch keeps the earlier). */
   modelsUsed: z.array(z.string()).optional(),
   runner: runnerSchema.optional(),
+  agentMethod: providerMethodIdSchema.optional(),
   /** The composer's per-task agent account (spec 2026-07-29-agent-profiles), applying to steps
    *  on `runner`. Absent = the run follows the project's own selection. */
   agentProfile: z.string().optional(),
@@ -1350,6 +1352,7 @@ export const createRunInputBaseSchema = z
     model: z.string().optional(),
     reasoningEffort: reasoningEffortSchema.optional(),
     runner: runnerSchema.optional(),
+    agentMethod: providerMethodIdSchema.optional(),
     /** Agent account for this task (spec 2026-07-29-agent-profiles). Omit to follow the
      *  project's own selection; an id that no longer exists is a 400, not a silent default. */
     agentProfile: z.string().max(64).optional(),
