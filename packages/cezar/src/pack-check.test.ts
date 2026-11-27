@@ -25,6 +25,12 @@ describe('findPackGaps', () => {
     expect(gaps[0]).toContain('web/dist/index.html');
   });
 
+  it('rejects a tarball that ships the dev-only bin/ launcher (#2057)', () => {
+    const gaps = findPackGaps([...goodPack, 'bin/cez-dev.mjs']);
+    expect(gaps).toHaveLength(1);
+    expect(gaps[0]).toContain('bin/cez-dev.mjs');
+  });
+
   it('rejects a tarball whose shell has no hashed bundles', () => {
     const gaps = findPackGaps(['dist/index.js', 'web/dist/index.html', ...IMPACT_PACK_FILES]);
     expect(gaps).toHaveLength(1);
