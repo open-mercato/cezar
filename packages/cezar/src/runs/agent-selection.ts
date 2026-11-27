@@ -1,10 +1,30 @@
 import type { SwitchRunAgentInput, WorkflowAgentSwitch } from '@open-mercato/cezar-contract';
+import { authMethods } from '../core/agent-auth-methods.ts';
+import { DEFAULT_AGENT_ACCOUNT_ID } from '../workspace/agent-accounts.ts';
 import { stepKind } from '../workflows/types.ts';
 import { RUNNER_IDS, type RunnerId } from '../core/agent-runner.ts';
 import type { RunRecord } from './store.ts';
 
 type AgentPin = { runner?: RunnerId; model?: string; reasoningEffort?: string };
 type WorkflowSwitchInput = Pick<SwitchRunAgentInput, 'runner' | 'model' | 'reasoningEffort'> & { agentProfile: string };
+
+/** A resumed session belongs to the account that opened it, even after the project changes login. */
+export function continuationSelection(
+  run: RunRecord,
+  options: { runner?: RunnerId; model?: string; agentProfile?: string; freshContext?: boolean },
+  switchingAgent = false,
+) {
+  const runner = run.runner ?? 'claude';
+  const targetRunner = options.runner ?? runner;
+  const targetAccount = options.agentProfile ?? (targetRunner === runner ? run.agentProfile : undefined);
+  const sessionStep = [...run.steps].reverse().find(step => step.sessionId);
+  const sessionAccount = sessionStep?.profileId ?? DEFAULT_AGENT_ACCOUNT_ID;
+  const newModelProvider = options.model !== undefined && options.model !== run.model
+    && authMethods(targetRunner).mode === 'any' && !!sessionStep?.agentMethod;
+  const resume = !!sessionStep?.sessionId && !switchingAgent && !options.freshContext && !newModelProvider
+    && (sessionStep.backend ?? runner) === targetRunner && (targetAccount === undefined || targetAccount === sessionAccount);
+  return { targetRunner, sessionStep, resume, newModelProvider, agentProfile: resume ? sessionStep?.profileId ?? targetAccount : targetAccount };
+}
 
 export function workflowAgentSwitch(
   run: RunRecord,

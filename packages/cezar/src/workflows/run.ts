@@ -113,7 +113,7 @@ import { grantsFileWrites, isReadOnlyWorkflow, readOnlyWorkflowRefusal, workflow
 import { getHeadCommit, getRepoInfo } from '../server/git.ts';
 import { loadWorkflows, newerCatalogWorkflow } from './load.ts';
 import type { QueuedMessage, RunRecord, RunStore, StepState } from '../runs/store.ts';
-import { switchedWorkflowAgent, taskAgentSelection, workflowAgentSwitch } from '../runs/agent-selection.ts';
+import { continuationSelection, switchedWorkflowAgent, taskAgentSelection, workflowAgentSwitch } from '../runs/agent-selection.ts';
 import { GLOBAL_INSTRUCTIONS_HEADING, LEGACY_GLOBAL_HEADINGS, readGlobalInstructions } from '../core/global-instructions.ts';
 import { instructionsConcernChecks, packageScriptReader, resolveCheckCommand, rewritableCheck, type CheckCommandResolution } from './check-instructions.ts';
 import { artifactsDir, authParkForAccount, FRESH_PROMPT_MAX, isIdleParked, prCheckoutDir, testCommandFile } from '../runs/store.ts';
@@ -6486,7 +6486,7 @@ export class RunManager {
       void this.pump();
       return { ok: true };
     }
-    const sessionStep = [...run.steps].reverse().find((s) => s.sessionId);
+    const { targetRunner, sessionStep, resume, newModelProvider } = continuationSelection(run, opts, !!agentSwitch);
     if (!sessionStep?.sessionId) {
       if (!agentSwitch && run.worktreeLifecycle?.phase === 'setup' && run.worktreeLifecycle.state === 'cancelled') {
         void this.lifecycle.reopenSetup(runId).catch(error => this.store.updateRun(runId, {error: String(error)}));
@@ -6494,29 +6494,9 @@ export class RunManager {
       }
       if (!internal.freshSessionAllowed && !blocked) return { ok: false, error: 'no agent session to resume' };
     }
-    const targetRunner = opts.runner ?? run.runner ?? 'claude';
-    // Session ids are provider-owned opaque values. New records carry explicit
-    // affinity; for legacy records, the run's current runner is the conservative
-    // owner until a continuation emits a new, attributed session id (#562).
-    const sessionBackend = sessionStep?.backend ?? run.runner ?? 'claude';
     if (opts.reasoningEffort && !runnerSupportsReasoningEffort(targetRunner)) {
       return { ok: false, error: REASONING_EFFORT_UNSUPPORTED_ERROR };
     }
-    // A session id only resolves inside the config dir that created it (spec
-    // 2026-07-29-agent-profiles), so switching ACCOUNT ends the session exactly like switching
-    // backend does: `claude --resume <id>` under another login finds nothing and would silently
-    // open a fresh conversation while the thread claimed it had resumed. A step that recorded no
-    // account predates the feature and therefore ran under the discovered one.
-    const sessionAccount = sessionStep?.profileId ?? DEFAULT_AGENT_ACCOUNT_ID;
-    // The account this turn must run on: the composer's pick, else the one the run already
-    // chose. The run's own choice counts too — a record whose newest session predates an
-    // account switch (a fresh continuation that recorded no session id) must not be resumed
-    // under the account the user switched away from.
-    const targetAccount = opts.agentProfile
-      ?? (targetRunner === (run.runner ?? 'claude') ? run.agentProfile : undefined);
-    const accountSwitched = targetAccount !== undefined && targetAccount !== sessionAccount;
-    const newModelProvider = opts.model !== undefined && opts.model !== run.model && authMethods(targetRunner).mode === 'any' && !!sessionStep?.agentMethod;
-    const resume = !newModelProvider && !agentSwitch && !opts.freshContext && Boolean(sessionStep?.sessionId) && sessionBackend === targetRunner && !accountSwitched;
     // An agent switch replays the queued Continue it replaces, its fresh intent included. Once a
     // fresh session has run, a manual switch, a backup-agent fallback or a lost session seeds the
     // whole run's transcript (spec 2026-10-31-managers, `--fresh`), so earlier turns can come back.

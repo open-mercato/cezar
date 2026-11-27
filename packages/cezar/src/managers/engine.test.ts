@@ -4190,6 +4190,30 @@ describe('ManagerEngine', () => {
       expect(await engine.taskMessage(id, { projectId: 'alpha', runId: 'live', text: 'x', model: 'opus' })).toMatchObject({ status: 409 });
     });
 
+    it.each([
+      { freshContext: false, expected: 'continue' },
+      { freshContext: true, expected: 'refusal' },
+    ])('validates the OMP catalog for the session that will run (fresh=$freshContext)', async ({ freshContext, expected }) => {
+      const record = run('finished', { status: 'done', runner: 'omp', steps: [
+        { id: 'task', backend: 'omp', sessionId: 'work-session', profileId: 'work' },
+        { id: 'check', kind: 'check', status: 'done' },
+      ] });
+      const engine = makeEngine({
+        projects: async () => [{ ...connected, runs: () => [record] }],
+        request: async (path, init) => {
+          requests.push({ path, method: init?.method ?? 'GET' });
+          return path.startsWith('/api/v1/models?')
+            ? Response.json({ models: [{ id: 'team/personal-only' }] })
+            : Response.json({ continued: true });
+        },
+      });
+      const id = await create(engine);
+      const result = await engine.taskMessage(id, { projectId: 'alpha', runId: record.id, text: 'again', model: 'team/work-only', freshContext });
+      if (expected === 'continue') expect(result).toEqual({ ok: true });
+      else expect(result).toMatchObject({ status: 400, error: expect.stringContaining('team/personal-only') });
+      expect(requests.some(r => r.path.endsWith('/continue'))).toBe(!freshContext);
+    });
+
     it('continues a finished task in a fresh session, and refuses that for a live task', async () => {
       const engine = withRuns([run('done', { status: 'review', runner: 'claude' }), run('live')]);
       const id = await create(engine);

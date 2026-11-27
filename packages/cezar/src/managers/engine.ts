@@ -1,3 +1,4 @@
+import { continuationSelection } from '../runs/agent-selection.ts';
 import { readAgentProviders, type StoredAgentProviders } from '../workspace/agent-providers.ts';
 import { providerQuotaKey, agentProviderEnv, verifyProviderLogin, type AgentProviderLaunch } from '../core/agent-provider-env.ts';
 import { withoutEnv } from '../core/agent-env.ts';
@@ -3698,7 +3699,8 @@ export class ManagerEngine {
         ({ model, note: notice } = mapped);
         effort = undefined;
       }
-      const issue = model || effort ? await this.modelIssue(run.runner ?? 'claude', model, effort, { root: scope.source?.root, agentProfile: run.agentProfile }) : undefined;
+      const { targetRunner, agentProfile } = continuationSelection(run, { model, freshContext: input.freshContext });
+      const issue = model || effort ? await this.modelIssue(targetRunner, model, effort, { root: scope.source?.root, agentProfile }) : undefined;
       if (issue) return issue;
       const continued = await this.forward(`${path}/continue`, {
         method: 'POST',
