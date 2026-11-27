@@ -1080,6 +1080,13 @@ export class ProviderAuthService {
     return this.startFreshProbe().visible;
   }
 
+  /** A headless import needs only the selected default login and its method evidence. */
+  async loginStatus(provider: ProviderId): Promise<ProviderProbeRow> {
+    if (process.env.CEZ_DRY_RUN === '1' || providerAuthChecksDisabled()) return { provider, status: 'connected' };
+    const result = await this.probe(descriptorFor(provider));
+    return this.withRuntimeFailures({ providers: [result] }).providers[0]!;
+  }
+
   /** Facts from the last completed status()/profileStatus() for this login. Never starts a probe.
    *  Missing facts (including a cold cache or a runtime rejection with no method ID) mean unknown. */
   methodStatuses(provider: ProviderId, configDir?: string | null): ProviderMethodStatuses {

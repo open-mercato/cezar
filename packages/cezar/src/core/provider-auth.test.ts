@@ -2639,6 +2639,24 @@ describe('inconclusive probe reports', () => {
 });
 
 describe('method evidence from the existing provider probes', () => {
+  it('checks only the selected CLI and returns its method facts to a headless import', async () => {
+    const run = runner(resultFor);
+    const service = new ProviderAuthService({ runCommand: run });
+    expect(await service.loginStatus('codex')).toMatchObject({
+      provider: 'codex', status: 'connected', methods: { subscription: 'connected' },
+    });
+    expect(run.mock.calls.map(call => call[0])).toEqual(['codex']);
+    service.reportRuntimeAuthFailure('codex');
+    expect(await service.loginStatus('codex')).toMatchObject({ status: 'disconnected', authFailureId: expect.any(String) });
+    expect(await service.loginStatus('codex')).not.toHaveProperty('methods');
+    run.mockClear();
+    vi.stubEnv('CEZ_AGENT_MODELS_LOCKED', '1');
+    try {
+      expect(await service.loginStatus('codex')).toEqual({ provider: 'codex', status: 'connected' });
+      expect(run).not.toHaveBeenCalled();
+    } finally { vi.unstubAllEnvs(); }
+  });
+
   it('keeps the wire rows unchanged and reads both the cache and host methods without spawning', async () => {
     const run = runner((executable) => executable === 'claude'
       ? { stdout: '{"loggedIn":true,"authMethod":"claude.ai","email":"private@example.test"}', stderr: '', exitCode: 0 }
