@@ -5898,7 +5898,7 @@ export function createAppParts(deps: ServerDeps) {
           if (refusal) return c.json({ error: refusal }, 400);
         }
 
-        const queued = manager.enqueueMessage(id, content);
+        const queued = manager.enqueueMessage(id, content, reply);
         if (queued) return c.json((answered = { queued: true as const, message: queued }));
         if (manager.deferMessage(id, content, { ...reply, userReply: true })) return c.json((answered = { deferred: true as const }));
         return c.json({ error: 'session closed' }, 409);
@@ -8383,6 +8383,7 @@ export function createAppParts(deps: ServerDeps) {
       teamSkills: config.skillsRepos.length > 0,
       bypassPermissions: config.bypassPermissions === true,
       bypassPermissionsBlocked: await bypassPermissionsBlocked(repoRoot, config, { hosted: !capabilities().localHandoff }),
+      claudePermissionMode: config.claudePermissionMode ?? null,
     };
   };
   // ---- chained family: per-repo config (project-scoped) ----
@@ -8493,6 +8494,11 @@ export function createAppParts(deps: ServerDeps) {
           if (parsed.data.bypassPermissions !== undefined) {
             if (parsed.data.bypassPermissions === true) raw.bypassPermissions = true;
             else delete raw.bypassPermissions;
+          }
+          // Only a real opinion is stored: null deletes the key (back to denied-without-asking).
+          if (parsed.data.claudePermissionMode !== undefined) {
+            if (parsed.data.claudePermissionMode === null) delete raw.claudePermissionMode;
+            else raw.claudePermissionMode = parsed.data.claudePermissionMode;
           }
           if (parsed.data.teamSkills === false) raw.skillsRepos = [];
           else if (parsed.data.teamSkills === true && Array.isArray(raw.skillsRepos) && raw.skillsRepos.length === 0) {

@@ -1980,9 +1980,11 @@ export class RunStore extends EventEmitter {
 
   /**
    * Record a task's `CEZ:ASK` (Questions inbox spec), closing the open asks it replaces: the same
-   * card id, or every header covered. Returns the asks it closed.
+   * card id, or every header covered. Returns the asks it closed. `independent`: a backend's own
+   * prompt (a Claude permission request) that no other card can replace or re-ask, because each one
+   * is a live question to its process and several can be open at once.
    */
-  recordTaskAsk(runId: string, ask: TaskAskRecord): TaskAskRecord[] {
+  recordTaskAsk(runId: string, ask: TaskAskRecord, options: { independent?: boolean } = {}): TaskAskRecord[] {
     const run = this.runs.get(runId);
     if (!run) return [];
     const redacted: TaskAskRecord = {
@@ -1997,7 +1999,7 @@ export class RunStore extends EventEmitter {
         })),
       })),
     };
-    const replaced = new Set(asksReplacedBy(run.asks, redacted).map((old) => old.requestId));
+    const replaced = new Set(options.independent ? [] : asksReplacedBy(run.asks, redacted).map((old) => old.requestId));
     const at = new Date().toISOString();
     const closed: TaskAskRecord[] = [];
     const asks = (run.asks ?? []).map((old) => {
@@ -2006,7 +2008,7 @@ export class RunStore extends EventEmitter {
       closed.push(next);
       return next;
     });
-    const partly = asksPartlyReasked(run.asks, redacted);
+    const partly = options.independent ? [] : asksPartlyReasked(run.asks, redacted);
     const capped = capTaskAsks([...asks, redacted], { reason: 'expired', at, detail: 'Too many newer questions in this task' });
     run.asks = capped.kept;
     closed.push(...capped.evicted);

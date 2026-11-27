@@ -105,6 +105,7 @@ describe('the config API', () => {
       teamSkills: true,
       bypassPermissions: false,
       bypassPermissionsBlocked: null,
+      claudePermissionMode: null,
     });
   });
 
@@ -313,6 +314,7 @@ describe('the config API', () => {
       teamSkills: true,
       bypassPermissions: false,
       bypassPermissionsBlocked: null,
+      claudePermissionMode: null,
     });
   });
 
@@ -521,6 +523,30 @@ describe('reviewGate round-trip (optional review gate, #489)', () => {
     const off = (await (await put({ bypassPermissions: false })).json()) as Record<string, unknown>;
     expect(off).toMatchObject({ bypassPermissions: false, bypassPermissionsBlocked: null });
     expect('bypassPermissions' in rawFile()).toBe(false);
+  });
+
+  it('claudePermissionMode round-trips: PUT sets it, null clears the raw key, an unknown value is a 400', async () => {
+    expect(((await (await apiRequest(app, '/api/v1/config')).json()) as Record<string, unknown>).claudePermissionMode).toBeNull();
+    for (const mode of ['manual', 'acceptEdits'] as const) {
+      const set = (await (await put({ claudePermissionMode: mode })).json()) as Record<string, unknown>;
+      expect(set.claudePermissionMode).toBe(mode);
+      expect(rawFile().claudePermissionMode).toBe(mode);
+      expect(((await (await apiRequest(app, '/api/v1/config')).json()) as Record<string, unknown>).claudePermissionMode).toBe(mode);
+    }
+    const cleared = (await (await put({ claudePermissionMode: null })).json()) as Record<string, unknown>;
+    expect(cleared.claudePermissionMode).toBeNull();
+    expect('claudePermissionMode' in rawFile()).toBe(false);
+    const bad = await put({ claudePermissionMode: 'auto' });
+    expect(bad.status).toBe(400);
+    expect('claudePermissionMode' in rawFile()).toBe(false);
+  });
+
+  it('an unrelated PUT leaves claudePermissionMode alone, and a hand-edited bad value reads as the default', async () => {
+    await put({ claudePermissionMode: 'manual' });
+    await put({ maxParallel: 3 });
+    expect(rawFile().claudePermissionMode).toBe('manual');
+    writeFileSync(join(repoRoot, '.ai/cezar', 'config.json'), JSON.stringify({ claudePermissionMode: 'auto' }));
+    expect(((await (await apiRequest(app, '/api/v1/config')).json()) as Record<string, unknown>).claudePermissionMode).toBeNull();
   });
 
   // #2259 review: a hosted operator may rely on Claude's own sandbox to contain agents.

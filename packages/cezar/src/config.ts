@@ -156,6 +156,10 @@ export const configSchema = z.object({
   /** Claude Code tasks skip every permission prompt (`--permission-mode bypassPermissions`).
    *  Off by default; see `bypassPermissionsBlocked` for where it is not honored. */
   bypassPermissions: z.boolean().optional().catch(undefined),
+  /** Claude Code asks instead of denying a tool outside the step's allow list, and the cockpit answers
+   *  the prompt (`--permission-prompt-tool stdio`). Absent = today's `dontAsk`. Read-only tasks and
+   *  `bypassPermissions` win. `acceptEdits` is capped by the runner to steps that already allow edits. */
+  claudePermissionMode: z.enum(['manual', 'acceptEdits']).optional().catch(undefined),
 });
 
 export type CezConfig = z.infer<typeof configSchema>;
