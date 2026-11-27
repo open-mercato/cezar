@@ -2084,8 +2084,8 @@ export class RunManager {
     // Dispatch authorization controls child creation; transport may serve other capabilities.
     const authorized = this.dispatchAuthorized(runId);
     // Shared transport still serves automations, tracker mediation (restored below), and reports.
-    const apiUrl = this.dispatchReachable() && (authorized || dispatch?.parentRunId || automationsReachable())
-      ? process.env.CEZ_API_URL : undefined;
+    const needsDispatchTransport = this.dispatchReachable() && (authorized || Boolean(dispatch?.parentRunId));
+    const apiUrl = needsDispatchTransport || automationsReachable() ? process.env.CEZ_API_URL : undefined;
     return {
       CEZ_HANDOFF_FILE: handoffPath(this.dataDir, runId),
       CEZ_TASK_ID: runId,

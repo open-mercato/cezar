@@ -90,6 +90,18 @@ describe('RunManager agent-profile resolution', () => {
       steps: [{ id: 'work', name: 'work', kind: 'agent' }],
     });
 
+  it('keeps the automation CLI reachable when Dispatch is disabled globally and for the run (#2382)', async () => {
+    vi.stubEnv('CEZ_DISPATCH', '0');
+    vi.stubEnv('CEZ_AUTOMATIONS', '1');
+    vi.stubEnv('CEZ_API_URL', 'http://127.0.0.1:3456');
+    const run = newRun();
+    store.updateRun(run.id, { dispatchAuthorized: false });
+
+    const { env } = await seam().agentEnvForStep(run.id, 'claude');
+
+    expect(env.CEZ_API_URL).toBe('http://127.0.0.1:3456');
+  });
+
   it('delivers fresh tracker context on steps and continuations even when automation dispatch is denied (#2382)', async () => {
     vi.stubEnv('CEZ_API_URL', 'http://127.0.0.1:3456');
     vi.stubEnv('CEZ_BIN', '/synthetic/cezar.js');
