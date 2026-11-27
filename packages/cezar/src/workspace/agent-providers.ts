@@ -17,8 +17,10 @@ const method = z.object({
   label: optionalText,
   baseUrl: optionalText,
   origin: z.enum(['cockpit', 'file', 'cli']).optional().catch(undefined),
+  fetchGeneration: z.number().int().nonnegative().optional().catch(undefined),
   models: z.object({
     fetchedAt: z.string(), ids: z.array(model), error: optionalText,
+    generation: z.number().int().nonnegative().optional().catch(undefined),
   }).passthrough().optional().catch(undefined),
   // A spread of a CLI/route input must never persist an inline key alongside display metadata.
   apiKey: z.never().optional(),
@@ -53,11 +55,27 @@ interface KeyEdits {
 
 // Up to two 2 MiB endpoint model lists per runner, plus metadata.
 const MAX_METADATA_BYTES = 64 * 1024 * 1024;
-async function load(path: string): Promise<z.infer<typeof document>> {
+// Keep rows written by a newer version outside the editable view. Their keys stay live
+// even if another runner is the only one this version recognizes.
+type OpaqueMethods = Map<string, Record<string, Record<string, unknown>>>;
+async function load(path: string, opaque?: OpaqueMethods): Promise<z.infer<typeof document>> {
   try {
     const text = await readPrivateFile(path, MAX_METADATA_BYTES);
     try {
-      return document.parse(JSON.parse(text));
+      const raw = JSON.parse(text);
+      const state = document.parse(raw);
+      if (opaque) {
+        for (const [runner, config] of Object.entries(state.agents)) {
+          const rows = raw.agents[runner].methods;
+          if (!rows || typeof rows !== 'object' || Array.isArray(rows)) continue;
+          const unknown = Object.entries(rows).filter((item): item is [string, Record<string, unknown>] => {
+            const [id, row] = item;
+            return !Object.hasOwn(config.methods, id) && row !== null && typeof row === 'object' && !Array.isArray(row);
+          });
+          if (unknown.length) opaque.set(runner, Object.fromEntries(unknown));
+        }
+      }
+      return state;
     } catch {
       throw new Error('Provider metadata is corrupt or has an unsupported format.');
     }
@@ -137,10 +155,15 @@ async function applyKeyEdits(
   }
 }
 
-async function retireUnusedKeys(store: SecretStore, state: StoredAgentProviders): Promise<void> {
+async function retireUnusedKeys(store: SecretStore, state: StoredAgentProviders, opaque: OpaqueMethods): Promise<void> {
   const live = new Set<string>();
   for (const row of methodsBySlot(state).values()) {
     if (row.keyRef) live.add(row.keyRef);
+  }
+  for (const rows of opaque.values()) {
+    for (const row of Object.values(rows)) {
+      if (typeof row.keyRef === 'string') live.add(row.keyRef);
+    }
   }
   // Publication is complete; a later edit retries any failed cleanup.
   await store.retireProviderKeys(live).catch(() => {});
@@ -148,32 +171,43 @@ async function retireUnusedKeys(store: SecretStore, state: StoredAgentProviders)
 
 /** Stage immutable ciphertext, then publish all selected references in one durable metadata
  * rename. Readers never take the writer lock. Only a successful publish can retire old keys. */
-export async function updateAgentProviders(edit: (state: StoredAgentProviders, keys: KeyEdits) => void): Promise<void> {
+export async function updateAgentProviders<T>(edit: (state: StoredAgentProviders, keys: KeyEdits) => T | Promise<T>): Promise<T> {
   const home = cezarHomeDir();
   const path = join(home, 'agent-providers.json');
   const store = new SecretStore({ ...process.env, CEZ_HOME: home });
-  await store.withAgentProviderLock(async () => {
-    const current = await load(path); // Refuse to overwrite an unreadable file.
+  return store.withAgentProviderLock(async () => {
+    const opaque: OpaqueMethods = new Map();
+    const current = await load(path, opaque); // Refuse to overwrite an unreadable file.
     const next = structuredClone(current);
     const changes = new Map<string, string | null>();
-    await edit(next, {
+    const result = await edit(next, {
       set: (runner, id, value) => { changes.set(`${runner}/${id}`, value); },
       remove: (runner, id) => { changes.set(`${runner}/${id}`, null); },
     });
 
+    for (const [runner, rows] of opaque) {
+      const edited = next.agents[runner];
+      if (!edited || Object.keys(rows).some(id => Object.hasOwn(edited.methods, id) || changes.has(`${runner}/${id}`))) {
+        throw new Error('This edit would replace an unsupported provider method. Use the version that saved it.');
+      }
+    }
+
     try {
       await applyKeyEdits(current, next, changes, store);
-      if (isDeepStrictEqual(current, next)) return;
-      const body = `${JSON.stringify(next)}\n`;
+      if (isDeepStrictEqual(current, next)) return result;
+      const agents = Object.fromEntries(Object.entries(next.agents).map(([runner, config]) =>
+        [runner, opaque.has(runner) ? { ...config, methods: { ...opaque.get(runner), ...config.methods } } : config]));
+      const body = `${JSON.stringify({ ...next, agents })}\n`;
       if (Buffer.byteLength(body) > MAX_METADATA_BYTES) throw new Error('Provider metadata is too large.');
       await writePrivateFile(path, body);
     } catch (error) {
       // A failed directory fsync may follow a successful rename. Keep BOTH generations
       // in that case until a later durable commit. A failure before rename can roll back.
       const visible = await load(path).catch(() => undefined);
-      if (visible && isDeepStrictEqual(visible, current)) await retireUnusedKeys(store, current);
+      if (visible && isDeepStrictEqual(visible, current)) await retireUnusedKeys(store, current, opaque);
       throw error;
     }
-    await retireUnusedKeys(store, next);
+    await retireUnusedKeys(store, next, opaque);
+    return result;
   });
 }

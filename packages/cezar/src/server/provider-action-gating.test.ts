@@ -165,6 +165,23 @@ describe('provider action gating', () => {
     );
   });
 
+  it('delegates fresh runs to native auth despite saved providers and refuses explicit managed overrides', async () => {
+    vi.stubEnv('CEZ_HOME', join(repoRoot, 'workspace'));
+    try {
+      await updateAgentProviders(state => { state.agents.codex = { methods: {}, active: null }; });
+      vi.stubEnv('CEZ_AGENT_MODELS_LOCKED', '1');
+      const start = (agentMethod?: string) => apiRequest(app, '/api/v1/runs', {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ task: 'Task', runner: 'codex', agentMethod, steps: [{ id: 'task', prompt: '{{task}}' }] }),
+      });
+      expect((await start()).status).toBe(201);
+      const explicit = await start('custom');
+      expect(explicit.status).toBe(409);
+      expect(await explicit.json()).toMatchObject({ error: expect.stringContaining('native') });
+      expect(startRun).toHaveBeenCalledTimes(1);
+    } finally { vi.unstubAllEnvs(); }
+  });
+
   it('blocks a mixed inline workflow when one agent step uses a disabled provider', async () => {
     const response = await apiRequest(app, '/api/v1/runs', {
       method: 'POST',

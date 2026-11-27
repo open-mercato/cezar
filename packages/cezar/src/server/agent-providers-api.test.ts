@@ -2,10 +2,11 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
+import { readAgentProviders } from '../workspace/agent-providers.ts';
 import { Hono } from 'hono';
 import { agentProvidersResponseSchema } from '@open-mercato/cezar-contract';
 import { agentProvidersRoutes } from './agent-providers-routes.ts';
-import { applyProviderChanges, providerCatalog, providerEntry, providerModelAdmission, refreshProviderModels } from '../agent-providers/service.ts';
+import { applyProviderChanges, configuredAuthStatus, providerCatalog, providerEntry, providerModelAdmission, refreshProviderModels } from '../agent-providers/service.ts';
 
 let home: string;
 beforeEach(async () => {
@@ -94,7 +95,7 @@ it('keeps an initial failed discovery unavailable and lets a local retry restore
   } finally { vi.unstubAllGlobals(); }
 });
 
-it('keeps a newer successful model list when an older refresh fails last', async () => {
+it.each([true, false])('keeps a newer successful catalog fresh when an earlier refresh finishes last (success=%s)', async success => {
   await applyProviderChanges([{ runner: 'codex', active: 'custom', methods: [
     { id: 'custom', baseUrl: 'https://gateway.test', apiKey: 'test-fixture-key' },
   ] }], 'cli', []);
@@ -109,10 +110,10 @@ it('keeps a newer successful model list when an older refresh fails last', async
     const slow = refreshProviderModels('codex', 'custom');
     await waiting;
     expect(await refreshProviderModels('codex', 'custom')).toEqual({ models: ['newest-model'] });
-    finishSlow(new Response(null, { status: 502 }));
-    expect(await slow).toMatchObject({ models: ['newest-model'], error: expect.any(String) });
+    finishSlow(success ? Response.json({ data: [{ id: 'retired-model' }] }) : new Response(null, { status: 502 }));
+    expect(await slow).toMatchObject({ models: ['newest-model'] });
     const catalog = await providerCatalog('codex', vi.fn());
-    expect(catalog).toMatchObject({ stale: true, models: [{ id: 'newest-model' }] });
+    expect(catalog).toMatchObject({ stale: false, models: [{ id: 'newest-model' }] });
   } finally { vi.unstubAllGlobals(); }
 });
 
@@ -128,6 +129,58 @@ it('adds only connected native methods to a configured additive catalog', async 
   expect(catalog.models.map(m => [m.id, m.via?.methodId])).toEqual([
     ['anthropic/native', 'anthropic'], ['anthropic/test-model', 'openrouter'], ['test-model', 'openrouter'],
   ]);
+});
+
+it('offers guarded OMP native subscriptions beside a saved gateway without claiming OAuth is connected', async () => {
+  await app(true).request(base + '/omp/methods/custom', put({ kind: 'custom', baseUrl: 'https://gateway.test', apiKey: 'fixture-only' }));
+  const login = { provider: 'omp' as const, status: 'unknown' as const, methods: { 'openai-codex': 'disconnected' as const } };
+  const catalog = await providerCatalog('omp', async () => ({
+    runner: 'omp', source: 'live', stale: false,
+    models: ['anthropic/native', 'openai-codex/signed-out', 'other/native'].map(id => ({ id, label: id, description: '' })),
+  }), () => login);
+  expect(catalog.models.map(m => [m.id, m.via?.methodId])).toEqual([
+    ['anthropic/native', 'anthropic'], ['anthropic/test-model', 'custom'], ['test-model', 'custom'],
+  ]);
+  expect(providerEntry('omp', await readAgentProviders(), login).methods.find(m => m.id === 'anthropic')?.state).toBe('unknown');
+});
+
+it.each(['copilot', 'antigravity', 'junie'] as const)('can select the %s vendor login with an inconclusive method probe', async runner => {
+  const login = { provider: runner, status: 'connected' as const };
+  await applyProviderChanges([{ runner, active: 'subscription', methods: [] }], 'cli', [login]);
+  const store = await readAgentProviders();
+  const method = providerEntry(runner, store, login).methods[0];
+  expect(method).toMatchObject({ state: 'unknown', verifyAtLaunch: true });
+  expect((await configuredAuthStatus(store, login, 'subscription')).status).toBe('connected');
+  expect(providerEntry(runner, store, { ...login, authFailureId: 'incident' }).methods[0]).not.toHaveProperty('verifyAtLaunch');
+});
+
+it('uses only native model discovery under the operator authentication lock', async () => {
+  await app(true).request(base + '/codex/methods/custom', put({ kind: 'custom', baseUrl: 'https://gateway.test', apiKey: 'fixture-only' }));
+  await app(true).request(base + '/codex/active', put({ methodId: 'custom' }));
+  vi.stubEnv('CEZ_AGENT_MODELS_LOCKED', '1');
+  expect(await (await app(true).request(base)).json()).toMatchObject({ nativeAuth: true });
+  const catalog = { runner: 'codex' as const, models: [], source: 'cache' as const, stale: false };
+  expect(await providerCatalog('codex', async () => catalog)).toEqual(catalog);
+});
+
+it('can return to a Kimi subscription verified at launch after removing a gateway', async () => {
+  const login = { provider: 'kimi' as const, status: 'connected' as const };
+  const server = new Hono().route('/api/v1', agentProvidersRoutes(() => true, async () => [login]));
+  const path = base + '/kimi/methods/custom';
+  expect((await server.request(path, put({ kind: 'custom', baseUrl: 'https://gateway.test', apiKey: 'fixture-only' }))).status).toBe(200);
+  expect((await server.request(base + '/kimi/active', put({ methodId: 'custom' }))).status).toBe(200);
+  expect((await server.request(path, { method: 'DELETE' })).status).toBe(204);
+  const select = () => server.request(base + '/kimi/active', put({ methodId: 'subscription' }));
+  expect((await select()).status).toBe(200);
+  const state = await readAgentProviders();
+  expect(providerEntry('kimi', state, login)).toMatchObject({ active: 'subscription', methods: expect.arrayContaining([
+    expect.objectContaining({ id: 'subscription', state: 'unknown' }),
+  ]) });
+  expect((await configuredAuthStatus(state, login)).status).toBe('connected');
+  expect((await configuredAuthStatus(state, { ...login, status: 'disconnected' })).status).toBe('disconnected');
+  const native = vi.fn(async () => ({ runner: 'kimi' as const, source: 'live' as const, stale: false,
+    models: [{ id: 'kimi-code/native', label: 'Native', description: '' }] }));
+  expect((await providerCatalog('kimi', native, () => login)).models[0]?.via?.methodId).toBe('subscription');
 });
 
 it('uses a detected vendor key without attributing an unverified subscription', () => {

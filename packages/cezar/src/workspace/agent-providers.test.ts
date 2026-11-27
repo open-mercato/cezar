@@ -205,6 +205,24 @@ it('salvages good records and future fields, and refuses to overwrite unreadable
   expect(await readFile(metadata, 'utf8')).toBe('{');
 });
 
+it('retains newer method records and ciphertext through unrelated edits', async () => {
+  await put();
+  const raw = JSON.parse(await readFile(metadata, 'utf8'));
+  const future = raw.agents.claude.methods.custom;
+  future.kind = 'future-provider';
+  future.origin = { future: true };
+  await writeFile(metadata, JSON.stringify(raw));
+  const vault = join(home, 'secrets', `.agent-provider-${future.keyRef}.vault`);
+  const ciphertext = await readFile(vault);
+
+  expect((await readAgentProviders()).agents.claude?.methods.custom).toBeUndefined();
+  await updateAgentProviders(state => { state.agents.codex = { active: null, methods: {} }; });
+  expect(JSON.parse(await readFile(metadata, 'utf8')).agents.claude.methods.custom).toEqual(future);
+  expect(await readFile(vault)).toEqual(ciphertext);
+  await expect(put(second)).rejects.toThrow(/newer|unsupported/);
+  expect(await readFile(vault)).toEqual(ciphertext);
+});
+
 it('refuses unpinned writes at the sandbox guard, before creating any files', async () => {
   vi.spyOn(paths, 'assertCezarHomeWriteIsSandboxed').mockImplementation(() => { throw new Error('sandbox guard'); });
   await expect(put()).rejects.toThrow('sandbox guard');

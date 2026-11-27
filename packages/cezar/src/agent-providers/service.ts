@@ -64,12 +64,30 @@ function methodView(def: Definition, saved: StoredProviderMethod | undefined, lo
   } else if (fromHost) state = 'connected';
   return {
     id: def.id, kind: def.kind, label: saved?.label ?? def.label, state,
+    ...(def.kind === 'subscription' && state === 'unknown' && canVerifyAtLaunch(login) ? { verifyAtLaunch: true } : {}),
     ...(fromHost ? { origin: 'host' as const } : saved?.origin ? { origin: saved.origin } : {}),
     ...(saved?.keyHint ? { keyHint: saved.keyHint } : {}),
     ...(saved?.baseUrl ? { baseUrl: saved.baseUrl } : {}),
     ...(info ? { modelCount: info.ids.length } : {}),
     ...(info?.error ? { error: info.error } : state === 'error' ? { error: 'Fetch the model list to use this provider.' } : {}),
   };
+}
+
+// These CLIs establish the vendor login in their launch context. Passive discovery can
+// identify an installed, usable CLI without establishing which credential will serve a model.
+function canVerifyAtLaunch(login?: ProviderLogin) {
+  if (!login || login.enabled === false || login.authFailureId) return false;
+  switch (login.provider) {
+    case 'kimi':
+    case 'copilot':
+      return login.status === 'connected';
+    case 'omp':
+    case 'junie':
+    case 'antigravity':
+      return login.status === 'connected' || login.status === 'unknown';
+    default:
+      return false;
+  }
 }
 
 export function providerEntry(runner: Runner, store: Store, login?: ProviderLogin): AgentProviderEntry {
@@ -127,7 +145,7 @@ export async function applyProviderChanges(changes: ProviderChange[], origin: Or
           const saved = entry.methods[active];
           const method = methodView(def, saved, login);
           const pendingFetch = methods.some(m => m.id === active) && remote(def.kind) && saved?.keyHint;
-          if (!pendingFetch && method.state !== 'connected') throw new Error('Connect the method before selecting it.');
+          if (!pendingFetch && method.state !== 'connected' && !method.verifyAtLaunch) throw new Error('Connect the method before selecting it.');
         }
         entry.active = active;
       }
@@ -148,8 +166,14 @@ export async function removeProviderMethod(runner: Runner, id: string) {
 }
 
 export async function refreshProviderModels(runner: Runner, id: string) {
-  const method = (await readAgentProviders()).agents[runner]?.methods[id];
-  if (!method || !remote(method.kind) || !method.baseUrl) throw new Error('This method has no configured models endpoint.');
+  // Both the server and the headless CLI can refresh this catalog. Reserve the request's
+  // order under their shared metadata lock, then release it before going to the network.
+  const method = await updateAgentProviders(state => {
+    const row = state.agents[runner]?.methods[id];
+    if (!row || !remote(row.kind) || !row.baseUrl) throw new Error('This method has no configured models endpoint.');
+    row.fetchGeneration = (row.fetchGeneration ?? 0) + 1;
+    return { ...row, baseUrl: row.baseUrl, fetchGeneration: row.fetchGeneration };
+  });
   const key = process.env.CEZ_DRY_RUN === '1' ? '' : await readAgentProviderKey(runner, id, method);
   if (!key && process.env.CEZ_DRY_RUN !== '1') throw new Error('Provider key is unavailable.');
   let ids: NonNullable<StoredProviderMethod['models']>['ids'] = [];
@@ -159,9 +183,13 @@ export async function refreshProviderModels(runner: Runner, id: string) {
   await updateAgentProviders(state => {
     const current = state.agents[runner]?.methods[id];
     if (!current || current.kind !== method.kind || current.baseUrl !== method.baseUrl || current.keyRef !== method.keyRef) throw new Error('Provider changed. Retry with the current settings.');
-    // A failing concurrent refresh must keep the newest successfully published list.
+    if (current.models && (current.models.generation ?? 0) > method.fetchGeneration) {
+      ids = current.models.ids;
+      error = current.models.error;
+      return;
+    }
     if (error) ids = current.models?.ids ?? [];
-    current.models = { fetchedAt: new Date().toISOString(), ids, ...(error ? { error } : {}) };
+    current.models = { fetchedAt: new Date().toISOString(), generation: method.fetchGeneration, ids, ...(error ? { error } : {}) };
   });
   return { models: ids.map(m => m.id), ...(error ? { error } : {}) };
 }
@@ -170,12 +198,13 @@ export async function providerCatalog(
   runner: Runner, native: () => Promise<RunnerModelCatalogResponse>,
   loginFor?: (configured: boolean) => ProviderLogin | undefined | Promise<ProviderLogin | undefined>,
 ): Promise<RunnerModelCatalogResponse> {
+  if (providerAuthChecksDisabled()) return native();
   const store = await readAgentProviders();
   const saved = store.agents[runner];
   const login = await loginFor?.(!!saved);
   const entry = providerEntry(runner, store, await configuredLogin(login, store));
   const selected = entry.methods.filter(m => entry.mode === 'any' || m.id === entry.active);
-  const local = selected.filter(m => (!remote(m.kind) || m.origin === 'host') && m.state === 'connected');
+  const local = selected.filter(m => (!remote(m.kind) || m.origin === 'host') && (m.state === 'connected' || m.verifyAtLaunch));
   const needsNative = !saved || local.length > 0;
   const legacy = needsNative ? await native() : undefined;
   const options: RunnerModelOption[] = [];
@@ -208,6 +237,7 @@ export async function configuredAuthStatus(store: Store, row: ProviderLogin, pin
   const chosen = pinned ?? entry.active;
   const available = entry.methods.filter(m => chosen ? m.id === chosen : entry.mode === 'any');
   if (available.some(m => m.kind !== 'subscription' && m.state === 'connected')) return { ...row, status: 'connected' };
+  if (available.some(m => m.verifyAtLaunch)) return row;
   const login = available.find(m => m.kind === 'subscription' && m.state === 'connected') ??
     available.find(m => m.kind === 'subscription' && m.state === 'unknown');
   return { ...row, status: login?.state === 'connected' ? 'connected' : login?.state === 'unknown' ? 'unknown' : 'disconnected' };
@@ -216,7 +246,7 @@ export async function configuredAuthStatus(store: Store, row: ProviderLogin, pin
 // Native runner guards also apply to synchronous dispatch and Continue. Only the selected
 // endpoint's actual catalog can authorize an otherwise foreign native model name.
 export async function providerModelAdmission(runner: Runner, model?: string, recordedMethod?: string): Promise<{ providerModel?: string }> {
-  if (!model || !modelConflictsWithRunner(model, runner)) return {};
+  if (providerAuthChecksDisabled() || !model || !modelConflictsWithRunner(model, runner)) return {};
   const entry = (await readAgentProviders()).agents[runner];
   if (!entry) return {};
   const selected = recordedMethod ?? entry.active;

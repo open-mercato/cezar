@@ -40,6 +40,7 @@ export const agentProviderMethodSchema = z.object({
   kind: providerMethodKindSchema,
   label: z.string(),
   state: z.enum(['connected', 'disconnected', 'error', 'unknown']),
+  verifyAtLaunch: z.literal(true).optional(),
   origin: z.enum(['host', 'cockpit', 'cli', 'file']).optional(),
   keyHint: z.string().optional(),
   baseUrl: z.string().optional(),
@@ -57,6 +58,7 @@ export const agentProviderEntrySchema = z.object({
 export type AgentProviderEntry = z.infer<typeof agentProviderEntrySchema>;
 export const agentProvidersResponseSchema = z.object({
   editable: z.boolean(),
+  nativeAuth: z.literal(true).optional(),
   agents: z.array(agentProviderEntrySchema),
 });
 export type AgentProvidersResponse = z.infer<typeof agentProvidersResponseSchema>;

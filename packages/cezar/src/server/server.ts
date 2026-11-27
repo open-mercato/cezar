@@ -1603,13 +1603,12 @@ export function createAppParts(deps: ServerDeps) {
     required: readonly ProviderId[],
     scope: ProviderAccountScope = {},
   ): Promise<string | null> => {
+    if (providerAuthChecksDisabled()) return null;
     // Judge the account the action runs on, not only the default login (telemetry ac53a6ef).
     const storedProviders = await readAgentProviders();
     const judged = async (refresh: boolean): Promise<ProviderStatusResponse> => {
       const rows = await providerStatus(refresh ? { refresh: true } : undefined);
-      const judgedRows = providerAuthChecksDisabled()
-        ? rows
-        : await withSelectedAccounts(rows, required, scope, providerAuth, { refresh });
+      const judgedRows = await withSelectedAccounts(rows, required, scope, providerAuth, { refresh });
       const providers = await Promise.all(judgedRows.providers.map(async row => {
         if (!required.includes(row.provider)) return row;
         const pinned = scope.methodFor?.(row.provider);
@@ -5664,6 +5663,7 @@ export function createAppParts(deps: ServerDeps) {
       }
       const fallback = parsed.data.runner ?? (await loadConfig(repoRoot)).defaultRunner;
       if (parsed.data.agentMethod !== undefined) {
+        if (providerAuthChecksDisabled()) return c.json({ error: 'Provider selection is locked to native agent authentication.' }, 409);
         const statuses = await withSelectedAccounts(await providerStatus(), [fallback], {
           repoRoot, profileFor: () => parsed.data.agentProfile,
         }, providerAuth);
