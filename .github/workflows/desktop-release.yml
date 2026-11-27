@@ -194,7 +194,7 @@ jobs:
         id: signing
         shell: bash
         env:
-          HAS_APPLE: ${{ secrets.APPLE_CERTIFICATE != '' && secrets.APPLE_ID != '' }}
+          HAS_APPLE: ${{ secrets.APPLE_CERTIFICATE != '' && secrets.APPLE_ID != '' && secrets.APPLE_PASSWORD != '' }}
           HAS_UPDATER_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY != '' }}
           HAS_SIGNPATH: ${{ secrets.SIGNPATH_API_TOKEN != '' && secrets.SIGNPATH_ORGANIZATION_ID != '' }}
         run: |
@@ -303,13 +303,23 @@ jobs:
       # Under the onboarding `test-signing` policy the signature is SignPath's self-signed test
       # certificate, which Windows does not trust either, so a failed request falls back to the
       # unsigned installer with a warning (and `publish` refuses it). Under any other policy,
-      # an unknown or mistyped one included, a failure stops the release.
+      # an unknown, mistyped or case-variant one included, a failure stops the release. Decided
+      # here, case-sensitively: a GitHub expression's `==` ignores case.
+      - name: Decide the SignPath fallback
+        id: policy
+        if: runner.os == 'Windows' && steps.signing.outputs.signpath == 'true'
+        shell: bash
+        working-directory: ${{ env.DESKTOP_DIR }}
+        env:
+          SIGNPATH_SIGNING_POLICY: ${{ vars.SIGNPATH_SIGNING_POLICY_SLUG || 'release-signing' }}
+        run: echo "fallback=$(node scripts/desktop-release-gates.mjs signpath-fallback "$SIGNPATH_SIGNING_POLICY")" >> "$GITHUB_OUTPUT"
+
       # v3, not v2: v2's deprecated githubactions.connectors.signpath.io intermittently answers
       # "Invalid URL for GitHub API" (2 of 3 desktop-v0.1.12 attempts); v3 uses the Pipeline Connector.
       - name: Sign the installer with SignPath
         id: signpath
         if: runner.os == 'Windows' && steps.signing.outputs.signpath == 'true'
-        continue-on-error: ${{ vars.SIGNPATH_SIGNING_POLICY_SLUG == 'test-signing' }}
+        continue-on-error: ${{ steps.policy.outputs.fallback == 'true' }}
         uses: signpath/github-action-submit-signing-request@a2c5b60d9c75f073142b653c354b632eedce097b # v3.2
         with:
           api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
@@ -331,6 +341,7 @@ jobs:
           echo "⚠️ SignPath ($SIGNPATH_SIGNING_POLICY) failed: the Windows installer is UNSIGNED — SmartScreen will warn on install, and publish will refuse it without allow_untrusted." >> "$GITHUB_STEP_SUMMARY"
 
       - name: Put the signed installer in place
+        id: placed
         if: runner.os == 'Windows' && steps.signing.outputs.signpath == 'true' && steps.signpath.outcome == 'success'
         shell: bash
         working-directory: ${{ env.DESKTOP_DIR }}
@@ -342,6 +353,7 @@ jobs:
           NAME: ${{ steps.installer.outputs.name }}
           HAS_UPDATER_KEY: ${{ steps.signing.outputs.updater }}
           SIGNPATH_SIGNING_POLICY: ${{ vars.SIGNPATH_SIGNING_POLICY_SLUG || 'release-signing' }}
+          SIGNPATH_FALLBACK: ${{ steps.policy.outputs.fallback }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: |
@@ -349,14 +361,16 @@ jobs:
           cp "signed/$NAME" "$INSTALLER"
           # Test-signing uses SignPath's self-signed test certificate during onboarding, so
           # prove an Authenticode signer exists there. Every other policy must chain to trust.
+          # The status is recorded either way: it alone decides `trusted` (Record the signing outcome).
           cat > verify-signpath-signature.ps1 <<'POWERSHELL'
           $signature = Get-AuthenticodeSignature $env:INSTALLER
           $signature | Format-List Status, SignerCertificate
+          Set-Content -Path authenticode-status.txt -Value "$($signature.Status)" -NoNewline -Encoding ascii
           if ($null -eq $signature.SignerCertificate) {
             Write-Error "SignPath returned an installer without an Authenticode signer"
             exit 1
           }
-          if ($env:SIGNPATH_SIGNING_POLICY -ne 'test-signing' -and $signature.Status -ne 'Valid') {
+          if ($env:SIGNPATH_FALLBACK -ne 'true' -and $signature.Status -ne 'Valid') {
             Write-Error "The installer signed under policy '$env:SIGNPATH_SIGNING_POLICY' is not trusted by Windows: $($signature.Status)"
             exit 1
           }
@@ -365,6 +379,7 @@ jobs:
           }
           POWERSHELL
           powershell -NoProfile -ExecutionPolicy Bypass -File verify-signpath-signature.ps1
+          echo "authenticode=$(cat authenticode-status.txt)" >> "$GITHUB_OUTPUT"
           if [ "$HAS_UPDATER_KEY" = "true" ]; then
             rm -f "$INSTALLER.sig"
             npx tauri signer sign "$INSTALLER"
@@ -401,9 +416,10 @@ jobs:
           test "$(plutil -extract CFBundleIconName raw "${apps[0]}/Contents/Info.plist")" = cezar || { echo "::error::CFBundleIconName is not cezar"; exit 1; }
           test -n "$(plutil -extract CFBundleIconFile raw "${apps[0]}/Contents/Info.plist")" || { echo "::error::no CFBundleIconFile"; exit 1; }
 
-      # What `publish` decides on: only `trusted` (Windows, a release-policy SignPath signature
-      # Windows accepts) and `developer-id` (macOS, signed and notarized) may reach the
-      # rolling release, the updater manifest or the cask.
+      # What `publish` decides on: only `trusted` (Windows: Authenticode status `Valid`, whatever
+      # the policy slug) and `developer-id` (macOS: a Developer ID Application authority AND
+      # Gatekeeper's "Notarized Developer ID") may reach the rolling release, the updater
+      # manifest or the cask. The decisions live in scripts/desktop-release-gates.mjs.
       - name: Record the signing outcome
         id: trust
         if: runner.os != 'Linux'
@@ -413,22 +429,19 @@ jobs:
           KEY: ${{ runner.os == 'Windows' && 'windows' || startsWith(matrix.target, 'aarch64') && 'macos_aarch64' || 'macos_x86_64' }}
           HAS_APPLE: ${{ steps.signing.outputs.apple }}
           SIGNPATH_OUTCOME: ${{ steps.signpath.outcome }}
-          SIGNPATH_SIGNING_POLICY: ${{ vars.SIGNPATH_SIGNING_POLICY_SLUG || 'release-signing' }}
+          AUTHENTICODE: ${{ steps.placed.outputs.authenticode }}
         run: |
           if [ "$RUNNER_OS" = "Windows" ]; then
-            # The Authenticode check above already required `Valid` for any non-test policy.
-            if [ "$SIGNPATH_OUTCOME" != "success" ]; then STATE=unsigned
-            elif [ "$SIGNPATH_SIGNING_POLICY" = "test-signing" ]; then STATE=test-signed
-            else STATE=trusted
-            fi
+            STATE=$(node scripts/desktop-release-gates.mjs windows-state "$SIGNPATH_OUTCOME" "$AUTHENTICODE")
           else
             shopt -s nullglob
             apps=( src-tauri/target/*/release/bundle/macos/*.app )
-            if [ "$HAS_APPLE" = "true" ] && ! codesign -dv "${apps[0]}" 2>&1 | grep -q 'Signature=adhoc'; then
-              STATE=developer-id
-            else
-              STATE=ad-hoc
-            fi
+            if [ ${#apps[@]} -eq 0 ]; then echo "::error::no .app bundle found"; exit 1; fi
+            # Captured to files first: a pipe into `grep -q` can SIGPIPE codesign under pipefail.
+            codesign -dv --verbose=2 "${apps[0]}" > codesign-info.txt 2>&1
+            spctl -a -vv -t exec "${apps[0]}" > gatekeeper-info.txt 2>&1 || true
+            cat gatekeeper-info.txt
+            STATE=$(node scripts/desktop-release-gates.mjs macos-state "$HAS_APPLE" codesign-info.txt gatekeeper-info.txt)
           fi
           echo "$KEY: $STATE"
           echo "$KEY=$STATE" >> "$GITHUB_OUTPUT"
@@ -636,10 +649,7 @@ jobs:
           MACOS_X86_64: ${{ needs.build.outputs.macos_x86_64 }}
           ALLOW_UNTRUSTED: ${{ inputs.allow_untrusted }}
         run: |
-          TRUSTED=true
-          [ "$WINDOWS" = "trusted" ] || TRUSTED=false
-          [ "$MACOS_AARCH64" = "developer-id" ] || TRUSTED=false
-          [ "$MACOS_X86_64" = "developer-id" ] || TRUSTED=false
+          TRUSTED=$(node packages/desktop/scripts/desktop-release-gates.mjs publish-trust "$WINDOWS" "$MACOS_AARCH64" "$MACOS_X86_64")
           {
             echo "### Signing"
             echo ""
@@ -705,16 +715,19 @@ jobs:
           TAG: ${{ needs.prepare.outputs.tag }}
           VERSION: ${{ needs.prepare.outputs.version }}
         run: |
+          GATES=packages/desktop/scripts/desktop-release-gates.mjs
+          TITLE=$(node "$GATES" rolling-title "$VERSION")
           # A re-run of an older release must not roll the download links and the updater
           # manifest back (the cask has the same guard, bump-homebrew-cask.mjs). The title names
-          # the version desktop-latest points at.
-          CURRENT=$(gh release view desktop-latest --repo "$REPO" --json name -q .name 2>/dev/null | sed -n 's/.*(latest: v\([^)]*\)).*/\1/p')
-          if [ -n "$CURRENT" ] && node --input-type=module -e \
-            "import { isOlderVersion } from './packages/desktop/scripts/bump-homebrew-cask.mjs'; process.exit(isOlderVersion(process.argv[1], process.argv[2]) ? 0 : 1)" \
-            "$VERSION" "$CURRENT"; then
-            echo "::warning::desktop-latest is already at v$CURRENT; not downgrading it to v$VERSION."
-            echo "⚠️ desktop-latest stays at v$CURRENT: v$VERSION is older." >> "$GITHUB_STEP_SUMMARY"
-            exit 0
+          # the version desktop-latest points at; a title the gate cannot read fails the step
+          # (exit 2 under `bash -e`) instead of switching the guard off.
+          if CURRENT_TITLE=$(gh release view desktop-latest --repo "$REPO" --json name -q .name); then
+            DECISION=$(node "$GATES" rolling-decision "$VERSION" "$CURRENT_TITLE")
+            if [ "$DECISION" != "update" ]; then
+              echo "::warning::desktop-latest is at a newer version ($CURRENT_TITLE); not downgrading it to v$VERSION."
+              echo "⚠️ desktop-latest stays where it is ($CURRENT_TITLE): v$VERSION is older." >> "$GITHUB_STEP_SUMMARY"
+              exit 0
+            fi
           fi
           mkdir rolling
           # Every installer or none: `--clobber` replaces by name, so a file missing here would
@@ -734,11 +747,11 @@ jobs:
             # The `desktop-latest` TAG stays where the first release put it. Moving a tag is a
             # ref update the workflow's token is refused (HTTP 403), and nothing reads the tag:
             # the download links go by release and asset name, and the notes name the version.
-            gh release edit desktop-latest --repo "$REPO" --title "cezar desktop (latest: v$VERSION)" \
+            gh release edit desktop-latest --repo "$REPO" --title "$TITLE" \
               --notes "Rolling pointer to the newest desktop release, [$TAG](https://github.com/$REPO/releases/tag/$TAG). Download links on this page never change." \
               --latest=false
           else
-            gh release create desktop-latest --repo "$REPO" --target "$SHA" --title "cezar desktop (latest: v$VERSION)" \
+            gh release create desktop-latest --repo "$REPO" --target "$SHA" --title "$TITLE" \
               --notes "Rolling pointer to the newest desktop release, [$TAG](https://github.com/$REPO/releases/tag/$TAG). Download links on this page never change." \
               --latest=false
           fi
@@ -751,7 +764,7 @@ jobs:
           REPO: ${{ github.repository }}
           TRUSTED: ${{ steps.trust.outputs.trusted }}
           # The same condition the build legs sign under.
-          HAS_APPLE: ${{ secrets.APPLE_CERTIFICATE != '' && secrets.APPLE_ID != '' }}
+          HAS_APPLE: ${{ secrets.APPLE_CERTIFICATE != '' && secrets.APPLE_ID != '' && secrets.APPLE_PASSWORD != '' }}
           HAS_UPDATER_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY != '' }}
           HAS_SIGNPATH: ${{ secrets.SIGNPATH_API_TOKEN != '' && secrets.SIGNPATH_ORGANIZATION_ID != '' }}
         run: |
@@ -770,7 +783,7 @@ jobs:
               echo "Prerelease only — the stable download links still point at the previous release."
             fi
             echo ""
-            [ "$HAS_APPLE" = "true" ] || echo "⚠️ macOS builds are ad-hoc signed, not notarized (no APPLE_CERTIFICATE/APPLE_ID) — Gatekeeper asks the user to allow them. Not fit for a landing page."
+            [ "$HAS_APPLE" = "true" ] || echo "⚠️ macOS builds are ad-hoc signed, not notarized (no APPLE_CERTIFICATE/APPLE_ID/APPLE_PASSWORD) — Gatekeeper asks the user to allow them. Not fit for a landing page."
             [ "$HAS_SIGNPATH" = "true" ] || echo "⚠️ The Windows installer is UNSIGNED (no SIGNPATH_* secrets) — SmartScreen will warn on install."
             [ "$HAS_UPDATER_KEY" = "true" ] || echo "⚠️ No updater manifest (no TAURI_SIGNING_PRIVATE_KEY) — installed shells will not auto-update to this version."
           } >> "$GITHUB_STEP_SUMMARY"

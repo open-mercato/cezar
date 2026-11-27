@@ -73,11 +73,12 @@ config, so a local `tauri build` does not demand the signing key.
 Secret-gated, all-or-nothing per platform. The build legs degrade to unsigned (Windows) or
 ad-hoc signed (macOS) builds with a warning, but **publishing fails closed**: each leg reports
 how it was signed (`build` outputs `windows`, `macos_aarch64`, `macos_x86_64`), and `publish`
-refuses, leaving the draft a draft, unless Windows is `trusted` (a SignPath signature under any
-policy but `test-signing` that Windows accepts) and both macOS legs are `developer-id` (signed
-and notarized). The manual `allow_untrusted` input publishes such a build as a **prerelease
-only**: no `desktop-latest`, no `desktop-latest.json`, no cask. Only the exact
-`SIGNPATH_SIGNING_POLICY_SLUG` `test-signing` lets a failed SignPath request fall back to the
+refuses, leaving the draft a draft, unless Windows is `trusted` (Authenticode status `Valid`,
+whatever the policy slug) and both macOS legs are `developer-id` (a `Developer ID Application`
+authority and Gatekeeper's `Notarized Developer ID`). The decisions are in
+`packages/desktop/scripts/desktop-release-gates.mjs`, which the tests run. The manual `allow_untrusted` input publishes such a build as a **prerelease
+only**: no `desktop-latest`, no `desktop-latest.json`, no cask. Only the exact,
+case-sensitive `SIGNPATH_SIGNING_POLICY_SLUG` `test-signing` lets a failed SignPath request fall back to the
 unsigned installer; any other slug fails the leg. Untrusted builds are fine for a maintainer to
 test and NOT fit for a Download button (Gatekeeper asks the user to allow them; SmartScreen warns).
 
@@ -88,11 +89,11 @@ Three more guards (post-merge audit of #2350, #2352 and #2355):
 - The rolling `desktop-latest` refresh never moves back to an older version (the cask's guard in
   `bump-homebrew-cask.mjs`).
 
-The jobs that read signing or release-app secrets (`build`, `publish`, `homebrew-tap`) run in
-the `desktop-release` GitHub environment. A maintainer creates it in the repository settings,
-with required reviewers (the approvers in `docs/code-signing-policy.md`) and deployment refs
-limited to `main` and `desktop-v*`. Until it exists, GitHub creates it on first use without
-protection rules, and the release still runs.
+The jobs that read signing or release-app secrets (`build`, `publish`, `homebrew-tap`) name
+the `desktop-release` GitHub environment. That is not a protection yet: the environment, its
+reviewers and ref rules, and the move of the secrets into it are maintainer setup still to do
+(the checklist in `docs/code-signing-policy.md`). Until then GitHub creates the environment on
+first use without rules, and the release still runs.
 
 | Secret | Used for |
 | --- | --- |
