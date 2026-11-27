@@ -13,14 +13,15 @@ export function servingMethods(entry: AgentProviderEntry): AgentProviderMethod[]
 
 export function canUseAgent(entry: AgentProviderEntry | undefined, login: ProviderStatus | undefined): boolean {
   if (!login?.enabled || login.status === 'not-installed') return false
-  if (entry?.configured) return servingMethods(entry).length > 0
+  if (entry && servingMethods(entry).length > 0) return true
   // An offline login probe can establish that an agent runs without identifying its provider.
-  return providerRowRunnable(login) || !!entry && servingMethods(entry).length > 0
+  return !entry?.configured && providerRowRunnable(login)
 }
 
-export function methodSummary(entry: AgentProviderEntry): string {
+export function methodSummary(entry: AgentProviderEntry, login?: ProviderStatus): string {
   const serving = servingMethods(entry)
-  if (!serving.length) return entry.methods.some(m => m.state === 'unknown') ? 'Login unverified' : 'No provider'
-  if (serving.some(m => m.state === 'unknown')) return 'Login unverified'
-  return entry.mode === 'one' ? serving[0]!.label : `${serving.length} of ${entry.methods.length} connected`
+  if (!serving.length) return canUseAgent(entry, login) ? 'Provider unverified' : 'No provider'
+  if (serving.every(m => m.state === 'unknown')) return 'Provider unverified'
+  const connected = serving.filter(m => m.state === 'connected')
+  return entry.mode === 'one' ? connected[0]!.label : `${connected.length} of ${entry.methods.length} connected`
 }

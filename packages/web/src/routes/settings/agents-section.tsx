@@ -3,7 +3,7 @@ import { SortableContext, sortableKeyboardCoordinates, useSortable, verticalList
 import { CSS } from '@dnd-kit/utilities'
 import { ArrowDownIcon, ArrowUpIcon, BotIcon, GripVerticalIcon, PlusIcon, XIcon } from 'lucide-react'
 import { Link, useLocation } from 'react-router'
-import { runnerModelsSchema, type AgentProviderEntry } from '@open-mercato/cezar-api-client'
+import type { AgentProviderEntry, ProviderStatus } from '@open-mercato/cezar-api-client'
 import { agentProvidersPath, canUseAgent, servingMethods } from '@/lib/agent-providers'
 import { useRef, useState, type ReactNode } from 'react'
 
@@ -63,11 +63,13 @@ const INHERIT_MODEL = '__inherit__'
 /** The catalog-status line rendered as a disabled item — never a pickable value. */
 const CATALOG_STATUS = '__status__'
 
-function ProviderLine({ entry }: { entry?: AgentProviderEntry }) {
+function ProviderLine({ entry, login }: { entry?: AgentProviderEntry; login?: ProviderStatus }) {
   if (!entry) return null
-  const serving = servingMethods(entry)
-  return <Link to={agentProvidersPath(entry.runner)} className={`block w-fit text-label underline underline-offset-2 ${serving.length ? 'text-muted-foreground' : 'text-pending-strong'}`}>
-    {serving.length ? `via ${serving.map(m => m.label).join(', ')} · Manage providers` : 'No provider · Configure providers'}
+  const serving = servingMethods(entry).filter(method => method.state === 'connected')
+  const runnable = canUseAgent(entry, login)
+  return <Link to={agentProvidersPath(entry.runner)} className={`block w-fit text-label underline underline-offset-2 ${runnable ? 'text-muted-foreground' : 'text-pending-strong'}`}>
+    {serving.length ? `via ${serving.map(m => m.label).join(', ')} · Manage providers`
+      : runnable ? 'Provider unverified · Manage providers' : 'No provider · Configure providers'}
   </Link>
 }
 
@@ -110,7 +112,7 @@ function AgentsForm({
   const { hash } = useLocation()
   const entries = useAgentProviders().data?.agents
   const globalModels = useWorkspaceConfig().data?.agentDefaults.models
-  const overrides = 'projectDefaultModels' in config ? runnerModelsSchema.parse(config.projectDefaultModels) : undefined
+  const overrides = config.projectDefaultModels
   const scope = useProjectScope()
   const fallbackProjectId = scope.projectId ?? 'default'
   const fallback = useAgentFallbackPolicy(fallbackProjectId)
@@ -182,7 +184,7 @@ function AgentsForm({
               slot="agents-model-row"
               saved={save.savedFor('defaultModels')}
               label={<span className="text-ui font-mono">{runner.label}</span>}
-              description={entry ? <ProviderLine entry={entry} /> : providerReason ? `${runner.desc} — ${providerReason}` : runner.desc}
+              description={entry ? <ProviderLine entry={entry} login={provider} /> : providerReason ? `${runner.desc} — ${providerReason}` : runner.desc}
             >
               {config.modelsLocked ? (
                 <output
@@ -220,7 +222,7 @@ function AgentsForm({
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent position="popper">
-                    {overrides && <SelectItem value={INHERIT_MODEL}>Inherit ({globalModels?.[runner.id] ?? (inherited ? configuredModel || 'auto' : 'workspace default')})</SelectItem>}
+                    {overrides && <SelectItem value={INHERIT_MODEL}>Inherit ({globalModels?.[runner.id] || (inherited ? configuredModel || 'auto' : 'workspace default')}){inherited && missing && ' · no longer offered'}</SelectItem>}
                     {missing && <SelectItem value={configuredModel} disabled>{configuredModel} · no longer offered</SelectItem>}
                     {modelOptions.map((model) => (
                       <SelectItem key={model.id || AUTO_MODEL} value={model.id || AUTO_MODEL}>
@@ -515,7 +517,7 @@ function FallbackField({
                       <span className="min-w-0 flex-1">
                         <span className="text-label text-muted-foreground">{index + 1}.</span> {label}
                         <span className="text-muted-foreground"> · {candidate.model ?? 'auto model'}</span>
-                        <ProviderLine entry={entries?.find(e => e.runner === candidate.provider)} />
+                        <ProviderLine entry={entries?.find(e => e.runner === candidate.provider)} login={providerStatusFor(providerStatus.data, candidate.provider)} />
                         {problem ? <span className="block text-label text-danger">{problem}</span> : null}
                         {note ? <span className="block text-label text-muted-foreground">{note}</span> : null}
                       </span>
@@ -581,7 +583,7 @@ function FallbackField({
               </SelectTrigger>
               <SelectContent position="popper">
                 <SelectItem value={AUTO_MODEL}>auto model</SelectItem>
-                {modelsForRunner(modelRunner, modelCatalog?.data, []).map((model) =>
+                {modelsForRunner(modelRunner, modelCatalog?.data, [], entries?.find(e => e.runner === modelRunner)).map((model) =>
                   model.id ? <SelectItem key={model.id} value={model.id}>{model.label}</SelectItem> : null,
                 )}
                 {modelStatus ? <SelectItem value={CATALOG_STATUS} disabled>{modelStatus}</SelectItem> : null}
@@ -705,7 +707,7 @@ function DefaultAgentField({
             }
           }}
         />
-        <ProviderLine entry={entries?.find(e => e.runner === defaultRunner)} />
+        <ProviderLine entry={entries?.find(e => e.runner === defaultRunner)} login={providerStatusFor(providerStatus.data, defaultRunner)} />
         {!providerStatus.isPending &&
         !providerStatus.isError &&
         providerStatusFor(providerStatus.data, defaultRunner)?.enabled === false ? (

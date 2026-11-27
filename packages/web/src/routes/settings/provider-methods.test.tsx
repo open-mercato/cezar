@@ -34,6 +34,22 @@ it('switches one-mode methods while leaving a host key read-only', async () => {
   })]))
 })
 
+it('opens native sign-out instructions without sending a credential change', () => {
+  const fetch = mount(claude)
+  const summary = screen.getByText('Sign out')
+  fireEvent.click(summary)
+  expect(summary.closest('details')?.open).toBe(true)
+  expect(screen.getByText(/Run claude auth logout/)).toBeTruthy()
+  expect(fetch).not.toHaveBeenCalled()
+})
+
+it('keeps an unverified subscription radio disabled', () => {
+  mount({ ...claude, active: 'custom', methods: claude.methods.map(method =>
+    method.kind === 'subscription' ? { ...method, state: 'unknown' } : method,
+  ) })
+  expect(screen.getByRole('radio', { name: 'Run claude on Claude subscription' }).hasAttribute('disabled')).toBe(true)
+})
+
 it('edits a file-managed endpoint without pre-filling its saved key', async () => {
   const fetch = mount(claude)
   expect(screen.getByText(/from providers file/)).toBeTruthy()

@@ -32,6 +32,7 @@ import {
   type AgentProfilesResponse,
   type BackendCheck,
   type ProviderId,
+  type ProviderStatus,
   type Runner,
   type SetWorkspaceConfigInput,
 } from '@open-mercato/cezar-api-client'
@@ -51,7 +52,7 @@ import { Badge } from '@/components/ui/badge'
 import { Button, buttonVariants } from '@/components/ui/button'
 import { IconTooltip } from '@/components/ui/icon-tooltip'
 import { Input } from '@/components/ui/input'
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { StatusDot, type StatusDotTone } from '@/components/status-dot'
 import { RUNNER_ORDER } from '@/lib/provider-status'
 import { toast } from '@/components/ui/toaster'
@@ -60,7 +61,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel,
 import { LoadingState, SettingsSkeleton } from '@/components/loading-state'
 import { modelCatalogStatus, modelsForRunner, RUNNERS } from '@/routes/new-task-form'
 import { useAddAccount } from '@/components/add-account/add-account-host'
-import { canUseAgent, methodSummary, servingMethods } from '@/lib/agent-providers'
+import { canUseAgent, methodSummary } from '@/lib/agent-providers'
 import { agentRowAction, AGENT_ROW_ACTION_LABEL } from '@/lib/agent-setup'
 import { AGENT_DESCRIPTORS } from './agent-descriptors'
 import { ProviderMethods } from './provider-methods'
@@ -237,16 +238,17 @@ function AccountsPane({ data }: { data: AgentProfilesResponse }) {
             // `checks` is read defensively: health is also patched in place from the WS topic and
             // seeded by route gates, so a partially-populated cache entry is a real state.
             check={checks?.find((c) => c.name === provider)}
-            subscription={data.editable && (methods.data?.editable === true || (methods.error instanceof ApiError && methods.error.status === 404)) ? <SubscriptionAccounts
+            subscription={data.editable && !methods.isPending ? <SubscriptionAccounts
               provider={provider} accounts={(data.profiles ?? []).filter(p => p.provider === provider)}
               capable={capable.includes(provider)} selected={data.defaults?.[provider]} hostPaths={hostPaths}
               onRemove={setConfirming} /> : undefined}
             entry={methods.data?.agents.find(agent => agent.runner === provider)}
+            login={status.data?.providers.find(row => row.provider === provider)}
             setup={setup.data?.agents.find(agent => agent.provider === provider)}
             onSetup={sheet.open}
             editable={methods.data?.editable === true}
             onStar={() => saveDefault.mutate(provider)}
-            canStar={defaultRunner !== undefined && !saveDefault.isPending && canUseAgent(methods.data?.agents.find(agent => agent.runner === provider), status.data?.providers.find(row => row.provider === provider))}
+            canStar={defaultRunner !== undefined && !saveDefault.isPending}
             staleModel={stale.includes(provider)}
             isDefault={provider === (defaultRunner ?? 'claude')}
             highlighted={provider === requested}
@@ -314,11 +316,12 @@ function useDefaultRunner(): Runner | undefined {
 }
 
 /** One agent on this machine: what the binary is, which logins it has, its default model. */
-function InstalledAgentRow({ provider, check, entry, setup, editable, onSetup, isDefault, highlighted, canStar, onStar, staleModel, subscription }: {
+function InstalledAgentRow({ provider, check, entry, login, setup, editable, onSetup, isDefault, highlighted, canStar, onStar, staleModel, subscription }: {
   provider: ProviderId
   check: BackendCheck | undefined
   subscription?: ReactNode
   entry?: AgentProviderEntry
+  login?: ProviderStatus
   setup?: AgentSetupEntry
   editable: boolean
   onSetup: ReturnType<typeof useAgentSetupSheet>['open']
@@ -333,8 +336,8 @@ function InstalledAgentRow({ provider, check, entry, setup, editable, onSetup, i
   const label = PROVIDER_LABEL[provider]
   const installed = check?.available
   const action = agentRowAction(setup, undefined)
-  const usable = entry && servingMethods(entry).length > 0
-  const summary = installed === false ? 'Not installed' : entry ? methodSummary(entry) : 'Checking…'
+  const usable = canUseAgent(entry, login)
+  const summary = installed === false ? 'Not installed' : entry ? methodSummary(entry, login) : 'Checking…'
   return (
     <section id={`agent-${provider}`} data-slot="accounts-provider" data-highlighted={highlighted ? '' : undefined}
       className={`scroll-mt-16 px-4 py-2 ${highlighted ? 'bg-primary/5' : ''}`}>
@@ -351,7 +354,7 @@ function InstalledAgentRow({ provider, check, entry, setup, editable, onSetup, i
           {entry && <Badge variant="outline" className="text-micro">{entry.mode === 'one' ? 'One at a time' : 'Any combination'}</Badge>}
         </button>
         <Button type="button" size="icon-sm" variant="ghost" aria-label={`Start new projects with ${label}`} aria-pressed={isDefault}
-          disabled={!editable || !canStar || installed === false} onClick={onStar}>
+          disabled={!editable || !canStar || !usable || installed === false} onClick={onStar}>
           <StarIcon className={isDefault ? 'fill-current text-primary' : ''} />
           {isDefault && <span className="sr-only">Default agent for new projects</span>}
         </Button>
@@ -363,9 +366,9 @@ function InstalledAgentRow({ provider, check, entry, setup, editable, onSetup, i
         </Button>}
       </div>}
       {open && <div id={`methods-${provider}`} className="space-y-3 py-2 sm:pl-6">
-        {entry && <ProviderMethods agent={entry} editable={editable} subscription={subscription} />}
+        {entry && <ProviderMethods agent={entry} editable={editable} subscription={subscription} onSignIn={installed === false ? undefined : () => onSetup(provider, 'sign-in')} />}
         {!entry?.methods.some(m => m.kind === 'subscription') && subscription}
-        <DefaultModelSelect runner={provider} readOnly={!editable} entry={entry} />
+        <DefaultModelSelect runner={provider} readOnly={!editable} entry={entry} unavailable={!!entry && !usable} />
         <footer className="flex flex-wrap items-center gap-2 text-label text-muted-foreground">
           {check?.version && <span>Installed {check.version}</span>}
           {editable && action === 'update' && <Button size="sm" variant="ghost" onClick={() => onSetup(provider, action)}>{AGENT_ROW_ACTION_LABEL[action]} {setup?.latestVersion}</Button>}
@@ -381,7 +384,7 @@ function InstalledAgentRow({ provider, check, entry, setup, editable, onSetup, i
  * `null` clears the key back to "no opinion" — absence cannot say that in a partial patch, and
  * a stale value would keep seeding every unconfigured project.
  */
-function DefaultModelSelect({ runner, entry, readOnly }: { runner: Runner; entry?: AgentProviderEntry; readOnly: boolean }) {
+function DefaultModelSelect({ runner, entry, readOnly, unavailable }: { runner: Runner; entry?: AgentProviderEntry; readOnly: boolean; unavailable: boolean }) {
   const queryClient = useQueryClient()
   const config = useWorkspaceConfig()
   const catalog = useRunnerModels(runner)
@@ -399,9 +402,15 @@ function DefaultModelSelect({ runner, entry, readOnly }: { runner: Runner; entry
   const current = models[runner] ?? ''
   const label = RUNNERS.find((entry) => entry.id === runner)?.label ?? runner
   const status = modelCatalogStatus(runner, catalog.data, catalog.isError)
-  const unavailable = entry && servingMethods(entry).length === 0
   const options = unavailable ? [] : modelsForRunner(runner, catalog.data, [current], entry)
   const missing = current && !options.some(m => m.id === current)
+  const groups = new Map<string, Array<(typeof options)[number]>>()
+  for (const model of options) {
+    const group = entry?.mode === 'any' ? model.via?.label ?? '' : ''
+    const members = groups.get(group)
+    if (members) members.push(model)
+    else groups.set(group, [model])
+  }
   return (
     <div className="flex items-center gap-2">
       <Select
@@ -429,10 +438,13 @@ function DefaultModelSelect({ runner, entry, readOnly }: { runner: Runner; entry
         <SelectContent position="popper">
           {missing && <SelectItem value={current} disabled>{current} · no longer offered</SelectItem>}
           {unavailable && <SelectItem value={AUTO_MODEL}>auto</SelectItem>}
-          {options.map((model) => (
-            <SelectItem key={model.id || AUTO_MODEL} value={model.id || AUTO_MODEL}>
-              {model.id === '' ? 'auto' : model.label}
-            </SelectItem>
+          {Array.from(groups, ([label, models]) => (
+            <SelectGroup key={label}>
+              {label && <SelectLabel>{label}</SelectLabel>}
+              {models.map(model => <SelectItem key={model.id || AUTO_MODEL} value={model.id || AUTO_MODEL}>
+                {model.id === '' ? 'auto' : model.label}
+              </SelectItem>)}
+            </SelectGroup>
           ))}
           {status ? <SelectItem value="__status__" disabled>{status}</SelectItem> : null}
         </SelectContent>
@@ -477,7 +489,6 @@ function SubscriptionAccounts({ provider, accounts, selected, capable, hostPaths
       {accounts.length > 0 && <details>
         <summary className="w-fit cursor-pointer rounded-sm text-label text-muted-foreground">Manage logins</summary>
         {accounts.map(account => <AccountRow key={account.id} account={account} hostPaths={hostPaths} onRemove={() => onRemove(account)} />)}
-        <p className="px-4 text-label text-muted-foreground">To sign out of a vendor login, use the agent’s own sign-out command.</p>
       </details>}
     </div>
   )

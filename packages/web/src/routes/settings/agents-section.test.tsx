@@ -289,6 +289,18 @@ afterEach(() => {
 })
 
 describe('the agents form', () => {
+  it('keeps a runnable native login available when its exact provider cannot be verified', async () => {
+    serve({ methods: { editable: true, agents: [
+      { runner: 'claude', mode: 'one', active: null, methods: [
+        { id: 'subscription', kind: 'subscription', label: 'Claude subscription', state: 'unknown' },
+      ] },
+    ] } })
+    renderAt('/settings/agents')
+    expect((await screen.findAllByRole('link', { name: 'Provider unverified · Manage providers' }))[0]?.getAttribute('href')).toBe('/settings/global/agents#agent-claude')
+    expect(screen.getByRole('radio', { name: 'claude' }).hasAttribute('disabled')).toBe(false)
+    expect(modelSelect('claude').disabled).toBe(false)
+  })
+
   it('uses the active method in default and fallback choices and links directly to workspace settings', async () => {
     serve({ methods: { editable: true, agents: [
       { runner: 'claude', mode: 'one', active: 'custom', methods: [{ id: 'custom', kind: 'custom', label: 'Fake gateway', state: 'connected' }] },

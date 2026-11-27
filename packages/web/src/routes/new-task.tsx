@@ -325,21 +325,25 @@ export function NewTaskRoute() {
   const runner = runners.length > 0 ? resolveRunner(draft.runner, runners, preferredRunner) : null
   const displayRunner = runner ?? preferredRunner
   const entry = methods.data?.agents.find(agent => agent.runner === displayRunner)
-  const missingMethod = methods.isSuccess && runner !== null && !canUseAgent(entry, providers.data?.providers.find(p => p.provider === runner))
+  const login = providers.data?.providers.find(provider => provider.provider === displayRunner)
+  const missingMethod = methods.isSuccess && runner !== null && !canUseAgent(entry, login)
   const providersReady = !providerPending && !providerError && runners.length > 0
   const catalog = useRunnerModels(displayRunner)
   const refreshModels = useModelRefreshAction(displayRunner)
   const modelsLocked = config.data?.modelsLocked === true
-  const models = runner === null
+  const models = useMemo(() => runner === null
     ? []
-    : modelsForRunner(runner, catalog.data, [draft.model, config.data?.defaultModels?.[runner]], entry)
-  const model = runner === null
+    : modelsForRunner(runner, catalog.data, [draft.model, config.data?.defaultModels?.[runner]], entry),
+  [runner, catalog.data, draft.model, config.data?.defaultModels, entry])
+  const model = useMemo(() => runner === null
     ? ''
-    : resolveModel(modelsLocked ? null : draft.model, runner, config.data?.defaultModels, catalog.data, entry)
-  const modelOptions = composerModelOptions(models, catalog.data, entry)
-  const selected = modelOptions.find(m => m.model === model && m.method === draft.agentMethod) ?? modelOptions.find(m => m.model === model)
+    : resolveModel(modelsLocked ? null : draft.model, runner, config.data?.defaultModels, catalog.data, modelsLocked ? undefined : entry),
+  [runner, modelsLocked, draft.model, config.data?.defaultModels, catalog.data, entry])
+  const modelOptions = useMemo(() => composerModelOptions(models, catalog.data, entry), [models, catalog.data, entry])
+  const selected = (!modelsLocked && model === draft.model ? modelOptions.find(m => m.model === model && m.method === draft.agentMethod) : undefined)
+    ?? modelOptions.find(m => m.model === model)
   const serving = entry && servingMethods(entry)
-  const selectedMethod = entry?.mode === 'one' ? serving?.[0]?.id : selected?.method
+  const selectedMethod = entry?.mode === 'one' ? serving?.[0]?.id : modelsLocked ? undefined : selected?.method
   const agentMethod = entry?.configured ? selectedMethod : undefined
   const providerModelsPending = !!entry?.configured && catalog.isPending && !!(draft.model || config.data?.defaultModels?.[displayRunner])
   const reasoningEffort = runner === null
@@ -759,7 +763,7 @@ export function NewTaskRoute() {
   // Shown when there is a choice to make: more than one runner, or more than one login for one
   // of them. A host with neither sees no runner pill, exactly as before.
   const runnerChoice = runners.length > 1 || runners.some((id) => hasAccountChoice(accountChoices, id))
-  const modelLabel = models.find((m) => m.id === model)?.label ?? 'auto'
+  const modelLabel = selected?.label ?? (model || 'auto')
   /** ONE `agent · model` chip: the runner pill and the model pill joined at the hip. */
   const enginePill = (
     <span data-slot="engine-pill" className="inline-flex min-w-0 max-w-full items-center">

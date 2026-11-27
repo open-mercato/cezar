@@ -7,11 +7,28 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { cn } from '@/lib/utils'
 
+const signOutHint: Partial<Record<AgentProviderEntry['runner'], string>> = {
+  claude: 'Run claude auth logout in a terminal using the account you want to sign out.',
+  codex: 'Run codex logout in a terminal using the account you want to sign out.',
+  opencode: 'Run opencode auth logout and select the provider to disconnect.',
+  pi: 'Open pi, enter /logout, and select the provider to disconnect.',
+}
+
+const planUrl = (runner: AgentProviderEntry['runner'], method: string) => {
+  if (runner === 'claude' || method === 'anthropic') return 'https://claude.com/pricing'
+  if (runner === 'codex' || method === 'openai' || method === 'openai-codex') return 'https://chatgpt.com/pricing'
+  if (runner === 'cursor') return 'https://cursor.com/pricing'
+  if (runner === 'copilot') return 'https://github.com/features/copilot/plans'
+  if (runner === 'junie') return 'https://www.jetbrains.com/ai-ides/buy/'
+  if (runner === 'kimi') return 'https://www.kimi.com/code'
+}
+
 /** Only the editor's DOM holds the typed credential. Never put it in query/mutation cache or drafts. */
-export function ProviderMethods({ agent, editable, subscription }: {
+export function ProviderMethods({ agent, editable, subscription, onSignIn }: {
   agent: AgentProviderEntry
   editable: boolean
   subscription?: ReactNode
+  onSignIn?: () => void
 }) {
   const client = useQueryClient()
   const [editing, setEditing] = useState<string | null>(null)
@@ -25,13 +42,14 @@ export function ProviderMethods({ agent, editable, subscription }: {
     try {
       await write()
       setEditing(null)
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'Provider change failed')
+    } finally {
+      // A failed refresh still records the error beside the last good catalog.
       await Promise.all([
         client.invalidateQueries({ queryKey: workspaceQueryKeys.agentProviders }),
         client.invalidateQueries({ queryKey: workspaceQueryKeys.models(agent.runner) }),
       ])
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : 'Provider change failed')
-    } finally {
       setBusy(false)
     }
   }
@@ -44,6 +62,8 @@ export function ProviderMethods({ agent, editable, subscription }: {
         {agent.methods.map(method => {
           const selected = agent.mode === 'any' ? method.state === 'connected' : agent.active === method.id
           const stored = Boolean(method.origin && method.origin !== 'host') || !!method.keyHint || method.state === 'error'
+          const signIn = method.kind === 'subscription' && method.state !== 'connected' && onSignIn && editable
+          const plan = signIn && planUrl(agent.runner, method.id)
           const writable = editable && method.origin !== 'host' && method.kind !== 'subscription'
           const keyUrl = method.kind === 'openrouter' ? 'https://openrouter.ai/keys'
             : method.kind !== 'apiKey' ? undefined : agent.runner === 'gemini' ? 'https://aistudio.google.com/apikey'
@@ -67,9 +87,17 @@ export function ProviderMethods({ agent, editable, subscription }: {
                     {method.modelCount !== undefined && ` · ${method.modelCount} models${method.error ? ' (stale)' : ''}`}
                   </div>
                 </div>
+                {plan && <a href={plan} target="_blank" rel="noreferrer" className="text-label underline">Get a plan</a>}
+                {signIn && <Button size="sm" variant="outline" aria-label={`Sign in to ${method.label} for ${agent.runner}`} onClick={onSignIn}>Sign in</Button>}
+                {editable && method.kind === 'subscription' && method.state === 'connected' && <details className="text-label">
+                  <summary className="w-fit cursor-pointer underline">Sign out</summary>
+                  <p className="mt-1 max-w-sm text-muted-foreground">{signOutHint[agent.runner] ?? `Open ${agent.runner} on the host and sign out of ${method.label} in its account settings.`}</p>
+                </details>}
+                {editable && agent.mode === 'one' && !radio && !selected && method.state === 'connected' &&
+                  <Button size="sm" variant="outline" disabled={busy} onClick={() => void change(() => setActiveMethod(agent.runner, method.id))}>Use {method.label}</Button>}
                 {method.error && <span className="text-label text-danger">{method.error}</span>}
-                {writable && (method.state === 'error' || method.error) &&
-                  <Button size="sm" variant="outline" disabled={busy} onClick={() => void change(() => refreshProviderMethod(agent.runner, method.id))}>Retry</Button>}
+                {writable && stored && (method.kind === 'custom' || method.kind === 'openrouter') &&
+                  <Button size="sm" variant="outline" disabled={busy} onClick={() => void change(() => refreshProviderMethod(agent.runner, method.id))}>{method.state === 'error' || method.error ? 'Retry' : 'Refresh models'}</Button>}
                 {writable && !stored && keyUrl && <a href={keyUrl} target="_blank" rel="noreferrer" className="text-label underline">Get a key</a>}
                 {writable && editing !== method.id && <>
                   <Button size="sm" variant="outline" disabled={busy} aria-label={`${stored ? 'Edit' : 'Add'} ${method.label} for ${agent.runner}`}

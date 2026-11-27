@@ -112,6 +112,7 @@ export function DefaultAgentPicker({
     >
       {shown.map((row) => {
         const provider = providerStatusFor(providerStatus.data, row.runner.id)
+        const entry = entries?.find(e => e.runner === row.runner.id)
         const providerConnected = connected(row.runner.id)
         const providerReason = providerStatus.isPending
           ? 'Checking provider authentication…'
@@ -142,7 +143,7 @@ export function DefaultAgentPicker({
               checked ? 'bg-muted text-foreground' : 'text-muted-foreground hover:text-foreground',
             )}
           >
-            {row.label}{entries?.some(e => e.runner === row.runner.id && !servingMethods(e).length) && ' · no provider'}
+            {row.label}{entry && !providerConnected && !servingMethods(entry).length && ' · no provider'}
             {stacked ? (
               <span
                 data-slot={row.missing ? 'agents-account-missing' : 'agents-account-dir'}

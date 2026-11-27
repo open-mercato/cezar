@@ -205,19 +205,17 @@ export function modelsForRunner(
 ): readonly ModelPreset[] {
   const presets = MODELS_BY_RUNNER[runner] ?? MODELS_BY_RUNNER.claude
   const listed = catalog?.models ?? []
-  const methodCatalog = !!entry?.configured && entry.methods.some(method =>
+  const methodCatalog = !!entry?.configured && (listed.length > 0 || entry.methods.some(method =>
     (entry.mode === 'any' || entry.active === method.id) && method.state === 'connected' &&
     (method.kind === 'custom' || method.kind === 'openrouter') && method.origin !== 'host',
-  )
-  const discovered = listed
+  ))
   // A live catalog REPLACES the presets rather than extending them: the whole point is that the
   // host CLI, not this file, decides which models exist. The presets come back the moment
   // discovery has nothing — a missing, old or logged-out CLI leaves a usable picker, never an
   // `auto`-only one (#784).
-  const base = discovered.length > 0 || methodCatalog ? [autoPreset(presets)] : [...presets]
+  const base = listed.length > 0 || methodCatalog ? [autoPreset(presets)] : [...presets]
   const seen = new Set(base.map((model) => model.id))
-  // `discovered` is already empty for a runner without discovery, so no second gate is needed.
-  for (const model of discovered) {
+  for (const model of listed) {
     if (!model.id || seen.has(model.id)) continue
     seen.add(model.id)
     base.push({ id: model.id, label: model.label || model.id, desc: model.description, ...(model.via && { via: model.via }) })

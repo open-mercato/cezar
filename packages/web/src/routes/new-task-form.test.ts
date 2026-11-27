@@ -74,6 +74,16 @@ describe('model option resolution', () => {
     expect(modelsForRunner('claude').some((m) => /^claude-\w+-\d/.test(m.id))).toBe(false)
   })
 
+  it('falls back to auto when a configured subscription drops the default model', () => {
+    const catalog = { runner: 'claude' as const, source: 'live' as const, stale: false,
+      models: [{ id: 'new-model', label: 'New model', description: '', via: { methodId: 'subscription', label: 'Subscription' } }] }
+    expect(resolveModel(null, 'claude', { claude: 'retired-model' }, catalog, {
+      runner: 'claude', mode: 'one', configured: true, active: 'subscription', methods: [
+        { id: 'subscription', kind: 'subscription', label: 'Subscription', state: 'connected' },
+      ],
+    })).toBe('')
+  })
+
   it('claude: a live catalog REPLACES the fallback aliases, keeping auto and the CLI order', () => {
     const catalog = {
       runner: 'claude' as const,

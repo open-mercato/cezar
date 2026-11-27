@@ -8,6 +8,7 @@ import { createQueryClient } from '@/api/query-client'
 import type {
   AgentProfilesResponse,
   AgentProvidersResponse,
+  RunnerModelCatalogResponse,
   WorkspaceConfigResponse,
 } from '@open-mercato/cezar-api-client'
 import { Toaster, resetToasts } from '@/components/ui/toaster'
@@ -75,10 +76,12 @@ function serve({
   accounts = ACCOUNTS,
   checks = [],
   methods = { editable: true, agents: [] },
+  catalog,
 }: {
   agentDefaults?: WorkspaceConfigResponse['agentDefaults']
   accounts?: AgentProfilesResponse
   methods?: AgentProvidersResponse
+  catalog?: RunnerModelCatalogResponse
   checks?: Array<{ name: string; available: boolean }>
 } = {}) {
   requests = []
@@ -143,6 +146,7 @@ function serve({
       if (url === '/api/v1/health' && method === 'GET') return json({ checks, bootProject: 'boot' })
       if (url.startsWith('/api/v1/open-targets')) return json({ targets: [] })
       if (url.startsWith('/api/v1/models?runner=')) {
+        if (catalog && url.endsWith('runner=' + catalog.runner)) return json(catalog)
         const runner = url.includes('cursor') ? 'cursor' : 'codex'
         return json({ runner, models: [], source: 'unavailable', stale: false })
       }
@@ -188,6 +192,26 @@ afterEach(() => {
 })
 
 describe('Agent accounts → Defaults for new projects', () => {
+  it('groups additive provider models and marks a vanished workspace default', async () => {
+    Element.prototype.scrollIntoView = vi.fn()
+    vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} })
+    serve({ agentDefaults: { models: { pi: 'retired' } },
+      methods: { editable: true, agents: [{ runner: 'pi', mode: 'any', configured: true, methods: [
+        { id: 'custom', label: 'Gateway', kind: 'custom', state: 'connected' },
+        { id: 'openrouter', label: 'OpenRouter', kind: 'openrouter', state: 'connected' },
+      ] }] }, catalog: { runner: 'pi', source: 'live', stale: false, models: [
+        { id: 'one', label: 'Model one', description: '', via: { methodId: 'custom', label: 'Gateway' } },
+        { id: 'two', label: 'Model two', description: '', via: { methodId: 'openrouter', label: 'OpenRouter' } },
+      ] } })
+    renderAccounts()
+    fireEvent.click(await screen.findByRole('button', { name: /pi.*Any combination/i }))
+    const select = await screen.findByRole('combobox', { name: 'Default model for pi' })
+    fireEvent.keyDown(select, { key: 'ArrowDown' })
+    expect(await screen.findByRole('group', { name: 'Gateway' })).toBeTruthy()
+    expect(screen.getByRole('group', { name: 'OpenRouter' })).toBeTruthy()
+    expect(screen.getByRole('option', { name: 'retired · no longer offered' }).getAttribute('aria-disabled')).toBe('true')
+  })
+
   it('moves the workspace default star without changing either account or project defaults', async () => {
     serve({ methods: { editable: true, agents: ['claude', 'codex'].map(id => ({
       runner: id as 'claude' | 'codex', mode: 'one', active: 'subscription',

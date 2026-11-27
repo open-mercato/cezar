@@ -114,17 +114,17 @@ export function PickerPill({
   }
   const renderOption = (option: (typeof options)[number], index: number) => (
     <div key={option.value}>
-    {option.group && option.group !== visibleOptions[index - 1]?.group && <DropdownMenuLabel>{option.group}</DropdownMenuLabel>}
-    <DropdownMenuRadioItem value={option.value} className="gap-2.5">
-      <span className="flex min-w-0 flex-col">
-        <span className="text-label font-medium">{option.label}</span>
-        {option.desc ? (
-          <span className="max-w-[calc(100vw-3rem)] whitespace-normal break-words text-meta text-muted-foreground md:max-w-96">
-            {option.desc}
-          </span>
-        ) : null}
-      </span>
-    </DropdownMenuRadioItem>
+      {option.group && option.group !== visibleOptions[index - 1]?.group && <DropdownMenuLabel>{option.group}</DropdownMenuLabel>}
+      <DropdownMenuRadioItem value={option.value} className="gap-2.5">
+        <span className="flex min-w-0 flex-col">
+          <span className="text-label font-medium">{option.label}</span>
+          {option.desc ? (
+            <span className="max-w-[calc(100vw-3rem)] whitespace-normal break-words text-meta text-muted-foreground md:max-w-96">
+              {option.desc}
+            </span>
+          ) : null}
+        </span>
+      </DropdownMenuRadioItem>
     </div>
   )
   const trigger = (

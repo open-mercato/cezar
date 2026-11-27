@@ -1450,6 +1450,11 @@ describe('submit', () => {
     writeDraft({ ...readDraft(), model: 'opus' })
     serve({
       providerStatus: PROVIDERS_MULTI,
+      agentProviders: { editable: true, agents: [{ runner: 'claude', mode: 'one', active: 'custom', configured: true,
+        methods: [{ id: 'custom', kind: 'custom', label: 'Test gateway', state: 'connected' }] }] },
+      modelCatalog: { runner: 'claude', source: 'live', stale: false, models: [
+        { id: 'gateway-model', label: 'Gateway model', description: '', via: { methodId: 'custom', label: 'Test gateway' } },
+      ] },
       config: {
         defaultModels: { claude: 'native-sonnet', codex: 'gpt-5.6-codex' },
         modelsLocked: true,

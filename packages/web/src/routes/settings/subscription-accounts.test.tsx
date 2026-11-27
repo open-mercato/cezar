@@ -87,7 +87,7 @@ function serve(
       const method = init?.method ?? 'GET'
       const body = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : undefined
       requests.push({ method, url, body })
-      if (url === '/api/v1/agent-providers') return json({ editable: response.editable, agents:
+      if (url === '/api/v1/agent-providers') return json({ editable: response.editable && response.hostPaths !== false, agents:
         [...new Set(state.profiles.map(p => p.provider))].map(runner => ({ runner, mode: 'one', active: 'subscription',
           methods: [{ id: 'subscription', kind: 'subscription', label: 'Subscription', state: 'connected' }] })) })
       if (url === '/api/v1/providers/status') return json({ providers: state.profiles.map((p) => p.status ?? { provider: p.provider, status: 'unknown' }) })
