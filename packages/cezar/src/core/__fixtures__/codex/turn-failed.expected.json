@@ -8,6 +8,8 @@
     "type": "turn.started",
     "turnId": "turn_01J8ZCXF44"
   },
+  { "type": "timing", "phase": "start", "turnId": "turn_01J8ZCXF44", "callIndex": 0, "startInferred": true },
+  { "type": "timing", "phase": "first-delta", "turnId": "turn_01J8ZCXF44", "callIndex": 0 },
   {
     "type": "item.started",
     "item": {
@@ -44,6 +46,7 @@
       }
     }
   },
+  { "type": "timing", "phase": "aborted", "turnId": "turn_01J8ZCXF44", "callIndex": 0, "reason": "error" },
   {
     "type": "turn.completed",
     "turnId": "turn_01J8ZCXF44",
@@ -53,9 +56,12 @@
     "type": "turn.started",
     "turnId": "turn_01J8ZCXG55"
   },
+  { "type": "timing", "phase": "start", "turnId": "turn_01J8ZCXG55", "callIndex": 0, "startInferred": true },
+  { "type": "timing", "phase": "aborted", "turnId": "turn_01J8ZCXG55", "callIndex": 0, "reason": "error" },
   {
     "type": "turn.completed",
     "turnId": "turn_01J8ZCXG55",
     "stopReason": "cancelled"
   }
+
 ]

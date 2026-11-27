@@ -263,6 +263,60 @@ describe('a teardown cezar initiated', () => {
   }, 15_000);
 });
 
+describe('per-call timing events (#1543)', () => {
+  it('a cancel mid-call closes the open call as aborted/cancelled', async () => {
+    const bin = fileURLToPath(new URL('./__fixtures__/claude/stub-timing-midcall.mjs', import.meta.url));
+    const uiEvents: UiEvent[] = [];
+    let sawDelta: () => void = () => {};
+    const gotDelta = new Promise<void>((resolve) => {
+      sawDelta = resolve;
+    });
+    const session = new ClaudeCliRunner({ bin, timeoutMs: 0 }).startSession(
+      { userPrompt: 'x', cwd: process.cwd() },
+      () => {},
+      {
+        onUiEvent: (event) => {
+          uiEvents.push(event);
+          if (event.type === 'timing' && event.phase === 'first-delta') sawDelta();
+        },
+      },
+    );
+    await gotDelta;
+    session.interrupt();
+    await session.result;
+    expect(uiEvents.filter((e) => e.type === 'timing')).toEqual([
+      { type: 'timing', phase: 'start', messageId: 'msg_stub', model: 'claude-stub' },
+      { type: 'timing', phase: 'first-delta', messageId: 'msg_stub' },
+      { type: 'timing', phase: 'aborted', messageId: 'msg_stub', reason: 'cancelled' },
+    ]);
+  }, 15_000);
+
+  it('the dry-run mock frames every assistant call as start, first-delta, end with output_tokens', async () => {
+    vi.stubEnv('CEZ_CLAUDE_BIN', undefined);
+    vi.stubEnv('CEZ_DRY_RUN', '1');
+    const cwd = mkdtempSync(join(tmpdir(), 'cez-claude-timing-'));
+    try {
+      const uiEvents: UiEvent[] = [];
+      await new ClaudeCliRunner({ timeoutMs: 5_000 }).startSession({ cwd, userPrompt: 'hello' }, () => {}, {
+        autoEndAfterFirstTurn: true,
+        onUiEvent: (event) => uiEvents.push(event),
+      }).result;
+      // The mock scripts several API calls; each must read start → first-delta → end, in order.
+      const phases = uiEvents.flatMap((e) => (e.type === 'timing' ? [e.phase] : []));
+      expect(phases.length).toBeGreaterThanOrEqual(3);
+      expect(phases.length % 3).toBe(0);
+      for (let i = 0; i < phases.length; i += 3) expect(phases.slice(i, i + 3)).toEqual(['start', 'first-delta', 'end']);
+      expect(uiEvents.find((e) => e.type === 'timing' && e.phase === 'end')).toMatchObject({
+        output_tokens: expect.any(Number),
+        stop_reason: 'end_turn',
+      });
+    } finally {
+      vi.unstubAllEnvs();
+      rmSync(cwd, { force: true, recursive: true });
+    }
+  }, 15_000);
+});
+
 // Telemetry 3ac6bbe3: a SIGTERM that reached cezar too (a unit stop, a logout, the group's Ctrl-C)
 // made claude exit 143 mid-shutdown, and the run was failed and reported as a crash.
 describe('a 143 exit while cezar itself is being signalled', () => {

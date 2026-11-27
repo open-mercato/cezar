@@ -219,6 +219,28 @@ describe('a model the ChatGPT-plan login cannot use (1350055f)', () => {
   }, 15_000);
 });
 
+describe('per-call timing through the real runner (#1543)', () => {
+  const mockBin = fileURLToPath(new URL('./__fixtures__/codex/mock-codex-app-server.mjs', import.meta.url));
+
+  it('a tool loop persists two calls, each start(startInferred) → first-delta → end with tokenUsage.last output', async () => {
+    const uiEvents: UiEvent[] = [];
+    await new CodexAppServerRunner({ bin: mockBin, timeoutMs: 0 }).startSession(
+      { userPrompt: 'mock:timing-tool-loop', cwd: process.cwd() },
+      () => {},
+      { autoEndAfterFirstTurn: true, onUiEvent: (event) => uiEvents.push(event) },
+    ).result;
+    const timing = uiEvents.flatMap((e) => (e.type === 'timing' ? [e] : []));
+    expect(timing).toEqual([
+      { type: 'timing', phase: 'start', turnId: 'turn_mock_1', callIndex: 0, startInferred: true },
+      { type: 'timing', phase: 'first-delta', turnId: 'turn_mock_1', callIndex: 0 },
+      { type: 'timing', phase: 'end', turnId: 'turn_mock_1', callIndex: 0, output_tokens: 120 },
+      { type: 'timing', phase: 'start', turnId: 'turn_mock_1', callIndex: 1, startInferred: true },
+      { type: 'timing', phase: 'first-delta', turnId: 'turn_mock_1', callIndex: 1 },
+      { type: 'timing', phase: 'end', turnId: 'turn_mock_1', callIndex: 1, output_tokens: 40 },
+    ]);
+  }, 15_000);
+});
+
 /** Telemetry 4c9de01a: Continue resumed a thread a still-live app-server held the writer lock for. */
 describe('resuming a thread another Codex process still holds', () => {
   const mockBin = fileURLToPath(

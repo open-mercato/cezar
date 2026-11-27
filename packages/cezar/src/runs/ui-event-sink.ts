@@ -41,7 +41,8 @@ const MAX_DELTA_BUFFER = 64_000;
  * the file and re-emits a URL instead of raw base64).
  */
 export function isV2WireEventType(type: string): boolean {
-  return type.includes('.');
+  // `timing` (#1543) is the one undotted v2 type, so a v1-only reader never sees it as a run-event.
+  return type.includes('.') || type === 'timing';
 }
 
 /** A loose event as the store consumes it (the sink adds no seq/ts — the

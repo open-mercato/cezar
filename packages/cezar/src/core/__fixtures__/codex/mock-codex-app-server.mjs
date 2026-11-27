@@ -316,6 +316,20 @@ rl.on('line', (line) => {
       } });
       return;
     }
+    // #1543: a tool loop = two model responses; each ends with its own tokenUsage.last, and the
+    // second request starts when the tool item completes.
+    if (turnText.includes('mock:timing-tool-loop')) {
+      const base = { threadId: 'th_mock_1', turnId: 'turn_mock_1' };
+      emit({ method: 'item/started', params: { ...base, item: { type: 'commandExecution', id: 'item_t1', command: ['bash', '-lc', 'ls'], cwd: '/repo', status: 'inProgress' } } });
+      emit({ method: 'thread/tokenUsage/updated', params: { threadId: 'th_mock_1', tokenUsage: { total: { totalTokens: 220, inputTokens: 100, outputTokens: 120 }, last: { totalTokens: 220, inputTokens: 100, outputTokens: 120, reasoningOutputTokens: 80 } } } });
+      emit({ method: 'item/completed', params: { ...base, item: { type: 'commandExecution', id: 'item_t1', command: ['bash', '-lc', 'ls'], cwd: '/repo', status: 'completed', exitCode: 0 } } });
+      emit({ method: 'item/started', params: { ...base, item: { type: 'agentMessage', id: 'item_t2', text: '' } } });
+      emit({ method: 'item/agentMessage/delta', params: { ...base, itemId: 'item_t2', delta: 'Listed.' } });
+      emit({ method: 'item/completed', params: { ...base, item: { type: 'agentMessage', id: 'item_t2', text: 'Listed.' } } });
+      emit({ method: 'thread/tokenUsage/updated', params: { threadId: 'th_mock_1', tokenUsage: { total: { totalTokens: 400, inputTokens: 240, outputTokens: 160 }, last: { totalTokens: 180, inputTokens: 140, outputTokens: 40 } } } });
+      emit({ method: 'turn/completed', params: { turn: { id: 'turn_mock_1', status: 'completed' } } });
+      return;
+    }
     emit({ method: 'item/started', params: { threadId: 'th_mock_1', turnId: 'turn_mock_1', item: { type: 'agentMessage', id: 'item_m1', text: '' } } });
     emit({ method: 'item/agentMessage/delta', params: { threadId: 'th_mock_1', turnId: 'turn_mock_1', itemId: 'item_m1', delta: 'Checking the working tree.' } });
     emit({ method: 'item/completed', params: { threadId: 'th_mock_1', turnId: 'turn_mock_1', item: { type: 'agentMessage', id: 'item_m1', text: 'Checking the working tree.' } } });

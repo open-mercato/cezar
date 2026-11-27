@@ -31,6 +31,7 @@ import type {
   ToolLocation,
   ToolStatus,
   UiEvent,
+  UiTimingEvent,
   UiItem,
   UiMessageItem,
   UiReasoningItem,
@@ -115,6 +116,15 @@ export interface CodexUiMapperState {
    * Installed 0.144.6 uses `collabAgentToolCall`; newer protocol revisions use
    * `collabToolCall`. Both carry the receiver ids used for child attribution. */
   readonly collabTasks: ReadonlyMap<string, CodexCollabTask>;
+  /** The main thread's current model API call (#1543); null outside a turn. */
+  readonly call: CodexCall | null;
+}
+
+/** `started`: start sent; `streaming`: first-delta sent; `ended`: end sent, waiting for the next call. */
+interface CodexCall {
+  readonly turnId: string;
+  readonly index: number;
+  readonly phase: 'started' | 'streaming' | 'ended';
 }
 
 export interface CodexUiMapping {
@@ -133,6 +143,7 @@ export function createCodexUiState(): CodexUiMapperState {
     planFromNotification: false,
     reviewItemId: null,
     collabTasks: new Map(),
+    call: null,
   };
 }
 
@@ -152,6 +163,88 @@ export function codexSessionStarted(threadId: string, state: CodexUiMapperState,
 
 /** Fold one parsed JSON-RPC frame into v2 events. Never throws. */
 export function mapCodexNotification(frame: unknown, state: CodexUiMapperState): CodexUiMapping {
+  const mapped = mapCodexFrame(frame, state);
+  const timed = codexCallTiming(frame, mapped.state);
+  if (timed.events.length === 0) return { events: mapped.events, state: timed.state };
+  const isTurnStart = isRecord(frame) && frame.method === 'turn/started';
+  return {
+    events: isTurnStart ? [...mapped.events, ...timed.events] : [...timed.events, ...mapped.events],
+    state: timed.state,
+  };
+}
+
+// ---- per-API-call timing (#1543) ---------------------------------------------
+// The app-server has no request frame, so `start` is inferred: `turn/started` for the first call,
+// the completion of a tool item for each later one. `end` is the per-response `tokenUsage.last`.
+
+const NON_MODEL_ITEMS = new Set(['userMessage', 'agentMessage', 'reasoning', 'plan', 'todoList', 'todo_list']);
+
+function codexCallTiming(frame: unknown, state: CodexUiMapperState): { events: UiEvent[]; state: CodexUiMapperState } {
+  const none = { events: [], state };
+  if (!isRecord(frame) || typeof frame.method !== 'string' || frame.id !== undefined) return none;
+  const params = isRecord(frame.params) ? frame.params : {};
+  // A child thread's frames share the connection; only the main thread's calls are timed.
+  const thread = str(params.threadId) ?? threadIdOf(params);
+  if (thread !== undefined && state.threadId !== undefined && thread !== state.threadId) return none;
+  const call = state.call;
+  const event = (phase: UiTimingEvent['phase'], c: CodexCall, extra: Partial<UiTimingEvent> = {}): UiTimingEvent =>
+    Object.assign({ type: 'timing' as const, phase, turnId: c.turnId, callIndex: c.index }, extra);
+  const started = (c: CodexCall): UiTimingEvent => event('start', c, { startInferred: true });
+  const open = call !== null && call.phase !== 'ended';
+  switch (frame.method) {
+    case 'turn/started': {
+      const turnId = turnIdOf(params) ?? state.currentTurnId ?? `turn_${state.turnSeq}`;
+      const next: CodexCall = { turnId, index: 0, phase: 'started' };
+      const events: UiEvent[] = open ? [event('aborted', call, { reason: 'error' })] : [];
+      return { events: [...events, started(next)], state: { ...state, call: next } };
+    }
+    case 'item/agentMessage/delta':
+    case 'item/reasoning/textDelta':
+    case 'item/reasoning/summaryDelta':
+    case 'item/reasoning/summaryTextDelta':
+      return firstDelta(state, call, event);
+    case 'item/started': {
+      const item = isRecord(params.item) ? params.item : undefined;
+      if (!item || typeof item.type !== 'string' || NON_MODEL_ITEMS.has(item.type)) return none;
+      return firstDelta(state, call, event);
+    }
+    case 'thread/tokenUsage/updated': {
+      const last = isRecord(params.tokenUsage) && isRecord(params.tokenUsage.last) ? params.tokenUsage.last : undefined;
+      if (!open || last === undefined) return none;
+      const out = nonNegative(last.outputTokens);
+      // `outputTokens` already includes reasoning tokens — never add them again.
+      return { events: [event('end', call, out !== undefined ? { output_tokens: out } : {})], state: { ...state, call: { ...call, phase: 'ended' } } };
+    }
+    case 'item/completed': {
+      const item = isRecord(params.item) ? params.item : undefined;
+      if (!call || call.phase !== 'ended' || !item || typeof item.type !== 'string' || NON_MODEL_ITEMS.has(item.type)) return none;
+      const next: CodexCall = { ...call, index: call.index + 1, phase: 'started' };
+      return { events: [started(next)], state: { ...state, call: next } };
+    }
+    case 'turn/completed':
+    case 'turn/failed': {
+      const id = turnIdOf(params);
+      if (!call || (id !== undefined && id !== call.turnId)) return none;
+      const turn = isRecord(params.turn) ? params.turn : {};
+      const failed = frame.method === 'turn/failed' || codexTurnFailed(params);
+      const reason = turn.status === 'interrupted' ? 'cancelled' : failed ? 'error' : 'stream-ended';
+      return { events: open ? [event('aborted', call, { reason })] : [], state: { ...state, call: null } };
+    }
+    default:
+      return none;
+  }
+}
+
+function firstDelta(
+  state: CodexUiMapperState,
+  call: CodexCall | null,
+  event: (phase: UiTimingEvent['phase'], c: CodexCall) => UiTimingEvent,
+): { events: UiEvent[]; state: CodexUiMapperState } {
+  if (!call || call.phase !== 'started') return { events: [], state };
+  return { events: [event('first-delta', call)], state: { ...state, call: { ...call, phase: 'streaming' } } };
+}
+
+function mapCodexFrame(frame: unknown, state: CodexUiMapperState): CodexUiMapping {
   if (!isRecord(frame) || typeof frame.method !== 'string') return { events: [], state };
   // Server requests are answered by CodexSession, not the notification mapper.
   if (frame.id !== undefined) return { events: [], state };

@@ -273,6 +273,36 @@ export interface UiModelUsage {
   costUsd?: number;
 }
 
+/**
+ * One phase of one model API call, stamped with receive time by the store (#1543).
+ * Additive and ndjson-only — never rendered. Missing phases stay absent; every `start` is
+ * followed by exactly one `end` or `aborted`, so `start` with neither means a lost event.
+ * claude: `message_start` / first `content_block_delta` / `message_delta` with usage;
+ * codex: inferred client-side (`startInferred`), see AGENT_PROTOCOL.md §3.
+ * A reader derives time-to-first-token = first-delta − start and generation time = end − first-delta.
+ */
+export interface UiTimingEvent {
+  type: 'timing';
+  phase: 'start' | 'first-delta' | 'end' | 'aborted';
+  /** claude: the API message id. Absent for codex. */
+  messageId?: string;
+  /** codex: the turn and the call's index within it. */
+  turnId?: string;
+  callIndex?: number;
+  model?: string;
+  /** Set on a sub-agent's calls (claude `parent_tool_use_id`). */
+  parentToolUseId?: string;
+  /** `start`: the start was inferred, so it includes local overhead (codex). */
+  startInferred?: true;
+  /** `end`: output tokens including thinking, and the API stop reason. */
+  output_tokens?: number;
+  stop_reason?: string;
+  /** `aborted` only. */
+  reason?: 'error' | 'cancelled' | 'stream-ended';
+  /** `aborted` + `error`: the API error type only, never message text. */
+  errorType?: string;
+}
+
 /** An item entered the stream (tools usually with status pending/running). */
 export interface UiItemStartedEvent {
   type: 'item.started';
@@ -444,6 +474,7 @@ export type UiEvent =
   | UiAskRequestedEvent
   | UiAskClosedEvent
   | UiUsageUpdatedEvent
+  | UiTimingEvent
   | UiImageEvent;
 
 /** Every v2 event discriminator — `satisfies Record<UiEventType, …>` maps

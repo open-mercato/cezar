@@ -1,6 +1,7 @@
 [
   { "type": "session.started", "sessionId": "th_01J8ZCTD8XN4VZ", "backend": "codex" },
   { "type": "turn.started", "turnId": "turn_01J8ZCTDA0" },
+  { "type": "timing", "phase": "start", "turnId": "turn_01J8ZCTDA0", "callIndex": 0, "startInferred": true },
   {
     "type": "plan.updated",
     "entries": [
@@ -25,5 +26,7 @@
       { "content": "Add a regression test", "status": "completed" }
     ]
   },
+  { "type": "timing", "phase": "aborted", "turnId": "turn_01J8ZCTDA0", "callIndex": 0, "reason": "stream-ended" },
   { "type": "turn.completed", "turnId": "turn_01J8ZCTDA0", "stopReason": "end_turn" }
+
 ]
