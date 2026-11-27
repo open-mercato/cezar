@@ -183,7 +183,7 @@ describe('ManagerEngine', () => {
   });
 
   describe('turns', () => {
-    it('starts a new conversation when the configured billing method changes', async () => {
+    it.each([undefined, 'auto'])('keeps the chosen catalog model with %s and starts fresh on billing changes', async (model) => {
       vi.stubEnv('CEZ_DRY_RUN', '1');
       vi.stubEnv('HOME', home);
       try {
@@ -195,6 +195,7 @@ describe('ManagerEngine', () => {
         }), { mode: 0o600 });
         const engine = makeEngine();
         const id = await create(engine, 0);
+        if (model) await engine.update(id, { model });
         backend.scripts.push(say('One'), say('Two'), say('Three'));
         save('custom');
         engine.send(id, 'first');
@@ -3766,6 +3767,19 @@ describe('ManagerEngine', () => {
           },
           warning: '--runner codex has no account with capacity until 2099-01-01T05:00:00.000Z; claude first login has capacity (--runner claude --account first)',
         });
+      });
+
+      it('checks each backup against the model it can carry after dropping a foreign pin', async () => {
+        const engine = makeEngine({
+          accountLimit: async (runner, profile, _root, model) => ({
+            account: profile ?? 'default', label: runner,
+            ...(runner === 'claude' || (runner === 'codex' && model === 'gpt-5.4') ? { until: RESET } : {}),
+          }),
+        });
+        const id = await managerWith(engine, [{ runner: 'claude' }, { runner: 'codex', model: 'gpt-5.4' }, { runner: 'cursor' }]);
+        const decision = await engine.createTask(id, { projectId: 'alpha', task: 'Fix it', model: 'opus' });
+        expect(decision).toMatchObject({ agent: { runner: 'cursor' } });
+        expect(requests.at(-1)?.body).toMatchObject({ runner: 'cursor' });
       });
 
       it('after a limit skip to another runner, fallbacks on the runner --model was meant for keep it', async () => {
