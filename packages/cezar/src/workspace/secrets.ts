@@ -1,6 +1,6 @@
 import { createCipheriv, createDecipheriv, randomBytes, randomUUID } from 'node:crypto';
 import { promises as fs, constants } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { renameWithRetry } from '../fs-rename.ts';
 import { z } from 'zod';
 import {
@@ -36,6 +36,9 @@ import { osKeychain, KEYCHAIN_ACCOUNT, type DataKeyring } from './secret-keyring
  * `0600` files, `O_NOFOLLOW` bounded reads, atomic tmp/rename writes, a cross-process mkdir
  * lock for read-modify-write, and `assertCezarHomeWriteIsSandboxed`. Not an OS-user boundary.
  *
+ * Provider keys share the data key, but live in immutable, private .vault files bound to a
+ * method slot and generation. No SecretScopeRef, name or audience can address those files.
+ *
  * A project slug can be handed to another repository after the first is removed from the
  * registry, so a project file records the root it belongs to; a file whose recorded root is not
  * the asking project's reads as empty instead of handing one repo's keys to another.
@@ -43,6 +46,8 @@ import { osKeychain, KEYCHAIN_ACCOUNT, type DataKeyring } from './secret-keyring
 
 /** A file larger than this is not one this store wrote. Bounded read, like the tracker store. */
 const FILE_MAX_BYTES = 1024 * 1024;
+// Dot-prefixed .vault files cannot collide with a project's <slug>.json, even on a case-insensitive FS.
+const PROVIDER_VAULT_RE = /^\.agent-provider-([\da-f]{8}(?:-[\da-f]{4}){3}-[\da-f]{12})\.vault$/;
 const CIPHER = 'aes-256-gcm';
 const FILE_VERSION = 1;
 const KEY_FILE = '.key';
@@ -109,7 +114,7 @@ export class SecretStore {
   private async keychain(): Promise<DataKeyring | null> {
     let account = KEYCHAIN_ACCOUNT;
     try {
-      const id = (await this.readFile(join(this.directory, '.keychain-account'))).trim();
+      const id = (await readPrivateFile(join(this.directory, '.keychain-account'))).trim();
       if (!z.uuid().safeParse(id).success) throw new SecretsError('Invalid keychain account marker');
       account = `${KEYCHAIN_ACCOUNT}:${id}`;
     } catch (error) {
@@ -134,26 +139,63 @@ export class SecretStore {
     } catch {
       // Reporting the configured backend must not prevent opening Settings when
       // key metadata is unreadable. This is not a decryption/availability claim.
-      const backend = await this.readFile(join(this.directory, '.backend')).catch(() => '');
+      const backend = await readPrivateFile(join(this.directory, '.backend')).catch(() => '');
       return backend.trim() === 'keychain' ? 'keychain' : 'file';
     }
   }
 
   /** Internal encryption for managed records. Never exposed by the generic secret editor. */
   async sealManaged(namespace: string, id: string, value: string): Promise<string> {
-    const dataKey = await this.loadOrCreateDataKey();
+    const dataKey = await this.loadOrCreateDataKey(namespace === 'agent-provider');
     await this.prepare();
-    await this.save(join(this.directory, '.backend'), `${dataKey.backend}\n`);
+    await writePrivateFile(join(this.directory, '.backend'), `${dataKey.backend}\n`);
     return JSON.stringify({ version: 1, ...encrypt(dataKey.key, aad(`managed:${namespace}`, id), value) });
   }
 
   async openManaged(namespace: string, id: string, text: string): Promise<string> {
-    const stored = z.object({ version: z.literal(1), iv: z.string(), data: z.string(), tag: z.string() }).strict().parse(JSON.parse(text));
-    const dataKey = await this.loadDataKey();
-    if (!dataKey) throw new SecretsError('Managed credentials cannot be decrypted: data key unavailable.');
+    let stored: Pick<StoredSecret, 'iv' | 'data' | 'tag'>;
+    try {
+      stored = z.object({ version: z.literal(1), iv: z.string(), data: z.string(), tag: z.string() }).strict().parse(JSON.parse(text));
+    } catch {
+      throw new Error('Managed credentials contain invalid ciphertext.');
+    }
+    const dataKey = await this.loadDataKey(namespace === 'agent-provider');
+    if (!dataKey) throw new SecretsError(`Managed credentials cannot be decrypted: ${await this.missingKeyReason()}`);
     const value = decrypt(dataKey.key, aad(`managed:${namespace}`, id), stored);
     if (value === null) throw new SecretsError('Managed credentials cannot be decrypted.');
     return value;
+  }
+
+  /** The metadata writer serializes both publication and retirement under this lock. */
+  async withAgentProviderLock<T>(action: () => Promise<T>): Promise<T> {
+    await this.prepare();
+    return this.locked('.agent-providers', action);
+  }
+
+  private providerKeyPath(ref: string): string {
+    return join(this.directory, `.agent-provider-${z.uuid().parse(ref)}.vault`);
+  }
+
+  async stageProviderKey(slot: string, value: string): Promise<string> {
+    const ref = randomUUID();
+    const sealed = await this.sealManaged('agent-provider', `${slot}/${ref}`, value);
+    if (Buffer.byteLength(sealed) > FILE_MAX_BYTES) throw new SecretsError('Provider key is too large.');
+    await writePrivateFile(this.providerKeyPath(ref), sealed);
+    return ref;
+  }
+
+  async openProviderKey(slot: string, ref: string): Promise<string> {
+    await this.checkDirectory();
+    const sealed = await readPrivateFile(this.providerKeyPath(ref));
+    return this.openManaged('agent-provider', `${slot}/${ref}`, sealed);
+  }
+
+  /** A crash before metadata publication leaves only unreachable ciphertext. The next edit retires it. */
+  async retireProviderKeys(live: Set<string>): Promise<void> {
+    for (const name of await fs.readdir(this.directory)) {
+      const ref = PROVIDER_VAULT_RE.exec(name)?.[1];
+      if (ref && !live.has(ref)) await fs.unlink(join(this.directory, name));
+    }
   }
 
   /** Stored entries, sorted by name. Absent or unreadable storage is an empty list, never a throw. */
@@ -171,7 +213,7 @@ export class SecretStore {
     const id = fileId(scope);
     if (!id) return {};
     try {
-      const file = parseSecretFile(await this.readFile(this.file(id)));
+      const file = parseSecretFile(await readPrivateFile(this.file(id)));
       if (scope.kind === 'project' && file.root !== await canonicalRoot(scope.root)) return {};
       return Object.fromEntries(Object.entries(file.secrets).filter(([name]) => !secretNameIssue(name)));
     } catch { return {}; }
@@ -188,7 +230,7 @@ export class SecretStore {
     let file: SecretFile;
     try {
       await this.checkDirectory();
-      file = parseSecretFile(await this.readFile(this.file(id)));
+      file = parseSecretFile(await readPrivateFile(this.file(id)));
     } catch (error) {
       // No directory and no file are the ordinary "nothing stored" cases and say nothing. Every
       // other failure — a loosened mode, a symlink (`ELOOP` from `O_NOFOLLOW`), an oversized
@@ -318,7 +360,7 @@ export class SecretStore {
     return this.locked(id, async () => {
       let file: SecretFile = { version: FILE_VERSION, ...(owner ? { root: owner } : {}), secrets: {} };
       try {
-        const existing = parseSecretFile(await this.readFile(this.file(id)));
+        const existing = parseSecretFile(await readPrivateFile(this.file(id)));
         // A file left by another root is that root's, and that root is gone from this slug:
         // the first write by the slug's new owner starts it over instead of inheriting it.
         if (existing.root === owner) file = existing;
@@ -326,7 +368,7 @@ export class SecretStore {
         if ((error as NodeJS.ErrnoException).code !== 'ENOENT' && !(error instanceof SecretsError)) throw error;
       }
       if (!mutate(file, id)) return false;
-      await this.save(this.file(id), `${JSON.stringify(file, null, 2)}\n`);
+      await writePrivateFile(this.file(id), `${JSON.stringify(file, null, 2)}\n`);
       return true;
     });
   }
@@ -336,20 +378,26 @@ export class SecretStore {
    * keeps its secrets readable even after a keychain appears), then the keychain. `null` when
    * neither has one. Re-read durable storage: a live home may have been reset or restored.
    */
-  private async loadDataKey(): Promise<{ key: Buffer; backend: SecretKeyBackend } | null> {
+  private async loadDataKey(requireUnlockedKeychain = false): Promise<{ key: Buffer; backend: SecretKeyBackend } | null> {
     try {
-      const key = Buffer.from((await this.readFile(join(this.directory, KEY_FILE))).trim(), 'base64');
+      const key = Buffer.from((await readPrivateFile(join(this.directory, KEY_FILE))).trim(), 'base64');
       if (key.length === 32) return { key, backend: 'file' };
     } catch {
       // No key file, or not one we wrote: look in the keychain.
     }
     const keychain = await this.keychain();
-    if (!keychain) return null;
+    if (!keychain) {
+      if (requireUnlockedKeychain && (await readPrivateFile(join(this.directory, '.backend')).catch(() => '')).trim() === 'keychain') {
+        throw new SecretsError('The OS keychain holding the data key is unavailable — restore access and retry.');
+      }
+      return null;
+    }
     try {
       const key = await keychain.get();
       if (key) return { key, backend: 'keychain' };
     } catch {
-      // A locked or unreachable store reads as "no key here"; a first write will try the file.
+      if (requireUnlockedKeychain) throw new SecretsError('The OS keychain is locked or unreachable — unlock it and retry.');
+      // A locked or unreachable store reads as "no key here"; a first general-secret write can try the file.
     }
     return null;
   }
@@ -357,7 +405,7 @@ export class SecretStore {
   /** A locked keychain is not a lost key: only a read that returned nothing advises re-storing. */
   private async missingKeyReason(): Promise<string> {
     const keychain = await this.keychain().catch(() => null);
-    const backend = await this.readFile(join(this.directory, '.backend')).then(text => text.trim(), () => '');
+    const backend = await readPrivateFile(join(this.directory, '.backend')).then(text => text.trim(), () => '');
     if (keychain && await keychain.get().then(() => false, () => true)) {
       return 'the OS keychain holding the data key is locked or unreachable — unlock it and retry';
     }
@@ -368,19 +416,19 @@ export class SecretStore {
   }
 
   /** The data key, created under the cross-process lock when this is the machine's first write. */
-  private async loadOrCreateDataKey(): Promise<{ key: Buffer; backend: SecretKeyBackend }> {
-    const found = await this.loadDataKey();
+  private async loadOrCreateDataKey(requireUnlockedKeychain = false): Promise<{ key: Buffer; backend: SecretKeyBackend }> {
+    const found = await this.loadDataKey(requireUnlockedKeychain);
     if (found) return found;
     await this.prepare();
     return this.locked('key', async () => {
-      const raced = await this.loadDataKey();
+      const raced = await this.loadDataKey(requireUnlockedKeychain);
       if (raced) return raced;
       // An unavailable key must never be replaced while ciphertext under it remains: it may only
       // be locked. With nothing left to decrypt, a new key is harmless and is the recovery path.
       const entries = await fs.readdir(this.directory);
-      const blockers: string[] = [];
+      const blockers = entries.filter(name => PROVIDER_VAULT_RE.test(name)).map(name => `secrets/${name}`);
       for (const entry of entries.filter(name => name.endsWith('.json'))) {
-        const existing = parseSecretFile(await this.readFile(join(this.directory, entry)));
+        const existing = parseSecretFile(await readPrivateFile(join(this.directory, entry)));
         if (Object.keys(existing.secrets).length) blockers.push(`secrets/${entry}`);
       }
       // Managed records (TrackerConnections) are sealed under the same key. Missing key metadata
@@ -391,12 +439,12 @@ export class SecretStore {
       });
       blockers.push(...managed.filter(name => name.endsWith('.vault')).map(name => `tracker-connections/${name}`));
       if (blockers.length) {
-        throw new SecretsError(`The existing data key is unavailable; unlock or restore it, or remove what is still encrypted under it (${blockers.join(', ')}: cezar secrets list/unset, cez tracker-connections list/remove; a secrets file of a project no longer registered can be deleted) before saving.`);
+        throw new SecretsError(`The existing data key is unavailable; unlock or restore it, or remove what is still encrypted under it (${blockers.join(', ')}: cezar secrets list/unset, cez tracker-connections list/remove, cez providers remove; a secrets file of a project no longer registered can be deleted) before saving.`);
       }
       const keychain = await this.keychain();
       // A keychain key that cannot be read right now may belong to a process still sealing its
       // first record; only a proven absence (a read that returned nothing) allows a new key.
-      if (entries.includes('.backend') && (await this.readFile(join(this.directory, '.backend'))).trim() === 'keychain'
+      if (entries.includes('.backend') && (await readPrivateFile(join(this.directory, '.backend'))).trim() === 'keychain'
         && !(keychain && await keychain.get().then(() => true, () => false))) {
         throw new SecretsError(keychain
           ? 'The keychain-held data key is unreachable; unlock the OS keychain, then retry.'
@@ -415,7 +463,7 @@ export class SecretStore {
             // gives each home its own item, protected by this home's key lock.
             // Reuse a marker left by an interrupted first initialization.
             if (!entries.includes('.keychain-account')) {
-              await this.save(join(this.directory, '.keychain-account'), `${randomUUID()}\n`);
+              await writePrivateFile(join(this.directory, '.keychain-account'), `${randomUUID()}\n`);
             }
             const scoped = await this.keychain();
             if (scoped) {
@@ -425,15 +473,16 @@ export class SecretStore {
             }
           }
         } catch {
+          if (requireUnlockedKeychain) throw new SecretsError('The OS keychain is locked or unreachable — unlock it and retry.');
           // The keychain refused the write (locked, denied): the file is the working fallback.
         }
       }
       if (initialized) {
-        await this.save(join(this.directory, '.backend'), 'keychain\n');
+        await writePrivateFile(join(this.directory, '.backend'), 'keychain\n');
         return initialized;
       }
-      await this.save(join(this.directory, KEY_FILE), `${key.toString('base64')}\n`);
-      await this.save(join(this.directory, '.backend'), 'file\n');
+      await writePrivateFile(join(this.directory, KEY_FILE), `${key.toString('base64')}\n`);
+      await writePrivateFile(join(this.directory, '.backend'), 'file\n');
       return { key, backend: 'file' };
     });
   }
@@ -453,45 +502,7 @@ export class SecretStore {
     assertCezarHomeWriteIsSandboxed(this.directory);
     await fs.mkdir(this.directory, { recursive: true, mode: 0o700 });
     await this.checkDirectory();
-    await this.save(join(this.directory, '.gitignore'), '# Managed private secrets; never commit this directory.\n*\n');
-  }
-
-  private async readFile(path: string): Promise<string> {
-    const file = await fs.open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
-    try {
-      const stat = await file.stat();
-      if (!stat.isFile() || stat.size > FILE_MAX_BYTES || (process.platform !== 'win32' && (stat.mode & 0o077) !== 0)) {
-        throw new SecretsError('the store file is unusable — it must be a regular 0600 file');
-      }
-      // Bound the actual read, too: the file can grow after fstat.
-      const buffer = Buffer.alloc(FILE_MAX_BYTES + 1);
-      let offset = 0;
-      while (offset < buffer.length) {
-        const { bytesRead } = await file.read(buffer, offset, buffer.length - offset, offset);
-        if (bytesRead === 0) break;
-        offset += bytesRead;
-      }
-      if (offset > FILE_MAX_BYTES) throw new SecretsError('the store file is unusable — it is larger than this store ever writes');
-      return buffer.subarray(0, offset).toString('utf8');
-    } finally {
-      await file.close();
-    }
-  }
-
-  private async save(path: string, text: string): Promise<void> {
-    assertCezarHomeWriteIsSandboxed(path);
-    const temporary = `${path}.${randomUUID()}.tmp`;
-    try {
-      const file = await fs.open(temporary, 'wx', 0o600);
-      try { await file.writeFile(text); await file.sync(); } finally { await file.close(); }
-      await renameWithRetry(temporary, path);
-      if (process.platform !== 'win32') {
-        const directory = await fs.open(this.directory, 'r');
-        try { await directory.sync(); } finally { await directory.close(); }
-      }
-    } finally {
-      await fs.unlink(temporary).catch(() => {});
-    }
+    await writePrivateFile(join(this.directory, '.gitignore'), '# Managed private secrets; never commit this directory.\n*\n');
   }
 
   /** Atomic mkdir serializes cockpit/CLI read-modify-writes. Never steal from a live owner. */
@@ -532,6 +543,44 @@ export class SecretStore {
       await fs.unlink(owner).catch(() => {});
       await fs.rmdir(lock).catch(() => {});
     }
+  }
+}
+
+export async function readPrivateFile(path: string, maxBytes = FILE_MAX_BYTES): Promise<string> {
+  const file = await fs.open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+  try {
+    const stat = await file.stat();
+    if (!stat.isFile() || stat.size > maxBytes || (process.platform !== 'win32' && (stat.mode & 0o077) !== 0)) {
+      throw new SecretsError('the store file is unusable — it must be a regular 0600 file');
+    }
+    // Bound the actual read, too: the file can grow after fstat.
+    const buffer = Buffer.alloc(stat.size + 1);
+    let offset = 0;
+    while (offset < buffer.length) {
+      const { bytesRead } = await file.read(buffer, offset, buffer.length - offset, offset);
+      if (bytesRead === 0) break;
+      offset += bytesRead;
+    }
+    if (offset > stat.size) throw new SecretsError('the store file changed during the read');
+    return buffer.subarray(0, offset).toString('utf8');
+  } finally {
+    await file.close();
+  }
+}
+
+export async function writePrivateFile(path: string, text: string): Promise<void> {
+  assertCezarHomeWriteIsSandboxed(path);
+  const temporary = `${path}.${randomUUID()}.tmp`;
+  try {
+    const file = await fs.open(temporary, 'wx', 0o600);
+    try { await file.writeFile(text); await file.sync(); } finally { await file.close(); }
+    await renameWithRetry(temporary, path);
+    if (process.platform !== 'win32') {
+      const directory = await fs.open(dirname(path), 'r');
+      try { await directory.sync(); } finally { await directory.close(); }
+    }
+  } finally {
+    await fs.unlink(temporary).catch(() => {});
   }
 }
 

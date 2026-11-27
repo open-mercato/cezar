@@ -167,6 +167,8 @@ export const stepStateSchema = z.object({
   sessionId: z.string().optional(),
   /** Backend that owns `sessionId`; absent on records written before backend affinity. */
   backend: runnerSchema.optional(),
+  agentMethod: providerMethodIdSchema.optional(),
+  agentMethodHost: z.literal(true).optional(),
   /** Reasoning level selected when this agent step started. Absent means the native default. */
   reasoningEffort: reasoningEffortSchema.optional(),
   /** Agent account (spec 2026-07-29-agent-profiles) that owns `sessionId` — `default`, or a

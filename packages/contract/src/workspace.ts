@@ -449,6 +449,7 @@ export const configResponseSchema = z.object({
    *  task branches stay `cez/<id8>`. */
   branchNaming: z.string().nullable(),
   defaultModels: runnerModelsSchema,
+  projectDefaultModels: runnerModelsSchema.optional(),
   /** True when native coding-agent settings are authoritative and model picks are read-only. */
   modelsLocked: z.boolean(),
   /** How many tasks run at once (1–16). */

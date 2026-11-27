@@ -11,3 +11,10 @@ export function recordedProfileFor(run: RunRecord, provider: ProviderId): string
   }
   return provider === runner ? run.agentProfile : undefined;
 }
+
+/** The most recent step on this provider owns the replayed session. */
+export function recordedMethodFor(run: RunRecord, provider: ProviderId): string | undefined {
+  const runner = run.runner ?? 'claude';
+  const step = [...run.steps].reverse().find(step => (step.backend ?? runner) === provider && step.agentMethod);
+  return step?.agentMethod ?? (provider === runner ? run.agentMethod : undefined);
+}

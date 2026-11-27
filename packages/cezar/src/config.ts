@@ -179,6 +179,11 @@ function withMachineDefaults(raw: unknown, machine: WorkspaceConfig['agentDefaul
     ? own.defaultModels as Record<string, unknown>
     : undefined;
   const models = { ...machine.models, ...ownModels };
+  // A project explicitly choosing auto overrides a workspace pin for the same runner.
+  const auto = configSchema.shape.defaultModelsAuto.safeParse(own.defaultModelsAuto);
+  if (auto.success) {
+    for (const runner of RUNNER_IDS) if (auto.data?.[runner] && !ownModels?.[runner]) delete models[runner];
+  }
   return {
     ...own,
     ...(own.defaultRunner === undefined && machine.runner !== undefined
@@ -210,6 +215,17 @@ export async function loadConfig(repoRoot: string): Promise<CezConfig> {
     // fall through — malformed JSON degrades to the default
   }
   return configSchema.parse(withMachineDefaults({}, machine));
+}
+
+/** Project model choices before workspace and vendor defaults are applied. */
+export async function projectModelDefaults(repoRoot: string) {
+  try {
+    const raw: unknown = JSON.parse(await readFile(join(repoRoot, '.ai/cezar/config.json'), 'utf8'));
+    const fields = configSchema.pick({ defaultModels: true, defaultModelsAuto: true }).parse(raw);
+    const models = { ...fields.defaultModels };
+    for (const runner of RUNNER_IDS) if (fields.defaultModelsAuto?.[runner] && !models[runner]) models[runner] = '';
+    return models;
+  } catch { return {}; }
 }
 
 /**

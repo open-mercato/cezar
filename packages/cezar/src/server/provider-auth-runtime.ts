@@ -52,6 +52,8 @@ export function watchProviderRuntimeAuthFailures(
       ? run.steps.find(({ id }) => id === event.stepId)
       : undefined;
     const provider: ProviderId = step?.backend ?? run.runner ?? 'claude';
+    const method = step?.agentMethod ?? (provider === (run.runner ?? 'claude') ? run.agentMethod : undefined);
+    if (method === 'apiKey' || method === 'openrouter' || method === 'custom') return;
     // The account the rejected session ran on: a named one is latched on its own, never on the
     // default login (telemetry 9e4a95db).
     const recorded = step?.profileId ?? recordedProfileFor(run, provider);

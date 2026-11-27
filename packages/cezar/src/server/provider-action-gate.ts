@@ -10,7 +10,7 @@ import { loadAgentAccounts, type AgentAccountStore } from '../workspace/agent-ac
 import { selectProfile } from '../workspace/agent-profiles.ts';
 import { stepKind, type WorkflowDef } from '../workflows/types.ts';
 
-export { recordedProfileFor } from './recorded-profile.ts';
+export { recordedMethodFor, recordedProfileFor } from './recorded-profile.ts';
 
 const ORDER: readonly ProviderId[] = PROVIDER_IDS;
 const RUNNABLE_WHEN_UNVERIFIED: ReadonlySet<ProviderId> = new Set([
@@ -77,6 +77,7 @@ export function providerForActiveRun(run: RunRecord): ProviderId {
  *  account), else the project's selection, else the discovered default — `selectProfile`'s order. */
 export interface ProviderAccountScope {
   repoRoot?: string;
+  methodFor?: (provider: ProviderId) => string | undefined;
   profileFor?: (provider: ProviderId) => string | undefined;
 }
 
