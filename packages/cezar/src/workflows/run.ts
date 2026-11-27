@@ -1012,7 +1012,7 @@ const NO_HOLDS: AccountHolds = { deadline: new Set(), inFlight: new Set() };
  *    it blocks fresh work but not other resumes. Blocking those deadlocked a live workspace.
  */
 function accountHeldFor(
-  run: Pick<RunRecord, 'runner' | 'agentProfile' | 'status' | 'autoResumeAttempts'>,
+  run: Pick<RunRecord, 'runner' | 'agentProfile' | 'status' | 'autoResumeAttempts' | 'autoResumeWindowOpen'>,
   holds: AccountHolds,
   fallbackRunner: RunnerId,
   accounts?: AccountResolution,
@@ -1072,9 +1072,10 @@ export interface AccountResolution {
  *
  * The hold exists to stop NEW work walking into a closed window. A resume is not new work.
  */
-function resumeInFlight(run: Pick<RunRecord, 'status' | 'autoResumeAttempts'>): boolean {
+function resumeInFlight(run: Pick<RunRecord, 'status' | 'autoResumeAttempts' | 'autoResumeWindowOpen'>): boolean {
+  // Once the resumed session has observed the window open, nothing is left to test (#2525).
   return (
-    run.autoResumeAttempts !== undefined && (run.status === 'queued' || run.status === 'running')
+    run.autoResumeAttempts !== undefined && !run.autoResumeWindowOpen && (run.status === 'queued' || run.status === 'running')
   );
 }
 
@@ -2251,6 +2252,7 @@ export class RunManager {
       if (planUsageAccount && !(ledgerProvider === 'codex' && attributionDisabled)) {
         try { recordUsageObservation(planUsageAccount, observation); } catch { /* metadata only */ }
       }
+      this.markResumeWindowOpen(runId, observation);
       if (!usageProvider) return;
       try {
         if (usageProvider === 'codex') {
@@ -2278,6 +2280,16 @@ export class RunManager {
       ...(onUsageWindows ? { onUsageWindows } : {}),
       ...(planUsageAccount ? { planUsageAccount } : {}),
     };
+  }
+
+  /** A resumed run that observes an open window (some `allowed`, none `blocked`) has proven it, so its
+   *  in-flight account hold ends now instead of at turn end (#2525). Deadline holds are untouched. */
+  private markResumeWindowOpen(runId: string, observation: UsageWindowsObservation): void {
+    const run = this.store.getRun(runId);
+    if (!run || !resumeInFlight(run) || run.autoResumeReason === 'transient') return;
+    const w = observation.windows;
+    if (!w.some((x) => x.status === 'allowed') || w.some((x) => x.status === 'blocked')) return;
+    this.store.updateRun(runId, { autoResumeWindowOpen: true });
   }
 
   startRun(
@@ -4580,7 +4592,7 @@ export class RunManager {
     }
     // `clearAutoResume` above retired the reason with the deadline; the resume in flight keeps it,
     // so `accountHolds` knows a transient retry holds no account.
-    this.store.updateRun(runId, { autoResumeAttempts: attempts, autoResumeReason: reason });
+    this.store.updateRun(runId, { autoResumeAttempts: attempts, autoResumeReason: reason, autoResumeWindowOpen: undefined });
     this.store.appendEvent(runId, {
       type: 'lifecycle',
       message: reason === 'transient'
@@ -4843,7 +4855,7 @@ export class RunManager {
    *  notification re-derives every participant's queue reasons, so only hold inputs notify (#1340). */
   private readonly holdInputs = new Map<string, string>();
   private readonly onRunHoldInputs = (run: RunRecord) => {
-    const inputs = JSON.stringify([run.status, run.autoResumeAt, run.autoResumeAttempts, run.autoResumeReason, run.runner, run.agentProfile]);
+    const inputs = JSON.stringify([run.status, run.autoResumeAt, run.autoResumeAttempts, run.autoResumeReason, run.autoResumeWindowOpen, run.runner, run.agentProfile]);
     if (this.holdInputs.get(run.id) === inputs) return;
     this.holdInputs.set(run.id, inputs);
     this.onQueueHoldChange();
@@ -5077,7 +5089,7 @@ export class RunManager {
     const run = this.store.getRun(runId);
     if (!run) return;
     if (run.autoResumeAt !== undefined || run.autoResumeAttempts !== undefined || run.autoResumeReason !== undefined) {
-      this.store.updateRun(runId, { autoResumeAt: undefined, autoResumeAttempts: undefined, autoResumeReason: undefined });
+      this.store.updateRun(runId, { autoResumeAt: undefined, autoResumeAttempts: undefined, autoResumeReason: undefined, autoResumeWindowOpen: undefined });
     }
   }
 
@@ -6987,7 +6999,7 @@ export class RunManager {
         // 2026-08-03-auto-resume-after-usage-limit). `settleSuccess` does the same for a run that
         // finishes outright; this covers the far more common "parked for the user" ending.
         if (this.store.getRun(runId)?.autoResumeAttempts !== undefined) {
-          this.store.updateRun(runId, { autoResumeAttempts: undefined, autoResumeReason: undefined });
+          this.store.updateRun(runId, { autoResumeAttempts: undefined, autoResumeReason: undefined, autoResumeWindowOpen: undefined });
         }
         // A nudged turn did NOT park, so it must not report that it did: the handoff file is
         // the rolling context the agent reads back on resume (spec 007), not a log, and an
@@ -9745,7 +9757,7 @@ export class RunManager {
         }
         // The window is proven open — see the twin in `runContinuation`.
         if (this.store.getRun(runId)?.autoResumeAttempts !== undefined) {
-          this.store.updateRun(runId, { autoResumeAttempts: undefined, autoResumeReason: undefined });
+          this.store.updateRun(runId, { autoResumeAttempts: undefined, autoResumeReason: undefined, autoResumeWindowOpen: undefined });
         }
         // Cez's own heartbeat — the handoff stays current even when the
         // agent forgets to write (spec 007).
@@ -10434,6 +10446,7 @@ export class RunManager {
         currentStepId: undefined,
         autoResumeAttempts: undefined,
         autoResumeReason: undefined,
+        autoResumeWindowOpen: undefined,
       });
       this.store.appendEvent(runId, {
         type: 'lifecycle',
@@ -10465,6 +10478,7 @@ export class RunManager {
       // creep toward the cap forever and stop resuming for no reason anyone could see.
       autoResumeAttempts: undefined,
       autoResumeReason: undefined,
+      autoResumeWindowOpen: undefined,
     });
     this.store.appendEvent(runId, {
       type: 'lifecycle',
