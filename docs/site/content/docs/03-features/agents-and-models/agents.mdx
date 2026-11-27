@@ -13,14 +13,10 @@ sources:
 ---
 Set a default agent, choose another for a task, or assign different agents to individual workflow steps.
 
-## Where to find it
+## Choose a provider
 
-Settings → Agents
+Open **Settings → Global → Agents** and expand the agent. Use its subscription row to manage logins or enter a key for an available provider. For a custom endpoint, enter the base URL and key. Cezar fetches its model list and displays the model count. If the connection fails, check the URL and key, then retry.
 
-## How to use it
+For an agent with a single active method, select the method that should serve the next task. Agents that support several providers offer models from their connected methods. New task shows which method serves each model. **Manage providers** opens that agent in Settings.
 
-1. Install the CLI you want to use and sign in.
-2. Check that it is available in Settings → Agents.
-3. Select the agent in New task or a workflow step.
-
-> **Good to know**: The provider's CLI handles your subscription, sign-in, and usage limits.
+A project can inherit the workspace's default model or choose its own in **Project → Agents**. Provider keys are workspace-wide. Set them from the local cockpit or run `cezar providers` on the host.
