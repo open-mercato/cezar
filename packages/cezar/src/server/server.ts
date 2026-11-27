@@ -1,3 +1,7 @@
+import { discoverNativeProviderModels } from '../agent-providers/native-models.ts';
+import { agentProvidersRoutes } from './agent-providers-routes.ts';
+import { configuredAuthStatus, freshMethodError, providerCatalog } from '../agent-providers/service.ts';
+import { readAgentProviders } from '../workspace/agent-providers.ts';
 import { loadGithubAsset } from './forge/github-assets.ts';
 import { createWebhookRoutes } from './webhooks.ts';
 import { WebhookCoordinator } from '../webhooks/coordinator.ts';
@@ -164,7 +168,7 @@ import {
   MAX_ATTACHMENTS_TOTAL_BASE64,
   stagedUploadSchema,
   uploadIdParamSchema,
-  modelDiscoveryRunnerSchema,
+  runnerSchema,
   openProjectInSchema,
   perRunner,
   startTodoInputSchema,
@@ -356,7 +360,7 @@ import {
   readWorktreePath,
   repoIndexContains,
 } from './git-changes.ts';
-import { gatedSkillsRepos, loadConfig, resolveArchivedTaskDeleteDays, resolveWorktreeIdleDays, resolveWorktreeRetention, type CezConfig } from '../config.ts';
+import { gatedSkillsRepos, loadConfig, projectModelDefaults, resolveArchivedTaskDeleteDays, resolveWorktreeIdleDays, resolveWorktreeRetention, type CezConfig } from '../config.ts';
 import { BYPASS_PERMISSIONS_HOSTED, bypassPermissionsBlocked } from '../bypass-permissions.ts';
 import { findConfigFile } from '../agent-config/catalog.ts';
 import { readConfigFile, statConfigPath, writeConfigFile } from '../agent-config/files.ts';
@@ -485,6 +489,7 @@ import {
   recordedProfileFor,
   unavailableProviderMessage,
   withSelectedAccounts,
+  recordedMethodFor,
   type ProviderAccountScope,
 } from './provider-action-gate.ts';
 import {
@@ -1542,6 +1547,8 @@ export function createAppParts(deps: ServerDeps) {
   const bootDataDir = join(bootRoot, '.ai/cezar');
   const modelCatalog = deps.modelCatalog ?? new RunnerModelCatalog({
     adapters: {
+      pi: { discover: () => discoverNativeProviderModels('pi', bootRoot) },
+      omp: { discover: () => discoverNativeProviderModels('omp', bootRoot) },
       claude: { discover: () => discoverClaudeModels({ cwd: bootRoot }) },
       codex: { discover: () => discoverCodexModels({ cwd: bootRoot }) },
       opencode: { discover: () => discoverOpencodeModels({ cwd: bootRoot }) },
@@ -1596,11 +1603,14 @@ export function createAppParts(deps: ServerDeps) {
     scope: ProviderAccountScope = {},
   ): Promise<string | null> => {
     // Judge the account the action runs on, not only the default login (telemetry ac53a6ef).
+    const storedProviders = await readAgentProviders();
     const judged = async (refresh: boolean): Promise<ProviderStatusResponse> => {
       const rows = await providerStatus(refresh ? { refresh: true } : undefined);
-      return providerAuthChecksDisabled()
+      const judgedRows = providerAuthChecksDisabled()
         ? rows
-        : withSelectedAccounts(rows, required, scope, providerAuth, { refresh });
+        : await withSelectedAccounts(rows, required, scope, providerAuth, { refresh });
+      return { ...judgedRows, providers: judgedRows.providers.map(row => required.includes(row.provider)
+        ? configuredAuthStatus(storedProviders, row, scope.methodFor?.(row.provider)) : row) };
     };
     const known = await judged(false);
     const message = unavailableProviderMessage(required, known);
@@ -2363,26 +2373,24 @@ export function createAppParts(deps: ServerDeps) {
 
   // ---- chained family: host model catalog (workspace-level) ----
   const modelsRoutes = new Hono<ProjectApiEnv>()
-    // `modelDiscoveryRunnerSchema` is the contract's own list of the runners with an
-    // authoritative host-local catalog (#794, #784), so the client compiles against exactly what
-    // this validates. A runner absent from it has no discovery path and this 400s.
+    // Configured endpoints can serve a catalog even when the CLI has no native discovery.
     .get(
       '/models',
       // Two validators so each keeps its own message; the second one's output is what `valid` reads.
       queryZodValidator(z.object({ refresh: modelsRefreshQuery }), { message: 'refresh must be 1 or true' }),
       queryZodValidator(
         z.object({
-          runner: z.union([z.string(), z.array(z.string()).transform((v) => v[0] as string)]).pipe(modelDiscoveryRunnerSchema),
+          runner: z.union([z.string(), z.array(z.string()).transform((v) => v[0] as string)]).pipe(runnerSchema),
           refresh: modelsRefreshQuery,
         }),
-        { message: 'runner must be claude, codex, opencode, cursor, junie, antigravity, or kimi' },
+        { message: 'runner must be one of ' + RUNNER_IDS.join(', ') },
       ),
       async (c) => {
         const query = { data: c.req.valid('query') };
-        if (query.data.refresh === '1' || query.data.refresh === 'true') {
-          return c.json(await modelCatalog.reprobe(query.data.runner));
-        }
-        return c.json(await modelCatalog.get(query.data.runner));
+        const { runner, refresh } = query.data;
+        const login = providerAuth.peekStatus()?.providers.find(p => p.provider === runner);
+        return c.json(await providerCatalog(runner,
+          () => refresh ? modelCatalog.reprobe(runner) : modelCatalog.get(runner), login));
       },
     );
 
@@ -5637,6 +5645,14 @@ export function createAppParts(deps: ServerDeps) {
         if (!workflow) return c.json({ error: `unknown workflow: ${parsed.data.workflow}` }, 404);
       }
       const fallback = parsed.data.runner ?? (await loadConfig(repoRoot)).defaultRunner;
+      if (parsed.data.agentMethod !== undefined) {
+        const statuses = await withSelectedAccounts(await providerStatus(), [fallback], {
+          repoRoot, profileFor: () => parsed.data.agentProfile,
+        }, providerAuth);
+        const row = statuses.providers.find(p => p.provider === fallback);
+        const error = freshMethodError(await readAgentProviders(), fallback, parsed.data.agentMethod, parsed.data.model, row);
+        if (error) return c.json({ error }, 409);
+      }
       const requiredProviders = providersRequiredByWorkflow(workflow, fallback);
       if (!parsed.data.enforceReadOnly) {
         const checked = workflow.graph?.nodes.some((n) => n.type === 'workflow')
@@ -5650,6 +5666,7 @@ export function createAppParts(deps: ServerDeps) {
       const blocked = await providerActionError(requiredProviders, {
         repoRoot,
         profileFor: (provider) => (provider === fallback ? parsed.data.agentProfile : undefined),
+        methodFor: (provider) => provider === fallback ? parsed.data.agentMethod : undefined,
       });
       if (blocked) return c.json({ error: blocked }, 409);
       // A composer override names an account the user just picked, so a stale id (deleted since
@@ -5682,6 +5699,7 @@ export function createAppParts(deps: ServerDeps) {
         reasoningEffort: parsed.data.reasoningEffort,
         runner: parsed.data.runner,
         agentProfile: parsed.data.agentProfile,
+        agentMethod: parsed.data.agentMethod,
         images,
         systemPrompt: parsed.data.systemPrompt,
         ...(parsed.data.startedByManager ? { startedByManager: parsed.data.startedByManager } : {}),
@@ -5868,6 +5886,7 @@ export function createAppParts(deps: ServerDeps) {
         if (run.status !== 'queued') {
           const blocked = await providerActionError([providerForActiveRun(run)], {
             repoRoot,
+            methodFor: (provider) => recordedMethodFor(run, provider),
             profileFor: (provider) => recordedProfileFor(run, provider),
           });
           if (blocked) return c.json({ error: blocked }, 409);
@@ -6039,6 +6058,7 @@ export function createAppParts(deps: ServerDeps) {
         }
         const blocked = await providerActionError([providerForExistingRun(run, parsed.data.runner)], {
           repoRoot,
+          methodFor: (provider) => recordedMethodFor(run, provider),
           // A runner switch drops the run's account (`continueRun`), so only the same runner inherits it.
           profileFor: (provider) => parsed.data.agentProfile
             ?? (provider === (run.runner ?? 'claude') ? recordedProfileFor(run, provider) : undefined),
@@ -8346,6 +8366,7 @@ export function createAppParts(deps: ServerDeps) {
       // way to say "ignore the agent's own configured default" without editing
       // the vendor's settings file. It layers over the native seed and under a
       // repo preset, so setting a preset later simply wins.
+      ...(modelsLocked ? {} : { projectDefaultModels: await projectModelDefaults(repoRoot) }),
       defaultModels: modelsLocked
         ? nativeModels
         : {
@@ -9386,7 +9407,8 @@ export function createAppParts(deps: ServerDeps) {
       const live = ['running', 'waiting'].includes(run.status) && run.idleClosedAt === undefined && run.awaitingAnswerSince === undefined;
       return providerActionError([live ? providerForActiveRun(run) : providerForExistingRun(run)], {
         repoRoot: ctx.root,
-        profileFor: (provider) => recordedProfileFor(run, provider),
+        methodFor: (provider) => recordedMethodFor(run, provider),
+            profileFor: (provider) => recordedProfileFor(run, provider),
       });
     },
   });
@@ -9934,6 +9956,8 @@ export function createAppParts(deps: ServerDeps) {
   const workspaceV1 = new Hono()
     .route('/', healthRoutes)
     .route('/', modelsRoutes)
+    .route('/', agentProvidersRoutes(() => capabilities().localHandoff && !inRelayScope(),
+      async () => (await providerStatus()).providers))
     .route('/', providersRoutes)
     .route('/', agentSetupFamily)
     .route('/', projectsRoutes)
