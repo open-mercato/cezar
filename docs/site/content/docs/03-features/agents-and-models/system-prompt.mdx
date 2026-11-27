@@ -13,16 +13,31 @@ sources:
 ---
 The additional project instructions apply regardless of which agent you choose.
 
-Global instructions in Settings → Agents → Global instructions apply to every new task,
-including tasks a manager creates and children started by dispatch or a workflow. They take
+Global instructions in Settings → Agents → Global instructions apply to every task and every
+manager, including tasks a manager creates and children started by dispatch or a workflow. They take
 precedence over conflicting repository, project, workflow and skill instructions. Project and
 workflow instructions still apply wherever they do not conflict. For example, a global rule
 to run only focused tests takes precedence over a repository instruction to run its full suite.
+They never lift cezar's own safety rules: a read-only task stays read-only, a task a manager
+started still leaves merges and automation enables to you, and a manager still asks for your
+approval before a merge, an automation enable or a new job.
 
 Manager restrictions are added separately, so they do not replace your project instructions.
 Every workflow step receives the combined instructions, including steps that switch agents.
-Continue reuses the task's saved instructions. New child tasks read the current settings rather
-than copying their parent's prompt, so they receive one copy of the latest global and project rules.
+Continue reuses the task's saved project instructions, but every session (Continue, a resume,
+a switch to another agent) reads the current global instructions, on every agent, so an edit in
+Settings reaches tasks that are already running. New child tasks read the current settings rather
+than copying their parent's prompt, so they receive one copy of the latest global and project
+rules. A manager reads the global instructions on every turn (chat, watch, job and follow-up) and
+must not ask a task to break them.
+
+They also reach every other model call cezar makes, on every agent: task titles and branch names, commit messages, the planner, and subagents. Helpers whose answer cezar parses (titles, commit subjects, plans) apply them to the content only, never to the answer's format. An agent is told to pass them to every subagent or helper agent it starts, such as Claude Code's Task tool. Two calls skip them on purpose: the connection probe and a tool call you approved exactly as written.
+
+## Check steps
+
+A workflow check step runs a shell command, which cannot read instructions. Just before a check runs, cezar asks the cheap naming model whether the command conflicts with your global instructions. The model gets the command and the files the task changed, and answers with the command to run. For example, with "run only checks relevant to the change", `npm test` can become `npm test -- src/cart/total.test.ts`. Only vitest, jest and pytest checks are adjusted, run directly or through an npm script whose body is a single such command without `passWithNoTests` (in either spelling). Other runners (go, cargo, mocha, rspec, `node --test`) run as written, because a source path given to them runs no tests and still passes. The model may only append `--` and existing test files the runner collects (`*.test.*`/`*.spec.*` for vitest and jest, `test_*.py`/`*_test.py` for pytest), or folders that hold them. Together they must cover every changed file: a source file is covered by a passed folder holding it, or when every test named after it runs. Such a test sits beside it, in a `__tests__`, `test` or `tests` folder inside its folder, under the same sub-folder of a test folder next to its folder, or in a test folder next to `src` or `lib`. cezar refuses any other answer, such as a flag (`--help`, `--passWithNoTests`), a wildcard, a source file, a subset that leaves a changed file untested, `||`, `exit` or a different program. When the command changes, the check's output starts with a line naming both commands and the reason, so the fixer and you see it. Otherwise the step shows a note saying why the check runs as written.
+
+> **Good to know**: The model only adjusts how the check runs. Tests stay tests, and the check still fails on failure. There is no call when the instructions do not mention checks or tests (whole English and Polish words such as tests, lint, testy or sprawdź are recognised), or when the task has no changed files. There is also none for a compound command, for whole-project tools such as typecheck, lint and build (narrowing them by file would check something else), and for the Run tests step that already runs the agent's related tests. Within a task, one answer is reused while the command, the instructions and the changed files stay the same. A failed call (offline, timeout) is retried on the next run. The file names reach the model as data, never as instructions. The call is skipped on a pull request from a fork, because its file names are untrusted. It is also skipped when the default agent has no cheap model, under `CEZ_DRY_RUN=1`, and with `CEZ_CHECK_INSTRUCTIONS=0`. In all of those cases, and on any failure, the check runs exactly as written. Gating checks before an automatic landing are never changed.
 
 ## Where to find it
 

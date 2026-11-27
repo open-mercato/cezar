@@ -156,11 +156,21 @@ describe('check-step marker fallback (#2467)', () => {
   it('falls back to CEZ_RUN_ID when CEZ_TASK_ID is absent, and CEZ_TASK_ID wins', () => {
     expect(taskIdFromEnviron('PATH=/bin\0CEZ_RUN_ID=run-9\0')).toBe('run-9');
     expect(taskIdFromEnviron('CEZ_RUN_ID=run-9\0CEZ_TASK_ID=task-1\0')).toBe('task-1');
+    expect(taskIdFromEnviron('CEZ_TASK_ID=task-1\0CEZ_RUN_ID=run-9\0')).toBe('task-1');
+    expect(taskIdFromEnviron('CEZ_RUN_ID=run-9\0CEZ_TASK_ID=\0')).toBeUndefined();
     expect(taskIdFromEnviron('XCEZ_RUN_ID=nope\0')).toBeUndefined();
   });
 
-  it('parses the same fallback from macOS ps output', () => {
-    const { procs } = parsePsEnvOutput('  201     1 sleep 118 PATH=/bin CEZ_RUN_ID=run-9 HOME=/h');
-    expect(procs.map((p) => ({ pid: p.pid, taskId: p.taskId }))).toEqual([{ pid: 201, taskId: 'run-9' }]);
+  it('applies the same fallback and precedence to macOS ps output', () => {
+    const { procs } = parsePsEnvOutput([
+      '  201     1 sleep 118 PATH=/bin CEZ_RUN_ID=run-9 HOME=/h',
+      '  202     1 sleep 118 CEZ_RUN_ID=run-9 CEZ_TASK_ID=task-1 HOME=/h',
+      '  203     1 sleep 118 CEZ_TASK_ID= CEZ_RUN_ID=run-9',
+      '  204     1 sleep 118 XCEZ_RUN_ID=run-9',
+    ].join('\n'));
+    expect(procs.map(({ pid, taskId }) => ({ pid, taskId }))).toEqual([
+      { pid: 201, taskId: 'run-9' },
+      { pid: 202, taskId: 'task-1' },
+    ]);
   });
 });

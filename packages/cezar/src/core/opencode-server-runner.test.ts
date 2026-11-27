@@ -1,12 +1,12 @@
 import type { ChildProcessWithoutNullStreams } from 'node:child_process';
 import { EventEmitter } from 'node:events';
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { PassThrough } from 'node:stream';
 import { fileURLToPath } from 'node:url';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AgentEvent } from './agent-runner.ts';
 import type { UiEvent } from './ui-events.ts';
 import { parseUsageLimit } from './usage-limit.ts';
@@ -39,6 +39,19 @@ vi.mock('node:child_process', async (importOriginal) => {
       spawnHook.override ? spawnHook.override(...args) : actual.spawn(...args),
   };
 });
+
+// The fake children below carry made-up pids, and the runner signals a server's process GROUP for
+// real (`process.kill(-pid)`): any unrelated group with that id on the machine was SIGKILLed.
+const FAKE_PIDS = new Set([5150, 5151]);
+const realKill = process.kill.bind(process);
+let killGuard: { mockRestore(): void } | undefined;
+beforeEach(() => {
+  killGuard = vi.spyOn(process, 'kill').mockImplementation(((pid: number, signal?: string | number) => {
+    if (FAKE_PIDS.has(Math.abs(pid))) throw Object.assign(new Error('kill ESRCH'), { code: 'ESRCH' });
+    return realKill(pid, signal);
+  }) as typeof process.kill);
+});
+afterEach(() => killGuard?.mockRestore());
 
 const httpHook = vi.hoisted(() => ({ override: null as null | (() => Promise<never>) }));
 
@@ -630,7 +643,10 @@ describe('#897 a turn that outlives its prompt POST', () => {
   }, 30_000);
 
   // The random port is in the OS ephemeral range, so it can already be taken (release 0.16.1 CI).
-  it('respawns on a fresh port when the random one is already taken', async () => {
+  // Contract: the first spawn hits the taken port, later ones avoid it, and the attempts stay
+  // within SERVER_PORT_ATTEMPTS. The exact count is not guaranteed: the respawn's own random
+  // pick can collide too (#2454).
+  async function respawnsAroundTakenPort(collideAgain: boolean): Promise<void> {
     const blocker = createServer();
     let taken = 0;
     for (let p = 40000 + Math.floor(Math.random() * 19000); !taken; p += 1) {
@@ -640,7 +656,9 @@ describe('#897 a turn that outlives its prompt POST', () => {
       });
     }
     try {
-      vi.spyOn(Math, 'random').mockReturnValueOnce((taken - 40000 + 0.5) / 20000);
+      const pick = (taken - 40000 + 0.5) / 20000;
+      const random = vi.spyOn(Math, 'random').mockReturnValueOnce(pick);
+      if (collideAgain) random.mockReturnValueOnce(pick);
       const ports: string[] = [];
       spawnHook.override = (file, args, options) => {
         ports.push(String((args as string[]).at(-1)));
@@ -653,9 +671,11 @@ describe('#897 a turn that outlives its prompt POST', () => {
       });
       await session.result;
 
-      expect(ports).toHaveLength(2);
       expect(ports[0]).toBe(String(taken));
-      expect(ports[1]).not.toBe(String(taken));
+      if (collideAgain) expect(ports[1]).toBe(String(taken));
+      expect(ports.length).toBeGreaterThanOrEqual(2);
+      expect(ports.length).toBeLessThanOrEqual(SERVER_PORT_ATTEMPTS);
+      expect(ports.at(-1)).not.toBe(String(taken));
       expect(notes(events)).toEqual([]);
       expect(errors(events)).toEqual([]);
       expect(types(events)).toContain('turn-end');
@@ -663,7 +683,11 @@ describe('#897 a turn that outlives its prompt POST', () => {
       spawnHook.override = null;
       await new Promise((resolve) => blocker.close(resolve));
     }
-  }, 30_000);
+  }
+
+  it('respawns on a fresh port when the random one is already taken', () => respawnsAroundTakenPort(false), 30_000);
+
+  it('still recovers when the respawn picks the taken port too', () => respawnsAroundTakenPort(true), 30_000);
 
   /**
    * The transitions OUT of the state this fix introduces. `session.idle` is now
@@ -804,6 +828,37 @@ describe('#897 a turn that outlives its prompt POST', () => {
     expect(isOpencodeMissingSessionError(errors[0]!.message)).toBe(true);
     expect(types(events)).not.toContain('session');
     expect(types(events)).not.toContain('turn-end');
+  }, 30_000);
+});
+
+describe('#2488 a reopened OpenCode 1.x session', () => {
+  const mockBin = join(dirname(fileURLToPath(import.meta.url)), '__fixtures__', 'opencode', 'mock-opencode-serve.mjs');
+
+  it('reopens the saved session and hears the current system prompt before the continuation', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'cez-opencode-prompts-'));
+    const prompts = join(dir, 'prompts.ndjson');
+    const requests = join(dir, 'requests.log');
+    try {
+      const runner = new OpencodeServerRunner({ bin: mockBin, timeoutMs: 60_000 });
+      const session = runner.startSession(
+        {
+          userPrompt: 'continue the existing task', systemPrompt: 'Never run the full suite.', cwd: process.cwd(),
+          sessionId: 'ses_mock_1', resume: true, env: { MOCK_PROMPTS_FILE: prompts, MOCK_REQUESTS_FILE: requests },
+        },
+        () => undefined,
+        { autoEndAfterFirstTurn: true },
+      );
+      expect((await session.result).sessionId).toBe('ses_mock_1');
+      const sent = readFileSync(requests, 'utf8').trim().split('\n');
+      // The mock hands a NEW session the same id, so only the requests prove it was a reopen.
+      expect(sent).toContain('GET /session/ses_mock_1');
+      expect(sent).not.toContain('POST /session');
+      const [prompt] = readFileSync(prompts, 'utf8').trim().split('\n').map((line) => JSON.parse(line) as string);
+      expect(prompt?.split('Never run the full suite.')).toHaveLength(2);
+      expect(prompt?.indexOf('Never run the full suite.')).toBeLessThan(prompt!.indexOf('continue the existing task'));
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   }, 30_000);
 });
 

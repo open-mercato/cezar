@@ -307,8 +307,8 @@ describe('transcript adapters and row building', () => {
     const entries = [tool('read-1'), tool('read-2')]
     const rows = buildTranscriptRows(agentTranscriptSections('agent-1', entries), 'r1')
     expect(rows).toHaveLength(1)
-    expect(rows[0]?.key).toBe('agent:agent-1:group:read-1')
-    expect(rows[0]?.content).toMatchObject({ kind: 'block', block: { kind: 'context-group' } })
+    expect(rows[0]?.key).toBe('agent:agent-1:activity:read-1')
+    expect(rows[0]?.content).toMatchObject({ kind: 'block', block: { kind: 'activity' } })
   })
 })
 

@@ -48,6 +48,20 @@ const shikiPlugin: CodeHighlighterPlugin = {
 }
 
 // Keep Streamdown's controls and error fallback; load Pele only for visible diagrams.
+// Memoize the dynamic import promise so concurrent renders (e.g. a streaming fence updating
+// while the first render is still resolving) share one in-flight load instead of re-entering
+// `import('pele/lazy')`. Clear on rejection so a transient chunk failure can retry.
+let peleModule: Promise<typeof import('pele/lazy')> | null = null
+function loadPele(): Promise<typeof import('pele/lazy')> {
+  if (!peleModule) {
+    peleModule = import('pele/lazy').catch((error: unknown) => {
+      peleModule = null
+      throw error
+    })
+  }
+  return peleModule
+}
+
 const mermaidPlugin: DiagramPlugin = {
   name: 'mermaid',
   type: 'diagram',
@@ -55,7 +69,7 @@ const mermaidPlugin: DiagramPlugin = {
   getMermaid: () => ({
     initialize: () => {},
     render: async (id, source) => {
-      const { renderAsync } = await import('pele/lazy')
+      const { renderAsync } = await loadPele()
       return renderAsync(source, { idPrefix: id, links: false, images: false })
     },
   }),

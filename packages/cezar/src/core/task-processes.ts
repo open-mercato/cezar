@@ -1,8 +1,7 @@
 /**
- * Processes a task leaves running after it settles (#1411). Every agent is spawned with
- * `CEZ_TASK_ID` in its environment and every descendant inherits it — re-parented, `setsid`ed and
- * double-forked ones included — so the marker finds what a process-tree walk misses, and never a
- * user's own shell in the worktree. It also finds orphans of cezar versions that predate this.
+ * Processes a task leaves running after it settles (#1411). Descendants inherit the agent's
+ * `CEZ_TASK_ID` or the check step's `CEZ_RUN_ID`, even if they leave the original process group.
+ * These markers find what a process-tree walk misses and still cover orphans from older versions.
  *
  * Linux reads `/proc/<pid>/environ`; macOS parses `ps -E`; anything else finds nothing. Every
  * failure degrades to "found nothing" — this must never affect a run.
@@ -12,13 +11,14 @@ import { execFile } from 'node:child_process';
 import { readdir, readFile } from 'node:fs/promises';
 
 const MARKER = 'CEZ_TASK_ID';
-// Check steps carry only the run id (CEZ_TASK_ID would hand them dispatch/report authority, #2467).
-const FALLBACK_MARKER = 'CEZ_RUN_ID';
+const CHECK_MARKER = 'CEZ_RUN_ID';
+const PS_TASK_MARKER = new RegExp(`(?:^|\\s)${MARKER}=(\\S*)`);
+const PS_CHECK_MARKER = new RegExp(`(?:^|\\s)${CHECK_MARKER}=(\\S*)`);
 const SCAN_BATCH = 64;
 
 export interface TaskProcess {
   pid: number;
-  /** The `CEZ_TASK_ID` the process was started with. */
+  /** The task or check run ID the process was started with. */
   taskId: string;
   /** argv joined with spaces, capped — for the run's lifecycle note only. */
   command: string;
@@ -29,12 +29,12 @@ export function taskProcessReapEnabled(env: NodeJS.ProcessEnv = process.env): bo
   return env.CEZ_TASK_PROCESS_REAP !== '0';
 }
 
-/** The `CEZ_TASK_ID` value in a NUL-separated `/proc/<pid>/environ` blob. */
+/** The task ID, falling back to the check run ID when it is absent. */
 export function taskIdFromEnviron(environ: string): string | undefined {
   let fallback: string | undefined;
   for (const entry of environ.split('\0')) {
     if (entry.startsWith(`${MARKER}=`)) return entry.slice(MARKER.length + 1) || undefined;
-    if (entry.startsWith(`${FALLBACK_MARKER}=`)) fallback = entry.slice(FALLBACK_MARKER.length + 1) || undefined;
+    if (entry.startsWith(`${CHECK_MARKER}=`)) fallback = entry.slice(CHECK_MARKER.length + 1) || undefined;
   }
   return fallback;
 }
@@ -56,8 +56,7 @@ export function parsePsEnvOutput(text: string): { procs: TaskProcess[]; parents:
     const pid = Number(match[1]);
     parents.set(pid, Number(match[2]));
     const rest = match[3] ?? '';
-    const marker =
-      new RegExp(`(?:^|\\s)${MARKER}=(\\S+)`).exec(rest) ?? new RegExp(`(?:^|\\s)${FALLBACK_MARKER}=(\\S+)`).exec(rest);
+    const marker = PS_TASK_MARKER.exec(rest) ?? PS_CHECK_MARKER.exec(rest);
     if (!marker?.[1]) continue;
     procs.push({ pid, taskId: marker[1], command: capCommand(rest.slice(0, marker.index)) });
   }
@@ -128,7 +127,7 @@ function listDarwin(): Promise<TaskProcess[]> {
   });
 }
 
-/** Every live process carrying a `CEZ_TASK_ID`, cezar's own ancestry excluded. Never throws. */
+/** Live processes carrying a task or check run marker, excluding cezar's own ancestry. */
 export async function listTaskProcesses(): Promise<TaskProcess[]> {
   try {
     if (process.platform === 'linux') return await listLinux();

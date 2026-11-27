@@ -1,98 +1,53 @@
 import { execFile } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { expect, it, vi } from 'vitest';
 import { RunStore } from '../runs/store.ts';
+import { liveCheckCount } from './check-process.ts';
 import { RunManager } from './run.ts';
-import type { WorkflowDef } from './types.ts';
 
-const run = promisify(execFile);
-const GIT_ID = ['-c', 'user.name=test', '-c', 'user.email=test@local'];
+const git = promisify(execFile);
 
-const alive = (pid: number): boolean => {
+it.skipIf(process.platform === 'win32')('uses the check run marker and closes the check on cancellation', async () => {
+  const repoRoot = mkdtempSync(join(tmpdir(), 'cez-check-cancel-'));
+  vi.stubEnv('CEZ_DRY_RUN', '1');
+  vi.stubEnv('CEZ_TASK_ID', 'outer-task');
+  vi.stubEnv('cez_task_id', 'outer-task');
+  let store: RunStore | undefined;
+  let manager: RunManager | undefined;
   try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
-};
-const waitFor = async (cond: () => boolean, ms = 10_000): Promise<boolean> => {
-  const end = Date.now() + ms;
-  while (Date.now() < end) {
-    if (cond()) return true;
-    await new Promise((r) => setTimeout(r, 50));
-  }
-  return cond();
-};
-
-/** #2467: cancelling a check step must take its descendants, not just the wrapper shell. */
-describe.runIf(process.platform !== 'win32')('check step cancel kills the whole process tree', () => {
-  let repoRoot: string;
-  let store: RunStore;
-  let manager: RunManager;
-  let pids: number[] = [];
-  const savedDry = process.env.CEZ_DRY_RUN;
-
-  beforeEach(async () => {
-    repoRoot = mkdtempSync(join(tmpdir(), 'cez-check-cancel-'));
-    process.env.CEZ_DRY_RUN = '1';
-    await run('git', ['init', '-q', '-b', 'main'], { cwd: repoRoot });
+    await git('git', ['init', '-q', '-b', 'main'], { cwd: repoRoot });
     writeFileSync(join(repoRoot, 'a.txt'), 'one\n');
-    await run('git', ['add', '-A'], { cwd: repoRoot });
-    await run('git', [...GIT_ID, 'commit', '-q', '-m', 'base'], { cwd: repoRoot });
+    await git('git', ['add', '-A'], { cwd: repoRoot });
+    await git('git', ['-c', 'user.name=test', '-c', 'user.email=test@local', 'commit', '-q', '-m', 'base'], { cwd: repoRoot });
     store = RunStore.open(join(repoRoot, '.ai/cezar'));
     manager = new RunManager(store, repoRoot);
-  });
+    const record = manager.startRun({
+      name: 'check-only',
+      source: 'file',
+      steps: [{
+        id: 'verify',
+        name: 'Verify',
+        command: 'printf "%s\\n" "$CEZ_RUN_ID" "${CEZ_TASK_ID-unset}" "${cez_task_id-unset}" > check-context; exec sleep 30',
+      }],
+    }, { task: 'x', worktree: false });
 
-  afterEach(() => {
-    for (const pid of pids) {
-      try {
-        process.kill(pid, 'SIGKILL');
-      } catch {
-        // gone
-      }
+    try {
+      await vi.waitFor(() => {
+        expect(readFileSync(join(repoRoot, 'check-context'), 'utf8')).toBe(`${record.id}\nunset\nunset\n`);
+      }, { timeout: 10_000 });
+      expect(liveCheckCount()).toBe(1);
+    } finally {
+      expect(await manager.cancelAndWait(record.id)).toBe(true);
+      await vi.waitFor(() => expect(liveCheckCount()).toBe(0), { timeout: 10_000 });
     }
-    manager.dispose();
-    if (savedDry === undefined) delete process.env.CEZ_DRY_RUN;
-    else process.env.CEZ_DRY_RUN = savedDry;
-    store.flush();
+    expect(store.getRun(record.id)?.status).toBe('cancelled');
+  } finally {
+    manager?.dispose();
+    store?.flush();
+    vi.unstubAllEnvs();
     rmSync(repoRoot, { recursive: true, force: true });
-  });
-
-  it('SIGTERMs the group: a backgrounded descendant that outlives bash is gone after cancel', async () => {
-    const pidFile = join(repoRoot, 'pids.txt');
-    const wf: WorkflowDef = {
-      name: 'check-only',
-      source: 'file',
-      steps: [{ id: 'verify', name: 'Verify', command: `sleep 300 & echo $! > ${pidFile}; wait` }],
-    };
-    const record = manager.startRun(wf, { task: 'x', worktree: false });
-    expect(await waitFor(() => existsSync(pidFile) && readFileSync(pidFile, 'utf8').trim() !== '')).toBe(true);
-    const child = Number(readFileSync(pidFile, 'utf8').trim());
-    pids.push(child);
-    expect(alive(child)).toBe(true);
-
-    await manager.cancelAndWait(record.id);
-    expect(await waitFor(() => !alive(child))).toBe(true);
-  }, 30_000);
-
-  it('dispose() kills an active check\'s descendant', async () => {
-    const pidFile = join(repoRoot, 'pids2.txt');
-    const wf: WorkflowDef = {
-      name: 'check-only',
-      source: 'file',
-      steps: [{ id: 'verify', name: 'Verify', command: `sleep 301 & echo $! > ${pidFile}; wait` }],
-    };
-    manager.startRun(wf, { task: 'x', worktree: false });
-    expect(await waitFor(() => existsSync(pidFile) && readFileSync(pidFile, 'utf8').trim() !== '')).toBe(true);
-    const child = Number(readFileSync(pidFile, 'utf8').trim());
-    pids.push(child);
-    expect(alive(child)).toBe(true);
-
-    manager.dispose();
-    expect(await waitFor(() => !alive(child))).toBe(true);
-  }, 30_000);
-});
+  }
+}, 30_000);

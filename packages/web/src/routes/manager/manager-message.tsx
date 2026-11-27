@@ -51,6 +51,7 @@ import { ManagerCard } from './manager-card'
 import { ForgeReference, ManagerAskText, ManagerProjectsContext, TaskReference } from './manager-reference'
 import { SessionCard, taskPath } from './manager-session-card'
 import { ReplyUsageNote, type ReplyUsage } from './manager-plan-usage'
+import { AgentSwitchNotice, ReplyAgentLabel } from './manager-agent-chain'
 
 const NO_PROJECTS: readonly ManagerReferenceProject[] = []
 
@@ -347,6 +348,7 @@ function AssistantMessage({
         {message.turn === 'job' && message.jobName ? <span className="font-medium">{message.automationReport ? 'Automation' : 'Job'}: {message.jobName}</span> : null}
         {message.taskReport ? <span className="font-medium">Task update</span> : message.turn === 'watch' ? <span className="font-medium">Watch check</span> : null}
         <time dateTime={message.at} title={new Date(message.at).toLocaleString()}>{managerMessageTime(message.at)}</time>
+        <ReplyAgentLabel message={message} />
       </p>
       {message.important ? (
         <p data-slot="manager-important" className="mb-1 flex items-center gap-1.5 text-xs font-semibold text-foreground">
@@ -593,6 +595,7 @@ function MessageBody({
       return <ActionCard origin={origin} message={message} onDecide={onDecide} />
     case 'notice':
       if (message.activity) return <ActivityNotice at={message.at} activity={message.activity} />
+      if (message.agentSwitch) return <AgentSwitchNotice message={message} managerId={origin.id} />
       return <p data-slot="manager-notice" className="text-center text-xs text-muted-foreground">{message.text}</p>
   }
 }

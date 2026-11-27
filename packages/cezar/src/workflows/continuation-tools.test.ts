@@ -5,9 +5,9 @@ import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AgentEvent, AgentRunResult, AgentRunSpec } from '../core/agent-runner.ts';
-import { RunStore } from '../runs/store.ts';
+import { FRESH_PROMPT_MAX, RunStore } from '../runs/store.ts';
 import type { StepToolPolicy } from '@open-mercato/cezar-contract';
-import { RunManager } from './run.ts';
+import { FRESH_CONTEXT_NOTE, RunManager } from './run.ts';
 import { DEFAULT_ALLOWED_TOOLS, type WorkflowDef } from './types.ts';
 
 const run = promisify(execFile);
@@ -294,6 +294,129 @@ describe('a resumed session keeps its workflow step tools', { timeout: 20_000 },
     expect(spec.userPrompt).toContain('User:\nfirst fix the API');
     expect(spec.userPrompt).toContain('Assistant:\nThe API is fixed; UI remains.');
     expect(spec.userPrompt).toContain('## New user instruction\nkeep going');
+    await settled(id);
+  });
+
+  it('freshContext opens a new session with no prior conversation on the same backend (#2513)', async () => {
+    const id = terminalRun({
+      def: SINGLE_DEF,
+      steps: [{ id: 'work', sessionId: 'sess-1', backend: 'claude' }],
+    });
+    store.appendEvent(id, { type: 'user-message', text: 'review PR 7' });
+    store.appendEvent(id, { type: 'text', text: 'Verdict: request changes.' });
+
+    expect(manager!.continueRun(id, { text: 'Re-review PR 7 at abc123', freshContext: true })).toEqual({ ok: true });
+    const spec = await specAt(0);
+    expect(spec.resume).toBe(false);
+    expect(spec.sessionId).toEqual(expect.any(String));
+    expect(spec.sessionId).not.toBe('sess-1');
+    expect(spec.userPrompt).toBe(`${FRESH_CONTEXT_NOTE}\n\nRe-review PR 7 at abc123`);
+    expect(spec.userPrompt).not.toContain('Verdict: request changes.');
+    await settled(id);
+  });
+
+  it('a fresh Continue is refused, not folded into the old session, while another Continue is starting', async () => {
+    const id = terminalRun({
+      def: SINGLE_DEF,
+      steps: [{ id: 'work', sessionId: 'sess-1', backend: 'claude' }],
+    });
+
+    expect(manager!.continueRun(id, { text: 'keep going' })).toEqual({ ok: true });
+    // A plain follow-up joins the starting Continue; a fresh one must not become its message.
+    expect(manager!.continueRun(id, { text: 'Re-review PR 7', freshContext: true })).toEqual({ ok: false, error: 'run is still active' });
+    await specAt(0);
+    await settled(id);
+  });
+
+  // Only the internal deferForCapacity=true path (recovery, agent handoffs) queues a Continue; the
+  // Continue route and `task say` launch it at once, and a launched one pins its new session id
+  // on the step in the same tick it starts running, so a restart then resumes that fresh session.
+  it('a queued fresh Continue revived after a restart opens a new session with its instruction (#2513)', async () => {
+    const id = terminalRun({
+      def: SINGLE_DEF,
+      steps: [{ id: 'work', sessionId: 'sess-1', backend: 'claude' }],
+    });
+    store.appendEvent(id, { type: 'text', text: 'Verdict: request changes.' });
+    expect(manager!.continueRun(id, { text: 'Re-review PR 7 at abc123', freshContext: true }, true)).toEqual({ ok: true });
+    expect(store.getRun(id)?.status).toBe('queued');
+    expect(store.getRun(id)?.steps.find((step) => step.id === 'continue-1')).toMatchObject({ freshContext: true, freshPrompt: 'Re-review PR 7 at abc123' });
+    expect(captured.specs).toHaveLength(0);
+    manager?.dispose();
+    manager = new RunManager(store, repoRoot);
+
+    await manager.recover();
+    const spec = await specAt(0);
+    expect(spec.resume).toBe(false);
+    expect(spec.sessionId).toEqual(expect.any(String));
+    expect(spec.sessionId).not.toBe('sess-1');
+    // A revived queued Continue also restates the task's objective after the instruction.
+    expect(spec.userPrompt.startsWith(`${FRESH_CONTEXT_NOTE}\n\nRe-review PR 7 at abc123`)).toBe(true);
+    expect(spec.userPrompt).not.toContain('handoff file (CEZ_HANDOFF_FILE)');
+    expect(spec.userPrompt).not.toContain('Verdict: request changes.');
+    expect(store.getRun(id)?.steps.find((step) => step.id === 'continue-1')?.freshPrompt).toBeUndefined();
+    await settled(id);
+  });
+
+  it('a queued fresh Continue cancelled before it opens drops its instruction', async () => {
+    const id = terminalRun({
+      def: SINGLE_DEF,
+      steps: [{ id: 'work', sessionId: 'sess-1', backend: 'claude' }],
+    });
+    expect(manager!.continueRun(id, { text: 'Re-review PR 7', freshContext: true }, true)).toEqual({ ok: true });
+    expect(store.getRun(id)?.steps.find((candidate) => candidate.id === 'continue-1')?.freshPrompt).toBe('Re-review PR 7');
+    expect(manager!.cancel(id)).toBe(true);
+    expect(store.getRun(id)?.status).toBe('cancelled');
+    const step = store.getRun(id)?.steps.find((candidate) => candidate.id === 'continue-1');
+    expect(step?.freshContext).toBe(true);
+    expect(step?.freshPrompt).toBeUndefined();
+  });
+
+  it('a queued fresh Continue past the stored cap keeps no instruction rather than one the reload drops', async () => {
+    const id = terminalRun({
+      def: SINGLE_DEF,
+      steps: [{ id: 'work', sessionId: 'sess-1', backend: 'claude' }],
+    });
+    expect(manager!.continueRun(id, { text: 'x'.repeat(FRESH_PROMPT_MAX + 1), freshContext: true }, true)).toEqual({ ok: true });
+    const step = store.getRun(id)?.steps.find((candidate) => candidate.id === 'continue-1');
+    expect(step?.freshContext).toBe(true);
+    expect(step?.freshPrompt).toBeUndefined();
+    manager!.cancel(id);
+  });
+
+  it('a queued fresh Continue without a persisted instruction revives with a prompt that does not point at the handoff', async () => {
+    const id = terminalRun({
+      def: SINGLE_DEF,
+      steps: [{ id: 'work', sessionId: 'sess-1', backend: 'claude' }],
+    });
+    // A record written before `freshPrompt` existed.
+    store.addStep(id, { id: 'continue-1', name: 'Continue', kind: 'agent', freshContext: true });
+    store.updateRun(id, { status: 'queued', finishedAt: undefined });
+    manager?.dispose();
+    manager = new RunManager(store, repoRoot);
+
+    await manager.recover();
+    const spec = await specAt(0);
+    expect(spec.resume).toBe(false);
+    expect(spec.userPrompt.startsWith(FRESH_CONTEXT_NOTE)).toBe(true);
+    expect(spec.userPrompt).toContain('the instruction it was opened with was lost');
+    expect(spec.userPrompt).not.toContain('handoff file (CEZ_HANDOFF_FILE)');
+    await settled(id);
+  });
+
+  it('a queued Continue without freshContext revived after a restart resumes its session', async () => {
+    const id = terminalRun({
+      def: SINGLE_DEF,
+      steps: [{ id: 'work', sessionId: 'sess-1', backend: 'claude' }],
+    });
+    store.addStep(id, { id: 'continue-1', name: 'Continue', kind: 'agent' });
+    store.updateRun(id, { status: 'queued', finishedAt: undefined });
+    manager?.dispose();
+    manager = new RunManager(store, repoRoot);
+
+    await manager.recover();
+    const spec = await specAt(0);
+    expect(spec.resume).toBe(true);
+    expect(spec.sessionId).toBe('sess-1');
     await settled(id);
   });
 

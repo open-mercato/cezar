@@ -217,7 +217,7 @@ export function WorkspaceColumns({
               grip={false}
               extras={headerExtras?.(column.view, slot as number)}
             />
-            <div data-slot="main" className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
+            <div data-slot="main" className="min-h-0 min-w-0 flex-1 overflow-y-auto overscroll-contain">
               {renderView(column.view, slot as number, column)}
             </div>
           </>
@@ -270,7 +270,7 @@ export function WorkspaceColumns({
             trailing={index === columns.length - 1 ? <FullViewExit className="ml-1.5" /> : null}
             extras={headerExtras?.(column.view, index)}
           />
-          <div data-slot="main" className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
+          <div data-slot="main" className="min-h-0 min-w-0 flex-1 overflow-y-auto overscroll-contain">
             <WorkspaceMaximizeContext.Provider value={null}>
               {renderView(column.view, index, column)}
             </WorkspaceMaximizeContext.Provider>

@@ -456,6 +456,33 @@ describe('the agents form', () => {
     await waitFor(() => expect(modelValue('claude')).toBe(''))
   })
 
+  it('lets unverified-runnable providers like antigravity pick a default model when status is unknown', async () => {
+    serve({
+      providerStatus: {
+        providers: [
+          { provider: 'claude', status: 'connected', enabled: true },
+          { provider: 'antigravity', status: 'unknown', enabled: true },
+        ],
+      },
+      hostModels: {
+        antigravity: [
+          { id: 'gemini-4-neon-high', label: 'Gemini 4 Neon (High)', description: '' },
+        ],
+      },
+    })
+    renderAt('/settings/agents')
+    await waitFor(() => expect(form()).not.toBeNull())
+
+    const select = modelSelect('antigravity')
+    await waitFor(() => expect(select.hasAttribute('disabled')).toBe(false))
+    await pick(select, 'Gemini 4 Neon (High)')
+    await waitFor(() => expect(puts()).toHaveLength(1))
+    expect(puts()[0]?.body).toEqual({
+      defaultModels: { antigravity: 'gemini-4-neon-high' },
+      defaultModelsAuto: { antigravity: false },
+    })
+  })
+
   it('offers each runner the models its own host CLI reports (#794)', async () => {
     serve({
       hostModels: {
