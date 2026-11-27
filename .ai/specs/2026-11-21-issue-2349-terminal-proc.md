@@ -1,0 +1,38 @@
+# Terminal descendant proc reads (#2349)
+
+## TLDR
+Linux terminal polls and shutdown currently run all-user `ps`. Replace those reads with a traversal rooted at cezar so unrelated users' proc files are not read: the only file opened outside cezar's tree is the `stat` of a stale, PID-reused children entry, which the PPID check then rejects before anything else of it is read. Preserve setuid descendants and existing terminal lifecycle behavior.
+
+## Problem and evidence
+[Issue #2349](https://github.com/open-mercato/cezar/issues/2349) and maintainer triage report that procps filters UID only after reading proc files. `foreground.ts` names tabs and supplies close warnings; `process-tree.ts` supplies shutdown's SIGHUP/SIGKILL group list. Removing children would weaken both guarantees.
+
+## Resolved assumptions (autonomous defaults)
+| Question | Default | Reason |
+| --- | --- | --- |
+| Real/effective UID? | Neither: traverse cezar's descendant links. | A setuid child's UID must not make a running terminal idle or hide reachable grandchildren. |
+| Other process scanners? | Defer them explicitly. | Parent scope is terminal only; this PR cannot claim all cockpit proc noise is gone. |
+| Linux proc unavailable? | Return unknown, never fall back to global `ps`. | Preserve close warning failure semantics and avoid restoring all-user reads. Existing shutdown fallback remains. |
+| macOS? | Retain existing `ps` path. | No Linux proc auditing there; UID filtering would drop elevated descendants. |
+
+## Proposed solution and architecture
+Add a private Linux proc reader within `server/terminal`. Begin at `process.pid`, parse `/proc/PID/stat` using the last closing parenthesis (comm can contain spaces/parentheses), enumerate that process's task IDs, and follow each task's `children`. Only discovered descendant PIDs are visited, without UID filtering. Validate the child's stat PPID against the discovered parent so stale child links cannot import unrelated reused PIDs. Keep visited IDs and bound elapsed time and visited count. Foreground uses asynchronous filesystem operations; shutdown uses synchronous operations in a short-lived Node helper before shell death/reparenting. The parent bounds the helper to 1.5 seconds with SIGKILL and an 8 MiB output cap, matching the old ps subprocess timeout. The compiled helper needs only Node; source (dev/test) runs load tsx resolved from the cezar package by absolute URL, never from the server's cwd, and allow 5 seconds for a cold tsx start. The helper is spawned synchronously, so closing a tab on Linux blocks the event loop for one Node start plus the walk (about 60 ms measured, at most the 1.5-second timeout), where `ps` took a few milliseconds. Share traversal/parsing rules through one generator driven by async/sync IO.
+
+Read `cmdline` only for foreground names, splitting NUL arguments. If unavailable, use stat's comm for the already-proven row; empty cmdline is also comm. An inaccessible process relationship read returns unknown rather than an incomplete table that falsely claims idle. ENOENT/ESRCH only skip an exited child after re-reading its visible parent task children list and confirming the link is gone; if that children file has itself vanished (the parent thread exited and its children were reparented), the child is skipped too. A link that remains live while stat is hidden (hidepid=2) returns unknown; root failure stays unknown. Entries that disappear mid-walk skip their branch, as `ps` skips exited rows, rather than failing the whole snapshot: a descendant whose task directory is gone keeps its own row without a subtree, and a thread whose `children` file is gone is skipped once its own `task/TID/stat` is gone too. A `children` file missing beside a live task stat means the kernel lacks children support and stays unknown, as do permission failures. A whole-snapshot failure would leave `kill()`/`closeAll()` signalling only the shell's group, so a closed tab's background jobs would survive. Shutdown reads only stat/task/children, never command lines. Its JSON output is validated with a private Zod row schema.
+
+No HTTP, CLI, storage, configuration, startup, dependency or architecture contract changes. Existing row consumers, one-second foreground cache, null semantics, descendant-group root guard, SIGHUP/grace/SIGKILL sequence and Windows behavior remain.
+
+## Edge cases and risks
+Setuid descendants remain traversable when proc permissions allow, including ordinary user grandchildren behind an elevated parent. If the kernel denies relationship reads, return unknown: the pre-existing close warning and shell-group/binding shutdown fallback apply; no privilege escalation or broader scan is attempted. A process snapshot remains racy, just like ps. The kernel documents `task/TID/children` as fully reliable only for stopped or frozen tasks: on a running task a child that forks or exits during the read can be missed, so a fast-forking tree may lose a just-started job for one snapshot. This is the same race `ps` has; cezar does not freeze the tree. Both traversals check elapsed time and operation count. Shutdown additionally runs under the parent subprocess timeout, preserving a killable boundary around stalled proc operations. Task enumeration includes children forked by non-leader threads. Global PID reuse and reparenting remain OS races; PPID checks retain the existing shutdown root validation.
+
+Other all-user scanners listed in maintainer triage remain out of scope. Full all-cockpit audit silence requires follow-up work. Root verification used native Linux containers with a real setuid-root bridge and an ordinary-user grandchild: hidepid=0 retains the full ancestry; hidepid=1 and hidepid=2 return unknown when elevated relationships are hidden. The hidepid=2 case initially reproduced false idle and now has a dedicated red-before-green regression. Ten browser start/busy/stop/idle cycles and close warnings passed. These observations supplement synthetic permission fixtures and ordinary live lifecycle tests; they do not claim that every hardened kernel policy is supported.
+
+## Research and review
+[Linux's kernel proc documentation](https://www.kernel.org/doc/html/latest/filesystems/proc.html#proc-pid-task-tid-children-information-about-task-children) describes `task/TID/children` as direct child task IDs; Linux proc stat supplies PPID and PGRP. This enables ancestry scoping without UID discovery. procps UID filtering cannot satisfy the audited-access goal (maintainer strace evidence). No public data model is added. Spec review grounded against foreground, process-tree, sessions and real lifecycle tests: one capability, no public contract change. Fresh-agent scope review is unavailable because the parent explicitly forbids additional workers; self-review is disclosed, not presented as independent approval.
+
+## Implementation Plan
+### Phase 1: scoped Linux reads
+1. Add bounded shared traversal, proc parser, async driver and timeout-bounded synchronous Node helper, with access-boundary and mixed-UID regression fixtures.
+2. Route the terminal readers on Linux through the helper, preserving other platforms and lifecycle consumers.
+### Phase 2: verification and publication
+3. Prove regressions red without the source change; run terminal lifecycle tests and all five configured npm validation commands.
+4. Review exact diff through om-auto-review-pr/om-code-review; publish a dedicated PR, draft whenever verification remains incomplete. Retain QA gates; add automerge only if fully verified and no startup/config/architecture change. Release only owned claims.
