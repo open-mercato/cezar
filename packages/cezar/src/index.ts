@@ -655,6 +655,8 @@ async function serveCommand(
     const mark = check.available ? '✓' : '✗';
     const detail = check.available ? (check.version ?? 'ok') : (check.hint ?? 'missing');
     console.log(`  ${mark} ${check.name.padEnd(6)} ${detail}`);
+    // A missing runner's hint already carries it; an installed one says it on its own line (#2439).
+    if (check.available && check.deprecated) console.log(`           ${check.deprecated}`);
   }
   if (port !== preferredPort) console.log(`  (port ${preferredPort} was busy — using ${port})`);
   console.log(`\n  cockpit → ${launchUrl}\n`);

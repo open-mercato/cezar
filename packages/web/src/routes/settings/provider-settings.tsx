@@ -37,7 +37,8 @@ export const PROVIDERS = [
   { id: 'omp', label: 'OMP', login: 'omp' },
   { id: 'antigravity', label: 'Antigravity', login: 'agy' },
   // No login subcommand: `/auth` inside the interactive CLI, or GEMINI_API_KEY in the environment.
-  { id: 'gemini', label: 'Gemini CLI (deprecated → Antigravity)', login: 'gemini' },
+  // `label` reads inside sentences; `heading` is the card title only (#2439).
+  { id: 'gemini', label: 'Gemini CLI', heading: 'Gemini CLI (deprecated → Antigravity)', login: 'gemini' },
   { id: 'kimi', label: 'Kimi Code', login: 'kimi login' },
 ] as const
 
@@ -259,7 +260,7 @@ export function ProviderSettings() {
         return (
           <div key={provider.id} data-slot="provider-card" data-provider={provider.id}>
             <FormRow
-              label={<h3 className="text-ui font-semibold text-foreground">{provider.label}</h3>}
+              label={<h3 className="text-ui font-semibold text-foreground">{'heading' in provider ? provider.heading : provider.label}</h3>}
               description={
                 <span className="block">
                   <span className="flex items-center gap-2">

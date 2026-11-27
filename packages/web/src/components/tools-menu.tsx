@@ -206,13 +206,8 @@ export function ToolsMenuItems({ health, forge }: { health: HealthResponse; forg
 /** A present tool: dot, mono name, right-aligned version. Informational, not interactive —
  *  there is nothing to do to a tool that works. */
 function AvailableToolRow({ check }: { check: BackendCheck }) {
-  return (
-    <div
-      data-slot="tool-row"
-      data-tool={check.name}
-      data-available="true"
-      className="flex items-center gap-2 rounded-sm px-2 py-1.5"
-    >
+  const row = (
+    <>
       <StatusDot tone="success" />
       <span className="font-mono text-label font-medium">{check.name}</span>
       <span
@@ -220,6 +215,32 @@ function AvailableToolRow({ check }: { check: BackendCheck }) {
         className="ml-auto font-mono text-meta font-medium text-muted-foreground tabular-nums"
       >
         {check.version ?? 'not found'}
+      </span>
+    </>
+  )
+  // Only a deprecation notice earns a second line on a working tool (#2439); other hints stay hidden.
+  if (!check.deprecated) {
+    return (
+      <div
+        data-slot="tool-row"
+        data-tool={check.name}
+        data-available="true"
+        className="flex items-center gap-2 rounded-sm px-2 py-1.5"
+      >
+        {row}
+      </div>
+    )
+  }
+  return (
+    <div
+      data-slot="tool-row"
+      data-tool={check.name}
+      data-available="true"
+      className="flex flex-col gap-1 rounded-sm px-2 py-1.5"
+    >
+      <span className="flex items-center gap-2">{row}</span>
+      <span data-slot="tool-deprecated" className="pl-[15px] text-meta leading-snug text-muted-foreground">
+        {check.deprecated}
       </span>
     </div>
   )
