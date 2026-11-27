@@ -12,6 +12,7 @@ import { referenceStatusSchema } from './github.ts';
 // consumes them rather than redeclaring. One-way on purpose — see the header of `./workflows.ts`.
 import { workflowDefSchema, workflowStepDefSchema } from './workflows.ts';
 import { taskAskRecordSchema } from './questions.ts';
+import { RUN_TAGS_MAX, runTagSchema, taskTagRefSchema } from './task-tags.ts';
 
 /** `GET /runs` query: `full=1` keeps each run's `workflowDef` (about 1.3 MB per run), which the list omits by default. */
 export const runsListQuerySchema = z.object({ full: z.enum(['1']).optional() });
@@ -276,6 +277,9 @@ export const runRecordSchema = z.object({
   /** The composer's per-task agent account (spec 2026-07-29-agent-profiles), applying to steps
    *  on `runner`. Absent = the run follows the project's own selection. */
   agentProfile: z.string().optional(),
+  /** Task tags: id plus a display snapshot (spec 2026-11-23-task-tags D4). Omitted, never `[]`,
+   *  when the run has none. */
+  tags: z.array(runTagSchema).max(RUN_TAGS_MAX).optional(),
   /** Set while the run waits on an expired agent login (spec 2026-11-18-inline-account-reconnect). */
   parked: runParkedSchema.optional(),
   /** Enabled policy captured at task creation; manual Continue does not refresh it. */
@@ -632,6 +636,9 @@ export const runIndexEntrySchema = z.object({
    *  refinement `workflowLabel` applies needs `steps[]`, which this row deliberately omits, so
    *  a `(planned)` chain reads as itself here rather than as its first agent's name. */
   workflow: z.string(),
+  /** Task tags, so the global page and the palette filter without the fat record (spec
+   *  2026-11-23-task-tags). */
+  tags: z.array(runTagSchema).max(RUN_TAGS_MAX).optional(),
   /** The task's branch, when it has one — a column on the global page, and the one field that
    *  makes a cross-project row identifiable at a glance without opening it. */
   branch: z.string().optional(),
@@ -1353,6 +1360,9 @@ export const createRunInputBaseSchema = z
     /** Agent account for this task (spec 2026-07-29-agent-profiles). Omit to follow the
      *  project's own selection; an id that no longer exists is a 400, not a silent default. */
     agentProfile: z.string().max(64).optional(),
+    /** Task tags (spec 2026-11-23-task-tags): resolved before the run is created, so a bad ref is a
+     *  400 and nothing starts. Every ×N variant gets the same tags. */
+    tags: z.array(taskTagRefSchema).max(RUN_TAGS_MAX).optional(),
     /** 1–3. Above 1 the response is `{ runs }` rather than a single record. */
     variants: z.number().int().min(1).max(3).optional(),
     /** false → run in the repo working tree instead of an isolated worktree (read-only skills).

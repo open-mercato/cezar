@@ -1,7 +1,10 @@
 import {
   DISPATCH_MAX_IN_FLIGHT,
   DISPATCH_MAX_SUBTASKS,
+  RUN_TAGS_MAX,
+  TASK_TAG_ID_RE,
   type DispatchIntent,
+  type RunTag,
   type Runner,
 } from '@open-mercato/cezar-api-client'
 import type { PendingAttachment } from '@/components/composer/composer-attachments'
@@ -54,6 +57,9 @@ export interface NewTaskDraft {
   /** The Ask chip (spec 2026-10-20-trunk-based-projects): a read-only task. Absent = the
    *  project decides (a trunk-based project asks when the message is a question). Per task, never sticky. */
   readOnly?: boolean
+  /** Task tags (spec 2026-11-23-task-tags § 7.2): kept across a reload, never across tasks — a
+   *  started task clears them, and they are not a remembered option. */
+  tags?: RunTag[]
 }
 
 export interface ComposerRunModeInput {
@@ -270,7 +276,18 @@ function normalize(raw: unknown): NewTaskDraft {
       typeof obj.generateFollowups === 'boolean' ? obj.generateFollowups : null,
     dispatch: normalizeDispatchIntent(obj.dispatch),
     ...(typeof obj.readOnly === 'boolean' ? { readOnly: obj.readOnly } : {}),
+    ...normalizeDraftTags(obj.tags),
   }
+}
+
+function normalizeDraftTags(raw: unknown): { tags?: RunTag[] } {
+  if (!Array.isArray(raw)) return {}
+  const tags = raw.flatMap((entry): RunTag[] => {
+    if (!entry || typeof entry !== 'object') return []
+    const { id, name } = entry as { id?: unknown; name?: unknown }
+    return typeof id === 'string' && TASK_TAG_ID_RE.test(id) && typeof name === 'string' ? [{ id, name }] : []
+  })
+  return tags.length > 0 ? { tags: tags.slice(0, RUN_TAGS_MAX) } : {}
 }
 
 /**
@@ -356,7 +373,7 @@ export function writeDraft(next: NewTaskDraft, projectId: string | null = null):
  *  skill; picking one again is one click. */
 export function clearStartedDraft(projectId: string | null = null): void {
   // A branch name is per-task — two tasks cannot both create it — while the toggle stays sticky.
-  const { branchName: _spent, readOnly: _asked, ...kept } = readDraft(projectId)
+  const { branchName: _spent, readOnly: _asked, tags: _tagged, ...kept } = readDraft(projectId)
   writeDraft({ ...kept, text: '', source: null }, projectId)
 }
 

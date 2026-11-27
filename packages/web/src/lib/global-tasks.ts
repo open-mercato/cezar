@@ -1,8 +1,9 @@
-import type { ManagerSummary, ProjectListEntry, RunIndexEntry } from '@open-mercato/cezar-api-client'
+import type { ManagerSummary, ProjectListEntry, RunIndexEntry, TaskTagsList } from '@open-mercato/cezar-api-client'
 
 import { allProjectTags } from '@/lib/project-tags'
 import { compareIsoDesc, runTitle, sortTimestamp, type SortBy } from '@/lib/task-groups'
 import { automationIdOf, matchesOrigin, type TaskOrigin } from '@/lib/task-origin'
+import { NO_TASK_TAG, resolveRunTags, tagNameKey, type ResolvedRunTag } from '@/lib/task-tags'
 
 /**
  * The pure half of the global Tasks page (`/tasks`): joining the cross-project run index to the
@@ -39,6 +40,7 @@ export type { ListView } from '@/lib/task-groups'
  *  `[]` per call would break the row memo's `tags` identity for the common untagged project. */
 const NO_TAGS: readonly string[] = []
 const NO_MANAGERS: readonly string[] = []
+const NO_TASK_TAGS: readonly ResolvedRunTag[] = []
 
 /** One row of the global table: an index entry plus everything the registry knows about the
  *  project it came from. Resolved once, so no cell has to look a project up again. */
@@ -55,6 +57,9 @@ export interface GlobalTask {
   tags: readonly string[]
   /** Ids of the managers that started or follow this task — the manager facet's values. */
   managers: readonly string[]
+  /** The task's OWN tags, resolved against the registry (spec 2026-11-23-task-tags D13: never its
+   *  project's tags). */
+  taskTags: readonly ResolvedRunTag[]
 }
 
 /** The bucket a task with no tags falls into — a filter value and a group key, so it has to be
@@ -96,7 +101,7 @@ export function sortGlobalTasks(tasks: readonly GlobalTask[], sortBy: SortBy): G
 
 /** Which facets exist. Named as a type so the filter bar can render them from one list and the
  *  toggle helper can name the one it edits without a stringly-typed key. */
-export type FacetId = 'tags' | 'statuses' | 'workflows' | 'managers'
+export type FacetId = 'tags' | 'taskTags' | 'statuses' | 'workflows' | 'managers'
 
 export interface GlobalTaskFilters {
   /** Free text over what the table shows — title, project, workflow, branch, tags. */
@@ -110,11 +115,15 @@ export interface GlobalTaskFilters {
   workflows: readonly string[]
   /** Manager ids: tasks one of them started or follows. Empty = every task. */
   managers: readonly string[]
+  /** Task-tag NAME keys (case-folded, so one chip covers same-named tags across projects), plus
+   *  `NO_TASK_TAG`. Its own key, so "No tag" never shares state with the project row's "Untagged". */
+  taskTags: readonly string[]
 }
 
 export const NO_FILTERS: GlobalTaskFilters = {
   query: '',
   tags: [],
+  taskTags: [],
   statuses: [],
   workflows: [],
   managers: [],
@@ -132,7 +141,7 @@ export function toggleFacetValue(
 /** How many facet values are selected — the number the "Clear" affordance and each facet pill's
  *  badge print. The query is not one of them; it has its own visible input. */
 export function activeFacetCount(filters: GlobalTaskFilters): number {
-  return filters.tags.length + filters.statuses.length + filters.workflows.length + filters.managers.length
+  return filters.tags.length + filters.taskTags.length + filters.statuses.length + filters.workflows.length + filters.managers.length
 }
 
 /** Are any filters narrowing the list? Drives the empty state's wording — "nothing here" and
@@ -174,6 +183,7 @@ export function toGlobalTasks(
   runs: readonly RunIndexEntry[],
   projects: readonly ProjectListEntry[],
   managers: readonly Pick<ManagerSummary, 'id' | 'followedTasks'>[] = [],
+  taskTagRegistry?: Pick<TaskTagsList, 'tags' | 'deletedIds'>,
 ): GlobalTask[] {
   const byId = new Map(projects.map((project) => [project.id, project]))
   const managersByTask = new Map<string, string[]>()
@@ -188,6 +198,7 @@ export function toGlobalTasks(
       projectName: project?.name || run.projectId,
       tags: project?.tags ?? NO_TAGS,
       managers: managersByTask.get(globalTaskKey(run)) ?? NO_MANAGERS,
+      taskTags: run.tags ? resolveRunTags(run.tags, taskTagRegistry) : NO_TASK_TAGS,
     }
   })
 }
@@ -257,6 +268,10 @@ export function facetCounts(
 export const tagValuesOf = (task: GlobalTask): readonly string[] =>
   task.tags.length === 0 ? [UNTAGGED] : task.tags
 
+/** A task's task-tag values: its tags' name keys, or `NO_TASK_TAG`. */
+export const taskTagValuesOf = (task: GlobalTask): readonly string[] =>
+  task.taskTags.length === 0 ? [NO_TASK_TAG] : [...new Set(task.taskTags.map((tag) => tagNameKey(tag.name)))]
+
 const matchesFacet = (selected: readonly string[], values: readonly string[]): boolean =>
   selected.length === 0 || values.some((value) => selected.includes(value))
 
@@ -284,6 +299,7 @@ function haystack(task: GlobalTask): string {
     task.run.workflow,
     task.run.branch ?? '',
     ...task.tags,
+    ...task.taskTags.map((tag) => tag.name),
   ]
     .join('\n')
     .toLowerCase()
@@ -306,6 +322,7 @@ export function filterGlobalTasks(
     if (!matchesFacet(filters.workflows, [task.run.workflow])) return false
     if (!matchesFacet(filters.managers, task.managers)) return false
     if (!matchesTags(task, filters.tags)) return false
+    if (!matchesFacet(filters.taskTags, taskTagValuesOf(task))) return false
     if (tokens.length === 0) return true
     const text = haystack(task)
     return tokens.every((token) => text.includes(token))
@@ -405,6 +422,8 @@ export const SEARCH_PARAMS = {
   query: 'q',
   tag: 'tag',
   untagged: 'untagged',
+  taskTag: 'ttag',
+  noTaskTag: 'notag',
   status: 'status',
   workflow: 'workflow',
   manager: 'manager',
@@ -455,6 +474,10 @@ export function urlStateToSearchParams(state: GlobalTasksUrlState): URLSearchPar
     if (tag === UNTAGGED) params.set(SEARCH_PARAMS.untagged, '1')
     else params.append(SEARCH_PARAMS.tag, tag)
   }
+  for (const key of state.filters.taskTags) {
+    if (key === NO_TASK_TAG) params.set(SEARCH_PARAMS.noTaskTag, '1')
+    else params.append(SEARCH_PARAMS.taskTag, key)
+  }
   for (const status of state.filters.statuses) params.append(SEARCH_PARAMS.status, status)
   for (const workflow of state.filters.workflows) params.append(SEARCH_PARAMS.workflow, workflow)
   for (const manager of state.filters.managers) params.append(SEARCH_PARAMS.manager, manager)
@@ -474,11 +497,14 @@ export function urlStateToSearchParams(state: GlobalTasksUrlState): URLSearchPar
 export function urlStateFromSearchParams(params: URLSearchParams): GlobalTasksUrlState {
   const tags = params.getAll(SEARCH_PARAMS.tag).filter((tag) => tag !== '')
   if (params.get(SEARCH_PARAMS.untagged) === '1') tags.push(UNTAGGED)
+  const taskTags = params.getAll(SEARCH_PARAMS.taskTag).map(tagNameKey).filter((key) => key !== '')
+  if (params.get(SEARCH_PARAMS.noTaskTag) === '1') taskTags.push(NO_TASK_TAG)
   const group = params.get(SEARCH_PARAMS.groupBy) ?? ''
   return {
     filters: {
       query: params.get(SEARCH_PARAMS.query) ?? '',
       tags,
+      taskTags,
       statuses: params.getAll(SEARCH_PARAMS.status).filter((status) => status !== ''),
       workflows: params.getAll(SEARCH_PARAMS.workflow).filter((workflow) => workflow !== ''),
       managers: params.getAll(SEARCH_PARAMS.manager).filter((manager) => manager !== ''),
