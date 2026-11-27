@@ -18,7 +18,7 @@ The implementation follows the three phases below. Vendor login remains with eac
 - [x] 1.3 Implement encrypted storage and atomic changes — 679599f93
 - [x] 1.4 Map verified methods to agent launch options — b39e324d0
 - [ ] 1.5 Characterize existing launches and wire run selection and replay
-- [ ] 1.6 Fetch, cache and expose method-served models
+- [x] 1.6 Fetch, cache and expose method-served models — 1b53684c7
 - [x] 1.7 Register local-write routes and check HTTP compatibility — f71c6f198
 - [x] 1.8 Add headless configuration and startup apply — 093c9a922
 - [x] 1.9 Build workspace agent settings — 80263f852
