@@ -37,6 +37,7 @@ import {
   useWorkspaceConfig,
   useWorkspaceUiState,
   useWorkflows,
+  workspaceQueryKeys,
 } from '@/api/queries'
 import {
   DEFAULT_AGENT_ACCOUNT_ID,
@@ -210,7 +211,10 @@ export function NewTaskRoute() {
     const stored = readDraft(draftProjectId)
     return {
       ...stored,
-      ...(requestedRunner ? { runner: requestedRunner, agentProfile: null, model: null, agentMethod: undefined, reasoningEffort: null } : {}),
+      // Older explicit drafts already identify their login. An inherited one has no such evidence.
+      kimiModelBinding: stored.kimiModelBinding ?? (stored.runner === 'kimi' && stored.model && stored.agentProfile
+        ? { model: stored.model, account: stored.agentProfile } : undefined),
+      ...(requestedRunner ? { runner: requestedRunner, agentProfile: null, model: null, kimiModelBinding: undefined, agentMethod: undefined, reasoningEffort: null } : {}),
       ...(deepLink.ref !== '' ? { text: deepLink.ref } : {}),
       ...(deepLink.skill !== ''
         ? { source: { source: 'skill', ref: deepLink.skill } as TaskSource }
@@ -313,11 +317,10 @@ export function NewTaskRoute() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [autoText, sourcesReady])
 
-  const { accounts: accountChoices, repoAccount, projectAccount, pending: accountsPending } = useAgentAccounts()
+  const { accounts: accountChoices, repoAccount, projectAccount, inventoryHidden, pending: accountsPending } = useAgentAccounts()
   const providers = useProviderStatus()
   const methods = useAgentProviders()
   const legacyProviders = methods.error instanceof ApiError && methods.error.status === 404
-  const providerPending = providers.isPending || methods.isPending || (accountsPending && !!draft.agentProfile)
   const providerError = providers.isError || (methods.isError && !legacyProviders)
   const nativeAuth = methods.data?.nativeAuth === true
   const rows = providers.data?.providers ?? []
@@ -332,32 +335,53 @@ export function NewTaskRoute() {
   const preferredRunner = defaultRunner ?? 'claude'
   const runner = draft.runner ?? (runners.length > 0 ? resolveRunner(null, runners, preferredRunner) : null)
   const displayRunner = runner ?? preferredRunner
+  const providerPending = providers.isPending || methods.isPending || (accountsPending && (!!draft.agentProfile || displayRunner === 'kimi'))
   const entry = managedEntries(methods.data)?.find(agent => agent.runner === displayRunner)
   const login = providers.data?.providers.find(provider => provider.provider === displayRunner)
   const providersReady = !providerPending && !providerError && runners.length > 0
-  const catalogAccount = draft.agentProfile ?? projectAccount?.[displayRunner]
+  const agentProfile = draft.agentProfile
+  const selectedAccount = agentProfile ?? repoAccount?.[displayRunner] ?? DEFAULT_AGENT_ACCOUNT_ID
+  const modelsLocked = nativeAuth || config.data?.modelsLocked === true
+  const requestedModel = draft.model ?? config.data?.defaultModels?.[displayRunner]
+  const kimiAlias = displayRunner === 'kimi' && !modelsLocked && !!requestedModel
+  // A legacy inherited alias can only be assumed local when there is just the default login.
+  const boundAccount = draft.kimiModelBinding && draft.kimiModelBinding.model === requestedModel ? draft.kimiModelBinding.account : undefined
+  const modelAccount = boundAccount ?? (draft.model
+    ? (hasAccountChoice(accountChoices, 'kimi') ? undefined : DEFAULT_AGENT_ACCOUNT_ID)
+    : repoAccount?.kimi ?? DEFAULT_AGENT_ACCOUNT_ID)
+  const accountChanged = kimiAlias && modelAccount !== selectedAccount
+  // The unqualified catalog follows the workspace default. A transfer needs a cache entry
+  // for its destination, even if the previous workspace default's answer is still cached.
+  const scopedCatalog = displayRunner === 'kimi' && !inventoryHidden && (accountChanged ||
+    queryClient.getQueryState(workspaceQueryKeys.models('kimi', selectedAccount)) !== undefined)
+  const catalogAccount = agentProfile ?? projectAccount?.[displayRunner] ?? (scopedCatalog ? selectedAccount : undefined)
   const catalog = useRunnerModels(displayRunner, displayRunner !== 'kimi' || !accountsPending, catalogAccount)
   const modelActions = useModelPickerActions(displayRunner, catalogAccount)
-  const modelsLocked = nativeAuth || config.data?.modelsLocked === true
-  const accountModels = displayRunner === 'kimi' && draft.agentProfile !== null && !modelsLocked
+  const freshCatalog = catalog.isSuccess && !catalog.isFetching && !catalog.data.stale && catalog.data.source !== 'unavailable'
+  const accountModels = displayRunner === 'kimi' && !modelsLocked && (accountChanged || agentProfile)
     ? kimiAccountModelIds(catalog) : undefined
   const models = useMemo(() => runner === null
     ? []
     : modelsForRunner(runner, catalog.data, [draft.model, config.data?.defaultModels?.[runner]], entry),
   [runner, catalog.data, draft.model, config.data?.defaultModels, entry])
-  const model = useMemo(() => runner === null
-    ? ''
-    : resolveModel(modelsLocked ? null : draft.model, runner, config.data?.defaultModels, catalog.data, modelsLocked ? undefined : entry),
-  [runner, modelsLocked, draft.model, config.data?.defaultModels, catalog.data, entry])
+  // Discovery can lose the "via" row as well as the alias. Keep a saved pair only while
+  // the same login and its selected provider can still serve it.
+  const pinnedMethod = draft.agentMethod
+  const pinnedMethodAvailable = entry && servingMethods(entry, { namedAccount: selectedAccount !== DEFAULT_AGENT_ACCOUNT_ID })
+    .some(method => method.id === pinnedMethod)
+  const replayKimiPair = !!draft.model && kimiAlias && !accountChanged && !freshCatalog && pinnedMethodAvailable && draft.runner === runner
+  const model = useMemo(() => {
+    if (runner === null) return ''
+    if (replayKimiPair && draft.model) return draft.model
+    return resolveModel(modelsLocked ? null : draft.model, runner, config.data?.defaultModels, catalog.data, modelsLocked ? undefined : entry)
+  }, [runner, replayKimiPair, modelsLocked, draft.model, config.data?.defaultModels, catalog.data, entry])
   // Agent accounts (spec 2026-07-29-agent-profiles). These are rows of the RUNNER pill rather than
   // a pill of their own — `claude · Default` / `claude · Klaudiusz` / `codex` — so what will run is
   // readable at a glance instead of assembled from two controls. An agent with a single login stays
   // a single row, which is why a host with no extra accounts sees the list it always saw.
-  const agentProfile = draft.agentProfile
   const missingRunner = draft.runner !== null && !runners.includes(draft.runner)
   const missingAccount = !!agentProfile && (draft.runner === null || (agentProfile !== DEFAULT_AGENT_ACCOUNT_ID &&
     !accountChoices.some(choice => choice.provider === displayRunner && choice.id === agentProfile)))
-  const selectedAccount = agentProfile ?? repoAccount?.[displayRunner] ?? DEFAULT_AGENT_ACCOUNT_ID
   const modelOptions = useMemo(() => {
     const offered = composerModelOptions(models, catalog.data, entry)
     if (!entry?.configured && !draft.agentMethod) return offered
@@ -365,20 +389,16 @@ export function NewTaskRoute() {
     return offered.filter(option => !option.method || serving?.some(method => method.id === option.method))
   }, [models, catalog.data, entry, selectedAccount, draft.agentMethod])
   // A saved method/model pair identifies one endpoint, even if another offers the same ID.
-  const pinnedMethod = draft.agentMethod
   const selected = pinnedMethod && !modelsLocked
     ? modelOptions.find(m => m.method === pinnedMethod && m.model === draft.model && draft.runner === runner)
     : modelOptions.find(m => m.model === model)
-  const lockedMethodAvailable = entry && servingMethods(entry, { namedAccount: selectedAccount !== DEFAULT_AGENT_ACCOUNT_ID })
-    .some(method => method.id === pinnedMethod)
-  const requestedModel = draft.model ?? config.data?.defaultModels?.[displayRunner]
-  const missingAccountModel = !!accountModels && !!requestedModel && !accountModels.has(requestedModel)
+  const missingAccountModel = !!accountModels && !!requestedModel && (accountChanged || freshCatalog) && !accountModels.has(requestedModel)
   const missingModel = missingAccountModel || (pinnedMethod
-    ? draft.runner === null || (modelsLocked ? !lockedMethodAvailable : !selected)
+    ? draft.runner === null || (modelsLocked ? !pinnedMethodAvailable : !selected && !replayKimiPair)
     : !!entry?.configured && !modelsLocked && draft.model !== null && draft.model !== model)
   const selectedMethod = pinnedMethod ?? (entry?.mode === 'one' ? entry.active ?? undefined : modelsLocked ? undefined : selected?.method)
   const agentMethod = entry?.configured ? selectedMethod : undefined
-  const providerModelsPending = !!entry?.configured && catalog.isPending && !!requestedModel
+  const providerModelsPending = !!entry?.configured && catalog.isPending && !!requestedModel && !replayKimiPair
   const reasoningEffort = runner === null
     ? ''
     : resolveReasoningEffort(draft.reasoningEffort, runner, model, catalog.data)
@@ -394,6 +414,11 @@ export function NewTaskRoute() {
     : missingAccountModel ? 'Choose a model available to the selected account.'
     : missingModel ? 'Choose a provider for this draft before starting it.'
     : undefined
+
+  useEffect(() => {
+    if (!kimiAlias || !requestedModel || !providersReady || inventoryHidden || selectionIssue || missingMethod || selectedAccount === boundAccount) return
+    setDraft(current => ({ ...current, kimiModelBinding: { model: requestedModel, account: selectedAccount } }))
+  }, [kimiAlias, requestedModel, providersReady, inventoryHidden, selectionIssue, missingMethod, selectedAccount, boundAccount])
 
   // A cold /new load mounts the textarea disabled while provider status is checked. Restore
   // the route's autofocus contract once that check enables the form, but never steal focus if
@@ -811,14 +836,14 @@ export function NewTaskRoute() {
               // login still switches accounts, so its saved alias needs the destination catalog.
               agentProfile: picked ?? (next === 'kimi' && next === displayRunner && missingAccount
                 ? repoAccount?.kimi ?? DEFAULT_AGENT_ACCOUNT_ID : null),
-              ...(next === displayRunner ? {} : { model: null, agentMethod: undefined, reasoningEffort: null }),
+              ...(next === displayRunner ? {} : { model: null, kimiModelBinding: undefined, agentMethod: undefined, reasoningEffort: null }),
             })
           }
           disabled={!providersReady}
         />
       ) : null}
       {missingModel && modelsLocked ? <button type="button" className={chipClass} disabled={!providersReady}
-        onClick={() => update({ runner: displayRunner, model: '', agentMethod: entry?.active ?? undefined, reasoningEffort: null })}>
+        onClick={() => update({ runner: displayRunner, model: '', kimiModelBinding: undefined, agentMethod: entry?.active ?? undefined, reasoningEffort: null })}>
         {nativeAuth ? 'Use native agent settings' : `Use ${entry?.methods.find(m => m.id === entry.active)?.label ?? 'current provider settings'}`}
       </button> : missingMethod && !missingModel ? <GlobalLink data-slot="configure-providers" to={agentProvidersPath(displayRunner)}
         className={cn(chipClass, 'text-pending-strong')}>Configure providers</GlobalLink> : <PickerPill
@@ -840,7 +865,12 @@ export function NewTaskRoute() {
         onPick={value => {
           const choice = modelOptions.find(m => m.value === value)
           if (!choice) return
-          update({ model: choice.model, agentMethod: choice.method, ...(choice.method && { runner: displayRunner }), reasoningEffort: null })
+          update({
+            model: choice.model, agentMethod: choice.method, ...(choice.method && { runner: displayRunner }),
+            kimiModelBinding: displayRunner === 'kimi' && choice.model && !inventoryHidden
+              ? { model: choice.model, account: selectedAccount } : undefined,
+            reasoningEffort: null,
+          })
         }}
         options={accountModels ? modelOptions.filter(option => accountModels.has(option.model)) : modelOptions}
         searchPlaceholder="Search models…"

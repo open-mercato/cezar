@@ -29,6 +29,8 @@ export interface NewTaskDraft {
   agentProfile: string | null
   agentMethod?: string
   model: string | null
+  /** The alias may come from project settings; bind that particular value to its effective login. */
+  kimiModelBinding?: { model: string; account: string }
   /** Per-task Codex effort. `null` means leave the native default untouched. */
   reasoningEffort: string | null
   variants: number
@@ -254,6 +256,7 @@ function storageKey(projectId: string | null): string {
  *  store must survive a hand-edited or older-shape localStorage value without throwing. */
 function normalize(raw: unknown): NewTaskDraft {
   const obj = raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : {}
+  const binding = obj.kimiModelBinding
   return {
     text: typeof obj.text === 'string' ? obj.text : '',
     source: isSource(obj.source) ? obj.source : null,
@@ -261,6 +264,8 @@ function normalize(raw: unknown): NewTaskDraft {
     agentProfile: typeof obj.agentProfile === 'string' ? obj.agentProfile : null,
     ...(typeof obj.agentMethod === 'string' && { agentMethod: obj.agentMethod }),
     model: typeof obj.model === 'string' ? obj.model : null,
+    ...(binding && typeof binding === 'object' && 'account' in binding && typeof binding.account === 'string' &&
+      'model' in binding && typeof binding.model === 'string' ? { kimiModelBinding: { account: binding.account, model: binding.model } } : {}),
     reasoningEffort: typeof obj.reasoningEffort === 'string' ? obj.reasoningEffort : null,
     variants: obj.variants === 2 || obj.variants === 3 ? obj.variants : 1,
     worktree: typeof obj.worktree === 'boolean' ? obj.worktree : null,

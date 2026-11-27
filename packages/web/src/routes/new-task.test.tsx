@@ -275,7 +275,7 @@ function serve(overrides: {
         return typeof data.health === 'function' ? data.health() : json(data.health)
       }
       if (url === '/api/v1/agent-providers' && data.agentProviders) return json(data.agentProviders)
-      if (data.modelCatalog && url === `/api/v1/models?runner=${data.modelCatalog.runner}`) return json(data.modelCatalog)
+      if (data.modelCatalog && url.split('&')[0] === `/api/v1/models?runner=${data.modelCatalog.runner}`) return json(data.modelCatalog)
       if (url === '/api/v1/providers/status') {
         return typeof data.providerStatus === 'function'
           ? data.providerStatus()
@@ -338,8 +338,7 @@ function LocationProbe() {
   return <output data-testid="location">{location.pathname + location.search}</output>
 }
 
-function renderNewTask(entry = '/new') {
-  const client = createQueryClient()
+function renderNewTask(entry = '/new', client = createQueryClient()) {
   const rendered = render(
     <QueryClientProvider client={client}>
       <MemoryRouter initialEntries={[entry]}>
@@ -2239,6 +2238,134 @@ const ACCOUNTS: AgentProfilesResponse = {
     },
   ],
 }
+
+describe('Kimi draft model accounts', () => {
+  const profiles = (login: string): AgentProfilesResponse => ({
+    ...ACCOUNTS, defaults: { kimi: login }, profileCapableProviders: ['kimi'],
+    profiles: ACCOUNTS.profiles.map(profile => ({
+      ...profile, provider: 'kimi', id: profile.isDefault ? 'default' : 'work',
+      status: { provider: 'kimi', status: 'connected' },
+    })),
+  })
+  function serveKimi(login: string, source: RunnerModelCatalogResponse['source'], ids: readonly string[], stale = false,
+    agentProviders?: AgentProvidersResponse) {
+    serve({
+      agentProviders,
+      config: { defaultRunner: 'kimi' }, agentProfiles: profiles(login),
+      providerStatus: { providers: [{ provider: 'kimi', enabled: true, status: 'connected' }] },
+      modelCatalog: { runner: 'kimi', source, stale, models: ids.map(id => ({ id, label: id, description: '' })) },
+    })
+  }
+
+  it.each(['default', 'work'])('starts an older explicit %s draft with its saved alias during an outage', async account => {
+    localStorage.setItem('cez-new-task-draft', JSON.stringify({
+      runner: 'kimi', agentProfile: account, model: 'local-alias', text: 'Resume my draft',
+    }))
+    serveKimi('work', 'unavailable', [])
+    renderNewTask()
+    await pillReady()
+    await startTask()
+    expect(postedBody()).toMatchObject({ runner: 'kimi', agentProfile: account, model: 'local-alias' })
+  })
+
+  it('asks an older inherited draft to confirm the alias when several logins could have supplied it', async () => {
+    localStorage.setItem('cez-new-task-draft', JSON.stringify({ runner: 'kimi', model: 'unknown-alias', text: 'Resume my draft' }))
+    serveKimi('default', 'live', ['replacement'])
+    renderNewTask()
+    await pillReady()
+    await screen.findByText('Choose a model available to the selected account.')
+    expect(screen.getByRole<HTMLButtonElement>('button', { name: 'Start task' }).disabled).toBe(true)
+    fireEvent.keyDown(screen.getByRole('button', { name: 'Model' }), { key: 'ArrowDown' })
+    fireEvent.click(await screen.findByRole('menuitemradio', { name: /replacement/ }))
+    await startTask()
+    expect(postedBody()).toHaveProperty('model', 'replacement')
+    expect(postedBody()).not.toHaveProperty('agentProfile')
+  })
+
+  it('checks a replacement project model before using it on an explicit named login', async () => {
+    writeDraft({ ...readDraft(), runner: 'kimi', agentProfile: 'work', text: 'Use the project model',
+      kimiModelBinding: { model: 'previous-default', account: 'work' } })
+    serve({
+      config: { defaultModels: { kimi: 'new-default' } }, agentProfiles: profiles('default'),
+      providerStatus: { providers: [{ provider: 'kimi', enabled: true, status: 'connected' }] },
+      modelCatalog: { runner: 'kimi', source: 'unavailable', stale: false, models: [] },
+    })
+    renderNewTask()
+    await pillReady()
+    await screen.findByText('Choose a model available to the selected account.')
+    expect(screen.getByRole<HTMLButtonElement>('button', { name: 'Start task' }).disabled).toBe(true)
+    await pickPill('model-pill', 'auto')
+    await startTask()
+    expect(postedBody()).toHaveProperty('agentProfile', 'work')
+    expect(postedBody()).not.toHaveProperty('model')
+  })
+
+  it.each(['subscription', 'other'])('keeps the saved billing method during an outage with %s active', async active => {
+    writeDraft({ ...readDraft(), runner: 'kimi', agentProfile: 'work', agentMethod: 'subscription',
+      model: 'local-alias', text: 'Use my saved subscription' })
+    serveKimi('default', 'unavailable', [], false, { editable: true, agents: [{
+      runner: 'kimi', configured: true, mode: 'one', active, methods: [
+        { id: 'subscription', label: 'Subscription', kind: 'subscription', state: 'unknown', verifyAtLaunch: true },
+        { id: 'other', label: 'Gateway', kind: 'custom', state: 'connected' },
+      ],
+    }] })
+    renderNewTask()
+    await pillReady()
+    if (active === 'subscription') {
+      await startTask()
+      expect(postedBody()).toMatchObject({ agentMethod: 'subscription', agentProfile: 'work', model: 'local-alias' })
+    } else {
+      expect(screen.getByRole<HTMLButtonElement>('button', { name: 'Start task' }).disabled).toBe(true)
+    }
+  })
+
+  it.each([
+    { source: 'live', ids: ['new-alias'], stale: false, pick: 'new-alias', reopen: true },
+    { source: 'cache', ids: ['shared'], stale: true, pick: 'auto', reopen: false },
+    { source: 'unavailable', ids: [], stale: false, pick: 'auto', reopen: true },
+    { source: 'cache', ids: ['shared'], stale: false, pick: null, reopen: true },
+  ] as const)('validates an inherited alias on the new login ($source, stale=$stale, reopen=$reopen)', async ({ source, ids, stale, pick, reopen }) => {
+    serveKimi('work', 'live', ['shared'])
+    const first = renderNewTask()
+    await pillReady()
+    fireEvent.change(textarea(), { target: { value: 'Keep following my project' } })
+    await pickPill('model-pill', 'shared')
+    expect(readDraft().kimiModelBinding).toEqual({ model: 'shared', account: 'work' })
+
+    // Keep the previous workspace catalog warm, including when a page reload restores the draft from disk.
+    if (reopen) {
+      first.unmount()
+      const stored = localStorage.getItem('cez-new-task-draft')!
+      resetDraft()
+      localStorage.setItem('cez-new-task-draft', stored)
+    }
+    serveKimi('default', source, ids, stale)
+    act(() => { first.client.setQueryData(workspaceQueryKeys.agentProfiles, profiles('default')) })
+    if (reopen) renderNewTask('/new', first.client)
+    await pillReady()
+    await waitFor(() => expect(first.client.getQueryData(workspaceQueryKeys.models('kimi', 'default'))).toMatchObject({ source, stale }))
+    if (pick) {
+      await screen.findByText('Choose a model available to the selected account.')
+      const start = screen.getByRole<HTMLButtonElement>('button', { name: 'Start task' })
+      expect(start.disabled).toBe(true)
+      fireEvent.click(start)
+      expect(postedBody()).toBeUndefined()
+      fireEvent.keyDown(screen.getByRole('button', { name: 'Model' }), { key: 'ArrowDown' })
+      const replacement = await screen.findByRole('menuitemradio', { name: new RegExp(pick) })
+      expect(screen.queryByRole('menuitemradio', { name: /shared/ })).toBeNull()
+      fireEvent.click(replacement)
+    } else {
+      await waitFor(() => expect(readDraft().kimiModelBinding).toEqual({ model: 'shared', account: 'default' }))
+      // Once the destination has confirmed the shared alias, an outage cannot undo that confirmation.
+      act(() => { first.client.setQueryData(workspaceQueryKeys.models('kimi', 'default'),
+        { runner: 'kimi', source: 'unavailable', stale: false, models: [] }) })
+    }
+    await startTask()
+    expect(postedBody()).not.toHaveProperty('agentProfile')
+    if (pick === 'auto') expect(postedBody()).not.toHaveProperty('model')
+    else expect(postedBody()).toHaveProperty('model', pick ?? 'shared')
+  })
+})
 
 /** The one pill that now carries both: which agent, and which of that agent's logins. */
 const runnerPill = () => document.querySelector('[data-slot="runner-pill"]') as HTMLElement | null
