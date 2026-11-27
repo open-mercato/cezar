@@ -192,10 +192,10 @@ export function providerRowRunnable(row: Pick<ProviderStatus, 'provider' | 'stat
   return row.status === 'connected' || (row.status === 'unknown' && RUNNABLE_WHEN_UNVERIFIED.has(row.provider))
 }
 
-export function usableRunners(status: ProviderStatusResponse | undefined): Runner[] {
+export function usableRunners(status: ProviderStatusResponse | undefined, runnable: (row: ProviderStatus) => boolean = providerRowRunnable): Runner[] {
   const rows = completeProviderRows(status)
   if (rows === null) return []
-  const usable = new Set(rows.filter((row) => row.enabled && providerRowRunnable(row)).map((row) => row.provider))
+  const usable = new Set(rows.filter((row) => row.enabled && runnable(row)).map((row) => row.provider))
   return RUNNER_ORDER.filter((runner) => usable.has(runner))
 }
 

@@ -39,16 +39,18 @@ function Radio({ checked, onSelect, slot, children }: { checked: boolean; onSele
 
 function TaskAgentModelPicker({
   runner,
+  agentProfile,
   model,
   label,
   onChange,
 }: {
   runner: Runner
+  agentProfile?: string
   model?: string
   label: string
   onChange: (model: string | undefined) => void
 }) {
-  const catalog = useRunnerModels(runner)
+  const catalog = useRunnerModels(runner, true, agentProfile)
   const models = modelsForRunner(runner, catalog.data, [model])
   const currentLabel = models.find((entry) => entry.id === (model ?? ''))?.label ?? model ?? 'auto'
   return (
@@ -156,6 +158,7 @@ export function TaskRoutingSection({ manager, onPatch }: { manager: ManagerSumma
                 <span className="min-w-0 flex-1 truncate">{agent.runner} · <b className="font-semibold">{labelOf(agent)}</b></span>
                 <TaskAgentModelPicker
                   runner={agent.runner}
+                  agentProfile={agent.agentProfile}
                   {...(agent.model ? { model: agent.model } : {})}
                   label={label}
                   onChange={(model) => saveAgents(agents.map((entry, at) => {

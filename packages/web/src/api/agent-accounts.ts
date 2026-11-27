@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { agentAccountRouteId, type ApiRun, type Runner } from '@open-mercato/cezar-api-client'
+import { agentAccountRouteId, type AgentProfile, type ApiRun, type Runner } from '@open-mercato/cezar-api-client'
 
 import { getAgentAccountDetails, getAgentAccountStatus } from '@/api/client'
 import { useHostTransport } from '@/api/host-usage'
@@ -16,34 +16,34 @@ import { PROVIDER_LABELS } from '@/lib/provider-auth-alert'
  * look alike and pick differently.
  */
 export interface AgentAccountChoices {
+  pending: boolean
+  inventoryHidden: boolean
   /** Every login for every runner, discovered accounts included. Empty = the zero-config host,
    *  which is why it renders as the single-row-per-agent list it always did. */
-  accounts: readonly RunnerAccountChoice[]
+  accounts: readonly AgentProfile[]
   /** What the active project's selection resolves to per runner — the row selected until the
    *  surface's own override replaces it. */
   repoAccount?: Partial<Record<Runner, string>>
+  /** Explicit project overrides. An absent catalog profile follows the workspace default server-side. */
+  projectAccount?: Partial<Record<Runner, string>>
 }
 
-export function useAgentAccounts(): AgentAccountChoices {
+export function useAgentAccounts(projectId?: string): AgentAccountChoices {
   const profiles = useAgentProfiles()
-  const repo = useRepo()
+  const repo = useRepo(projectId)
   // A pending account (added from the cockpit, never signed in) is not offered yet.
-  const accounts = (profiles.data?.profiles ?? []).filter((profile) => !profile.pending).map((profile) => ({
-    provider: profile.provider as Runner,
-    id: profile.id,
-    label: profile.label,
-    configDir: profile.configDir,
-  }))
+  const accounts = (profiles.data?.profiles ?? []).filter((profile) => !profile.pending)
   // Selections are keyed by the project's realpath'd ROOT — the key the store itself uses — and
   // `useRepo` is project-scoped, so it already answers for the ACTIVE project; going through the
   // projects list would mean re-deriving a mapping the API has already done.
   const repoRoot = repo.data?.info?.root
+  const projectAccount = repoRoot ? profiles.data?.selections?.[repoRoot] : undefined
   return {
     accounts,
-    repoAccount: resolveRepoAccounts(
-      repoRoot ? profiles.data?.selections?.[repoRoot] : undefined,
-      profiles.data?.defaults,
-    ),
+    pending: profiles.isPending || repo.isPending,
+    inventoryHidden: profiles.data?.editable === false && profiles.data.profiles.length === 0,
+    projectAccount,
+    repoAccount: resolveRepoAccounts(projectAccount, profiles.data?.defaults),
   }
 }
 
@@ -73,6 +73,7 @@ export function signedOutAccountMessage(runner: Runner, account: string): string
 }
 
 export interface SelectedAccountCheck {
+  named: boolean
   /** Why a task on this account cannot start, or null when nothing says so. */
   blocked: string | null
   /** Re-probe before refusing, as the server does: the reason that survives a fresh answer. */
@@ -105,6 +106,7 @@ export function useSelectedAccountCheck(
       ? signedOutAccountMessage(runner, account.label || account.id)
       : null
   return {
+    named: !!account,
     blocked: reasonFor(status?.status),
     verify: async () => {
       if (!account) return null

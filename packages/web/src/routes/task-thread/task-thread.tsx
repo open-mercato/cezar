@@ -492,7 +492,7 @@ export function ThreadView({
             (trunk-based, spec 2026-10-20-trunk-based-projects) gets no panel: corrections go through
             the composer and landing through the header's Commit step. */}
         {run.status === 'review' && !lifecycleGate && run.worktree !== false ? (
-          <ReviewPanel run={run} diffComments={diffComments} />
+          <ReviewPanel run={run} diffComments={diffComments} continuation={continueAction} />
         ) : null}
       </div>
 

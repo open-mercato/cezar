@@ -18,6 +18,10 @@ let providerStatus: ProviderStatusResponse
 vi.mock('@/api/queries', () => ({
   useSendMessage: () => ({ mutateAsync, isPending: false }),
   useContinueRun: () => ({ mutateAsync: continueAsync, isPending: false }),
+  useAgentProviders: () => ({ data: { editable: true, agents: [] } }),
+  useAgentProfiles: () => ({ data: { profiles: [] } }),
+  useRepo: () => ({}),
+  useAgentAccountStatus: () => ({}),
   useProviderStatus: () => ({ data: providerStatus, isSuccess: true }),
 }))
 

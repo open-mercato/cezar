@@ -539,3 +539,64 @@ describe('switching project', () => {
     expect(JSON.parse(localStorage.getItem(`cez-new-task-draft:${OTHER}`)!).text).toBe('')
   })
 })
+
+
+it.each([
+  { project: OTHER, projectProfile: 'work', configured: true, destination: 'host-only' },
+  { project: BOOT, projectProfile: null, configured: true, destination: 'host-only' },
+  { project: OTHER, projectProfile: 'work', configured: false, destination: 'host-only' },
+  { project: OTHER, projectProfile: 'work', configured: false, destination: 'work-only' },
+  { project: OTHER, projectProfile: 'work', configured: false, destination: '' },
+])('starts with the Kimi catalog for $project (configured=$configured, alias="$destination")', async ({ project, projectProfile, configured, destination }) => {
+  serve()
+  const underlyingFetch = globalThis.fetch
+  const catalogProfiles: Array<string | null> = []
+  let release!: () => void
+  const pending = new Promise<void>(resolve => { release = resolve })
+  vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
+    const path = String(input)
+    if (path.endsWith('/workspace/agent-profiles')) return Response.json({
+      defaults: { kimi: 'work' }, selections: { [OTHER_REPO.info!.root]: { kimi: 'work' } },
+      profiles: ['default', 'work'].map(id => ({ provider: 'kimi', id, label: id, isDefault: id === 'default', status: { status: 'connected' } })),
+    })
+    if (path.endsWith('/providers/status')) return Response.json({ providers: [{ provider: 'kimi', enabled: true, status: 'connected' }] })
+    if (path.endsWith('/agent-providers')) return Response.json({ editable: true, agents: [{
+      runner: 'kimi', mode: 'one', ...(configured && { configured: true }), active: configured ? 'subscription' : null,
+      methods: [{ id: 'subscription', kind: 'subscription', state: 'connected', label: 'Kimi subscription' }],
+    }] })
+    if (path.startsWith('/api/v1/models?runner=kimi')) {
+      const profile = new URL(path, 'http://localhost').searchParams.get('agentProfile')
+      catalogProfiles.push(profile)
+      if (profile === 'default') await pending
+      const id = profile === 'default' ? destination : 'work-only'
+      return Response.json({ runner: 'kimi', source: 'live', stale: false, models: [
+        ...(id ? [{ id, label: id, description: '', ...(configured && { via: { methodId: 'subscription', label: 'Kimi subscription' } }) }] : []),
+      ] })
+    }
+    return underlyingFetch(input, init)
+  })
+  renderAt(`/p/${project}/new?runner=kimi`)
+  await composerReady()
+  await pickPill('model-pill', 'work-only')
+  expect(catalogProfiles).toEqual([projectProfile])
+  fireEvent.change(textarea(), { target: { value: 'Use my host alias' } })
+  await pickPill('runner-pill', 'kimi · default')
+  await waitFor(() => expect(catalogProfiles).toEqual([projectProfile, 'default']))
+  const start = screen.getByRole<HTMLButtonElement>('button', { name: 'Start task' })
+  expect(start.disabled).toBe(true)
+  release()
+  if (destination !== 'work-only') {
+    fireEvent.keyDown(screen.getByRole('button', { name: 'Model' }), { key: 'ArrowDown' })
+    const replacement = await screen.findByRole('menuitemradio', { name: destination ? /host-only/ : /auto/ })
+    expect(screen.queryByRole('menuitemradio', { name: /work-only/ })).toBeNull()
+    expect(start.disabled).toBe(true)
+    fireEvent.click(replacement)
+  }
+  await waitFor(() => expect(start.disabled).toBe(false))
+  fireEvent.click(start)
+  const post = () => requests.find(r => r.method === 'POST' && r.url.endsWith('/runs'))?.body
+  await waitFor(() => expect(post()).toMatchObject({ runner: 'kimi', agentProfile: 'default' }))
+  if (destination) expect(post()).toHaveProperty('model', destination)
+  else expect(post()).not.toHaveProperty('model')
+  if (configured) expect(post()).toHaveProperty('agentMethod', 'subscription')
+})

@@ -3,7 +3,7 @@ import { Link } from '@/lib/project-router'
 
 /** Explain an unavailable start and keep its recovery link in the active project. */
 export function AgentProviderGate({ resolved, dataSlot }: {
-  resolved: Pick<ResolvedEngine, 'providerPending' | 'providerError' | 'canRun'>
+  resolved: Pick<ResolvedEngine, 'providerPending' | 'providerError' | 'accountUnavailable' | 'modelUnavailable' | 'canRun'>
   dataSlot?: string
 }) {
   if (resolved.providerPending || resolved.canRun) return null
@@ -11,6 +11,8 @@ export function AgentProviderGate({ resolved, dataSlot }: {
     <span data-slot={dataSlot} className="inline-flex flex-wrap items-center gap-1 text-xs text-muted-foreground">
       {resolved.providerError
         ? 'Provider authentication could not be verified.'
+        : resolved.accountUnavailable ? 'The selected account is unavailable. Choose an account or runner.'
+        : resolved.modelUnavailable ? 'Choose an available model to run this item.'
         : 'Connect an agent provider to run this item.'}
       <Link to="/settings/agents#providers" className="font-medium text-foreground underline underline-offset-4">
         Configure providers

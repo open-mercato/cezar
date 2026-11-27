@@ -43,7 +43,18 @@ it('opens native sign-out instructions without sending a credential change', () 
   expect(fetch).not.toHaveBeenCalled()
 })
 
-it('keeps an unverified subscription radio disabled', () => {
+it('allows an explicit unverified subscription choice for launch verification', async () => {
+  const fetch = mount({ ...claude, runner: 'kimi', active: 'custom', methods: claude.methods.map(method =>
+    method.kind === 'subscription' ? { ...method, label: 'Kimi subscription', state: 'unknown', verifyAtLaunch: true } : method,
+  ) })
+  expect(screen.getByText(/Login unverified/)).toBeTruthy()
+  const radio = screen.getByRole('radio', { name: 'Run kimi on Kimi subscription' })
+  expect(radio.hasAttribute('disabled')).toBe(false)
+  fireEvent.click(radio)
+  await waitFor(() => expect(fetch.mock.calls[0]?.[1].body).toBe(JSON.stringify({ methodId: 'subscription' })))
+})
+
+it('keeps an unknown subscription disabled without launch verification', () => {
   mount({ ...claude, active: 'custom', methods: claude.methods.map(method =>
     method.kind === 'subscription' ? { ...method, state: 'unknown' } : method,
   ) })
@@ -74,7 +85,7 @@ it('adds a key and retries a failed any-mode method without selecting a radio', 
   expect(screen.queryByRole('radio')).toBeNull()
   expect(screen.getByText(/2 models \(stale\)/)).toBeTruthy()
   fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
-  await waitFor(() => expect(fetch.mock.calls[0]?.[0]).toBe('/api/v1/agent-providers/pi/methods/custom/models'))
+  await waitFor(() => expect(fetch.mock.calls[0]).toEqual(['/api/v1/agent-providers/pi/methods/custom/models', expect.objectContaining({ method: 'POST' })]))
   fireEvent.click(screen.getByRole('button', { name: 'Add OpenRouter for pi' }))
   fireEvent.change(screen.getByLabelText('API key'), { target: { value: 'fake-key' } })
   fireEvent.click(screen.getByRole('button', { name: 'Save provider' }))
