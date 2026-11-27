@@ -20,6 +20,8 @@ const resolved = (over: Partial<ResolvedEngine> = {}): ResolvedEngine => ({
   model: '',
   reasoningEffort: '',
   reasoningEfforts: [],
+  serviceTier: '',
+  serviceTiers: [],
   runners: ['claude'],
   defaultRunner: 'claude',
   canRun: true,
@@ -294,6 +296,14 @@ describe('engineBody', () => {
  * what lets the run follow the project's selection, and it is a different request from naming the
  * discovered `'default'` account explicitly, which overrides that selection server-side.
  */
+describe('engineRunBody service tier (#1946)', () => {
+  it('sends a resolved tier and omits it when empty or locked', () => {
+    expect(engineRunBody(resolved({ serviceTier: 'priority' })).serviceTier).toBe('priority')
+    expect('serviceTier' in engineRunBody(resolved({ serviceTier: '' }))).toBe(false)
+    expect('serviceTier' in engineRunBody(resolved({ serviceTier: 'priority', modelsLocked: true }))).toBe(false)
+  })
+})
+
 describe('engineRunBody', () => {
   it('puts no agentProfile key on the wire for an untouched pick', () => {
     const body = engineRunBody(resolved({ account: null }))

@@ -84,6 +84,27 @@ describe('Codex model discovery', () => {
     ]);
   });
 
+  it('normalizes advertised service tiers and omits them when absent or malformed (#1946)', async () => {
+    const fake = fakeChild([
+      { id: 1, result: {} },
+      {
+        id: 2,
+        result: {
+          data: [
+            { model: 'a', serviceTiers: [{ id: 'priority', name: 'Fast', description: '1.5x speed' }, 'bad', { name: 'no id' }], defaultServiceTier: 'priority' },
+            { model: 'b', serviceTiers: 'nope' },
+            { model: 'c' },
+          ],
+          nextCursor: null,
+        },
+      },
+    ]);
+    const models = await discoverCodexModels({ cwd: '/repo', spawn: () => fake.child });
+    expect(models[0]).toMatchObject({ id: 'a', serviceTiers: [{ id: 'priority', name: 'Fast', description: '1.5x speed' }], defaultServiceTier: 'priority' });
+    expect(models[1]).not.toHaveProperty('serviceTiers');
+    expect(models[2]).not.toHaveProperty('serviceTiers');
+  });
+
   it('follows every pagination cursor without reordering pages', async () => {
     const fake = fakeChild(fixture('model-list-pagination'));
     await expect(discoverCodexModels({ cwd: '/repo', spawn: () => fake.child })).resolves.toEqual([

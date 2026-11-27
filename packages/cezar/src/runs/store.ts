@@ -221,6 +221,8 @@ export const runRecordSchema = z.object({
   model: z.string().optional(),
   /** Per-run Codex reasoning level. Optional so runs written before the feature still parse. */
   reasoningEffort: z.string().trim().min(1).max(64).optional(),
+  /** Per-run Codex service tier (#1946). Optional so old runs.json still parses. */
+  serviceTier: z.string().trim().min(1).max(64).optional(),
   /** Canonical provider/model identity (#405) — the normalised `provider/model`
    *  (e.g. `anthropic/claude-opus-4-8`) the run actually used, resolved from the
    *  free-text `model` against the chosen runner. Additive and optional: pre-#405
@@ -1541,6 +1543,7 @@ export class RunStore extends EventEmitter {
     task: string;
     model?: string;
     reasoningEffort?: string;
+    serviceTier?: string;
     runner?: RunnerId;
     /** Composer's per-task agent account (spec 2026-07-29-agent-profiles). */
     agentProfile?: string;
@@ -1565,6 +1568,7 @@ export class RunStore extends EventEmitter {
       task: input.task,
       model: input.model,
       reasoningEffort: input.reasoningEffort,
+      ...(input.serviceTier ? { serviceTier: input.serviceTier } : {}),
       runner: input.runner,
       agentProfile: input.agentProfile,
       fallbackPolicy: input.fallbackPolicy,

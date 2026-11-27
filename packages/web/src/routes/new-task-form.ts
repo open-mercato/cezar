@@ -1,7 +1,7 @@
 // A contract VALUE, not a type: which runners cezar can interrogate for a live catalog is decided
 // once, by the schema `GET /api/v1/models` validates with, so the picker and the route cannot
 // disagree about who has discovery. It narrows `Runner` to `ModelDiscoveryRunner`.
-import { runnerDiscoversModels, runnerSupportsReasoningEffort } from '@open-mercato/cezar-api-client'
+import { runnerDiscoversModels, runnerSupportsReasoningEffort, runnerSupportsServiceTier } from '@open-mercato/cezar-api-client'
 import type {
   BackendCheck,
   CreateRunInput,
@@ -15,6 +15,7 @@ import type {
   WorkflowDef,
 } from '@open-mercato/cezar-api-client'
 import type { ReasoningEffortOption } from '@/components/reasoning-effort-pill'
+import type { ServiceTierOption } from '@/components/service-tier-pill'
 
 /**
  * The new-task form's picker rules and its POST body, as pure functions — the exact semantics
@@ -269,6 +270,27 @@ export function reasoningEffortsForModel(
   return catalog.models.find((candidate) => candidate.id === model)?.reasoningEfforts ?? []
 }
 
+/** Tiers are advertised per discovered Codex model; older CLIs advertise none (#1946). */
+export function serviceTiersForModel(
+  runner: Runner,
+  model: string,
+  catalog: RunnerModelCatalogResponse | undefined,
+): readonly ServiceTierOption[] {
+  if (!runnerSupportsServiceTier(runner) || model === '' || catalog?.runner !== runner) return []
+  return catalog.models.find((candidate) => candidate.id === model)?.serviceTiers ?? []
+}
+
+/** A stale draft tier is never sent after its runner/model stops advertising it. */
+export function resolveServiceTier(
+  picked: string | null,
+  runner: Runner,
+  model: string,
+  catalog: RunnerModelCatalogResponse | undefined,
+): string {
+  const options = serviceTiersForModel(runner, model, catalog)
+  return picked !== null && options.some((option) => option.id === picked) ? picked : ''
+}
+
 /** A stale draft effort is never sent after its runner/model capability disappears. */
 export function resolveReasoningEffort(
   picked: string | null,
@@ -388,6 +410,8 @@ export function buildCreateRunBody(opts: {
   model: string
   /** Empty means the selected Codex model's native default; it is omitted on the wire. */
   reasoningEffort?: string
+  /** Codex service tier id; empty is the native default and is omitted on the wire (#1946). */
+  serviceTier?: string
   /** Native coding-agent settings stay visible, but a locked model is never a request override. */
   modelsLocked?: boolean
   runner: Runner
@@ -430,6 +454,7 @@ export function buildCreateRunBody(opts: {
     source,
     model,
     reasoningEffort,
+    serviceTier,
     modelsLocked,
     runner,
     runnerExplicit,
@@ -456,6 +481,7 @@ export function buildCreateRunBody(opts: {
       : { workflow: source?.ref ?? QUICK_TASK }),
     model: modelsLocked ? undefined : model || undefined,
     ...(modelsLocked || !reasoningEffort ? {} : { reasoningEffort }),
+    ...(modelsLocked || !serviceTier ? {} : { serviceTier }),
     runner: runnerOverride(runner, defaultRunner, runnerExplicit),
     // Sent only when the user picked one — an absent key is "follow the project", which is what
     // every launch that never touched the control means.

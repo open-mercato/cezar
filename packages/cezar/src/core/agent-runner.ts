@@ -24,6 +24,7 @@ import {
   REASONING_EFFORT_RUNNERS,
   runnerSchema,
   runnerSupportsReasoningEffort,
+  runnerSupportsServiceTier,
   type Runner,
 } from '@open-mercato/cezar-contract';
 import type { UsageWindowsObservation } from '@open-mercato/cezar-contract';
@@ -136,6 +137,8 @@ export interface AgentRunSpec {
    * preserves the native agent default; other backends reject an explicit value.
    */
   reasoningEffort?: string;
+  /** Codex App Server `serviceTier` (#1946). Omitted sends nothing; other backends reject it. */
+  serviceTier?: string;
   /** Inactivity kill switch for the run (ms): no output for this long stops it; 0 disables. */
   timeoutMs?: number;
   /**
@@ -160,7 +163,9 @@ export function prependSystemPrompt(systemPrompt: string | undefined, userPrompt
   return systemPrompt ? `${systemPrompt}\n\n---\n\n${userPrompt}` : userPrompt;
 }
 
-export { REASONING_EFFORT_RUNNERS, runnerSupportsReasoningEffort };
+export { REASONING_EFFORT_RUNNERS, runnerSupportsReasoningEffort, runnerSupportsServiceTier };
+
+export const SERVICE_TIER_UNSUPPORTED_ERROR = 'service tier is only supported by the Codex runner';
 
 export const REASONING_EFFORT_UNSUPPORTED_ERROR = 'reasoning effort is only supported by the Codex and Claude runners';
 

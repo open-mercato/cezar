@@ -5,6 +5,7 @@ import { useConfig, useModelRefreshAction, useProviderStatus, useRunnerModels } 
 import type { CreateRunInput, Runner } from '@open-mercato/cezar-api-client'
 import { PickerPill, RunnerPill, type RunnerAccountChoice } from '@/components/picker-pill'
 import { ReasoningEffortPill } from '@/components/reasoning-effort-pill'
+import { ServiceTierPill } from '@/components/service-tier-pill'
 import { usableRunners } from '@/lib/provider-status'
 import {
   modelConflictsWithRunner,
@@ -12,6 +13,8 @@ import {
   modelCatalogStatus,
   reasoningEffortsForModel,
   resolveReasoningEffort,
+  resolveServiceTier,
+  serviceTiersForModel,
   resolveModel,
   resolveRunner,
   runnerOverride,
@@ -39,6 +42,8 @@ export interface EnginePick {
   model: string | null
   /** `null` is untouched; `''` explicitly returns a continuation to Codex's native default. */
   reasoningEffort?: string | null
+  /** `null`/absent is Codex's native speed; otherwise an advertised service tier id (#1946). */
+  serviceTier?: string | null
   /**
    * Which login of that agent runs it (spec 2026-07-29-agent-profiles). Three states, and the
    * first two are NOT the same thing: `null` follows the project's selection (and keeps following
@@ -57,6 +62,8 @@ export interface ResolvedEngine {
   model: string
   reasoningEffort: string
   reasoningEfforts: ReturnType<typeof reasoningEffortsForModel>
+  serviceTier: string
+  serviceTiers: ReturnType<typeof serviceTiersForModel>
   /** The backends this host offers — the runner pill renders only when there is a choice. */
   runners: readonly Runner[]
   /** What the active project's server context would pick from its authoritative config. */
@@ -103,6 +110,8 @@ export function useResolvedEngine(pick: EnginePick): ResolvedEngine {
     model,
     reasoningEffort: resolveReasoningEffort(pick.reasoningEffort ?? null, runner, model, catalog.data),
     reasoningEfforts,
+    serviceTier: resolveServiceTier(pick.serviceTier ?? null, runner, model, catalog.data),
+    serviceTiers: serviceTiersForModel(runner, model, catalog.data),
     runners,
     defaultRunner,
     canRun: providers.isSuccess && runners.length > 0,
@@ -240,9 +249,10 @@ export function engineBody(resolved: ResolvedEngine): Pick<CreateRunInput, 'runn
  */
 export function engineRunBody(
   resolved: ResolvedEngine,
-): Pick<CreateRunInput, 'runner' | 'model' | 'reasoningEffort' | 'agentProfile'> {
+): Pick<CreateRunInput, 'runner' | 'model' | 'reasoningEffort' | 'serviceTier' | 'agentProfile'> {
   return {
     ...engineBody(resolved),
+    ...(resolved.modelsLocked || !resolved.serviceTier ? {} : { serviceTier: resolved.serviceTier }),
     ...(resolved.account ? { agentProfile: resolved.account } : {}),
   }
 }
@@ -266,7 +276,7 @@ export function EnginePills({
   accounts?: boolean
 }) {
   const resolved = useResolvedEngine(pick)
-  const { runner, model, reasoningEffort, reasoningEfforts, runners, canRun, modelsLocked } = resolved
+  const { runner, model, reasoningEffort, reasoningEfforts, serviceTier, serviceTiers, runners, canRun, modelsLocked } = resolved
   const config = useConfig()
   const catalog = useRunnerModels(runner)
   const refreshModels = useModelRefreshAction(runner)
@@ -301,8 +311,9 @@ export function EnginePills({
                   account: picked,
                   model: next === runner ? pick.model : null,
                   reasoningEffort: next === runner ? pick.reasoningEffort ?? null : null,
+                  serviceTier: next === runner ? pick.serviceTier ?? null : null,
                 }
-                : { runner: next, account: null, model: null, reasoningEffort: null },
+                : { runner: next, account: null, model: null, reasoningEffort: null, serviceTier: null },
             )
           }
         />
@@ -317,7 +328,7 @@ export function EnginePills({
         disabled={unavailable}
         readOnly={modelsLocked === true}
         disabledHint={modelsLocked ? 'Model selection is locked to native coding-agent settings.' : undefined}
-        onPick={(next) => onChange({ ...pick, model: next, reasoningEffort: null })}
+        onPick={(next) => onChange({ ...pick, model: next, reasoningEffort: null, serviceTier: null })}
         options={models.map((m) => ({ value: m.id, label: m.label, desc: m.desc }))}
         status={modelCatalogStatus(runner, catalog.data, catalog.isError)}
         action={refreshModels}
@@ -330,6 +341,15 @@ export function EnginePills({
         disabled={unavailable}
         modelsLocked={modelsLocked}
         onPick={(next) => onChange({ ...pick, reasoningEffort: next || null })}
+      />
+      <ServiceTierPill
+        runner={runner}
+        model={model}
+        value={serviceTier}
+        options={serviceTiers}
+        disabled={unavailable}
+        modelsLocked={modelsLocked}
+        onPick={(next) => onChange({ ...pick, serviceTier: next || null })}
       />
     </>
   )

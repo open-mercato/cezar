@@ -1,7 +1,7 @@
 import { trackerAccessSchema } from './tracker-operations.ts';
 import { deferredBindingSchema, queueWaitReasonSchema } from './deferred-start-state.ts';
 import { z } from 'zod';
-import { reasoningEffortSchema } from './agent.ts';
+import { reasoningEffortSchema, serviceTierSchema } from './agent.ts';
 import { webhookAttentionRequestSchema, webhookCompletionReasonSchema } from './webhooks.ts';
 import { worktreeLifecycleProjectionSchema } from './worktree-lifecycle.ts';
 import { runnerSchema } from './health.ts';
@@ -266,6 +266,8 @@ export const runRecordSchema = z.object({
   model: z.string().optional(),
   /** Per-run Codex reasoning level. Absent means the App Server's native default. */
   reasoningEffort: reasoningEffortSchema.optional(),
+  /** Per-run Codex service tier (Fast/Ultrafast, #1946). Absent means Codex's native default. */
+  serviceTier: serviceTierSchema.optional(),
   /** Normalized provider/model identity used for attribution and reproducible replay. */
   modelIdentity: z.string().optional(),
   /** The latest main model any step reported actually running; absent until one does. */
@@ -1347,6 +1349,8 @@ export const createRunInputBaseSchema = z
     task: z.string().max(100_000, 'must be at most 100000 characters'),
     model: z.string().optional(),
     reasoningEffort: reasoningEffortSchema.optional(),
+    /** Codex service tier id (#1946); 400 for a non-Codex runner. Omit for the native default. */
+    serviceTier: serviceTierSchema.optional(),
     runner: runnerSchema.optional(),
     /** Agent account for this task (spec 2026-07-29-agent-profiles). Omit to follow the
      *  project's own selection; an id that no longer exists is a 400, not a silent default. */

@@ -670,6 +670,14 @@ export const reasoningEffortOptionSchema = z.object({
 });
 export type ReasoningEffortOption = z.infer<typeof reasoningEffortOptionSchema>;
 
+/** One service tier the model advertises (`model/list.serviceTiers`, #1946). */
+export const serviceTierOptionSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  description: z.string(),
+});
+export type ServiceTierOption = z.infer<typeof serviceTierOptionSchema>;
+
 /**
  * The runners whose model list is discovered from the host rather than hard-coded: Codex through
  * its app-server protocol, OpenCode through its own `models` listing (#794), Claude through the
@@ -696,6 +704,10 @@ export const runnerModelOptionSchema = z.object({
   reasoningEfforts: z.array(reasoningEffortOptionSchema).optional(),
   /** The runner's suggested value. Informational only: cezar never sends it implicitly. */
   defaultReasoningEffort: z.string().optional(),
+  /** Codex tiers this model advertises; absent on older CLIs, where the picker stays hidden. */
+  serviceTiers: z.array(serviceTierOptionSchema).optional(),
+  /** The catalog's default tier id. Informational: cezar never sends it implicitly. */
+  defaultServiceTier: z.string().optional(),
 });
 export type RunnerModelOption = z.infer<typeof runnerModelOptionSchema>;
 

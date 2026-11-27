@@ -178,7 +178,7 @@ import { LatestVersions } from '../core/agent-cli-versions.ts';
 import { resolveCursorAgentBin } from '../core/cursor-bin.ts';
 import { resolveAntigravityBin } from '../core/antigravity-runner.ts';
 import { hostUsageSampler, type HostSampler } from '../core/host-usage.ts';
-import { RUNNER_IDS, type RunnerId } from '../core/agent-runner.ts';
+import { RUNNER_IDS, runnerSupportsServiceTier, SERVICE_TIER_UNSUPPORTED_ERROR, type RunnerId } from '../core/agent-runner.ts';
 import type { ContentBlock } from '../core/agent-runner.ts';
 import { AGENT_MODELS_LOCKED_ERROR, agentModelsLocked } from '../core/agent-model-policy.ts';
 import { discoverClaudeModels } from '../core/claude-model-catalog.ts';
@@ -5616,8 +5616,11 @@ export function createAppParts(deps: ServerDeps) {
       if (parsed.data.managerAgent && !managerAgentTokenMatches(c.req.header(MANAGER_AGENT_HEADER))) {
         return c.json({ error: 'managerAgent is set only by a cezar manager' }, 403);
       }
-      if (agentModelsLocked(repoRoot) && (parsed.data.model?.trim() || parsed.data.reasoningEffort?.trim())) {
+      if (agentModelsLocked(repoRoot) && (parsed.data.model?.trim() || parsed.data.reasoningEffort?.trim() || parsed.data.serviceTier)) {
         return c.json({ error: AGENT_MODELS_LOCKED_ERROR }, 409);
+      }
+      if (parsed.data.serviceTier && parsed.data.runner && !runnerSupportsServiceTier(parsed.data.runner)) {
+        return c.json({ error: SERVICE_TIER_UNSUPPORTED_ERROR }, 400);
       }
       let workflow: WorkflowDef | undefined;
       let workflowCatalog: WorkflowDef[] = [];
@@ -5680,6 +5683,7 @@ export function createAppParts(deps: ServerDeps) {
         task: parsed.data.task,
         model: parsed.data.model,
         reasoningEffort: parsed.data.reasoningEffort,
+        serviceTier: parsed.data.serviceTier,
         runner: parsed.data.runner,
         agentProfile: parsed.data.agentProfile,
         images,

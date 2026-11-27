@@ -85,7 +85,7 @@ const EXITED_STDOUT_GRACE_MS = 1_000;
  * publish (spec 2026-10-22-html-artifacts-and-impact).
  */
 export function codexThreadOverrides(
-  spec: Pick<AgentRunSpec, 'model' | 'cwd' | 'env' | 'enforceReadOnly'>,
+  spec: Pick<AgentRunSpec, 'model' | 'serviceTier' | 'cwd' | 'env' | 'enforceReadOnly'>,
   mcpConfig: Record<string, unknown> | undefined,
   env: NodeJS.ProcessEnv = process.env,
 ): Record<string, unknown> {
@@ -98,6 +98,8 @@ export function codexThreadOverrides(
     : mcpConfig;
   return {
     model: spec.model,
+    // Absent unless the user chose a tier (#1946): the App Server's native default stays untouched.
+    ...(spec.serviceTier ? { serviceTier: spec.serviceTier } : {}),
     cwd: spec.cwd,
     sandbox: spec.enforceReadOnly ? 'read-only' : sandboxed ? 'workspace-write' : 'danger-full-access',
     approvalPolicy: 'never',
@@ -667,6 +669,7 @@ class CodexSession implements AgentSession {
       summary: reasoningSummary(),
       ...(this.restrictedHome ? { approvalPolicy: 'never', sandboxPolicy: { type: 'readOnly', networkAccess: false }, environments: [] } : {}),
       ...(this.spec.reasoningEffort ? { effort: this.spec.reasoningEffort } : {}),
+      ...(this.spec.serviceTier ? { serviceTier: this.spec.serviceTier } : {}),
     });
     this.activeTurnId = turnIdOf(res) ?? this.activeTurnId;
   }

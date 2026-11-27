@@ -43,7 +43,7 @@ import { diskFullAgentErrorText } from '../disk-space.ts';
 import { accountStateHint, classifyAgentFailure, isOauthRefreshRace, transientRetryCap, transientRetryDelayMs } from '../core/agent-failure-class.ts';
 import { reportAgentError } from '../runs/agent-error-telemetry.ts';
 import { createRunner } from '../core/runner-factory.ts';
-import { isRunnerId, REASONING_EFFORT_UNSUPPORTED_ERROR, runnerSupportsReasoningEffort, type RunnerId } from '../core/agent-runner.ts';
+import { isRunnerId, REASONING_EFFORT_UNSUPPORTED_ERROR, runnerSupportsReasoningEffort, runnerSupportsServiceTier, type RunnerId } from '../core/agent-runner.ts';
 import { modelConflictsWithRunner, pinSurvivesRunnerSwitch } from '../core/model-presets.ts';
 import { AGENT_MODELS_LOCKED_ERROR, agentModelsLocked } from '../core/agent-model-policy.ts';
 import {
@@ -1175,6 +1175,8 @@ export interface StartRunInput {
   model?: string;
   /** Per-task Codex reasoning level. Undefined delegates to the native App Server default. */
   reasoningEffort?: string;
+  /** Per-task Codex service tier (#1946). Undefined sends nothing. */
+  serviceTier?: string;
   /** Agent backend chosen for this task (GUI). Unset = the config default. */
   runner?: RunnerId;
   /** Agent account for this task (spec 2026-07-29-agent-profiles), applying to steps that run
@@ -2292,7 +2294,7 @@ export class RunManager {
     // direct callers cannot bypass the HTTP policy.
     const effectiveInput = {
       ...(agentModelsLocked(this.repoRoot)
-        ? { ...input, model: undefined, reasoningEffort: undefined }
+        ? { ...input, model: undefined, reasoningEffort: undefined, serviceTier: undefined }
         : input),
       // A root started with the composer's Dispatch toggle always gets a worktree: children fork
       // its commits, and an in-place run has no branch to fork. Overridden on the INPUT, which is
@@ -2308,6 +2310,7 @@ export class RunManager {
       task: input.task,
       model: effectiveInput.model,
       reasoningEffort: effectiveInput.reasoningEffort,
+      serviceTier: effectiveInput.serviceTier,
       runner: input.runner,
       // The composer's per-task account (spec 2026-07-29-agent-profiles). Persisted at creation
       // so a queued run picks it up at dequeue and every later resume reads the same answer.
@@ -4636,6 +4639,7 @@ export class RunManager {
       task: run.task,
       model: run.model,
       reasoningEffort: run.reasoningEffort,
+      serviceTier: run.serviceTier,
       runner: run.runner,
       agentProfile: run.agentProfile,
       // No `systemPrompt`: the record keeps only the COMPOSED prompt, never the bare override, so
@@ -6625,6 +6629,10 @@ export class RunManager {
     const continuationReasoningEffort = agentModelsLocked(this.repoRoot)
       ? undefined
       : record?.steps.find((step) => step.id === stepId)?.reasoningEffort;
+    // Re-read from the run record so Continue and restart recovery keep the choice (#1946).
+    const continuationServiceTier = agentModelsLocked(this.repoRoot) || !runnerSupportsServiceTier(backend)
+      ? undefined
+      : record?.serviceTier;
     // A provider/account switch cannot resume the old provider-owned session. Reconstruct the
     // portable context from Cezar's durable record + redacted event stream before this new turn's
     // user-message is appended. This works even when the interrupted agent never wrote HANDOFF.md.
@@ -7249,6 +7257,7 @@ export class RunManager {
           mcpServers: continuationTools.enforceReadOnly ? [] : continueMcp,
           model: continueModel,
           reasoningEffort: continuationReasoningEffort,
+          ...(continuationServiceTier ? { serviceTier: continuationServiceTier } : {}),
           sessionId: launchSessionId,
           resume,
           timeoutMs: 0,
@@ -9467,6 +9476,10 @@ export class RunManager {
     const reasoningEffort = agentModelsLocked(this.repoRoot)
       ? undefined
       : resolveStepReasoningEffort(step, taskBackend, input.reasoningEffort);
+    // Codex-only and task-level (#1946): a step on another backend never receives the tier.
+    const serviceTier = agentModelsLocked(this.repoRoot) || !runnerSupportsServiceTier(backend) || backend !== taskBackend
+      ? undefined
+      : input.serviceTier;
     this.store.updateStep(runId, step.id, {
       sessionId,
       backend,
@@ -9890,6 +9903,7 @@ export class RunManager {
           mcpServers: stepTools.enforceReadOnly ? [] : stepMcp,
           model: backendModel,
           reasoningEffort,
+          ...(serviceTier ? { serviceTier } : {}),
           sessionId: launchSessionId,
           resume,
           // Interactive sessions have no runner timeout — the idle timer rules.
