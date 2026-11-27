@@ -1,3 +1,4 @@
+import { readAgentProviders, type StoredAgentProviders } from '../workspace/agent-providers.ts';
 import { providerQuotaKey, agentProviderEnv, verifyProviderLogin, type AgentProviderLaunch } from '../core/agent-provider-env.ts';
 import { withoutEnv } from '../core/agent-env.ts';
 import { randomUUID } from 'node:crypto';
@@ -132,7 +133,7 @@ import {
   observeConnectors,
   type ObservedConnectors,
 } from './connectors.ts';
-import { taskModelIssue, type TaskModelCatalog } from './task-model.ts';
+import { managerProviderChoice, taskModelIssue, type TaskModelCatalog } from './task-model.ts';
 import { closestAntigravityEffort, isAntigravityModel, resolveAntigravityEffort } from '../core/antigravity-effort.ts';
 import { readAgentModelSettings } from '../agent-config/models.ts';
 import { TurnStatsCollector } from './turn-stats.ts';
@@ -3444,16 +3445,17 @@ export class ManagerEngine {
       if (projectConfig?.defaultModelsAuto?.[candidateRunner]) return undefined;
       return projectConfig?.defaultModels?.[candidateRunner];
     };
+    const providers = await readAgentProviders();
     const requestedModel = input.model;
     // All rows on the same catalog share the same answer, even when several logins are eligible.
     const modelChecks = new Map<string, Promise<ManagerRefusal | undefined>>();
     const candidateModel = async (runner: RunnerId, profile?: string) => {
       if (modelsLocked) return undefined;
       if (requestedModel) {
-        const key = runner === 'kimi' ? runner + ':' + (profile ?? '') : runner;
+        const key = runner + ':' + (profile ?? '');
         let check = modelChecks.get(key);
         if (!check) {
-          check = this.modelIssue(runner, requestedModel, undefined, profile);
+          check = this.modelIssue(runner, requestedModel, undefined, profile, providers);
           modelChecks.set(key, check);
         }
         if (!await check) return requestedModel;
@@ -3466,13 +3468,23 @@ export class ManagerEngine {
       const rank = (agent: ManagerTaskAgent) => (roles ? 0 : retry?.allowed && agent.runner === retry.runner && agent.agentProfile === retry.agentProfile ? 0 : agent.runner === preferred ? 1 : 2);
       const ordered = [...candidates].sort((a, b) => rank(a) - rank(b));
       const load = roles ? this.deps.accountLoad?.() : undefined;
-      const allowed = await Promise.all([...compatibleAgents].sort((a, b) => rank(a) - rank(b)).map(async (agent) => {
-        const option = await this.accountOption(agent.runner, agent.agentProfile, root, await candidateModel(agent.runner, agent.agentProfile));
+      const evaluated = await Promise.all([...compatibleAgents].sort((a, b) => rank(a) - rank(b)).map(async (agent) => {
+        const model = await candidateModel(agent.runner, agent.agentProfile);
+        const { error: issue } = managerProviderChoice(agent.runner, providers.agents[agent.runner], model);
+        if (issue) return { error: issue, runner: agent.runner, agentProfile: agent.agentProfile };
+        const option = await this.accountOption(agent.runner, agent.agentProfile, root, model);
         if (!roles) return option;
         const usage = fiveHourUsedPercent(option.runner, option.account, now);
         return { ...option, role: agent.role ?? 'main', load: load?.get(`${option.runner}:${option.account}`) ?? 0, ...(usage !== undefined ? { usage } : {}) };
       }));
-      const options = ordered.map((agent) => allowed.find((option) => option.runner === agent.runner && option.agentProfile === agent.agentProfile)!);
+      const allowed = evaluated.filter((option): option is AccountOption => 'account' in option);
+      const options = allowed.filter(option => candidates.some(agent =>
+        option.runner === agent.runner && option.agentProfile === agent.agentProfile));
+      if (!options.length) {
+        const rejected = evaluated.find(option => 'error' in option && candidates.some(agent =>
+          agent.runner === option.runner && agent.agentProfile === option.agentProfile));
+        return { error: rejected && 'error' in rejected ? rejected.error : 'No selected agent can serve this model.', status: 400 };
+      }
       const own = roles && retry?.allowed && input.agentProfile === undefined
         ? options.find((option) => option.runner === retry.runner && option.agentProfile === retry.agentProfile && option.role === 'main')
         : undefined;
@@ -3483,7 +3495,7 @@ export class ManagerEngine {
         ...(roles ? { roles } : {}),
         ...(input.runner && candidates.length < compatibleAgents.length ? { narrowedBy: `--runner ${input.runner}` } : {}),
       });
-      firstRunner = options[0]?.runner;
+      firstRunner = ordered[0]?.runner;
       const picked = choice.chosen;
       // An explicit --runner or --account keeps a usage-limit fallback on that runner, as does "same agent only".
       const sameRunner = input.runner !== undefined || input.agentProfile !== undefined || scope.manager.taskLimitSwitch === 'same-agent';
@@ -3727,11 +3739,15 @@ export class ManagerEngine {
   }
 
   /** `--model`/`--effort` against the runner and the host's model catalog; a 400 naming the valid ones. */
-  private async modelIssue(runner: string, model: string | undefined, effort: string | undefined, agentProfile?: string): Promise<ManagerRefusal | undefined> {
+  private async modelIssue(runner: string, model: string | undefined, effort: string | undefined, agentProfile?: string, providers?: StoredAgentProviders): Promise<ManagerRefusal | undefined> {
     if (!isRunnerId(runner)) return undefined;
+    const choice = model ? managerProviderChoice(runner, (providers ?? await readAgentProviders()).agents[runner], model) : {};
+    if (choice.error) return { error: choice.error, status: 400 };
     let catalog: TaskModelCatalog | undefined;
-    // Managed methods can serve a catalog even when the native CLI has no discovery adapter.
-    if (model || (MODEL_DISCOVERY_RUNNERS as readonly string[]).includes(runner)) {
+    if (choice.gateway && model) {
+      catalog = { models: [{ id: model, via: { methodId: choice.gateway } }] };
+    } else if ((MODEL_DISCOVERY_RUNNERS as readonly string[]).includes(runner)) {
+      // Preserve native admission on runners whose account's catalog is unavailable here.
       const query = new URLSearchParams({ runner });
       if (runner === 'kimi' && agentProfile) query.set('agentProfile', agentProfile);
       const response = await this.forward(`/models?${query}`).catch(() => undefined);

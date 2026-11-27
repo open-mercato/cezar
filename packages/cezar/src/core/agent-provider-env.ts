@@ -37,7 +37,7 @@ export interface MethodSelection {
 const REMOVED = "This task's provider was removed. Pick another in Settings → Agents.";
 
 /** Resolve an unpinned method from public metadata. Queue checks must never open a key. */
-function implicitProviderMethod(runner: RunnerId, entry: StoredAgentProviders['agents'][RunnerId], model?: string, preferCheapModel = false) {
+export function implicitProviderMethod(runner: RunnerId, entry: StoredAgentProviders['agents'][RunnerId], model?: string, preferCheapModel = false) {
   if (!entry) return undefined;
   const { mode, methods } = authMethods(runner);
   if (mode === 'one') return entry.active ?? undefined;

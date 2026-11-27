@@ -3782,7 +3782,17 @@ describe('ManagerEngine', () => {
         expect(requests.at(-1)?.body).toMatchObject({ runner: 'cursor' });
       });
 
-      it('uses configured catalogs on runners without native model discovery', async () => {
+      it.each([
+        { requested: 'org/codex-only', rowModel: 'team/small' },
+        { requested: 'org/shared', rowModel: 'team/small' },
+        { requested: 'org/shared', rowModel: undefined },
+      ])('routes past an unusable Pi gateway for $requested with row default $rowModel', async ({ requested, rowModel }) => {
+        const method = (kind: string, ids: string[]) => ({
+          kind, addedAt: '', keyHint: '…1234', models: { fetchedAt: '', ids: ids.map(id => ({ id })) },
+        });
+        writeFileSync(join(home, 'agent-providers.json'), JSON.stringify({ version: 1, agents: {
+          pi: { methods: { custom: method('custom', ['org/shared', 'team/small']), openrouter: method('openrouter', ['org/shared']) } },
+        } }), { mode: 0o600 });
         const engine = makeEngine({
           accountLimit: async (runner, _profile, _root, model) => ({
             account: 'default', label: runner,
@@ -3791,19 +3801,35 @@ describe('ManagerEngine', () => {
           request: async (path, init) => {
             if (path.startsWith('/api/v1/models?')) {
               const runner = new URL(path, 'http://localhost').searchParams.get('runner');
-              const id = runner === 'codex' ? 'org/codex-only' : runner === 'pi' ? 'team/small' : 'team/claude';
-              return Response.json({ models: [{ id, via: { methodId: 'custom' } }] });
+              const ids = runner === 'codex' ? [requested] : runner === 'pi' ? ['team/small', 'org/shared'] : ['team/claude'];
+              return Response.json({ models: ids.map(id => ({ id, via: { methodId: 'custom' } })) });
             }
             requests.push({ path, method: init?.method ?? 'GET', body: typeof init?.body === 'string' ? JSON.parse(init.body) : undefined });
             return Response.json({ id: 'new-run' });
           },
         });
         const manager = await engine.create({ instructions: '', projects: 'all', runner: 'codex', cronMinutes: 0,
-          taskAgents: [{ runner: 'codex' }, { runner: 'pi', model: 'team/small' }, { runner: 'claude' }] });
+          taskAgents: [{ runner: 'codex' }, { runner: 'pi', ...(rowModel ? { model: rowModel } : {}) }, { runner: 'claude' }] });
         if ('error' in manager) throw manager;
-        const result = await engine.createTask(manager.id, { projectId: 'alpha', task: 'Fix it', model: 'org/codex-only' });
+        const result = await engine.createTask(manager.id, { projectId: 'alpha', task: 'Fix it', model: requested });
         expect(result).toMatchObject({ agent: { runner: 'claude' } });
         expect(requests.at(-1)?.body).toMatchObject({ runner: 'claude' });
+      });
+
+      it('preserves native OMP models that belong to the selected account', async () => {
+        const engine = makeEngine({
+          request: async (path, init) => {
+            if (path.startsWith('/api/v1/models?')) return Response.json({ models: [{ id: 'team/personal-only' }] });
+            requests.push({ path, method: init?.method ?? 'GET', body: typeof init?.body === 'string' ? JSON.parse(init.body) : undefined });
+            return Response.json({ id: 'new-run' });
+          },
+        });
+        const manager = await engine.create({ instructions: '', projects: 'all', runner: 'omp', cronMinutes: 0,
+          taskAgents: [{ runner: 'omp', agentProfile: 'work' }] });
+        if ('error' in manager) throw manager;
+        const result = await engine.createTask(manager.id, { projectId: 'alpha', task: 'Fix it', model: 'team/work-only', agentProfile: 'work' });
+        expect(result).toMatchObject({ agent: { runner: 'omp' } });
+        expect(requests.at(-1)?.body).toMatchObject({ runner: 'omp', model: 'team/work-only', agentProfile: 'work' });
       });
 
       it('after a limit skip to another runner, fallbacks on the runner --model was meant for keep it', async () => {

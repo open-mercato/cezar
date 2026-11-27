@@ -1,5 +1,9 @@
 import { runnerSupportsReasoningEffort, REASONING_EFFORT_RUNNERS } from '@open-mercato/cezar-contract';
-import type { RunnerId } from '../core/agent-runner.ts';
+import { AgentProviderUnavailable, type RunnerId } from '../core/agent-runner.ts';
+import { authMethods } from '../core/agent-auth-methods.ts';
+import { implicitProviderMethod } from '../core/agent-provider-env.ts';
+import { providerAuthChecksDisabled } from '../core/provider-auth.ts';
+import type { StoredAgentProviders } from '../workspace/agent-providers.ts';
 import { KNOWN_PRESETS_BY_RUNNER, modelConflictsWithRunner } from '../core/model-presets.ts';
 
 /**
@@ -11,6 +15,26 @@ import { KNOWN_PRESETS_BY_RUNNER, modelConflictsWithRunner } from '../core/model
 /** The slice of `GET /models` this reads. */
 export interface TaskModelCatalog {
   models: Array<{ id: string; via?: { methodId: string }; reasoningEfforts?: Array<{ id: string }> }>;
+}
+
+/** Managers have no method picker. Resolve the same implicit billing method as the launch before ranking a row. */
+export function managerProviderChoice(runner: RunnerId, entry: StoredAgentProviders['agents'][RunnerId], model?: string): { error?: string; gateway?: string } {
+  if (!entry || authMethods(runner).mode !== 'any' || providerAuthChecksDisabled()) return {};
+  const selected = model === 'auto' ? undefined : model;
+  try {
+    const id = implicitProviderMethod(runner, entry, selected);
+    if (!id) return { error: `Pick a model offered by a configured provider for ${runner}.` };
+    const method = entry.methods[id];
+    if (method?.kind !== 'openrouter' && method?.kind !== 'custom') return {};
+    const ids = method.models?.ids;
+    if (!ids?.length || (selected && !ids.some(item => item.id === selected))) {
+      return { error: `Pick a model offered by ${runner}/${id}.` };
+    }
+    return { gateway: id };
+  } catch (error) {
+    if (error instanceof AgentProviderUnavailable) return { error: error.message };
+    throw error;
+  }
 }
 
 /** Native levels when the catalog names none: Claude's `--effort`, Codex's `turn/start.effort`. */
