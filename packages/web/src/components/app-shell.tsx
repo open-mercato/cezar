@@ -706,6 +706,9 @@ function FocusSidebarRail({ desktop, ...props }: NavProps & { desktop: 'macos' |
  * the mark, the New task `+`, every project area as an icon, Manager when there is one, and the
  * expand button at the foot. Desktop only — below `md` the drawer is the sidebar.
  */
+const RAIL_DOOR_CLASS =
+  'relative flex size-8 shrink-0 items-center justify-center rounded-md transition-colors hover:bg-muted'
+
 function SidebarIconRail({
   slot,
   onExpand,
@@ -758,6 +761,28 @@ function SidebarIconRail({
               <PlusIcon className="size-4" aria-hidden="true" />
             </Link>
           </Button>
+          {/* The expanded sidebar's two workspace doors (#2031), above the project areas. */}
+          <nav aria-label="Workspace" data-slot="rail-doors" className="flex flex-col items-center gap-1 border-b border-border pt-2 pb-2">
+            <NavLink
+              to="/dashboard"
+              data-slot="rail-dashboard"
+              aria-label="Dashboard"
+              title="Dashboard"
+              className={({ isActive }) => cn(RAIL_DOOR_CLASS, isActive && 'bg-muted')}
+            >
+              <LayoutDashboardIcon className="size-4 text-violet" aria-hidden="true" />
+            </NavLink>
+            <RouterLink
+              to="/tasks"
+              data-slot="rail-all-tasks"
+              aria-label="All tasks"
+              title="All tasks"
+              aria-current={props.globalTasks ? 'page' : undefined}
+              className={cn(RAIL_DOOR_CLASS, props.globalTasks && 'bg-muted')}
+            >
+              <LayersIcon className="size-4 text-violet" aria-hidden="true" />
+            </RouterLink>
+          </nav>
           <nav aria-label="Main" className="flex min-h-0 flex-col items-center gap-1 overflow-y-auto pt-2">
             {items.filter((item) => item.group !== 'workspace').map((item) => {
               const Icon = item.icon
