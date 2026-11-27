@@ -348,6 +348,16 @@ const openDetails = async (id: string) => {
 }
 
 describe('the agent accounts section', () => {
+  it('keeps identity private until Manage is opened on the requested login', async () => {
+    serve({ editable: true, profileCapableProviders: ['claude'], defaults: {}, selections: {},
+      profiles: [DEFAULTS[0]!, profile({ id: 'work' })] })
+    renderAccounts()
+    await waitFor(() => expect(rows()).toHaveLength(2))
+    expect(detailReads).toEqual([])
+    await openDetails('work')
+    await waitFor(() => expect(detailReads).toEqual(['/api/v1/workspace/agent-profiles/work/details']))
+  })
+
   it('unfolds the not-installed agent named by ?agent= — the Tools menu\'s "Set up" deep link', async () => {
     serve({ editable: true, profileCapableProviders: ['claude', 'codex'], defaults: {}, selections: {}, profiles: DEFAULTS })
     renderAccounts('/settings/global/accounts?agent=codex')
