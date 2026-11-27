@@ -12,13 +12,13 @@ The implementation follows the three phases below. Vendor login remains with eac
 ### Phase 1: Workspace agents
 
 - [ ] 1.1 Verify vendor capabilities against shipped CLIs
-- [ ] 1.2 Define provider, model and run contracts
-- [ ] 1.3 Implement encrypted storage and atomic changes
+- [x] 1.2 Define provider, model and run contracts — c15958ba6
+- [x] 1.3 Implement encrypted storage and atomic changes — 679599f93
 - [ ] 1.4 Map verified methods to agent launch options
 - [ ] 1.5 Characterize existing launches and wire run selection and replay
 - [ ] 1.6 Fetch, cache and expose method-served models
-- [ ] 1.7 Register local-write routes and check HTTP compatibility
-- [ ] 1.8 Add headless configuration and startup apply
+- [x] 1.7 Register local-write routes and check HTTP compatibility — f71c6f198
+- [x] 1.8 Add headless configuration and startup apply — 093c9a922
 - [ ] 1.9 Build workspace agent settings
 - [ ] 1.10 Fold account controls into subscription rows
 
@@ -30,5 +30,5 @@ The implementation follows the three phases below. Vendor login remains with eac
 
 - [ ] 3.1 Characterize composer availability
 - [ ] 3.2 Select and submit method-served models
-- [ ] 3.3 Document provider configuration
-- [ ] 3.4 Archive the capability delta
+- [x] 3.3 Document provider configuration — 3f1eda832
+- [x] 3.4 Archive the capability delta — 3f1eda832
