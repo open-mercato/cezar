@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { agentProvidersResponseSchema } from '@open-mercato/cezar-contract';
 import { execFile as execFileCallback, spawn, type ChildProcess } from 'node:child_process';
 import { once } from 'node:events';
 import { mkdtemp, mkdir, readFile, realpath, rm } from 'node:fs/promises';
@@ -162,13 +163,14 @@ test('the packaged CLI reuses one cockpit, registers a second CWD, and recovers 
     const recoveredHealth = await waitForHealth(recoveryOrigin);
     assert.notEqual(recoveredHealth.runtimeId, firstHealth.runtimeId, 'a replacement process mints a new runtime identity');
     const assertSharedMethods = async () => {
-      const { agents } = await (await fetch(recoveryOrigin + '/api/v1/agent-providers')).json();
-      const gemini = agents.find((agent: { runner: string }) => agent.runner === 'gemini');
-      const host = gemini.methods.find((method: { id: string }) => method.id === 'apiKey');
-      assert.deepEqual([gemini.active, host.state, host.origin], ['apiKey', 'connected', 'host']);
-      const codex = agents.find((agent: { runner: string }) => agent.runner === 'codex');
-      const gateway = codex.methods.find((method: { id: string }) => method.id === 'custom');
-      assert.deepEqual([codex.active, gateway.state, gateway.origin], ['custom', 'connected', 'file']);
+      const response = await fetch(recoveryOrigin + '/api/v1/agent-providers');
+      const { agents } = agentProvidersResponseSchema.parse(await response.json());
+      const gemini = agents.find(agent => agent.runner === 'gemini');
+      const host = gemini?.methods.find(method => method.id === 'apiKey');
+      assert.deepEqual([gemini?.active, host?.state, host?.origin], ['apiKey', 'connected', 'host']);
+      const codex = agents.find(agent => agent.runner === 'codex');
+      const gateway = codex?.methods.find(method => method.id === 'custom');
+      assert.deepEqual([codex?.active, gateway?.state, gateway?.origin], ['custom', 'connected', 'file']);
     };
     await assertSharedMethods();
     await execFile(process.execPath, [cliPath, 'providers', 'apply', sharedKeyDocument, '--no-fetch'], {
