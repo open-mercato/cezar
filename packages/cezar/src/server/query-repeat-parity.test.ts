@@ -2,6 +2,7 @@ import { mkdtempSync, mkdirSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { RunnerModelCatalog } from '../core/runner-model-catalog.ts'
 import { RunStore } from '../runs/store.ts'
 import type { RunManager } from '../workflows/run.ts'
 import { createApp } from './server.ts'
@@ -23,6 +24,8 @@ import { connectedProviderAuth } from './provider-auth.testkit.ts'
  * very cost that comment warns about, just below the timeout while there were three providers and
  * over it at four. The subject here is the query string, never discovery, so the fan-out is stubbed
  * out with `connectedProviderAuth()`: what this pins now stays pinned as providers are added.
+ * `/models?runner=codex` likewise ran the real `codex` model discovery and timed out under a full
+ * run, so the catalog is stubbed too.
  */
 describe('a repeated query key stays 200 (c.req.query took the first value)', () => {
   let repoRoot: string
@@ -34,6 +37,7 @@ describe('a repeated query key stays 200 (c.req.query took the first value)', ()
       repoRoot, store: RunStore.open(join(repoRoot, '.ai/cezar')),
       manager: {} as RunManager, version: '0.0.0-test',
       providerAuth: connectedProviderAuth(),
+      modelCatalog: new RunnerModelCatalog({ adapters: { codex: { discover: async () => [] } } }),
     })
   })
   afterEach(() => rmSync(repoRoot, { recursive: true, force: true }))
