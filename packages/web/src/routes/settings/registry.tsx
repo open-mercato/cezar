@@ -16,12 +16,14 @@ import {
   ShieldCheckIcon,
   SlidersHorizontalIcon,
   SmartphoneIcon,
+  SquareTerminalIcon,
 } from 'lucide-react'
 import type { ComponentType, SVGProps } from 'react'
 
 import type { Capabilities } from '@open-mercato/cezar-api-client'
 import { AgentConfigSection } from './agent-config-section'
 import { AgentsGlobalSection } from './agents-global-section'
+import { TerminalCommandsSection } from './terminal-commands-section'
 import { AgentsSection } from './agents-section'
 import { AppearanceSection } from './appearance'
 import { BehaviourSection } from './behaviour-section'
@@ -63,6 +65,7 @@ export type SettingsSectionId =
   | 'instructions'
   | 'global-instructions'
   | 'tasks'
+  | 'terminal-commands'
   | 'resources'
   | 'worktrees'
   | 'projects'
@@ -171,6 +174,14 @@ export const SETTINGS_SECTIONS: SettingsSection[] = [
     description: 'Development model, landing, required checks, base branch, review, live titles.',
     icon: ListChecksIcon,
     component: TasksSection,
+    scope: 'project',
+  },
+  {
+    id: 'terminal-commands',
+    title: 'Terminal commands',
+    description: 'Run commands the task terminal offers, beside the ones it detects.',
+    icon: SquareTerminalIcon,
+    component: TerminalCommandsSection,
     scope: 'project',
   },
   {

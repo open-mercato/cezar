@@ -1,6 +1,7 @@
 import { z } from 'zod';
 
 import { effectiveStartAppSchema } from './start-app.ts';
+import { configuredCommandSchema } from './terminal-commands.ts';
 
 /**
  * The workspace terminal (spec `.ai/specs/2026-10-07-task-workspace.md` §6, Milestone 2).
@@ -132,6 +133,8 @@ export const discoveredCommandsSchema = z.object({
   install: z.string().optional(),
   /** The project's start recipe, when one is defined — personal over project. */
   recipe: effectiveStartAppSchema.optional(),
+  /** Commands the user defined in project settings (#1555), yours first. Absent when none. */
+  configured: z.array(configuredCommandSchema).optional(),
 });
 export type DiscoveredCommandsResponse = z.infer<typeof discoveredCommandsSchema>;
 

@@ -28,7 +28,7 @@ function parseObject(text: string): Record<string, unknown> | null {
   }
 }
 
-async function readRaw(dataDir: string): Promise<Record<string, unknown>> {
+export async function readRaw(dataDir: string): Promise<Record<string, unknown>> {
   const text = await readFile(join(dataDir, 'config.json'), 'utf8').catch(() => null);
   return (text === null ? null : parseObject(text)) ?? {};
 }
@@ -49,18 +49,30 @@ export function effectiveStartApp(state: StartAppState): EffectiveStartApp | nul
 }
 
 /** Writes one scope. Every other key of either file is kept as it was. */
-export async function writeStartApp(
+export function writeStartApp(
   dataDir: string,
   root: string,
   scope: 'project' | 'personal',
   recipe: StartAppRecipe | null,
 ): Promise<boolean> {
+  return writeScopedKey(dataDir, root, scope, KEY, recipe);
+}
+
+/** `KEY` of `.ai/cezar/config.json` (project) or of the project's registry entry (personal); null
+ *  removes it. Shared with the terminal commands (#1555), which live beside the recipe. */
+export async function writeScopedKey(
+  dataDir: string,
+  root: string,
+  scope: 'project' | 'personal',
+  key: string,
+  value: unknown | null,
+): Promise<boolean> {
   if (scope === 'project') {
     // Written the way `PUT /config` writes this file: under the config writers' shared lock, and a
     // malformed file is refused rather than replaced by `{ startApp }`.
     const apply = (raw: Record<string, unknown>) => {
-      if (recipe) raw[KEY] = recipe;
-      else delete raw[KEY];
+      if (value !== null) raw[key] = value;
+      else delete raw[key];
       return raw;
     };
     const path = join(dataDir, 'config.json');
@@ -82,8 +94,8 @@ export async function writeStartApp(
     const entry = config.projects.find((project) => project.root === root) as Record<string, unknown> | undefined;
     if (!entry) return;
     found = true;
-    if (recipe) entry[KEY] = recipe;
-    else delete entry[KEY];
+    if (value !== null) entry[key] = value;
+    else delete entry[key];
   });
   return found;
 }

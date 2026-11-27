@@ -15,13 +15,6 @@ import {
 } from '@/components/ui/alert-dialog'
 import { Button } from '@/components/ui/button'
 import { IconTooltip } from '@/components/ui/icon-tooltip'
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuLabel,
-  DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { cn } from '@/lib/utils'
 
@@ -32,7 +25,7 @@ import {
   MIN_DRAWER_HEIGHT,
   clampDrawerHeight,
 } from './drawer-state'
-import { CommandPicker, DetectedUrlsStrip } from './terminal-extras'
+import { DetectedUrlsStrip, NewTerminalMenu } from './terminal-extras'
 import { TerminalPane } from './terminal-pane'
 import type { TerminalScope } from './terminal-scope'
 
@@ -278,46 +271,23 @@ export function TerminalDrawer({
               onClose={() => (session.busy !== false ? setConfirming(session) : closeTab(session))}
             />
           ))}
-          {unavailable ? null : shells.length > 1 ? (
-            // More than one shell on this host, so `+` asks which (spec §6). One shell means
-            // there is nothing to ask, and the button just opens it.
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="icon-xs"
-                  aria-label="New terminal tab"
-                  title="New terminal tab — pick a shell"
-                  className="rounded"
-                >
-                  <PlusIcon aria-hidden="true" className="size-3.5" />
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="start" className="w-56">
-                <DropdownMenuLabel>New tab</DropdownMenuLabel>
-                {shells.map((shell, index) => (
-                  <DropdownMenuItem key={shell} data-shell={shell} onSelect={() => addTab(shell)}>
-                    <span className="truncate font-mono text-xs">{shell}</span>
-                    {index === 0 ? (
-                      <span className="ml-auto shrink-0 text-xs text-soft-foreground">default</span>
-                    ) : null}
-                  </DropdownMenuItem>
-                ))}
-              </DropdownMenuContent>
-            </DropdownMenu>
-          ) : (
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon-xs"
-              aria-label="New terminal tab"
-              title="New terminal tab"
-              onClick={() => addTab()}
-              className="rounded"
-            >
-              <PlusIcon aria-hidden="true" className="size-3.5" />
-            </Button>
+          {unavailable ? null : (
+            // `+` is always one click to an empty terminal (#1554); the chevron beside it holds
+            // everything secondary — another shell, project commands, a custom command.
+            <>
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon-xs"
+                aria-label="New terminal tab"
+                title="New terminal tab"
+                onClick={() => addTab()}
+                className="rounded"
+              >
+                <PlusIcon aria-hidden="true" className="size-3.5" />
+              </Button>
+              <NewTerminalMenu scope={scope} shells={shells} onNew={addTab} onRun={runCommand} />
+            </>
           )}
         </TabsList>
         </Tabs>
@@ -341,7 +311,6 @@ export function TerminalDrawer({
             </span>
           </span>
         ) : null}
-        {unavailable ? null : <CommandPicker scope={scope} onRun={runCommand} />}
         {active?.busy === true ? (
           <Button
             variant="ghost"

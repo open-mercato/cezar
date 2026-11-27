@@ -1,8 +1,8 @@
-import { ChevronDownIcon, ExternalLinkIcon, PanelRightIcon, PlayIcon } from 'lucide-react'
-import { useCallback, useEffect, useState } from 'react'
+import { ChevronDownIcon, ExternalLinkIcon, PanelRightIcon, PlusIcon } from 'lucide-react'
+import { Fragment, useCallback, useEffect, useState } from 'react'
 
 import { getRunTerminalUrls } from '@/api/client'
-import type { DetectedUrlEntry, DiscoveredCommandEntry } from '@open-mercato/cezar-api-client'
+import type { DetectedUrlEntry, DiscoveredCommandsResponse } from '@open-mercato/cezar-api-client'
 import { StatusDot } from '@/components/status-dot'
 import { Button } from '@/components/ui/button'
 import {
@@ -31,6 +31,12 @@ import type { TerminalScope } from './terminal-scope'
 /** How often the detected-address strip re-probes. Each refresh is one TCP connect per address
  *  on the server, and a server coming up is something a user waits a second or two for anyway. */
 const URL_REFRESH_MS = 3_000
+
+/** The defined commands' groups, in the order the server sends them: yours, then the repo's. */
+const CONFIGURED_GROUPS = [
+  { scope: 'personal', label: 'Your commands' },
+  { scope: 'project', label: 'From the repo config' },
+] as const
 
 export function DetectedUrlsStrip({
   runId,
@@ -123,41 +129,104 @@ export function DetectedUrlsStrip({
   )
 }
 
-export function CommandPicker({
+/**
+ * The chevron beside `+` (#1554): `+` itself opens an empty terminal in one click, and this menu
+ * holds everything secondary, in labelled sections — another shell, the project's defined
+ * commands (#1555), the ones detected from `package.json` / a Makefile, and a typed command.
+ *
+ * With nothing defined the menu offers what it always offered: detected commands and a custom
+ * line. A command always runs in a NEW tab of this scope's own tree (spec §6).
+ */
+export function NewTerminalMenu({
   scope,
+  shells,
+  onNew,
   onRun,
 }: {
   /** Whose commands: a task's worktree or the project root. */
   scope: Pick<TerminalScope, 'commands'>
+  /** The host's shells, default first; the menu offers the others by name. */
+  shells: string[]
+  /** Opens an empty terminal, in `shell` when one is named. */
+  onNew: (shell?: string) => void
   /** Runs the command in a NEW terminal tab (spec §6) — never in the one you are looking at. */
   onRun: (command: string) => void
 }) {
-  const [commands, setCommands] = useState<DiscoveredCommandEntry[]>([])
+  const [state, setState] = useState<DiscoveredCommandsResponse | null>(null)
   const [manual, setManual] = useState('')
 
   const load = useCallback(() => {
     void scope.commands()
-      .then((state) => setCommands(state.commands))
+      .then(setState)
       .catch(() => {})
   }, [scope])
+
+  const configured = state?.configured ?? []
+  const detected = state?.commands ?? []
 
   return (
     <DropdownMenu onOpenChange={(open) => open && load()}>
       <DropdownMenuTrigger asChild>
-        <Button variant="ghost" size="sm" className="h-6 shrink-0 px-2 text-xs text-muted-foreground">
-          <PlayIcon aria-hidden="true" className="size-3" />
-          Run
-          <ChevronDownIcon aria-hidden="true" className="size-3" />
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon-xs"
+          aria-label="More terminal options"
+          title="Other shell, project commands, custom command"
+          className="rounded"
+        >
+          <ChevronDownIcon aria-hidden="true" className="size-3.5" />
         </Button>
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" className="max-h-80 w-80 overflow-y-auto">
-        <DropdownMenuLabel>Project commands</DropdownMenuLabel>
-        {commands.length === 0 ? (
+      <DropdownMenuContent align="start" className="max-h-96 w-80 overflow-y-auto">
+        <DropdownMenuItem data-slot="empty-terminal" onSelect={() => onNew()}>
+          <PlusIcon aria-hidden="true" className="size-3.5" />
+          Empty terminal
+        </DropdownMenuItem>
+        {shells.length > 1 ? (
+          <>
+            <DropdownMenuSeparator />
+            <DropdownMenuLabel>Shell</DropdownMenuLabel>
+            {shells.map((shell, index) => (
+              <DropdownMenuItem key={shell} data-shell={shell} onSelect={() => onNew(shell)}>
+                <span className="truncate font-mono text-xs">{shell}</span>
+                {index === 0 ? <span className="ml-auto shrink-0 text-xs text-soft-foreground">default</span> : null}
+              </DropdownMenuItem>
+            ))}
+          </>
+        ) : null}
+        {/* Yours and the repo's apart (#1555 review): a repo-config command arrived with the
+            checkout, so the menu must not let it pass for one you saved yourself. */}
+        {CONFIGURED_GROUPS.map(({ scope: group, label }) => {
+          const entries = configured.filter((entry) => entry.scope === group)
+          if (entries.length === 0) return null
+          return (
+            <Fragment key={group}>
+              <DropdownMenuSeparator />
+              <DropdownMenuLabel data-slot="configured-group" data-scope={group}>{label}</DropdownMenuLabel>
+              {entries.map((entry) => (
+                <DropdownMenuItem
+                  key={`${entry.scope}:${entry.command}`}
+                  data-slot="configured-command"
+                  data-scope={entry.scope}
+                  onSelect={() => onRun(entry.command)}
+                  className="flex-col items-start gap-0"
+                >
+                  <span className="text-xs">{entry.name}</span>
+                  <span className="font-mono text-meta text-soft-foreground">{entry.command}</span>
+                </DropdownMenuItem>
+              ))}
+            </Fragment>
+          )
+        })}
+        <DropdownMenuSeparator />
+        <DropdownMenuLabel>Detected commands</DropdownMenuLabel>
+        {detected.length === 0 ? (
           <p className="px-2 py-1.5 text-label text-muted-foreground">
-            No commands found in package.json or a Makefile. Type your own below.
+            No commands found in package.json or a Makefile.
           </p>
         ) : (
-          commands.map((entry) => (
+          detected.map((entry) => (
             <DropdownMenuItem
               key={`${entry.source}:${entry.command}`}
               onSelect={() => onRun(entry.command)}
@@ -174,7 +243,7 @@ export function CommandPicker({
           ))
         )}
         <DropdownMenuSeparator />
-        <DropdownMenuLabel className="font-normal text-soft-foreground">Custom command</DropdownMenuLabel>
+        <DropdownMenuLabel>Custom command</DropdownMenuLabel>
         <form
           className="px-2 pb-1"
           onSubmit={(event) => {
