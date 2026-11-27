@@ -386,6 +386,14 @@ export const runRecordSchema = z.object({
   /** Which automatic resume `autoResumeAt`/`autoResumeAttempts` belong to: a usage limit's reset
    *  window, or a retry after a transient provider failure — which holds no account. Absent = limit. */
   autoResumeReason: z.enum(['usage_limit', 'transient']).optional().catch(undefined),
+<<<<<<< HEAD
+=======
+  /** The resumed session observed the usage window open; its account hold is released (#2525). */
+  autoResumeWindowOpen: z.boolean().optional().catch(undefined),
+  /** Why a `waiting` run with no process waits: an agent login was rejected and a reconnect resumes
+   *  it (spec 2026-11-18-inline-account-reconnect). Only a `waiting` run carries it. */
+  parked: runParkedSchema.optional().catch(undefined),
+>>>>>>> bbbec3e (fix(workflows): release the account-resume hold once the resumed run sees the window open (#2525) (#2537))
   createdAt: z.string(),
   startedAt: z.string().optional(),
   finishedAt: z.string().optional(),
@@ -690,6 +698,7 @@ function clearPendingAutoResume(run: RunRecord): void {
   run.autoResumeAt = undefined;
   run.autoResumeAttempts = undefined;
   run.autoResumeReason = undefined;
+  run.autoResumeWindowOpen = undefined;
 }
 
 /** The OS refused the write (EPERM/EACCES/EROFS) — the file is there, cezar may not touch it. */
