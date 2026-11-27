@@ -32,7 +32,8 @@ export const deferredCreationRecordSchema = z.object({
 export type DeferredCreationRecord = z.infer<typeof deferredCreationRecordSchema>;
 
 export const queueWaitReasonSchema = z.discriminatedUnion('kind', [
-  z.object({ kind: z.literal('usage-reset'), until: z.string().datetime(), timeZone: z.string().optional() }),
+  // `account` (`runner:profileId`) is what "Resume now" lifts; absent on records from before it.
+  z.object({ kind: z.literal('usage-reset'), until: z.string().datetime(), timeZone: z.string().optional(), account: z.string().min(1).optional() }),
   z.object({ kind: z.literal('account-resume') }),
   /** Every account a manager may route this task to already runs as many tasks as it allows. */
   z.object({ kind: z.literal('account-busy') }),

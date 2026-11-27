@@ -131,6 +131,9 @@ import {
   automationListPreferencesSchema,
   setWorkspaceUiStateInputSchema,
   setWorkspaceConfigInputSchema,
+  resumeAccountHoldsInputSchema,
+  runnerSchema as resumeRunnerSchema,
+  type ResumeAccountHoldsResponse,
   type GroupResponse,
   type GroupVariant,
   type PickVariantResponse,
@@ -407,6 +410,7 @@ import {
   type ProjectListEntry,
 } from '../workspace/projects.ts';
 import { WorkspaceSemaphore } from '../workspace/semaphore.ts';
+import { releaseUsageLimit } from '../workspace/usage-limit-logins.ts';
 import {
   candidateKey,
   FallbackPolicyBusyError,
@@ -4137,6 +4141,29 @@ export function createAppParts(deps: ServerDeps) {
   // ---- chained family: workspace settings + GUI prefs (workspace-level) ----
   const workspaceConfigRoutes = new Hono<ProjectApiEnv>()
     .get('/workspace/config', async (c) => c.json(workspaceConfigBody(await loadWorkspaceConfig())))
+
+    // "Resume now" for one agent account (spec 2026-08-03-auto-resume-after-usage-limit, 2026-11-23
+    // addendum): a limit closes an account in every project, so lifting it does too. The lift is
+    // workspace state every hold derivation reads, so a project nobody has loaded needs no build.
+    .post('/workspace/usage-holds/resume', jsonZodValidator(resumeAccountHoldsInputSchema), async (c) => {
+      const { account } = c.req.valid('json');
+      const split = account.indexOf(':');
+      const runner = account.slice(0, split);
+      const profileId = account.slice(split + 1);
+      const known = resumeRunnerSchema.safeParse(runner).success && (
+        profileId === DEFAULT_AGENT_ACCOUNT_ID
+        || (await loadAgentAccounts().catch(() => defaultAgentAccountStore())).accounts.some((a) => a.provider === runner && a.id === profileId)
+      );
+      // A deleted account's stale id can still hold: it stays liftable while it does.
+      const holds = (deps.semaphore ?? bootContext.manager).accountHolds();
+      if (!known && !holds.deadline.has(account) && !holds.inFlight.has(account)) return c.json({ error: `unknown account: ${account}` }, 404);
+      releaseUsageLimit(account);
+      let released = 0;
+      for (const ctx of new Set([bootContext, ...contexts.ids().flatMap((id) => contexts.peek(id) ?? [])])) {
+        released += ctx.manager.resumeAccountNow(account);
+      }
+      return c.json({ account, released } satisfies ResumeAccountHoldsResponse);
+    })
 
     // Live host totals for a REMOTE cockpit (spec `.ai/specs/2026-09-20-host-resource-telemetry.md`):
     // the local cockpit gets them pushed over the `host` topic, but a remote one opens no

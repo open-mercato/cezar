@@ -4,6 +4,7 @@ import { delimiter, join } from 'node:path';
 import lockfile from 'proper-lockfile';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mergeWriteAgentAccounts } from '../workspace/agent-accounts.ts';
+import { recordUsageLimit, releaseUsageLimit } from '../workspace/usage-limit-logins.ts';
 import { managerAccessOf, type GithubData, type ManagerAsk, type ManagerMessage } from '@open-mercato/cezar-contract';
 import type { AgentEvent, AgentRunner, AgentRunSpec, AgentSession, RunnerId } from '../core/agent-runner.ts';
 import { inRelayScope, runInRelayScope } from '../relay/scope.ts';
@@ -5224,6 +5225,20 @@ describe('ManagerEngine', () => {
       expect(notice.seq).toBeLessThan(replies[0]!.seq);
       const summary = await engine.summary(id);
       expect(summary?.activeAgent).toMatchObject({ agent: { slot: 1 }, reason: 'usage-limit', primaryBackAt: resetAt });
+      expect(engine.accountHolds().deadlines.get('claude:default')).toBe(Date.parse(resetAt));
+    });
+
+    it('Resume now lifts a chain\'s usage-limit hold from the task queues, until the next limit', async () => {
+      const engine = makeEngine({ now: () => clock });
+      const id = await withBackup(engine);
+      backend.scripts.push(limited, say('Rebased on codex.'));
+      engine.send(id, 'rebase the stack');
+      await settled(engine);
+      expect(engine.accountHolds().deadlines.get('claude:default')).toBe(Date.parse(resetAt));
+      releaseUsageLimit('claude:default');
+      expect([...engine.accountHolds().deadlines]).toEqual([]);
+      // The next limit on the account is recorded before its hold is published: it binds again.
+      recordUsageLimit('claude:default', undefined, Date.parse(resetAt));
       expect(engine.accountHolds().deadlines.get('claude:default')).toBe(Date.parse(resetAt));
     });
 

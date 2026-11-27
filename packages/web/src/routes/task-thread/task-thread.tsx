@@ -35,7 +35,7 @@ import { isHttpUrl } from '@/lib/utils'
 
 import { AutoResumeHint } from './auto-resume-hint'
 import { useFinishRun } from './use-finish-run'
-import { usePromoteRun, useStartRunNow } from './use-start-run-now'
+import { usePromoteRun, useResumeAccountHolds, useStartRunNow } from './use-start-run-now'
 import { E2eSetupVerdict } from './e2e-setup-verdict'
 import { useDraft } from './thread-draft'
 import { useDiffComments } from './diff-comments'
@@ -721,6 +721,8 @@ function QueuedPlaceholder({ run }: { run: ApiRun }) {
   const position = queuePosition(runs.data ?? [], run.id)
   const startNow = useStartRunNow(run.id)
   const promote = usePromoteRun(run.id)
+  const resumeAccount = useResumeAccountHolds()
+  const heldAccount = run.queueWaitReason?.kind === 'usage-reset' ? run.queueWaitReason.account : undefined
   return (
     <div data-slot="queued-state" className="flex flex-col items-center gap-1.5 py-10 text-center">
       <StatusDot tone="pending" pulse />
@@ -743,6 +745,21 @@ function QueuedPlaceholder({ run }: { run: ApiRun }) {
               onClick={() => startNow.mutate()}
             >
               Start now
+            </Button>
+          </IconTooltip>
+        )}
+        {/* The hold binds a login, not a folder: after a re-login (or when the limit is known to be
+            over) this lifts it in every project (spec 2026-08-03-auto-resume-after-usage-limit). */}
+        {heldAccount && (
+          <IconTooltip label="Lift this account's usage-limit hold in every project until its next limit. Paused tasks resume first; waiting tasks start once one of them reaches the provider. For when you signed in to another account">
+            <Button
+              data-slot="resume-account-now"
+              size="sm"
+              variant="outline"
+              disabled={resumeAccount.isPending}
+              onClick={() => resumeAccount.mutate(heldAccount)}
+            >
+              Resume now
             </Button>
           </IconTooltip>
         )}

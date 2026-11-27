@@ -620,6 +620,13 @@ async function respond(userText, imageCount) {
     ? '\nCEZ:PR=4242\nCEZ:ISSUE=17\nCEZ:TITLE=implementing marker refs'
     : '';
 
+  // `mock:linger` → the account reports its five-hour window `allowed` at once (the real CLI's
+  // `rateLimitType` frame), then the turn holds ~25 s: a resume that sees its window open long before
+  // its turn ends (#2525).
+  if (userText.includes('mock:linger')) {
+    emit({ type: 'rate_limit_event', rate_limit_info: { status: 'allowed', rateLimitType: 'five_hour', resetsAt: Math.floor(Date.now() / 1000) + 3600 } });
+    await sleep(25_000);
+  }
   // `mock:slow` → hold the turn for ~25 s so queue states are observable. `mock:pause` → ~2 s,
   // long enough for a test to drop a file into the run's inbox before its turn ends.
   if (userText.includes('mock:slow')) await sleep(25_000);
