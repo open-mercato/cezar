@@ -193,6 +193,17 @@ describe('AskCard', () => {
     expect(mutateAsync).toHaveBeenCalledWith({ askRequestId: expect.any(String), text: 'Library: date-fns\nStyle: Relative' })
   })
 
+  it('clicking a selected single-select option again clears it on a held draft (#1509)', () => {
+    renderAsk(twoQuestionAsk)
+    const opt = screen.getByRole('button', { name: /date-fns/ })
+    fireEvent.click(opt)
+    expect(opt.getAttribute('aria-pressed')).toBe('true')
+    fireEvent.click(opt)
+    expect(opt.getAttribute('aria-pressed')).toBe('false')
+    fireEvent.click(screen.getByRole('button', { name: /Relative/ }))
+    expect((screen.getByRole('button', { name: 'Send answer' }) as HTMLButtonElement).disabled).toBe(true)
+  })
+
   it('multi-select: Send is disabled until options are picked, then sends the comma-joined labels', () => {
     renderAsk(multiAsk)
     const send = screen.getByRole('button', { name: 'Send answer' }) as HTMLButtonElement

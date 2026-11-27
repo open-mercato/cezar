@@ -7,6 +7,7 @@ import { workspaceQueryKeys } from '@/api/queries'
 import { resetDismissals } from '@/api/questions'
 import { supersededAskIds, type ManagerMessage } from '@open-mercato/cezar-api-client'
 
+import { resetAskSelections } from '@/routes/task-thread/ask-selections'
 import { actionMessage, assistantMessage, userMessage } from './manager-fixtures'
 import { answersShownOnCard, askAnswerLines, CommandsRow, ManagerChatActionsContext, ManagerMessageRow, PrTitlesContext, usePrTitles } from './manager-message'
 
@@ -42,6 +43,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup()
   resetDismissals()
+  resetAskSelections()
   vi.unstubAllGlobals()
 })
 
