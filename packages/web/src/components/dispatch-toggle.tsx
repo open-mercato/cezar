@@ -49,6 +49,7 @@ export function DispatchToggle({
   onSettingsOpenChange,
   runners,
   parentRunner,
+  kimiProfile,
   parentModels,
 }: {
   available: boolean
@@ -60,6 +61,7 @@ export function DispatchToggle({
   runners: readonly Runner[]
   /** What the parent task runs as: "same as parent" resolves against it for the model list. */
   parentRunner: Runner
+  kimiProfile?: string
   /** The composer's own model catalog — already fetched for the parent's runner, and carrying
    *  the draft/configured ids the composer keeps representable. Used as-is while the subtasks
    *  inherit the runner. */
@@ -82,7 +84,7 @@ export function DispatchToggle({
   // picker collapsed to one option for exactly the runners whose models are worth picking.
   // Fetched only when that runner differs from the parent's; `parentModels` already covers the
   // inherited case, so the common path still makes one request for the whole composer.
-  const subtaskCatalog = useRunnerModels(subtaskRunner, available && subtaskRunner !== parentRunner)
+  const subtaskCatalog = useRunnerModels(subtaskRunner, available && subtaskRunner !== parentRunner, kimiProfile)
   const models =
     subtaskRunner === parentRunner
       ? parentModels

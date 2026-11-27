@@ -26,14 +26,14 @@ export function useRunEngine(run: ApiRun, reportedModel?: string) {
   // absent whenever the run just followed the project, and the project's selection can have been
   // changed since — both would name an account this run may never have touched. The last step that
   // recorded one is what ran; `sessionId` and `profileId` are a pair for exactly this reason.
-  const accountId = [...run.steps].reverse().find((step) => step.profileId)?.profileId
+  const accountId = [...run.steps].reverse().find(step => step.profileId && (step.backend ?? runner) === runner)?.profileId
   const account = accountId === undefined
     ? undefined
     : accountId === DEFAULT_AGENT_ACCOUNT_ID
       ? 'default'
       // A deleted account still names the folder this run's sessions live in, so the id is shown
       // rather than swallowed — "gone" is the useful half of that answer.
-      : profiles.data?.profiles.find((p) => p.id === accountId)?.label ?? `${accountId} (removed)`
+      : profiles.data?.profiles.find(p => p.id === accountId && p.provider === runner)?.label ?? `${accountId} (removed)`
   // The canonical `provider/model` the run actually resolved to (#405), shown only when it says
   // something `model` does not (#546). Absent on pre-#405 records and skipped when it merely
   // repeats `model` — an identity nothing wrote down is not one a reader may invent.
@@ -43,7 +43,7 @@ export function useRunEngine(run: ApiRun, reportedModel?: string) {
   const actualModel = runActualModel(run, reportedModel)
   const modelLabel = requestedToActual(model || 'auto', actualModel)
   const summary = [runner, account, modelLabel].filter(Boolean).join(' · ')
-  return { runner, account, model, actualModel, modelLabel, identity, summary }
+  return { runner, account, accountId, model, actualModel, modelLabel, identity, summary }
 }
 
 /**
@@ -57,7 +57,7 @@ export function RunEnginePills({ run }: { run: ApiRun }) {
   const engine = useRunEngine(run)
   // The catalog only turns the pinned id into its display name ("opus" → "Opus 5.5"), so the chip
   // reads exactly as the editable one will once the session closes.
-  const catalog = useRunnerModels(engine.runner)
+  const catalog = useRunnerModels(engine.runner, true, engine.accountId ?? run.agentProfile)
   const models = modelsForRunner(engine.runner, catalog.data, [run.model])
   const modelLabel = models.find((preset) => preset.id === engine.model)?.label ?? engine.model
   const hint = 'The session’s engine — pick another when you continue it'

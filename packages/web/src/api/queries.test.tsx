@@ -23,7 +23,7 @@ import {
   healthRecheckInterval,
   FORGE_RECHECK_MS,
   useRunnerModels,
-  useModelRefreshAction,
+  useModelPickerActions,
   useMarkRunSeen,
   useMarkRunUnseen,
   usePatchRun,
@@ -256,18 +256,46 @@ describe('useRunnerModels', () => {
   })
 })
 
-describe('useModelRefreshAction', () => {
+describe('useModelPickerActions', () => {
+  it('writes a late Kimi refresh to the account that requested it', async () => {
+    const refresh = deferredResponse()
+    const catalog = (id: string) => json({ runner: 'kimi', models: [{ id, label: id, description: '' }], source: 'live', stale: false })
+    fetchMock.mockImplementation(async input => {
+      const path = String(input)
+      if (path.endsWith('/agent-providers')) return json({ editable: true, agents: [] })
+      if (path === '/api/v1/models?runner=kimi&agentProfile=work&refresh=1') return refresh.promise
+      if (path === '/api/v1/models?runner=kimi&agentProfile=work') return catalog('work-alias')
+      if (path === '/api/v1/models?runner=kimi&agentProfile=default') return catalog('host-alias')
+      throw new Error('Unexpected catalog URL ' + path)
+    })
+    const { result, rerender } = renderHook(({ profile }) => ({
+      catalog: useRunnerModels('kimi', true, profile), ...useModelPickerActions('kimi', profile),
+    }), { wrapper: wrapper(), initialProps: { profile: 'work' } })
+    await waitFor(() => expect(result.current.catalog.data?.models[0]?.id).toBe('work-alias'))
+    act(() => result.current.action!.onSelect())
+    await waitFor(() => expect(result.current.action?.disabled).toBe(true))
+    rerender({ profile: 'default' })
+    await waitFor(() => expect(result.current.catalog.data?.models[0]?.id).toBe('host-alias'))
+    refresh.resolve(catalog('new-work-alias'))
+    await waitFor(() => expect(result.current.action?.disabled).toBe(false))
+    expect(result.current.catalog.data?.models[0]?.id).toBe('host-alias')
+    rerender({ profile: 'work' })
+    expect(result.current.catalog.data?.models[0]?.id).toBe('new-work-alias')
+  })
+
   it('offers no action for a runner without a host catalog', () => {
-    const { result } = renderHook(() => useModelRefreshAction('pi'), { wrapper: wrapper() })
-    expect(result.current).toBeUndefined()
+    fetchMock.mockResolvedValue(json({ editable: true, agents: [] }))
+    const { result } = renderHook(() => useModelPickerActions('pi'), { wrapper: wrapper() })
+    expect(result.current.action).toBeUndefined()
   })
 
   it('re-probes with refresh=1, disables itself while pending and writes the answer into the picker catalog', async () => {
     let answer!: (response: Response) => void
     fetchMock.mockResolvedValueOnce(json({ runner: 'codex', models: [{ id: 'old', label: 'Old', description: '' }], source: 'cache', stale: false }))
+    fetchMock.mockResolvedValueOnce(json({ editable: true, agents: [] }))
     fetchMock.mockImplementationOnce(() => new Promise<Response>((resolve) => { answer = resolve }))
     const { result } = renderHook(
-      () => ({ catalog: useRunnerModels('codex'), action: useModelRefreshAction('codex') }),
+      () => ({ catalog: useRunnerModels('codex'), ...useModelPickerActions('codex') }),
       { wrapper: wrapper() },
     )
     await waitFor(() => expect(result.current.catalog.data?.models[0]?.id).toBe('old'))

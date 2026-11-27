@@ -22,7 +22,7 @@ export function composerModelOptions(models: readonly ModelPreset[], catalog?: R
     const via = model.via?.label ?? (active ? active.label : undefined)
     return {
       model: model.id,
-      method: model.via?.methodId,
+      method: model.via?.methodId ?? (active ? active.id : undefined),
       value: model.via ? JSON.stringify([model.via.methodId, model.id]) : model.id,
       label: model.label,
       desc: [via && `via ${via}`, model.desc].filter(Boolean).join(' · '),
