@@ -8,9 +8,9 @@ import {
   GitPullRequestIcon,
   LoaderCircleIcon,
 } from 'lucide-react'
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 
-import { ApiError, continueRun, createRunPr } from '@/api/client'
+import { ApiError, createRunPr } from '@/api/client'
 import { queryKeys } from '@/api/queries'
 import type { ApiRun, RunStatus } from '@open-mercato/cezar-api-client'
 import { TwinkleBackdrop } from '@/components/centered-state'
@@ -28,7 +28,7 @@ import { isHttpUrl } from '@/lib/utils'
 import { GIT_ACTION_PENDING_LABELS } from '../task-git/git-toolbar'
 import { useRunGitStep } from '../task-git/run-git-step'
 import { finishTitle } from './run-actions'
-import { useContinuationProvider } from './continuation-provider'
+import type { ContinueAction } from './follow-up-engine'
 import { useDeliverPrompt } from './deliver-prompt'
 import { MESSAGE_TEXT_MAX, messageWithReview, type DiffComments } from './diff-comments'
 import { useDraft } from './thread-draft'
@@ -51,7 +51,13 @@ import { writeClipboard } from '@/lib/clipboard'
 /** The review gate's attention, from the one canonical function — blue, pulsing: waiting on you. */
 const REVIEW_GATE = deriveAttention({ status: 'review' })
 
-export function ReviewPanel({ run, diffComments }: { run: ApiRun; diffComments?: DiffComments }) {
+interface ReviewPanelProps {
+  run: ApiRun
+  continuation: ContinueAction
+  diffComments?: DiffComments
+}
+
+export function ReviewPanel({ run, diffComments, continuation }: ReviewPanelProps) {
   return (
     <section data-slot="review-panel" aria-label="Review the changes" className="flex flex-col gap-3">
       {/* The review gate waits on a person: the banner wears `deriveAttention`'s tone for `review`
@@ -72,14 +78,14 @@ export function ReviewPanel({ run, diffComments }: { run: ApiRun; diffComments?:
       </div>
 
       <RunDiff runId={run.id} />
-      <ReviewActions run={run} diffComments={diffComments} />
+      <ReviewActions run={run} diffComments={diffComments} continuation={continuation} />
     </section>
   )
 }
 
 // ---- notes + exits --------------------------------------------------------------------------
 
-function ReviewActions({ run, diffComments }: { run: ApiRun; diffComments?: DiffComments }) {
+function ReviewActions({ run, diffComments, continuation }: ReviewPanelProps) {
   const queryClient = useQueryClient()
   const notesRef = useRef<HTMLTextAreaElement>(null)
   // Review notes are the second-longest thing anyone types into a task, and they are typed while
@@ -90,17 +96,11 @@ function ReviewActions({ run, diffComments }: { run: ApiRun; diffComments?: Diff
   const setNotes = draft.setText
   const [manual, setManual] = useState<string | null>(null)
   const finish = useFinishRun(run.id)
-  const continuation = useContinuationProvider(run)
   // The review notes ride the SAME delivery seam as the composer's (deliver-prompt): a record
   // still claiming `review` over a run that has been reopened (an auto-resume, a restart
   // recovery) sends the notes to a dead session, and only the recovery — refetch, then deliver on
   // the live path — keeps them from bouncing back as a `run is still active` toast (77117b95).
-  const continueWith = useCallback(
-    (text: string, _images: unknown, idempotencyKey?: string) =>
-      continueRun(run.id, { text, runner: continuation.runnerOverride, idempotencyKey }),
-    [run.id, continuation.runnerOverride],
-  )
-  const deliverPrompt = useDeliverPrompt(run, continueWith, { surface: 'review' })
+  const deliverPrompt = useDeliverPrompt(run, continuation.continueWith, { surface: 'review' })
   const invalidate = () => queryClient.invalidateQueries({ queryKey: queryKeys.runs.all })
 
   // Legacy send-back semantics verbatim (web/app.js `data-action="send-back"`): the notes go

@@ -85,7 +85,7 @@ function applyPatch(row: Row, patch: ManagerPatch): Row {
 function RowSummary({ row, fallbackRunner }: { row: Row; fallbackRunner: string }) {
   const runner = (row.runner ?? fallbackRunner) as Runner
   const profiles = useAgentProfiles().data
-  const catalog = useRunnerModels(runner)
+  const catalog = useRunnerModels(runner, true, row.agentProfile)
   const account = row.agentProfile ?? profiles?.defaults?.[runner] ?? DEFAULT_AGENT_ACCOUNT_ID
   const accountLabel = profiles?.profiles.find((entry) => entry.provider === runner && entry.id === account)?.label
     ?? (account === DEFAULT_AGENT_ACCOUNT_ID ? 'Default' : account)

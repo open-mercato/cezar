@@ -875,3 +875,34 @@ describe('the tasks section', () => {
     expect(puts()[0]?.body).toEqual({ baseBranch: null })
   })
 })
+
+it('native auth keeps the project default selectable with a stale managed entry', async () => {
+  serve({ config: { modelsLocked: true }, methods: { editable: true, nativeAuth: true, agents: [{
+    runner: 'codex', mode: 'one', configured: true, active: null,
+    methods: [{ id: 'subscription', kind: 'subscription', label: 'ChatGPT', state: 'unknown' }],
+  }] } })
+  const client = renderAt('/settings/agents')
+  await screen.findByRole('radiogroup', { name: 'Default runner' })
+  await waitFor(() => expect(client.getQueryState(['workspace', 'agent-providers'])?.status).toBe('success'))
+  const row = document.querySelector<HTMLButtonElement>('[data-slot="agents-runner"] [data-value="codex"]')!
+  expect(row.disabled, row.textContent ?? '').toBe(false)
+})
+
+it('the project model and account rows recognize the connected project subscription', async () => {
+  serve({ agentProfiles: { ...WITH_WORK_ACCOUNT, selections: { '/repo': { claude: 'klaudiusz' } } },
+    providerStatus: { providers: [{ provider: 'claude', status: 'disconnected', enabled: true }] },
+    methods: { editable: true, agents: [{ runner: 'claude', mode: 'one', configured: true, active: 'subscription',
+      methods: [{ id: 'subscription', kind: 'subscription', label: 'Claude subscription', state: 'disconnected' }] }] } })
+  renderAt('/settings/agents')
+  const row = await screen.findByRole<HTMLButtonElement>('radio', { name: /Klaudiusz/i })
+  expect([row.disabled, modelSelect('claude').disabled], row.textContent ?? '').toEqual([false, false])
+})
+
+it.each([true, false])('project rows honor verifyAtLaunch=%s', async allowed => {
+  serve({ providerStatus: { providers: [{ provider: 'kimi', status: 'connected', enabled: true }] },
+    methods: { editable: true, agents: [{ runner: 'kimi', mode: 'one', configured: true, active: 'subscription',
+      methods: [{ id: 'subscription', kind: 'subscription', label: 'Kimi', state: 'unknown', ...(allowed && { verifyAtLaunch: true }) }] }] } })
+  renderAt('/settings/agents')
+  await screen.findByRole('link', { name: allowed ? 'Provider unverified · Manage providers' : 'No provider · Configure providers' })
+  expect(modelSelect('kimi').disabled).toBe(!allowed)
+})

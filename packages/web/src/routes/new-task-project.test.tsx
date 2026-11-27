@@ -539,3 +539,45 @@ describe('switching project', () => {
     expect(JSON.parse(localStorage.getItem(`cez-new-task-draft:${OTHER}`)!).text).toBe('')
   })
 })
+
+
+it.each([[OTHER, 'work'], [BOOT, null]] as const)('uses the Kimi catalog for the account selected in %s', async (project, projectProfile) => {
+  serve()
+  const underlyingFetch = globalThis.fetch
+  const catalogProfiles: Array<string | null> = []
+  vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
+    const path = String(input)
+    if (path.endsWith('/workspace/agent-profiles')) return Response.json({
+      defaults: { kimi: 'work' }, selections: { [OTHER_REPO.info!.root]: { kimi: 'work' } },
+      profiles: ['default', 'work'].map(id => ({ provider: 'kimi', id, label: id, isDefault: id === 'default', status: { status: 'connected' } })),
+    })
+    if (path.endsWith('/providers/status')) return Response.json({ providers: [{ provider: 'kimi', enabled: true, status: 'connected' }] })
+    if (path.endsWith('/agent-providers')) return Response.json({ editable: true, agents: [{
+      runner: 'kimi', mode: 'one', configured: true, active: 'subscription',
+      methods: [{ id: 'subscription', kind: 'subscription', state: 'connected', label: 'Kimi subscription' }],
+    }] })
+    if (path.startsWith('/api/v1/models?runner=kimi')) {
+      const profile = new URL(path, 'http://localhost').searchParams.get('agentProfile')
+      catalogProfiles.push(profile)
+      const id = profile === 'default' ? 'host-only' : 'work-only'
+      return Response.json({ runner: 'kimi', source: 'live', stale: false, models: [
+        { id, label: id, description: '', via: { methodId: 'subscription', label: 'Kimi subscription' } },
+      ] })
+    }
+    return underlyingFetch(input, init)
+  })
+  renderAt(`/p/${project}/new?runner=kimi`)
+  await composerReady()
+  await pickPill('model-pill', 'work-only')
+  expect(catalogProfiles).toEqual([projectProfile])
+  await pickPill('runner-pill', 'kimi · default')
+  const model = screen.getByRole('button', { name: 'Model' })
+  fireEvent.keyDown(model, { key: 'ArrowDown' })
+  fireEvent.click(await screen.findByRole('menuitemradio', { name: /host-only/ }))
+  expect(catalogProfiles).toEqual([projectProfile, 'default'])
+  fireEvent.change(textarea(), { target: { value: 'Use my host alias' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Start task' }))
+  await waitFor(() => expect(requests.find(r => r.method === 'POST' && r.url.endsWith('/runs'))?.body).toMatchObject({
+    runner: 'kimi', model: 'host-only', agentProfile: 'default', agentMethod: 'subscription',
+  }))
+})

@@ -1,6 +1,7 @@
 import { hashKey, useInfiniteQuery, useMutation, useQueries, useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query'
 import { useCallback, useEffect, useMemo, useRef } from 'react'
 
+import { agentProvidersPath, hasManagedCatalog, managedEntries } from '@/lib/agent-providers'
 import { mergeProviderStatusResponse } from '@/lib/provider-status'
 import { mergeRun } from './events'
 
@@ -467,7 +468,7 @@ export function useTrackerItem(association: TrackerAssociation | null | undefine
  */
 export const workspaceQueryKeys = {
   dashboard: ['workspace', 'dashboard'] as const,
-  models: (runner: string) => ['workspace', 'models', runner] as const,
+  models: (runner: string, profile?: string | null) => ['workspace', 'models', runner, ...(runner === 'kimi' && profile ? [profile] : [])] as const,
   agentProviders: ['workspace', 'agent-providers'] as const,
   providerStatus: ['workspace', 'providers', 'status'] as const,
   agentSetup: ['workspace', 'providers', 'setup'] as const,
@@ -536,10 +537,10 @@ export function useAgentProviders() {
   })
 }
 
-export function useRunnerModels(runner: Runner, enabled = true) {
+export function useRunnerModels(runner: Runner, enabled = true, agentProfile?: string | null) {
   return useQuery({
-    queryKey: workspaceQueryKeys.models(runner),
-    queryFn: ({ signal }) => getRunnerModels(runner, { signal }),
+    queryKey: workspaceQueryKeys.models(runner, agentProfile),
+    queryFn: ({ signal }) => getRunnerModels(runner, { signal, agentProfile }),
     staleTime: 5 * 60 * 1_000,
     enabled,
   })
@@ -551,23 +552,34 @@ export function useRunnerModels(runner: Runner, enabled = true) {
 export function useRefreshRunnerModels() {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: (runner: ModelDiscoveryRunner) => getRunnerModels(runner, { refresh: true }),
-    onSuccess: (data, runner) => {
-      queryClient.setQueryData(workspaceQueryKeys.models(runner), data)
+    mutationFn: ({ runner, agentProfile }: { runner: ModelDiscoveryRunner; agentProfile?: string | null }) =>
+      getRunnerModels(runner, { refresh: true, agentProfile }),
+    onSuccess: (data, { runner, agentProfile }) => {
+      queryClient.setQueryData(workspaceQueryKeys.models(runner, agentProfile), data)
     },
   })
 }
 
-/** The model pill's "Refresh models…" action — `undefined` for a runner with no host catalog. */
-export function useModelRefreshAction(runner: Runner) {
+/** Managed catalogs refresh per endpoint in Settings; the models GET only refreshes native discovery. */
+export function useModelPickerActions(runner: Runner, agentProfile?: string | null) {
+  const methods = useAgentProviders()
   const refresh = useRefreshRunnerModels()
-  if (!runnerDiscoversModels(runner)) return undefined
-  return {
+  const entry = managedEntries(methods.data)?.find(agent => agent.runner === runner)
+  const managed = entry?.configured && entry.methods.some(method =>
+    (entry.mode === 'any' || method.id === entry.active) && hasManagedCatalog(method),
+  )
+  const footerLink = entry ? {
+    label: managed && methods.data?.editable ? 'Refresh models in Settings…' : 'Manage providers',
+    to: agentProvidersPath(runner),
+  } : undefined
+  const legacy = methods.error instanceof ApiError && methods.error.status === 404
+  const action = !managed && (methods.isSuccess || legacy) && runnerDiscoversModels(runner) ? {
     label: refresh.isPending ? 'Refreshing models…' : 'Refresh models…',
     slot: 'model-pill-refresh',
     disabled: refresh.isPending,
-    onSelect: () => refresh.mutate(runner),
-  }
+    onSelect: () => refresh.mutate({ runner, agentProfile }),
+  } : undefined
+  return { action, footerLink }
 }
 
 /**
@@ -579,6 +591,7 @@ export function useModelRefreshAction(runner: Runner) {
  */
 export function useRunnerModelCatalogs(
   enabled = true,
+  kimiProfile?: string,
 ): Record<Runner, ReturnType<typeof useRunnerModels>> {
   const claude = useRunnerModels('claude', enabled)
   const codex = useRunnerModels('codex', enabled)
@@ -590,7 +603,7 @@ export function useRunnerModelCatalogs(
   const omp = useRunnerModels('omp', enabled)
   const antigravity = useRunnerModels('antigravity', enabled)
   const gemini = useRunnerModels('gemini', enabled)
-  const kimi = useRunnerModels('kimi', enabled)
+  const kimi = useRunnerModels('kimi', enabled, kimiProfile)
   return { claude, codex, junie, opencode, cursor, pi, copilot, omp, antigravity, gemini, kimi }
 }
 
@@ -900,7 +913,14 @@ export function useRemoveAgentProfile() {
 
 /** Point one project's provider at an account (spec 2026-07-29-agent-profiles). */
 export function useSelectAgentProfile() {
-  return useAgentProfileMutation((input: SelectAgentProfileInput) => selectAgentProfile(input))
+  const client = useQueryClient()
+  return useAgentProfileMutation(async (input: SelectAgentProfileInput) => {
+    const result = await selectAgentProfile(input)
+    if (input.provider === 'kimi' && input.projectId === null) {
+      void client.invalidateQueries({ queryKey: workspaceQueryKeys.models('kimi'), exact: true })
+    }
+    return result
+  })
 }
 
 /**
@@ -1785,10 +1805,10 @@ export function useLaunchKey() {
   })
 }
 
-export function useRepo() {
+export function useRepo(projectId = queryScope()) {
   return useQuery({
-    queryKey: queryKeys.repo,
-    queryFn: ({ signal }) => getRepo({ signal }),
+    queryKey: [projectId, 'repo'],
+    queryFn: ({ signal }) => getRepo({ signal }, projectId),
   })
 }
 

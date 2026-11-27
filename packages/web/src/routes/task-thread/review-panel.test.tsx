@@ -9,11 +9,19 @@ import { deriveAttention } from '@/lib/attention'
 import type { ApiRun, RunStatus } from '@open-mercato/cezar-api-client'
 import { Toaster, resetToasts } from '@/components/ui/toaster'
 
-import { AcceptCelebration, ReviewPanel } from './review-panel'
+import { AcceptCelebration, ReviewPanel as Review } from './review-panel'
+import { useContinueAction } from './follow-up-engine'
 import { createPrPrompt } from './run-actions'
 import { ThreadView } from './task-thread'
 import { reduceThread } from './thread-state'
 import { __resetGitStepFlights } from '../task-git/run-git-step'
+
+function ReviewPanel({ run }: { run: ApiRun }) {
+  const continuation = useContinueAction(run)
+  return <div data-testid="provider-state" data-pending={continuation.providerPending}>
+    <Review run={run} continuation={continuation} />
+  </div>
+}
 
 afterEach(() => {
   __resetGitStepFlights()
@@ -78,6 +86,7 @@ function stubFetch(overrides: Record<string, () => Response> = {}): SentRequest[
       if (override) return override()
       if (method === 'GET' && path === '/api/v1/runs/r1/diff') return new Response(DIFF, { status: 200 })
       if (method === 'GET' && path === '/api/v1/runs') return jsonResponse([])
+      if (path === '/api/v1/agent-providers') return jsonResponse({ editable: true, agents: [] })
       if (method === 'GET' && path === '/api/v1/providers/status') {
         return jsonResponse({
           providers: [
@@ -344,6 +353,7 @@ describe('the review gate on the thread', () => {
     const notes = screen.getByLabelText('Notes for the agent')
     fireEvent.change(notes, { target: { value: 'use the available provider' } })
     const sendBack = screen.getByRole<HTMLButtonElement>('button', { name: /Send back/ })
+    await waitFor(() => expect(screen.getByTestId('provider-state').dataset.pending).toBe('false'))
     await waitFor(() => expect(sendBack.disabled).toBe(false))
     fireEvent.click(sendBack)
 
@@ -594,4 +604,94 @@ describe('the review banner tone (redesign 2026-11)', () => {
     expect(banner.className).not.toContain('violet')
     expect(banner.querySelector<HTMLElement>('[data-slot="status-dot"]')!.dataset.tone).toBe(expected.tone)
   })
+})
+
+it.each([
+  ['disconnected', true, false], ['not-installed', true, true], ['connected', false, true],
+] as const)('thread Send back preserves Codex custom with status %s enabled %s', async (status, enabled, blocked) => {
+  const sent = stubFetch({
+    'GET /api/v1/providers/status': () => jsonResponse({ providers: [
+      { provider: 'codex', enabled, status }, { provider: 'claude', enabled: true, status: 'connected' },
+    ] }),
+    'GET /api/v1/agent-providers': () => jsonResponse({ editable: true, agents: [
+      { runner: 'codex', configured: true, mode: 'one', active: 'custom', methods: [{ id: 'custom', kind: 'custom', state: 'connected', label: 'Gateway', origin: 'cockpit' }] },
+    ] }),
+  })
+  renderWithProviders(<ThreadView run={run('review', { runner: 'codex', agentMethod: 'custom' })} thread={reduceThread([])} />)
+  fireEvent.change(screen.getByLabelText('Notes for the agent'), { target: { value: 'Review on the same account' } })
+  await screen.findByRole('button', { name: 'Runner' })
+  const send = screen.getByRole<HTMLButtonElement>('button', { name: /Send back/ })
+  await waitFor(() => expect(send.disabled).toBe(blocked))
+  if (blocked) {
+    fireEvent.click(send)
+    expect(sent.some(r => r.method === 'POST')).toBe(false)
+    fireEvent.keyDown(screen.getByRole('button', { name: 'Runner' }), { key: 'ArrowDown' })
+    fireEvent.click(await screen.findByRole('menuitemradio', { name: /claude/i }))
+    await waitFor(() => expect(send.disabled).toBe(false))
+  }
+  fireEvent.click(send)
+  const post = () => sent.find(r => r.method === 'POST' && r.path.endsWith('/continue'))
+  await waitFor(() => expect(post()?.body).toMatchObject({ text: expect.stringContaining('same account') }))
+  if (blocked) expect(post()?.body).toMatchObject({ runner: 'claude' })
+  else expect(post()?.body).not.toHaveProperty('runner')
+})
+
+it('requires a model offered by the new Kimi account after a thread account switch', async () => {
+  const catalog = (id: string) => jsonResponse({ runner: 'kimi', source: 'live', stale: false,
+    models: [{ id, label: id, description: '', via: { methodId: 'subscription', label: 'Kimi' } }] })
+  const sent = stubFetch({
+    'GET /api/v1/providers/status': () => jsonResponse({ providers: [{ provider: 'kimi', status: 'connected', enabled: true }] }),
+    'GET /api/v1/agent-providers': () => jsonResponse({ editable: true, agents: [{
+      runner: 'kimi', configured: true, mode: 'one', active: 'subscription',
+      methods: [{ id: 'subscription', kind: 'subscription', state: 'connected', label: 'Kimi' }],
+    }] }),
+    'GET /api/v1/workspace/agent-profiles': () => jsonResponse({ defaults: {}, selections: {},
+      profiles: ['default', 'work'].map(id => ({ id, provider: 'kimi', label: id, isDefault: id === 'default', status: { status: 'connected' } })),
+    }),
+    'GET /api/v1/models?runner=kimi&agentProfile=work': () => catalog('work-only'),
+    'GET /api/v1/models?runner=kimi&agentProfile=default': () => catalog('host-only'),
+  })
+  const record = run('failed', { runner: 'kimi', agentProfile: 'work', agentMethod: 'subscription', model: 'work-only' })
+  renderWithProviders(<ThreadView run={record} thread={reduceThread([])} />)
+  const runner = await screen.findByRole('button', { name: 'Runner' })
+  fireEvent.keyDown(runner, { key: 'ArrowDown' })
+  fireEvent.click(await screen.findByRole('menuitemradio', { name: /kimi · default/ }))
+  const submit = document.querySelector<HTMLButtonElement>('[data-slot="footer-continue"]')!
+  await waitFor(() => expect(submit.disabled).toBe(true))
+  fireEvent.click(submit)
+  expect(sent.some(r => r.path.endsWith('/continue') && r.method === 'POST')).toBe(false)
+  fireEvent.keyDown(screen.getByRole('button', { name: 'Model' }), { key: 'ArrowDown' })
+  fireEvent.click(await screen.findByRole('menuitemradio', { name: /host-only/ }))
+  fireEvent.click(submit)
+  await waitFor(() => expect(sent.find(r => r.path.endsWith('/continue') && r.method === 'POST')?.body)
+    .toMatchObject({ model: 'host-only', agentProfile: 'default' }))
+})
+
+it.each(['ready', 'disabled'] as const)('untouched thread Continue with recorded Codex gateway and Claude available (%s)', async state => {
+  const fixture = run('failed', { runner: 'codex', agentMethod: 'custom', error: 'Could not finish' })
+  const sent = stubFetch({
+    'GET /api/v1/providers/status': () => jsonResponse({ providers: [
+      { provider: 'codex', status: 'disconnected', enabled: state === 'ready' },
+      { provider: 'claude', status: 'connected', enabled: true },
+    ] }),
+    'GET /api/v1/agent-providers': () => jsonResponse({ editable: true, agents: [
+      { runner: 'codex', configured: true, mode: 'one', active: 'custom', methods: [{ id: 'custom', kind: 'custom', state: 'connected', label: 'Gateway', origin: 'cockpit' }] },
+    ] }),
+  })
+  renderWithProviders(<ThreadView run={fixture} thread={reduceThread([])} />)
+  await screen.findByRole('button', { name: 'Runner' })
+  const submit = document.querySelector<HTMLButtonElement>('[data-slot="footer-continue"]')!
+  expect(submit).toBeTruthy()
+  await waitFor(() => expect(submit.disabled).toBe(state === 'disabled'))
+  if (state === 'disabled') {
+    fireEvent.click(submit)
+    expect(sent.some(r => r.method === 'POST')).toBe(false)
+    fireEvent.keyDown(screen.getByRole('button', { name: 'Runner' }), { key: 'ArrowDown' })
+    fireEvent.click(await screen.findByRole('menuitemradio', { name: /claude/i }))
+  }
+  fireEvent.click(submit)
+  const post = () => sent.find(r => r.method === 'POST' && r.path.endsWith('/continue'))
+  await waitFor(() => expect(post()).toBeDefined())
+  if (state === 'disabled') expect(post()?.body).toMatchObject({ runner: 'claude' })
+  else expect(post()?.body).not.toHaveProperty('runner')
 })

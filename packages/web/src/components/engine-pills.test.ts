@@ -77,6 +77,7 @@ function stubResolverFetch({
     'fetch',
     vi.fn(async (input: RequestInfo | URL) => {
       const path = String(input)
+      if (path === '/api/v1/agent-providers') return jsonResponse({ editable: true, agents: [] })
       if (path === '/api/v1/providers/status') {
         if (providerPending) return new Promise<Response>(() => {})
         return jsonResponse(providers, providerStatus)
@@ -385,7 +386,7 @@ describe('useResolvedEngine agent accounts', () => {
     expect('agentProfile' in engineRunBody(result.current)).toBe(false)
   })
 
-  it('drops an account that no longer exists', async () => {
+  it('blocks a handoff when its explicitly selected account no longer exists', async () => {
     stubResolverFetch({
       providers: { providers: [{ provider: 'claude', status: 'connected', enabled: true }] },
       profiles: TWO_CLAUDE_LOGINS,
@@ -394,7 +395,8 @@ describe('useResolvedEngine agent accounts', () => {
     const { result } = renderResolved({ runner: 'claude', model: null, account: 'deleted-login' })
     await waitFor(() => expect(result.current.accounts).toHaveLength(3))
 
-    expect(result.current.account).toBeNull()
+    expect(result.current.canRun).toBe(false)
+    expect(result.current.accountUnavailable).toBe(true)
   })
 
   it('is empty on a zero-config host, so nothing about the body changes', async () => {

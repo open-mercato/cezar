@@ -3,12 +3,12 @@ import { SortableContext, sortableKeyboardCoordinates, useSortable, verticalList
 import { CSS } from '@dnd-kit/utilities'
 import { ArrowDownIcon, ArrowUpIcon, BotIcon, GripVerticalIcon, PlusIcon, XIcon } from 'lucide-react'
 import { Link, useLocation } from 'react-router'
-import type { AgentProviderEntry, ProviderStatus } from '@open-mercato/cezar-api-client'
-import { agentProvidersPath, canUseAgent, servingMethods } from '@/lib/agent-providers'
+import type { AgentProfile, AgentProviderEntry, ProviderStatus } from '@open-mercato/cezar-api-client'
+import { accountSelection, agentProvidersPath, canUseAgent, managedEntries, servingMethods } from '@/lib/agent-providers'
+import { useAgentAccounts } from '@/api/agent-accounts'
 import { useRef, useState, type ReactNode } from 'react'
 
 import {
-  useAgentProfiles,
   useAgentProviders,
   useWorkspaceConfig,
   useAgentSetup,
@@ -17,8 +17,8 @@ import {
   useConfig,
   useProjects,
   useProviderStatus,
-  useRepo,
   useRunnerModelCatalogs,
+  useRunnerModels,
   useSelectAgentProfile,
 } from '@/api/queries'
 import { useProjectScope } from '@/api/project-scope-context'
@@ -63,12 +63,13 @@ const INHERIT_MODEL = '__inherit__'
 /** The catalog-status line rendered as a disabled item — never a pickable value. */
 const CATALOG_STATUS = '__status__'
 
-function ProviderLine({ entry, login }: { entry?: AgentProviderEntry; login?: ProviderStatus }) {
+function ProviderLine({ entry, login, profile }: { entry?: AgentProviderEntry; login?: ProviderStatus; profile?: AgentProfile }) {
   if (!entry) return null
-  const serving = servingMethods(entry).filter(method => method.state === 'connected')
-  const runnable = canUseAgent(entry, login)
+  const selection = accountSelection(profile)
+  const serving = servingMethods(entry, selection).filter(method => method.state === 'connected' || (method.kind === 'subscription' && selection.namedAccount))
+  const runnable = canUseAgent(entry, login, selection)
   return <Link to={agentProvidersPath(entry.runner)} className={`block w-fit text-label underline underline-offset-2 ${runnable ? 'text-muted-foreground' : 'text-pending-strong'}`}>
-    {serving.length ? `via ${serving.map(m => m.label).join(', ')} · Manage providers`
+    {runnable && serving.length ? `via ${serving.map(m => m.label).join(', ')} · Manage providers`
       : runnable ? 'Provider unverified · Manage providers' : 'No provider · Configure providers'}
   </Link>
 }
@@ -77,7 +78,8 @@ export function AgentsSection() {
   const config = useConfig()
   // One row per runner here, so every runner's own host catalog is needed at once (#794) —
   // unlike the composer, which only ever renders the runner the user picked.
-  const catalogs = useRunnerModelCatalogs()
+  const accounts = useAgentAccounts()
+  const catalogs = useRunnerModelCatalogs(true, accounts.projectAccount?.kimi)
   const providerStatus = useProviderStatus()
 
   if (config.isPending) {
@@ -96,32 +98,31 @@ export function AgentsSection() {
       />
     )
   }
-  return <AgentsForm config={config.data} catalogs={catalogs} providerStatus={providerStatus} />
+  return <AgentsForm agentAccounts={accounts} config={config.data} catalogs={catalogs} providerStatus={providerStatus} />
 }
 
 function AgentsForm({
   config,
+  agentAccounts,
   catalogs,
   providerStatus,
 }: {
   config: ConfigResponse
+  agentAccounts: ReturnType<typeof useAgentAccounts>
   catalogs: ReturnType<typeof useRunnerModelCatalogs>
   providerStatus: ReturnType<typeof useProviderStatus>
 }) {
   const save = useConfigSave()
   const { hash } = useLocation()
-  const entries = useAgentProviders().data?.agents
+  const entries = managedEntries(useAgentProviders().data)
   const globalModels = useWorkspaceConfig().data?.agentDefaults.models
   const overrides = config.projectDefaultModels
   const scope = useProjectScope()
   const fallbackProjectId = scope.projectId ?? 'default'
   const fallback = useAgentFallbackPolicy(fallbackProjectId)
   const saveFallback = useSaveAgentFallbackPolicy(fallbackProjectId)
-  const profiles = useAgentProfiles()
-  const repo = useRepo()
-  const repoRoot = repo.data?.info?.root
-  const selection = repoRoot ? profiles.data?.selections[repoRoot] : undefined
-  const defaultProfileId = selection?.[config.defaultRunner] ?? profiles.data?.defaults[config.defaultRunner] ?? 'default'
+  const { accounts, repoAccount } = agentAccounts
+  const projectProfile = (runner: Runner) => accounts.find(p => p.provider === runner && p.id === repoAccount?.[runner])
 
   return (
     <div
@@ -131,6 +132,8 @@ function AgentsForm({
       <DefaultAgentField
         defaultRunner={config.defaultRunner}
         entries={entries}
+        accounts={accounts}
+        repoAccount={repoAccount}
         providerStatus={providerStatus}
         saving={save.isPending}
         saved={save.savedFor('defaultRunner')}
@@ -153,10 +156,11 @@ function AgentsForm({
         {RUNNERS.map((runner) => {
           const provider = providerStatusFor(providerStatus.data, runner.id)
           const entry = entries?.find(e => e.runner === runner.id)
+          const profile = projectProfile(runner.id)
           const providerConnected =
             !providerStatus.isPending &&
             !providerStatus.isError &&
-            canUseAgent(entry, provider)
+            canUseAgent(entry, provider, accountSelection(profile))
           const providerReason = providerStatus.isPending
             ? 'Checking provider authentication…'
             : providerStatus.isError
@@ -184,7 +188,7 @@ function AgentsForm({
               slot="agents-model-row"
               saved={save.savedFor('defaultModels')}
               label={<span className="text-ui font-mono">{runner.label}</span>}
-              description={entry ? <ProviderLine entry={entry} login={provider} /> : providerReason ? `${runner.desc} — ${providerReason}` : runner.desc}
+              description={entry ? <ProviderLine entry={entry} login={provider} profile={profile} /> : providerReason ? `${runner.desc} — ${providerReason}` : runner.desc}
             >
               {config.modelsLocked ? (
                 <output
@@ -241,11 +245,11 @@ function AgentsForm({
         entries={entries}
         policy={fallback.data}
         loadError={fallback.isError ? fallback.error : null}
-        profiles={(profiles.data?.profiles ?? []).filter((profile) => !profile.pending)}
+        profiles={accounts}
         providerStatus={providerStatus}
         catalogs={catalogs}
         modelsLocked={config.modelsLocked}
-        defaultProfileId={defaultProfileId}
+        defaultProfileId={repoAccount?.[config.defaultRunner] ?? 'default'}
         defaultRunner={config.defaultRunner}
         saving={saveFallback.isPending}
         onRetry={() => void fallback.refetch()}
@@ -326,7 +330,7 @@ function FallbackField({
   entries?: AgentProviderEntry[]
   policy?: AgentFallbackPolicy
   loadError: Error | null
-  profiles: Array<{ id: string; provider: string; label: string }>
+  profiles: readonly AgentProfile[]
   providerStatus: ReturnType<typeof useProviderStatus>
   catalogs: ReturnType<typeof useRunnerModelCatalogs>
   defaultRunner: Runner
@@ -362,9 +366,14 @@ function FallbackField({
   const [pickedModel, setPickedModel] = useState('')
   /** Polite announcement of the last saved edit, for screen readers. */
   const [announcement, setAnnouncement] = useState('')
-  const optionDisabled = (option: FallbackOption) => entries !== undefined &&
-    !canUseAgent(entries.find(e => e.runner === option.provider), providerStatusFor(providerStatus.data, option.provider))
+  const canUseCandidate = ({ provider, profileId }: Pick<FallbackOption, 'provider' | 'profileId'>) => canUseAgent(
+    entries?.find(e => e.runner === provider), providerStatusFor(providerStatus.data, provider),
+    accountSelection(profiles.find(p => p.provider === provider && p.id === profileId)),
+  )
+  const optionDisabled = (option: FallbackOption) => entries !== undefined && !canUseCandidate(option)
   const selected = addable.find(option => option.key === picked && !optionDisabled(option)) ?? addable.find(option => !optionDisabled(option))
+
+  const kimiCatalog = useRunnerModels('kimi', selected?.provider === 'kimi', selected?.profileId)
 
   if (loadError) {
     const localOnly = loadError instanceof ApiError && loadError.status === 409
@@ -406,7 +415,7 @@ function FallbackField({
     if (modelsLocked && candidate.model) return 'Model selection is locked — remove and add this agent again to use native settings.'
     const status = providerStatusFor(providerStatus.data, candidate.provider as Runner)
     if (status?.enabled === false) return 'Provider disabled — will be skipped'
-    if (status && !canUseAgent(entries?.find(e => e.runner === candidate.provider), status)) return 'Not connected — will be skipped'
+    if (status && !canUseCandidate(candidate)) return 'Not connected — will be skipped'
     return undefined
   }
   /** The project's default agent is skipped for tasks it starts — a task never falls back to itself. */
@@ -443,7 +452,7 @@ function FallbackField({
     onSave(policy.enabled, next, () => setAnnouncement(`${labelFor(moving)} moved to position ${target + 1}`))
   }
   const modelRunner = (selected?.provider ?? defaultRunner) as Runner
-  const modelCatalog = catalogs[modelRunner]
+  const modelCatalog = modelRunner === 'kimi' ? kimiCatalog : catalogs[modelRunner]
   const modelStatus = modelCatalogStatus(modelRunner, modelCatalog?.data, modelCatalog?.isError ?? false)
   const full = candidates.length >= MAX_FALLBACK_AGENTS
 
@@ -637,6 +646,8 @@ function DefaultAgentField({
   children,
   defaultRunner,
   entries,
+  accounts,
+  repoAccount,
   providerStatus,
   saving,
   saved,
@@ -644,16 +655,16 @@ function DefaultAgentField({
 }: {
   defaultRunner: Runner
   entries?: AgentProviderEntry[]
+  accounts: readonly AgentProfile[]
+  repoAccount?: Partial<Record<Runner, string>>
   children: ReactNode
   providerStatus: ReturnType<typeof useProviderStatus>
   saving: boolean
   saved: boolean
   onPick: (runner: Runner) => void
 }) {
-  const profiles = useAgentProfiles()
   const projects = useProjects()
   const scope = useProjectScope()
-  const repo = useRepo()
   const select = useSelectAgentProfile()
   // Settings → Agents is where the newest releases are worth a lookup (spec 2026-11-25).
   const setup = useAgentSetup({ latest: true })
@@ -663,12 +674,7 @@ function DefaultAgentField({
   // alias. The repo ROOT is the key the account store uses, and `useRepo` is project-scoped so it
   // already answers for the ACTIVE project.
   const projectId = scope.projectId ?? 'default'
-  const repoRoot = repo.data?.info?.root
-  // Repo first, then the machine-wide default — the same order the server resolves in, so the
-  // checked row is the account a task would really run under rather than a guess.
-  const selection = repoRoot ? profiles.data?.selections[repoRoot] : undefined
-  const machine = profiles.data?.defaults
-  const rows = agentPickerRows(profiles.data?.profiles ?? [])
+  const rows = agentPickerRows(accounts)
   const hasAccounts = hasAgentAccounts(rows)
 
   return (
@@ -687,7 +693,7 @@ function DefaultAgentField({
           rows={rows}
           entries={entries}
           runner={defaultRunner}
-          accountFor={(id) => selection?.[id] ?? machine?.[id] ?? null}
+          accountFor={(id) => repoAccount?.[id] ?? null}
           providerStatus={providerStatus}
           disabled={saving}
           // The account half needs a project to write against; the runner half does not, so only an
@@ -707,7 +713,8 @@ function DefaultAgentField({
             }
           }}
         />
-        <ProviderLine entry={entries?.find(e => e.runner === defaultRunner)} login={providerStatusFor(providerStatus.data, defaultRunner)} />
+        <ProviderLine entry={entries?.find(e => e.runner === defaultRunner)} login={providerStatusFor(providerStatus.data, defaultRunner)}
+          profile={accounts.find(p => p.provider === defaultRunner && p.id === repoAccount?.[defaultRunner])} />
         {!providerStatus.isPending &&
         !providerStatus.isError &&
         providerStatusFor(providerStatus.data, defaultRunner)?.enabled === false ? (

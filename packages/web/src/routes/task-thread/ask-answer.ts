@@ -126,8 +126,8 @@ export function useAskAnswer(
   // Everywhere else the scope is already the run's own and naming it would be noise.
   const sendMessage = useSendMessage(run.id, projectId)
   const resume = useContinueRun(run.id, projectId)
-  const activeProvider = useActiveProviderAvailability(run)
-  const existingProvider = useExistingProviderAvailability(run)
+  const activeProvider = useActiveProviderAvailability(run, projectId)
+  const existingProvider = useExistingProviderAvailability(run, projectId)
   const providerStatus = useProviderStatus()
   const [error, setError] = useState<string | undefined>(undefined)
   const [delivering, setDelivering] = useState(false)

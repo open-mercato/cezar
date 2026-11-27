@@ -594,9 +594,11 @@ export async function refreshProviderMethod(runner: Runner, id: string) {
   return providerModelsResponseSchema.parse(await workspaceRequest(`${methodPath(runner, id)}/models`, { method: 'POST' }))
 }
 
-export async function getRunnerModels(runner: Runner, opts?: ReadOptions & { refresh?: boolean }): Promise<RunnerModelCatalogResponse> {
-  const path = `/models?runner=${runner}${opts?.refresh ? '&refresh=1' : ''}`
-  return runnerModelCatalogResponseSchema.parse(await workspaceRequest(path, { signal: opts?.signal }))
+export async function getRunnerModels(runner: Runner, opts?: ReadOptions & { refresh?: boolean; agentProfile?: string | null }): Promise<RunnerModelCatalogResponse> {
+  const query = new URLSearchParams({ runner })
+  if (runner === 'kimi' && opts?.agentProfile) query.set('agentProfile', opts.agentProfile)
+  if (opts?.refresh) query.set('refresh', '1')
+  return runnerModelCatalogResponseSchema.parse(await workspaceRequest(`/models?${query}`, { signal: opts?.signal }))
 }
 
 /** Host-local authentication state shared by every project. */
@@ -923,9 +925,9 @@ export async function getTodos(opts?: ReadOptions): Promise<TodoItem[]> {
   )
 }
 
-export async function getRepo(opts?: ReadOptions): Promise<RepoResponse> {
+export async function getRepo(opts?: ReadOptions, projectId = queryScope()): Promise<RepoResponse> {
   return unwrap(
-    await cez.api.v1.p[':projectId'].repo.$get({ param: { projectId: queryScope() } }, init(opts)),
+    await cez.api.v1.p[':projectId'].repo.$get({ param: { projectId } }, init(opts)),
     '/repo',
   )
 }

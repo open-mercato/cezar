@@ -590,6 +590,28 @@ describe('Run — backend selection (#401)', () => {
     expect(screen.getAllByRole('link', { name: 'Configure providers' }).length).toBeGreaterThan(0)
   })
 
+  it('starts an inbox task on the project gateway when its vendor login is signed out', async () => {
+    const sent = stubFetch({
+      'GET /api/v1/config': () => jsonResponse({ defaultRunner: 'codex', defaultModels: {} }),
+      'GET /api/v1/providers/status': () => jsonResponse({ providers: [
+        { provider: 'claude', status: 'connected', enabled: true }, { provider: 'codex', status: 'disconnected', enabled: true },
+      ] }),
+      'GET /api/v1/agent-providers': () => jsonResponse({ editable: false, agents: [{
+        runner: 'codex', mode: 'one', configured: true, active: 'custom',
+        methods: [{ id: 'custom', kind: 'custom', label: 'Gateway', state: 'connected' }],
+      }] }),
+    })
+    renderInbox()
+    await waitFor(() => expect(cards()).toHaveLength(2))
+    const card = cards()[0]!
+    const start = card.querySelector<HTMLButtonElement>('[data-action="todo-run"]')!
+    await waitFor(() => expect(start.disabled).toBe(false))
+    expect(card.querySelector('[data-slot="runner-pill"]')?.textContent).toContain('codex')
+    fireEvent.click(start)
+    await waitFor(() => expect(started(sent, 't1')).toBe(true))
+    expect(startBody(sent, 't1') ?? {}).not.toHaveProperty('runner')
+  })
+
   it('explicitly sends the sole connected fallback when it differs from the server default', async () => {
     const sent = stubFetch(
       {},

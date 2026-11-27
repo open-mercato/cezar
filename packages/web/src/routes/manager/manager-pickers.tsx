@@ -225,7 +225,7 @@ export function ModelPicker({
 }) {
   const runner = useManagerRunner(pinnedRunner)
   const runners = useManagerRunners()
-  const catalog = useRunnerModels(runner)
+  const catalog = useRunnerModels(runner, true, agentProfile)
   const models = modelsForRunner(runner, catalog.data, [model])
   const label = models.find((entry) => entry.id === (model ?? ''))?.label ?? model ?? 'auto'
   // `--effort` is a Claude flag (spec, Tools); elsewhere the control would promise nothing.

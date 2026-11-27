@@ -5,6 +5,7 @@ import { refreshProviderMethod, removeProviderMethod, saveProviderMethod, setAct
 import { workspaceQueryKeys } from '@/api/queries'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import { hasManagedCatalog, selectableMethod } from '@/lib/agent-providers'
 import { cn } from '@/lib/utils'
 
 const signOutHint: Partial<Record<AgentProviderEntry['runner'], string>> = {
@@ -73,13 +74,14 @@ export function ProviderMethods({ agent, editable, subscription, onSignIn }: {
               <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
                 {radio && <input type="radio" name={`method-${agent.runner}`} checked={selected}
                   aria-label={`Run ${agent.runner} on ${method.label}`}
-                  disabled={!editable || busy || method.state !== 'connected'}
+                  disabled={!editable || busy || !selectableMethod(method)}
                   onChange={() => void change(() => setActiveMethod(agent.runner, method.id))} />}
                 <div className="min-w-0 flex-1 text-ui">
                   <strong className="font-medium">{method.label}</strong>
                   <div className="break-words text-label text-muted-foreground">
                     {method.state === 'connected' ? selected ? 'In use' : 'Connected, not in use'
                       : method.state === 'unknown' ? 'Login unverified' : method.state === 'error' ? 'Models unavailable' : 'Not connected'}
+                    {method.verifyAtLaunch && ' · checked at launch'}
                     {method.origin === 'host' && ' · from host environment'}
                     {method.origin === 'file' && ' · from providers file'}
                     {method.baseUrl && ` · ${method.baseUrl}`}
@@ -93,10 +95,10 @@ export function ProviderMethods({ agent, editable, subscription, onSignIn }: {
                   <summary className="w-fit cursor-pointer underline">Sign out</summary>
                   <p className="mt-1 max-w-sm text-muted-foreground">{signOutHint[agent.runner] ?? `Open ${agent.runner} on the host and sign out of ${method.label} in its account settings.`}</p>
                 </details>}
-                {editable && agent.mode === 'one' && !radio && !selected && method.state === 'connected' &&
+                {editable && agent.mode === 'one' && !radio && !selected && selectableMethod(method) &&
                   <Button size="sm" variant="outline" disabled={busy} onClick={() => void change(() => setActiveMethod(agent.runner, method.id))}>Use {method.label}</Button>}
                 {method.error && <span className="text-label text-danger">{method.error}</span>}
-                {writable && stored && (method.kind === 'custom' || method.kind === 'openrouter') &&
+                {editable && hasManagedCatalog(method) &&
                   <Button size="sm" variant="outline" disabled={busy} onClick={() => void change(() => refreshProviderMethod(agent.runner, method.id))}>{method.state === 'error' || method.error ? 'Retry' : 'Refresh models'}</Button>}
                 {writable && !stored && keyUrl && <a href={keyUrl} target="_blank" rel="noreferrer" className="text-label underline">Get a key</a>}
                 {writable && editing !== method.id && <>
