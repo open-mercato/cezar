@@ -4,6 +4,7 @@ import {
   type AgentProviderEntry, type AgentProviderMethod, type ProviderMethodKind, type ProviderStatus,
   type Runner, type RunnerModelCatalogResponse, type RunnerModelOption,
 } from '@open-mercato/cezar-contract';
+import { discoverKimiModels, kimiSubscriptionModel } from '../core/kimi-model-catalog.ts';
 import { modelConflictsWithRunner } from '../core/model-presets.ts';
 import { providerAuthChecksDisabled, type ProviderAuthService } from '../core/provider-auth.ts';
 import type { ProviderMethodStatuses } from '../core/provider-method-status.ts';
@@ -180,31 +181,57 @@ export async function refreshProviderModels(runner: Runner, id: string) {
   let error: string | undefined;
   try { ids = await fetchProviderModels(method.baseUrl, key ?? ''); }
   catch { error = 'Could not load models. Check the endpoint and key, then retry.'; }
-  await updateAgentProviders(state => {
+  const catalog = await updateAgentProviders(state => {
     const current = state.agents[runner]?.methods[id];
     if (!current || current.kind !== method.kind || current.baseUrl !== method.baseUrl || current.keyRef !== method.keyRef) throw new Error('Provider changed. Retry with the current settings.');
-    if (current.models && (current.models.generation ?? 0) > method.fetchGeneration) {
-      ids = current.models.ids;
-      error = current.models.error;
-      return;
+    const fetchedAt = new Date().toISOString();
+    const models = current.models ??= { fetchedAt, ids: [] };
+    const lastOutcome = models.generation ?? 0;
+    // Older metadata recorded only the latest outcome. Preserve its list until a newer request succeeds.
+    models.successGeneration ??= models.ids.length ? lastOutcome : 0;
+    if (!error && method.fetchGeneration > models.successGeneration) {
+      models.ids = ids;
+      models.successGeneration = method.fetchGeneration;
     }
-    if (error) ids = current.models?.ids ?? [];
-    current.models = { fetchedAt: new Date().toISOString(), generation: method.fetchGeneration, ids, ...(error ? { error } : {}) };
+    if (method.fetchGeneration > lastOutcome) {
+      models.generation = method.fetchGeneration;
+      models.fetchedAt = fetchedAt;
+      if (error) models.error = error;
+      else delete models.error;
+    }
+    return models;
   });
-  return { models: ids.map(m => m.id), ...(error ? { error } : {}) };
+  return { models: catalog.ids.map(m => m.id), ...(catalog.error ? { error: catalog.error } : {}) };
+}
+
+async function kimiCatalog(env: NodeJS.ProcessEnv, via?: NonNullable<RunnerModelOption['via']>): Promise<RunnerModelCatalogResponse> {
+  try {
+    const models = await discoverKimiModels({ env, subscriptionOnly: !!via });
+    return { runner: 'kimi', models: via ? models.map(m => ({ ...m, via })) : models, source: 'live', stale: false };
+  } catch {
+    return { runner: 'kimi', models: [], source: 'unavailable', stale: false, reason: 'Kimi model discovery is temporarily unavailable' };
+  }
 }
 
 export async function providerCatalog(
   runner: Runner, native: () => Promise<RunnerModelCatalogResponse>,
   loginFor?: (configured: boolean) => ProviderLogin | undefined | Promise<ProviderLogin | undefined>,
+  kimiEnv?: NodeJS.ProcessEnv,
 ): Promise<RunnerModelCatalogResponse> {
-  if (providerAuthChecksDisabled()) return native();
+  const nativeCatalog = () => runner === 'kimi' && kimiEnv ? kimiCatalog(kimiEnv) : native();
+  if (providerAuthChecksDisabled()) return nativeCatalog();
   const store = await readAgentProviders();
   const saved = store.agents[runner];
+  if (runner === 'kimi' && !saved) return nativeCatalog();
   const login = await loginFor?.(!!saved);
   const entry = providerEntry(runner, store, await configuredLogin(login, store));
   const selected = entry.methods.filter(m => entry.mode === 'any' || m.id === entry.active);
   const local = selected.filter(m => (!remote(m.kind) || m.origin === 'host') && (m.state === 'connected' || m.verifyAtLaunch));
+  const kimiMethod = runner === 'kimi' && local.find(m => m.kind === 'subscription');
+  if (kimiMethod) {
+    // A cached native list can outlive a TOML provider change. Read aliases and ownership together.
+    return kimiCatalog(kimiEnv ?? await kimiAccountEnv(login), { methodId: kimiMethod.id, label: kimiMethod.label });
+  }
   const needsNative = !saved || local.length > 0;
   const legacy = needsNative ? await native() : undefined;
   const options: RunnerModelOption[] = [];
@@ -256,12 +283,24 @@ export async function providerModelAdmission(runner: Runner, model?: string, rec
   return matches.length === 1 ? { providerModel: model } : {};
 }
 
-export function freshMethodError(store: Store, runner: Runner, id: string, model: string | undefined, login?: ProviderLogin) {
+async function kimiAccountEnv(login?: ProviderLogin): Promise<NodeJS.ProcessEnv> {
+  if (!login?.profileId) return process.env;
+  const { env } = await resolveProfileEnvForRoot(undefined, 'kimi', login.profileId);
+  return { ...process.env, ...env };
+}
+
+export async function freshMethodError(store: Store, runner: Runner, id: string, model: string | undefined, login?: ProviderLogin) {
   const entry = providerEntry(runner, store, login);
   const method = entry.methods.find(m => m.id === id);
   if (!method) return 'Unsupported method for ' + runner + '.';
   if (store.agents[runner] && entry.mode === 'one' && entry.active !== id) return 'The selected provider changed. Choose the active method.';
   if (method.state === 'error' || method.state === 'disconnected') return 'This provider is unavailable. Check Settings → Agents.';
+  if (runner === 'kimi' && method.kind === 'subscription') {
+    const alias = model?.trim();
+    if (!await kimiSubscriptionModel(await kimiAccountEnv(login), alias || undefined)) {
+      return 'The Kimi subscription cannot serve the selected model. Choose a managed model in Settings → Agents.';
+    }
+  }
   const cached = store.agents[runner]?.methods[id]?.models;
   if (cached && model && model !== 'auto' && !cached.ids.some(m => m.id === model)) return 'This provider no longer offers the selected model.';
   return null;

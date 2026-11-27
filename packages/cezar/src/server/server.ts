@@ -169,7 +169,7 @@ import {
   MAX_ATTACHMENTS_TOTAL_BASE64,
   stagedUploadSchema,
   uploadIdParamSchema,
-  runnerSchema,
+  runnerModelCatalogQuerySchema,
   openProjectInSchema,
   perRunner,
   startTodoInputSchema,
@@ -1434,7 +1434,6 @@ const uiStateBody = uiStateSchema.superRefine(capUiStateKeys);
 const queryValue = z.union([z.string(), z.array(z.string()).transform((v) => v[0] as string)]).optional();
 
 const refreshQuery = z.object({ refresh: queryValue });
-const modelsRefreshQuery = queryValue.refine((v) => v === undefined || v === '1' || v === 'true');
 const waitQuery = z.object({ wait: queryValue });
 
 /**
@@ -2385,25 +2384,34 @@ export function createAppParts(deps: ServerDeps) {
     // Configured endpoints can serve a catalog even when the CLI has no native discovery.
     .get(
       '/models',
-      // Two validators so each keeps its own message; the second one's output is what `valid` reads.
-      queryZodValidator(z.object({ refresh: modelsRefreshQuery }), { message: 'refresh must be 1 or true' }),
+      // Validate each optional field with its own diagnostic before parsing the full query.
+      queryZodValidator(runnerModelCatalogQuerySchema.pick({ refresh: true }), { message: 'refresh must be 1 or true' }),
+      queryZodValidator(runnerModelCatalogQuerySchema.pick({ agentProfile: true }), { message: 'agentProfile must be 1 to 64 characters' }),
       queryZodValidator(
-        z.object({
-          runner: z.union([z.string(), z.array(z.string()).transform((v) => v[0] as string)]).pipe(runnerSchema),
-          refresh: modelsRefreshQuery,
-        }),
+        runnerModelCatalogQuerySchema,
         { message: 'runner must be one of ' + RUNNER_IDS.join(', ') },
       ),
       async (c) => {
-        const query = { data: c.req.valid('query') };
-        const { runner, refresh } = query.data;
+        const { runner, refresh, agentProfile } = c.req.valid('query');
+        const unavailable = { runner, models: [], source: 'unavailable' as const, stale: false, reason: 'This Kimi account is unavailable.' };
+        if (runner === 'kimi' && agentProfile && agentProfile !== DEFAULT_AGENT_ACCOUNT_ID && !accountsVisible()) {
+          return c.json(unavailable);
+        }
+        const account = runner === 'kimi' ? await resolveProfileEnvForRoot(undefined, runner, agentProfile) : undefined;
+        if (account && agentProfile && account.profile.id !== agentProfile) {
+          return c.json(unavailable);
+        }
         return c.json(await providerCatalog(runner,
           () => refresh ? modelCatalog.reprobe(runner) : modelCatalog.get(runner),
           async configured => {
             const status = providerAuth.peekStatus() ?? (configured ? await providerStatus() : undefined);
-            const row = status?.providers.find(p => p.provider === runner);
-            return row && { ...row, methods: providerAuth.methodStatuses(runner) };
-          }));
+            if (!status) return undefined;
+            const scoped = configured && account && !account.profile.isDefault
+              ? await withSelectedAccounts(status, [runner], { profileFor: () => account.profile.id }, providerAuth)
+              : status;
+            const row = scoped.providers.find(p => p.provider === runner);
+            return row && selectedProviderLogin(row, providerAuth);
+          }, account && !account.profile.isDefault ? { ...process.env, ...account.env } : undefined));
       },
     );
 
@@ -5669,7 +5677,11 @@ export function createAppParts(deps: ServerDeps) {
         }, providerAuth);
         const row = statuses.providers.find(p => p.provider === fallback);
         const login = row && await selectedProviderLogin(row, providerAuth);
-        const error = freshMethodError(await readAgentProviders(), fallback, parsed.data.agentMethod, parsed.data.model, login);
+        // Auto asks Kimi to use its native default, including when the client spells it out.
+        if (fallback === 'kimi' && parsed.data.agentMethod === 'subscription' && parsed.data.model?.trim() === 'auto') {
+          parsed.data.model = undefined;
+        }
+        const error = await freshMethodError(await readAgentProviders(), fallback, parsed.data.agentMethod, parsed.data.model, login);
         if (error) return c.json({ error }, 409);
       }
       const requiredProviders = providersRequiredByWorkflow(workflow, fallback);
