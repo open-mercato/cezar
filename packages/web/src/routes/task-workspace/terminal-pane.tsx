@@ -8,6 +8,8 @@ import { cn } from '@/lib/utils'
 
 import '@xterm/xterm/css/xterm.css'
 import { writeClipboard } from '@/lib/clipboard'
+import { decodeOsc52 } from '@/lib/osc52'
+import { readTerminalFont, stepTerminalFont, subscribeTerminalFont } from '@/lib/terminal-font-pref'
 
 /**
  * One terminal tab's screen: an emulator bound to one PTY session (spec
@@ -135,7 +137,7 @@ export function TerminalPane({
         cursorBlink: true,
         cursorStyle: 'bar',
         cursorWidth: 2,
-        fontSize: 12.5,
+        fontSize: readTerminalFont(),
         lineHeight: 1.35,
         letterSpacing: 0,
         // The cockpit's own mono face first, so the terminal reads as part of the page.
@@ -175,6 +177,13 @@ export function TerminalPane({
         if (event.type !== 'keydown') return true
         if (!event.metaKey && !event.ctrlKey) return true
         const key = event.key.toLowerCase()
+        // Font size (#2435): Cmd/Ctrl + / - / 0. Ctrl-0, Ctrl-- and Ctrl-= send nothing useful to a shell.
+        const fontDelta = key === '=' || key === '+' ? 1 : key === '-' ? -1 : key === '0' ? 0 : null
+        if (fontDelta !== null && !event.altKey) {
+          event.preventDefault()
+          stepTerminalFont(fontDelta)
+          return false
+        }
         // `metaKey` is macOS's modifier; `shiftKey` is the Ctrl-Shift- form everywhere else.
         const clipboardChord = event.metaKey || event.shiftKey
         if (!clipboardChord) return true
@@ -205,6 +214,19 @@ export function TerminalPane({
         void ioRef.current.resize(cols, rows).catch(() => {})
       }
       term.onResize(pushSize)
+      // OSC 52 (#2441): programs such as Claude Code's fullscreen mode copy through it. Write only —
+      // a read request is never answered, so nothing in the PTY can read the user's clipboard.
+      term.parser.registerOscHandler(52, (data) => {
+        const text = decodeOsc52(data)
+        if (text !== null) void writeClipboard(text).catch(() => {})
+        return true
+      })
+      // Live font size: refit, and push the size ourselves because a no-op fit emits no onResize.
+      const unsubscribeFont = subscribeTerminalFont(() => {
+        term.options.fontSize = readTerminalFont()
+        fitRef.current?.()
+        pushSize({ cols: term.cols, rows: term.rows })
+      })
       term.onData((data) => {
         void ioRef.current.write(data).catch(() => {})
       })
@@ -218,6 +240,7 @@ export function TerminalPane({
       observer?.observe(host)
       detach = () => {
         observer?.disconnect()
+        unsubscribeFont()
         term.dispose()
       }
     })()

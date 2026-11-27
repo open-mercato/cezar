@@ -50,6 +50,8 @@ class FakeTerminal {
     this.resizeHandlers.push(handler)
   }
   onData() {}
+  parser = { registerOscHandler() { return { dispose() {} } } }
+  options: Record<string, unknown> = {}
   /** The clipboard bindings attach one of these; this suite is about the size handshake. */
   attachCustomKeyEventHandler() {}
   hasSelection() {
