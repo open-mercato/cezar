@@ -2041,22 +2041,8 @@ export class RunManager {
       trackerContext = trackerPrompt({ binding, ...(context && contextFile ? { context, contextFile } : {}), ...(unavailable ? { unavailable } : {}), commands });
     }
     const usageProvider = backend === 'claude' ? 'claude' : boundIdentity ? 'codex' : undefined;
-<<<<<<< HEAD
     const onUsageWindows = usageProvider ? async (observation: UsageWindowsObservation) => {
-=======
-    // The plan-usage ledger reads every Claude/Codex account (design rev 3); the reset store
-    // above stays limited to accounts whose identity it can bind.
-    const ledgerProvider = backend === 'claude' || backend === 'codex' ? backend : undefined;
-    const planUsageAccount = ledgerProvider
-      ? await ledgerAccountRef(ledgerProvider, { id: resolved.profile.id, label: resolved.profile.label, path: profilePath }).catch(() => undefined)
-      : undefined;
-    const onUsageWindows = ledgerProvider ? async (observation: UsageWindowsObservation) => {
-      if (planUsageAccount && !(ledgerProvider === 'codex' && attributionDisabled)) {
-        try { recordUsageObservation(planUsageAccount, observation); } catch { /* metadata only */ }
-      }
       this.markResumeWindowOpen(runId, observation);
-      if (!usageProvider) return;
->>>>>>> bbbec3e (fix(workflows): release the account-resume hold once the resumed run sees the window open (#2525) (#2537))
       try {
         if (usageProvider === 'codex') {
           if (attributionDisabled) return;
