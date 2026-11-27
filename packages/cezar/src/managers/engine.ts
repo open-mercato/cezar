@@ -3730,7 +3730,8 @@ export class ManagerEngine {
   private async modelIssue(runner: string, model: string | undefined, effort: string | undefined, agentProfile?: string): Promise<ManagerRefusal | undefined> {
     if (!isRunnerId(runner)) return undefined;
     let catalog: TaskModelCatalog | undefined;
-    if ((MODEL_DISCOVERY_RUNNERS as readonly string[]).includes(runner)) {
+    // Managed methods can serve a catalog even when the native CLI has no discovery adapter.
+    if (model || (MODEL_DISCOVERY_RUNNERS as readonly string[]).includes(runner)) {
       const query = new URLSearchParams({ runner });
       if (runner === 'kimi' && agentProfile) query.set('agentProfile', agentProfile);
       const response = await this.forward(`/models?${query}`).catch(() => undefined);

@@ -27,9 +27,12 @@ const listed = (values: readonly string[]): string =>
 export function taskModelIssue(input: { runner: RunnerId; model?: string | undefined; effort?: string | undefined; catalog?: TaskModelCatalog | undefined }): string | undefined {
   const { runner, model, effort } = input;
   const catalog = input.catalog && input.catalog.models.length > 0 ? input.catalog : undefined;
-  const valid = [...new Set([...(KNOWN_PRESETS_BY_RUNNER[runner] ?? []), ...(catalog?.models.map((entry) => entry.id) ?? [])])];
+  const isGateway = (entry: TaskModelCatalog['models'][number]) => entry.via?.methodId === 'custom' || entry.via?.methodId === 'openrouter';
+  // A configured gateway serves the IDs in its catalog, including on runners with native presets.
+  const presets = catalog?.models.some(isGateway) ? [] : KNOWN_PRESETS_BY_RUNNER[runner] ?? [];
+  const valid = [...new Set([...presets, ...(catalog?.models.map(entry => entry.id) ?? [])])];
   if (model) {
-    const gateway = catalog?.models.some(option => option.id === model && (option.via?.methodId === 'custom' || option.via?.methodId === 'openrouter'));
+    const gateway = catalog?.models.some(option => option.id === model && isGateway(option));
     if (!gateway && modelConflictsWithRunner(model, runner)) {
       return `model '${model}' is not a ${runner} model${valid.length > 0 ? `. Valid for ${runner}: ${listed(valid)}` : ''}. Pick another, or pass --runner`;
     }

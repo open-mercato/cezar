@@ -3782,6 +3782,30 @@ describe('ManagerEngine', () => {
         expect(requests.at(-1)?.body).toMatchObject({ runner: 'cursor' });
       });
 
+      it('uses configured catalogs on runners without native model discovery', async () => {
+        const engine = makeEngine({
+          accountLimit: async (runner, _profile, _root, model) => ({
+            account: 'default', label: runner,
+            ...(runner === 'codex' || runner === 'pi' && model === 'team/small' ? { until: RESET } : {}),
+          }),
+          request: async (path, init) => {
+            if (path.startsWith('/api/v1/models?')) {
+              const runner = new URL(path, 'http://localhost').searchParams.get('runner');
+              const id = runner === 'codex' ? 'org/codex-only' : runner === 'pi' ? 'team/small' : 'team/claude';
+              return Response.json({ models: [{ id, via: { methodId: 'custom' } }] });
+            }
+            requests.push({ path, method: init?.method ?? 'GET', body: typeof init?.body === 'string' ? JSON.parse(init.body) : undefined });
+            return Response.json({ id: 'new-run' });
+          },
+        });
+        const manager = await engine.create({ instructions: '', projects: 'all', runner: 'codex', cronMinutes: 0,
+          taskAgents: [{ runner: 'codex' }, { runner: 'pi', model: 'team/small' }, { runner: 'claude' }] });
+        if ('error' in manager) throw manager;
+        const result = await engine.createTask(manager.id, { projectId: 'alpha', task: 'Fix it', model: 'org/codex-only' });
+        expect(result).toMatchObject({ agent: { runner: 'claude' } });
+        expect(requests.at(-1)?.body).toMatchObject({ runner: 'claude' });
+      });
+
       it('after a limit skip to another runner, fallbacks on the runner --model was meant for keep it', async () => {
         const engine = limited({ 'claude:first': RESET, 'claude:second': RESET });
         const id = await managerWith(engine, [...twoClaudes, { runner: 'codex' as const, agentProfile: 'work' }]);
