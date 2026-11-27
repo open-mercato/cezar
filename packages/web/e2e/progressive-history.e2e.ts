@@ -116,11 +116,11 @@ function navigateAndSampleArrival(runId: string): ArrivalSample[] {
     let attempts = 0
     const sample = () => {
       attempts += 1
-      const main = document.querySelector('[data-slot="main"]')
       const destination = document.querySelector(
         ${JSON.stringify(`[data-route="task-thread"][data-run-id="${runId}"]`)},
       )
       const ready = destination?.querySelector('[data-slot="thread-rows"]')
+      const main = ready?.closest('[data-slot="main"]')
       if (main && ready) {
         window.__cezArrivalSamples.push({
           top: main.scrollTop,
@@ -138,7 +138,7 @@ function navigateAndSampleArrival(runId: string): ArrivalSample[] {
 
 function parkCurrentThread(): number {
   return Number(browser.evaluate(`(() => {
-    const main = document.querySelector('[data-slot="main"]')
+    const main = document.querySelector('[data-slot="thread-rows"]').closest('[data-slot="main"]')
     main.dispatchEvent(new WheelEvent('wheel', { deltaY: -120, bubbles: true }))
     main.scrollTop = Math.max(160, Math.round((main.scrollHeight - main.clientHeight) / 2))
     main.dispatchEvent(new Event('scroll', { bubbles: true }))
@@ -213,7 +213,7 @@ describe('progressive long-session history', () => {
 
   it('consumes one upward intent without cascading while the boundary remains near', async () => {
     browser.evaluate(`(() => {
-      const main = document.querySelector('[data-slot="main"]')
+      const main = document.querySelector('[data-slot="thread-rows"]').closest('[data-slot="main"]')
       main.scrollTop = 0
       main.dispatchEvent(new WheelEvent('wheel', { deltaY: -120, bubbles: true }))
     })()`)
@@ -236,9 +236,9 @@ describe('progressive long-session history', () => {
     expect(Number(browser.evaluate(
       `document.querySelector('[data-slot="history-boundary"]')?.dataset.retainedPages`,
     ))).toBe(5)
-    browser.evaluate(`document.querySelector('[data-slot="main"]').scrollTop = 0`)
-    browser.waitForFunction(`document.querySelector('[data-slot="jump-to-latest"]') !== null`)
-    browser.click('[data-slot="jump-to-latest"]')
+    browser.evaluate(`document.querySelector('[data-slot="thread-rows"]').closest('[data-slot="main"]').scrollTop = 0`)
+    browser.waitForFunction(`document.querySelector('[data-slot="jump-to-latest"], [data-slot="my-messages-latest"]') !== null`)
+    browser.click('[data-slot="my-messages-latest"], [data-slot="jump-to-latest"]')
     browser.waitForFunction(
       `document.querySelector('[data-slot="history-boundary"]')?.dataset.retainedPages === '1'`,
     )
@@ -248,13 +248,13 @@ describe('progressive long-session history', () => {
     // The preceding paging case deliberately visited the archive boundary. Establish the first
     // run's departure state as an explicit live-tail cache entry before warming the second run.
     browser.evaluate(`(() => {
-      const main = document.querySelector('[data-slot="main"]')
+      const main = document.querySelector('[data-slot="thread-rows"]').closest('[data-slot="main"]')
       main.dispatchEvent(new WheelEvent('wheel', { deltaY: 120, bubbles: true }))
       main.scrollTop = main.scrollHeight - main.clientHeight
       main.dispatchEvent(new Event('scroll', { bubbles: true }))
     })()`)
     browser.waitForFunction(
-      `(() => { const main = document.querySelector('[data-slot="main"]'); return main.scrollHeight - main.scrollTop - main.clientHeight < 80 })()`,
+      `(() => { const main = document.querySelector('[data-slot="thread-rows"]').closest('[data-slot="main"]'); return main.scrollHeight - main.scrollTop - main.clientHeight < 80 })()`,
     )
 
     // Warm both query caches first. The destination transcript, not a loading placeholder, is
