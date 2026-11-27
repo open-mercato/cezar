@@ -10,7 +10,9 @@ import type { AgentEvent } from './agent-runner.ts';
 import { isSignalTerminationExit, prependSystemPrompt } from './agent-runner.ts';
 import {
   buildClaudeArgs,
+  CLAUDE_COCKPIT_PERMISSION_GUIDANCE,
   CLAUDE_HEADLESS_GUIDANCE,
+  claudePromptMode,
   ClaudeCliRunner,
   appendClaudeSystemPrompt,
   shouldSpoolSystemPrompt,
@@ -25,6 +27,7 @@ import {
 import { recordOwnSignal, resetOwnSignalsForTests } from './process-signals.ts';
 import { ClaudeSessionCost, resetClaudeSessionCosts } from './claude-session-cost.ts';
 import type { UiEvent } from './ui-events.ts';
+import { CLAUDE_PERMISSION_ASK_PREFIX } from './claude-permission-prompt.ts';
 import { connectorCallFence, connectorCallPrompt } from '../managers/connectors.ts';
 
 /** Only the escalation tests below swap the child out; every other test in this
@@ -197,6 +200,505 @@ describe('buildClaudeArgs approval gate', () => {
     const idx = args.indexOf('--permission-mode');
     expect(args[idx + 1]).toBe('acceptEdits');
   });
+});
+
+describe('buildClaudeArgs claudePermissionMode (spec 2026-07-17-permission-modes, Claude phase)', () => {
+  const spec = { userPrompt: 'go', cwd: '/tmp' };
+  const mode = (args: string[]) => args[args.indexOf('--permission-mode') + 1];
+  const promptTool = (args: string[]) => {
+    const at = args.indexOf('--permission-prompt-tool');
+    return at < 0 ? undefined : args[at + 1];
+  };
+  const wide = ['Read', 'Edit', 'Write', 'Bash'];
+
+  it('leaves the default argv byte-identical: dontAsk and no prompt tool', () => {
+    const args = buildClaudeArgs(spec, {});
+    expect(mode(args)).toBe('dontAsk');
+    expect(args).not.toContain('--permission-prompt-tool');
+    expect(claudePromptMode(spec, {})).toEqual({ permissionMode: 'dontAsk', promptTool: false });
+  });
+
+  it('keeps CEZ_APPROVAL_GATE as acceptEdits without a prompt channel', () => {
+    const args = buildClaudeArgs(spec, { CEZ_APPROVAL_GATE: '1' });
+    expect(mode(args)).toBe('acceptEdits');
+    expect(args).not.toContain('--permission-prompt-tool');
+  });
+
+  it('manual asks on the stdio channel', () => {
+    const args = buildClaudeArgs({ ...spec, claudePermissionMode: 'manual' }, {});
+    expect(mode(args)).toBe('manual');
+    expect(promptTool(args)).toBe('stdio');
+  });
+
+  it('beats the approval gate, which has no prompt tool', () => {
+    const args = buildClaudeArgs({ ...spec, claudePermissionMode: 'manual' }, { CEZ_APPROVAL_GATE: '1' });
+    expect(mode(args)).toBe('manual');
+    expect(promptTool(args)).toBe('stdio');
+  });
+
+  it('is beaten by read-only, strict and bypassPermissions, and adds no prompt tool then', () => {
+    for (const [extra, expected] of [
+      [{ enforceReadOnly: true }, 'dontAsk'],
+      [{ strictPermissions: true }, 'dontAsk'],
+      [{ bypassPermissions: true }, 'bypassPermissions'],
+      [{ bypassPermissions: true, enforceReadOnly: true }, 'dontAsk'],
+    ] as const) {
+      const args = buildClaudeArgs({ ...spec, claudePermissionMode: 'manual', ...extra }, {});
+      expect(mode(args)).toBe(expected);
+      expect(args).not.toContain('--permission-prompt-tool');
+    }
+  });
+
+  it('acceptEdits holds only when the step already allows Edit, Write and unrestricted Bash', () => {
+    const accept = { ...spec, claudePermissionMode: 'acceptEdits' as const };
+    const args = buildClaudeArgs({ ...accept, allowedTools: wide }, {});
+    expect(mode(args)).toBe('acceptEdits');
+    expect(promptTool(args)).toBe('stdio');
+    // A repo-tracked config must never widen a step's tool fence: anything less falls back to manual.
+    for (const narrower of [
+      { allowedTools: ['Read', 'Edit', 'Bash'] },
+      { allowedTools: ['Read', 'Write', 'Bash'] },
+      { allowedTools: ['Read', 'Edit', 'Write'] },
+      { allowedTools: wide, bashAllowlist: ['git status'] },
+      {},
+    ]) {
+      const fallback = buildClaudeArgs({ ...accept, ...narrower }, {});
+      expect(mode(fallback)).toBe('manual');
+      expect(promptTool(fallback)).toBe('stdio');
+    }
+  });
+
+  it('carries the prompt tool on a resumed spawn, since flags come from the spec every time', () => {
+    const args = buildClaudeArgs({ ...spec, sessionId: 's1', resume: true, claudePermissionMode: 'manual' }, {});
+    expect(args).toContain('--resume');
+    expect(mode(args)).toBe('manual');
+    expect(promptTool(args)).toBe('stdio');
+  });
+
+  it('agrees with claudePromptMode', () => {
+    expect(claudePromptMode({ ...spec, claudePermissionMode: 'manual' }, {})).toEqual({ permissionMode: 'manual', promptTool: true });
+    expect(claudePromptMode({ ...spec, claudePermissionMode: 'acceptEdits', allowedTools: wide }, {})).toEqual({ permissionMode: 'acceptEdits', promptTool: true });
+    expect(claudePromptMode({ ...spec, claudePermissionMode: 'acceptEdits' }, {})).toEqual({ permissionMode: 'manual', promptTool: true });
+    expect(claudePromptMode({ ...spec, claudePermissionMode: 'manual', enforceReadOnly: true }, {})).toEqual({ permissionMode: 'dontAsk', promptTool: false });
+    expect(claudePromptMode(spec, { CEZ_APPROVAL_GATE: '1' })).toEqual({ permissionMode: 'acceptEdits', promptTool: false });
+  });
+});
+
+describe('Claude system prompt guidance for permission prompts', () => {
+  const spec = { userPrompt: 'go', cwd: '/tmp' };
+  const prompt = (args: string[]) => args[args.indexOf('--append-system-prompt') + 1];
+
+  it('keeps the headless guidance verbatim whenever a prompt cannot be answered', () => {
+    expect(appendClaudeSystemPrompt(undefined)).toBe(CLAUDE_HEADLESS_GUIDANCE);
+    expect(appendClaudeSystemPrompt('Rules.', false)).toBe(`Rules.\n\n---\n\n${CLAUDE_HEADLESS_GUIDANCE}`);
+    expect(prompt(buildClaudeArgs({ ...spec, claudePermissionMode: 'manual' }, {}))).toBe(CLAUDE_HEADLESS_GUIDANCE);
+  });
+
+  it('swaps in the cockpit guidance when the user can answer', () => {
+    expect(appendClaudeSystemPrompt('Rules.', true)).toBe(`Rules.\n\n---\n\n${CLAUDE_COCKPIT_PERMISSION_GUIDANCE}`);
+    expect(CLAUDE_COCKPIT_PERMISSION_GUIDANCE).not.toBe(CLAUDE_HEADLESS_GUIDANCE);
+    expect(CLAUDE_COCKPIT_PERMISSION_GUIDANCE).toMatch(/cezar cockpit/);
+    expect(CLAUDE_COCKPIT_PERMISSION_GUIDANCE).toMatch(/Shift\+Tab/);
+    const args = buildClaudeArgs({ ...spec, claudePermissionMode: 'manual' }, {}, undefined, undefined, undefined, true);
+    expect(prompt(args)).toBe(CLAUDE_COCKPIT_PERMISSION_GUIDANCE);
+  });
+
+  it('never swaps it in without the prompt tool', () => {
+    expect(prompt(buildClaudeArgs(spec, {}, undefined, undefined, undefined, true))).toBe(CLAUDE_HEADLESS_GUIDANCE);
+    expect(prompt(buildClaudeArgs({ ...spec, enforceReadOnly: true, claudePermissionMode: 'manual' }, {}, undefined, undefined, undefined, true)))
+      .toBe(CLAUDE_HEADLESS_GUIDANCE);
+  });
+});
+
+/**
+ * Permission prompts (`control_request` / `can_use_tool`) answered from the cockpit. The runner is
+ * driven by a tiny fake CLI that emits scripted frames after the first user message and logs every
+ * stdin line, so the exact `control_response` the CLI would receive is asserted.
+ */
+describe('ClaudeCliRunner permission prompts', () => {
+  let dir = '';
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'cez-claude-permission-'));
+  });
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  const request = (id: string, extra: Record<string, unknown> = {}) => ({
+    type: 'control_request',
+    request_id: id,
+    request: {
+      subtype: 'can_use_tool',
+      tool_name: 'Bash',
+      input: { command: `touch ${id}` },
+      tool_use_id: `toolu_${id}`,
+      permission_suggestions: [{ type: 'addRules', rules: [{ toolName: 'Bash', ruleContent: `touch ${id}:*` }], behavior: 'allow', destination: 'localSettings' }],
+      ...extra,
+    },
+  });
+
+  /** A CLI that emits `first` after its first user line, optionally `exitAfterMs` later, and logs stdin. */
+  function fakeClaude(first: unknown[], opts: { exitAfterMs?: number } = {}): { bin: string; log: () => Array<Record<string, any>> } {
+    const bin = join(dir, 'claude-fake.mjs');
+    const logFile = join(dir, 'stdin.log');
+    writeFileSync(bin, `#!/usr/bin/env node
+import { appendFileSync } from 'node:fs';
+import { createInterface } from 'node:readline';
+const first = ${JSON.stringify(first)};
+let started = false;
+console.log(JSON.stringify({ type: 'system', subtype: 'init', session_id: 's-1', model: 'claude-opus-5-5' }));
+createInterface({ input: process.stdin }).on('line', (line) => {
+  appendFileSync(${JSON.stringify(logFile)}, line + '\\n');
+  if (started || JSON.parse(line).type !== 'user') return;
+  started = true;
+  for (const frame of first) console.log(JSON.stringify(frame));
+  ${opts.exitAfterMs !== undefined ? `setTimeout(() => process.exit(0), ${opts.exitAfterMs});` : ''}
+}).on('close', () => process.exit(0));
+`, { mode: 0o700 });
+    return {
+      bin,
+      log: () => {
+        try {
+          return readFileSync(logFile, 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l));
+        } catch {
+          return [];
+        }
+      },
+    };
+  }
+
+  const responses = (log: Array<Record<string, any>>) => log.filter((l) => l.type === 'control_response');
+  const until = async (cond: () => boolean, ms = 4_000) => {
+    const end = Date.now() + ms;
+    while (!cond()) {
+      if (Date.now() > end) throw new Error('condition not met in time');
+      await new Promise((r) => setTimeout(r, 10));
+    }
+  };
+  const cards = (ui: UiEvent[]) => ui.flatMap((e) => (e.type === 'ask.requested' ? [e.requestId] : []));
+  const start = (bin: string, opts: { canAsk?: boolean; ui?: UiEvent[]; events?: AgentEvent[] } = {}) => {
+    const ui = opts.ui ?? [];
+    const session = new ClaudeCliRunner({ bin, timeoutMs: 0 }).startSession(
+      { userPrompt: 'go', cwd: dir, claudePermissionMode: 'manual' },
+      (event) => opts.events?.push(event),
+      { onUiEvent: (e) => ui.push(e), canAskPermission: () => opts.canAsk ?? true },
+    );
+    return { session, ui };
+  };
+  const id = (raw: string) => `${CLAUDE_PERMISSION_ASK_PREFIX}${raw}`;
+
+  it('raises a card and writes nothing until the user answers', async () => {
+    const fake = fakeClaude([request('r1')]);
+    const { session, ui } = start(fake.bin);
+    try {
+      await until(() => cards(ui).length === 1);
+      expect(cards(ui)).toEqual([id('r1')]);
+      expect(session.hasPendingPermission?.()).toBe(true);
+      await new Promise((r) => setTimeout(r, 50));
+      expect(responses(fake.log())).toEqual([]);
+    } finally {
+      session.interrupt();
+      await session.result;
+    }
+  }, 15_000);
+
+  it('writes the allow response out of band, without starting a turn', async () => {
+    const fake = fakeClaude([request('r1')]);
+    const { session, ui } = start(fake.bin);
+    try {
+      await until(() => cards(ui).length === 1);
+      const turnsBefore = ui.filter((e) => e.type === 'turn.started').length;
+      expect(session.respondPermission?.(id('r1'), 'Permission: Always allow')).toBe(true);
+      await until(() => responses(fake.log()).length === 1);
+      expect(responses(fake.log())[0]).toEqual({
+        type: 'control_response',
+        response: {
+          subtype: 'success',
+          request_id: 'r1',
+          response: {
+            behavior: 'allow',
+            updatedInput: { command: 'touch r1' },
+            toolUseID: 'toolu_r1',
+            updatedPermissions: [{ type: 'addRules', rules: [{ toolName: 'Bash', ruleContent: 'touch r1:*' }], behavior: 'allow', destination: 'session' }],
+          },
+        },
+      });
+      // Never a user turn: the only `user` line on stdin is the seed prompt.
+      expect(fake.log().filter((l) => l.type === 'user')).toHaveLength(1);
+      expect(ui.filter((e) => e.type === 'turn.started')).toHaveLength(turnsBefore);
+      expect(session.hasPendingPermission?.()).toBe(false);
+      expect(session.respondPermission?.(id('r1'), 'Allow once')).toBe(false);
+    } finally {
+      session.interrupt();
+      await session.result;
+    }
+  }, 15_000);
+
+  it('writes a deny with the user\'s words for free text', async () => {
+    const fake = fakeClaude([request('r1')]);
+    const { session, ui } = start(fake.bin);
+    try {
+      await until(() => cards(ui).length === 1);
+      expect(session.respondPermission?.(id('r1'), 'Need more info')).toBe(true);
+      await until(() => responses(fake.log()).length === 1);
+      const body = responses(fake.log())[0]!.response.response;
+      expect(body).toMatchObject({ behavior: 'deny', toolUseID: 'toolu_r1' });
+      expect(body.message).toContain('Need more info');
+    } finally {
+      session.interrupt();
+      await session.result;
+    }
+  }, 15_000);
+
+  it('shows one card at a time, the next after the head is answered', async () => {
+    const fake = fakeClaude([request('r1'), request('r2')]);
+    const { session, ui } = start(fake.bin);
+    try {
+      await until(() => cards(ui).length === 1);
+      await new Promise((r) => setTimeout(r, 50));
+      expect(cards(ui)).toEqual([id('r1')]);
+      // Only the head can be answered; the other is still queued.
+      expect(session.respondPermission?.(id('zzz'), 'Reject')).toBe(false);
+      expect(session.respondPermission?.(id('r1'), 'Reject')).toBe(true);
+      await until(() => cards(ui).length === 2);
+      expect(cards(ui)).toEqual([id('r1'), id('r2')]);
+      expect(session.hasPendingPermission?.()).toBe(true);
+      expect(session.respondPermission?.(id('r2'), 'Allow once')).toBe(true);
+      await until(() => responses(fake.log()).length === 2);
+      expect(responses(fake.log()).map((l) => l.response.request_id)).toEqual(['r1', 'r2']);
+      expect(session.hasPendingPermission?.()).toBe(false);
+    } finally {
+      session.interrupt();
+      await session.result;
+    }
+  }, 15_000);
+
+  it('answers hasPendingPermission per card id when two prompts are queued', async () => {
+    const fake = fakeClaude([request('r1'), request('r2'), request('r3'), { type: 'control_cancel_request', request_id: 'r3' }]);
+    const { session, ui } = start(fake.bin);
+    try {
+      await until(() => cards(ui).length === 1 && ui.some((e) => e.type === 'ask.closed'));
+      expect(session.hasPendingPermission?.()).toBe(true);
+      expect(session.hasPendingPermission?.(id('r1'))).toBe(true);
+      expect(session.hasPendingPermission?.(id('r2'))).toBe(true);
+      // Withdrawn by Claude: no longer pending, though others are.
+      expect(session.hasPendingPermission?.(id('r3'))).toBe(false);
+      expect(session.hasPendingPermission?.(id('nope'))).toBe(false);
+      expect(session.respondPermission?.(id('r1'), 'Allow once')).toBe(true);
+      // Answered: gone; the other still waits, and the any-query stays true.
+      expect(session.hasPendingPermission?.(id('r1'))).toBe(false);
+      expect(session.hasPendingPermission?.(id('r2'))).toBe(true);
+      expect(session.hasPendingPermission?.()).toBe(true);
+    } finally {
+      session.interrupt();
+      await session.result;
+    }
+  }, 15_000);
+
+  it('denies at once, with a note and no card, when nobody can answer', async () => {
+    const fake = fakeClaude([request('r1')]);
+    const events: AgentEvent[] = [];
+    const { session, ui } = start(fake.bin, { canAsk: false, events });
+    try {
+      await until(() => responses(fake.log()).length === 1);
+      expect(responses(fake.log())[0]!.response.response).toMatchObject({ behavior: 'deny', toolUseID: 'toolu_r1' });
+      expect(responses(fake.log())[0]!.response.response.message).toContain('nobody can answer permission prompts in this run');
+      expect(cards(ui)).toEqual([]);
+      expect(events).toContainEqual({ type: 'note', message: 'claude: refused Bash (nobody can answer permission prompts in this run)' });
+      expect(session.hasPendingPermission?.()).toBe(false);
+    } finally {
+      session.interrupt();
+      await session.result;
+    }
+  }, 15_000);
+
+  it('denies at once when there is no UI channel at all', async () => {
+    const fake = fakeClaude([request('r1')]);
+    const session = new ClaudeCliRunner({ bin: fake.bin, timeoutMs: 0 }).startSession(
+      { userPrompt: 'go', cwd: dir, claudePermissionMode: 'manual' },
+      undefined,
+      { canAskPermission: () => true },
+    );
+    try {
+      await until(() => responses(fake.log()).length === 1);
+      expect(responses(fake.log())[0]!.response.response).toMatchObject({ behavior: 'deny' });
+    } finally {
+      session.interrupt();
+      await session.result;
+    }
+  }, 15_000);
+
+  it('denies AskUserQuestion and ExitPlanMode at once even when a user could answer', async () => {
+    const fake = fakeClaude([request('r1', { tool_name: 'AskUserQuestion', input: { questions: [] } }), request('r2', { tool_name: 'ExitPlanMode', input: {} })]);
+    const events: AgentEvent[] = [];
+    const { session, ui } = start(fake.bin, { events });
+    try {
+      await until(() => responses(fake.log()).length === 2);
+      const [ask, plan] = responses(fake.log()).map((l) => l.response.response);
+      expect(ask).toMatchObject({ behavior: 'deny' });
+      expect(ask.message).toMatch(/CEZ:ASK/);
+      expect(plan).toMatchObject({ behavior: 'deny' });
+      expect(cards(ui)).toEqual([]);
+      expect(events.some((e) => e.type === 'note' && /AskUserQuestion/.test(e.message))).toBe(true);
+    } finally {
+      session.interrupt();
+      await session.result;
+    }
+  }, 15_000);
+
+  it('retracts a card when Claude withdraws the request, and raises the next one', async () => {
+    const fake = fakeClaude([request('r1'), request('r2'), { type: 'control_cancel_request', request_id: 'r1' }]);
+    const { session, ui } = start(fake.bin);
+    try {
+      await until(() => cards(ui).length === 2);
+      expect(ui).toContainEqual({ type: 'ask.closed', requestId: id('r1'), reason: 'retracted', detail: 'Claude withdrew the permission prompt' });
+      expect(cards(ui)).toEqual([id('r1'), id('r2')]);
+      expect(session.respondPermission?.(id('r1'), 'Allow once')).toBe(false);
+      expect(session.respondPermission?.(id('r2'), 'Allow once')).toBe(true);
+    } finally {
+      session.interrupt();
+      await session.result;
+    }
+  }, 15_000);
+
+  it('answers an unsupported control request with an error response', async () => {
+    const fake = fakeClaude([{ type: 'control_request', request_id: 'h1', request: { subtype: 'hook_callback' } }]);
+    const { session, ui } = start(fake.bin);
+    try {
+      await until(() => responses(fake.log()).length === 1);
+      expect(responses(fake.log())[0]).toEqual({
+        type: 'control_response',
+        response: { subtype: 'error', request_id: 'h1', error: expect.stringContaining('hook_callback') },
+      });
+      expect(cards(ui)).toEqual([]);
+    } finally {
+      session.interrupt();
+      await session.result;
+    }
+  }, 15_000);
+
+  it('expires every pending card when the session ends, and refuses a late answer', async () => {
+    const fake = fakeClaude([request('r1'), request('r2')], { exitAfterMs: 100 });
+    const { session, ui } = start(fake.bin);
+    await session.result;
+    const detail = 'the Claude session ended before this permission prompt was answered';
+    expect(ui).toContainEqual({ type: 'ask.closed', requestId: id('r1'), reason: 'expired', detail });
+    expect(ui).toContainEqual({ type: 'ask.closed', requestId: id('r2'), reason: 'expired', detail });
+    expect(session.hasPendingPermission?.()).toBe(false);
+    expect(session.respondPermission?.(id('r1'), 'Allow once')).toBe(false);
+  }, 15_000);
+
+  it('keeps the prompt pending when stdin is already closed, and says it was not delivered', async () => {
+    const fake = fakeClaude([request('r1')]);
+    const { session, ui } = start(fake.bin);
+    try {
+      await until(() => cards(ui).length === 1);
+      session.end();
+      expect(session.respondPermission?.(id('r1'), 'Allow once')).toBe(false);
+      expect(session.hasPendingPermission?.()).toBe(true);
+    } finally {
+      session.interrupt();
+      await session.result;
+    }
+  }, 15_000);
+
+  it('refuses a can_use_tool at once when the prompt tool is off, even if a user could answer', async () => {
+    const fake = fakeClaude([request('r1')]);
+    const ui: UiEvent[] = [];
+    const session = new ClaudeCliRunner({ bin: fake.bin, timeoutMs: 0 }).startSession(
+      { userPrompt: 'go', cwd: dir },
+      undefined,
+      { onUiEvent: (e) => ui.push(e), canAskPermission: () => true },
+    );
+    try {
+      await until(() => responses(fake.log()).length === 1);
+      expect(responses(fake.log())[0]!.response.response).toMatchObject({ behavior: 'deny' });
+      expect(cards(ui)).toEqual([]);
+      expect(session.hasPendingPermission?.()).toBe(false);
+    } finally {
+      session.interrupt();
+      await session.result;
+    }
+  }, 15_000);
+
+  it('still maps a non-control frame that carries a request_id (default mode)', async () => {
+    const fake = fakeClaude([{ type: 'assistant', request_id: 'x1', message: { role: 'assistant', content: [{ type: 'text', text: 'hello there' }] } }]);
+    const events: AgentEvent[] = [];
+    const session = new ClaudeCliRunner({ bin: fake.bin, timeoutMs: 0 }).startSession({ userPrompt: 'go', cwd: dir }, (e) => events.push(e), {});
+    try {
+      await until(() => events.some((e) => e.type === 'text'));
+      expect(events).toContainEqual({ type: 'text', text: 'hello there' });
+      expect(responses(fake.log())).toEqual([]);
+    } finally {
+      session.interrupt();
+      await session.result;
+    }
+  }, 15_000);
+
+  it('keeps the prompt pending and answerable across a user message (verified against claude 2.1.332)', async () => {
+    const mockBin = fileURLToPath(new URL('../../scripts/mock-claude.mjs', import.meta.url));
+    const events: AgentEvent[] = [];
+    const ui: UiEvent[] = [];
+    const session = new ClaudeCliRunner({ bin: mockBin, timeoutMs: 0 }).startSession(
+      { userPrompt: 'permission-probe', cwd: dir, claudePermissionMode: 'manual', env: { CEZ_HANDOFF_FILE: '', CEZ_MOCK_ARGS_FILE: '', CEZ_TODOS_FILE: '' } },
+      (event) => events.push(event),
+      { onUiEvent: (e) => ui.push(e), canAskPermission: () => true },
+    );
+    try {
+      await until(() => cards(ui).length === 1);
+      expect(session.sendMessage([{ type: 'text', text: 'also mention the weather' }])).toBe(true);
+      await new Promise((r) => setTimeout(r, 100));
+      // The CLI holds the message; the prompt is neither cancelled nor answered by it.
+      expect(session.hasPendingPermission?.()).toBe(true);
+      expect(ui.some((e) => e.type === 'ask.closed')).toBe(false);
+      expect(events.some((e) => e.type === 'tool-result')).toBe(false);
+      expect(session.respondPermission?.(cards(ui)[0]!, 'Allow once')).toBe(true);
+      await until(() => events.some((e) => e.type === 'tool-result'));
+      expect(events.find((e) => e.type === 'tool-result')).toMatchObject({ isError: false });
+      // The held message is then answered as its own turn.
+      await until(() => events.some((e) => e.type === 'text' && e.text.includes('Follow-up')));
+    } finally {
+      session.interrupt();
+      await session.result;
+    }
+  }, 20_000);
+
+  it('drives the dry-run mock end to end: card, answer, tool result', async () => {
+    const mockBin = fileURLToPath(new URL('../../scripts/mock-claude.mjs', import.meta.url));
+    const events: AgentEvent[] = [];
+    const ui: UiEvent[] = [];
+    const session = new ClaudeCliRunner({ bin: mockBin, timeoutMs: 0 }).startSession(
+      {
+        userPrompt: 'permission-probe',
+        cwd: dir,
+        claudePermissionMode: 'manual',
+        env: { CEZ_HANDOFF_FILE: '', CEZ_MOCK_ARGS_FILE: '', CEZ_TODOS_FILE: '' },
+      },
+      (event) => events.push(event),
+      { onUiEvent: (e) => ui.push(e), canAskPermission: () => true, autoEndAfterFirstTurn: true },
+    );
+    await until(() => cards(ui).length === 1);
+    expect(cards(ui)[0]).toMatch(new RegExp(`^${CLAUDE_PERMISSION_ASK_PREFIX}`));
+    const card = ui.find((e) => e.type === 'ask.requested');
+    expect(card?.type === 'ask.requested' && card.questions[0]!.question).toContain('touch cez-permission-probe.txt');
+    expect(session.respondPermission?.(cards(ui)[0]!, 'Reject')).toBe(true);
+    await session.result;
+    const result = events.find((e) => e.type === 'tool-result');
+    expect(result).toMatchObject({ isError: true });
+    expect(result?.type === 'tool-result' && result.result).toContain('rejected');
+  }, 20_000);
+
+  it('the mock stays silent about permissions when started without the prompt tool', async () => {
+    const mockBin = fileURLToPath(new URL('../../scripts/mock-claude.mjs', import.meta.url));
+    const ui: UiEvent[] = [];
+    const result = await new ClaudeCliRunner({ bin: mockBin, timeoutMs: 20_000 }).startSession(
+      { userPrompt: 'permission-probe', cwd: dir, env: { CEZ_HANDOFF_FILE: '', CEZ_MOCK_ARGS_FILE: '', CEZ_TODOS_FILE: '' } },
+      undefined,
+      { onUiEvent: (e) => ui.push(e), canAskPermission: () => true, autoEndAfterFirstTurn: true },
+    ).result;
+    expect(cards(ui)).toEqual([]);
+    expect(result.text).toContain('Done with the first pass');
+  }, 25_000);
 });
 
 /**

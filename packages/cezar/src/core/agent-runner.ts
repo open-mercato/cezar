@@ -99,6 +99,10 @@ export interface AgentRunSpec {
   /** Claude only: skip every permission prompt (`--permission-mode bypassPermissions`), the
    *  project's opt-in `bypassPermissions`. `enforceReadOnly` wins. Other backends ignore it. */
   bypassPermissions?: boolean;
+  /** Claude only: the project's `claudePermissionMode` — Claude asks instead of denying a tool outside
+   *  the allow list, and the cockpit answers on the `can_use_tool` control channel. Absent = `dontAsk`.
+   *  Read-only, strict and `bypassPermissions` win. Other backends ignore it. */
+  claudePermissionMode?: 'manual' | 'acceptEdits';
   /** Claude only: `sandbox.excludedCommands` patterns, for a command that must reach the loopback
    *  cockpit the user's Bash sandbox blocks (a manager's `cez-manager`). Other backends ignore it. */
   sandboxExcludedCommands?: string[];
@@ -341,6 +345,12 @@ export interface AgentSession {
   readonly processExited?: Promise<void>;
   /** True while the session still accepts messages. */
   readonly open: boolean;
+  /** Answer a backend permission prompt raised as an `ask.requested` card, out of band: never as a
+   *  user turn. False when `requestId` is not pending (answered, withdrawn, session gone). */
+  respondPermission?(requestId: string, text: string): boolean;
+  /** True while a permission prompt waits on the user (that one card, when `requestId` is given);
+   *  the run stays parked until every one is answered. */
+  hasPendingPermission?(requestId?: string): boolean;
 }
 
 export interface AgentRunner {

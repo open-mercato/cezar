@@ -469,9 +469,46 @@ function writeDemoReview() {
   }
 }
 
+// Permission prompts: with `--permission-prompt-tool stdio` the real CLI sends `can_use_tool` on
+// stdout and blocks until a `control_response` line with the same request_id comes back on stdin.
+// `permission-probe` in the user text scripts one such prompt (a Bash `touch` the host must allow).
+const PROMPT_TOOL_STDIO = process.argv.some((arg, i) => arg === '--permission-prompt-tool' && process.argv[i + 1] === 'stdio');
+// Like claude 2.1.332 (live probe), a user line written while a prompt is pending cancels nothing and
+// answers nothing: it waits behind the in-flight turn (`queue` below) until the control_response lands.
+const permissionWaiters = new Map();
+function awaitPermission(requestId) {
+  return new Promise((resolve) => permissionWaiters.set(requestId, resolve));
+}
+
+async function permissionProbe() {
+  const toolUseId = `toolu_mock_perm_${turn}`;
+  const requestId = `mock-perm-${turn}`;
+  const input = { command: 'touch cez-permission-probe.txt', description: 'Create the permission probe file' };
+  emit({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'tool_use', id: toolUseId, name: 'Bash', input }], usage: { input_tokens: 200, output_tokens: 20 } } });
+  write({
+    type: 'control_request',
+    request_id: requestId,
+    request: {
+      subtype: 'can_use_tool',
+      tool_name: 'Bash',
+      input,
+      tool_use_id: toolUseId,
+      permission_suggestions: [{ type: 'addRules', rules: [{ toolName: 'Bash', ruleContent: 'touch cez-permission-probe.txt:*' }], behavior: 'allow', destination: 'localSettings' }],
+    },
+  });
+  const answer = await awaitPermission(requestId);
+  const allowed = answer?.behavior === 'allow';
+  const content = allowed ? 'Created cez-permission-probe.txt (dry run, nothing written)' : `Permission denied: ${answer?.message ?? 'no answer'}`;
+  emit({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: toolUseId, content, is_error: !allowed }] } });
+  const text = allowed ? 'The probe was allowed. (dry run)' : 'The probe was blocked. (dry run)';
+  emit({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text }], usage: { input_tokens: 200, output_tokens: 20 } } });
+  emit({ type: 'result', subtype: 'success', result: text, usage: { input_tokens: 200, output_tokens: 20 }, total_cost_usd: 0.001 });
+}
+
 async function respond(userText, imageCount) {
   turn += 1;
   await pace(250);
+  if (PROMPT_TOOL_STDIO && userText.includes('permission-probe')) return permissionProbe();
   if (userText.includes('[cez-connector-call]')) return connectorCall(userText);
   if (userText.includes('[cez-manager:')) return managerTurn(userText);
   // `mock:done` anywhere in the message → the reply ends with the CEZ:DONE
@@ -1049,6 +1086,13 @@ rl.on('line', (line) => {
   let imageCount = 0;
   try {
     const msg = JSON.parse(trimmed);
+    // An answer to a prompt the mock raised: route it to its waiter, never treat it as a user message.
+    if (msg?.type === 'control_response') {
+      const reply = msg.response ?? {};
+      permissionWaiters.get(reply.request_id)?.(reply.subtype === 'success' ? reply.response : { behavior: 'deny', message: reply.error });
+      permissionWaiters.delete(reply.request_id);
+      return;
+    }
     const blocks = msg?.message?.content ?? [];
     userText = blocks.filter((b) => b.type === 'text').map((b) => b.text).join('\n') || '(no text)';
     imageCount = blocks.filter((b) => b.type === 'image').length;
@@ -1070,6 +1114,8 @@ rl.on('line', (line) => {
   queue = queue.then(() => respond(userText, imageCount));
 });
 rl.on('close', () => {
+  // A prompt still unanswered at EOF is a deny, so the in-flight turn can finish.
+  for (const resolve of permissionWaiters.values()) resolve({ behavior: 'deny', message: 'session closed' });
   // EOF = session over; finish any in-flight turn then exit cleanly.
   queue.then(() => process.exit(0));
 });
