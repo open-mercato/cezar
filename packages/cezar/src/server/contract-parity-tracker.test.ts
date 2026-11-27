@@ -6,7 +6,7 @@ import type {
   TrackerAssociationResponse, TrackerAssociationSavedResponse, TrackerClearedResponse,
   TrackerCandidatesResponse, TrackerItemsResponse, TrackerItemResponse,
   TrackerErrorResponse, TrackerAssociationInput, TrackerCandidatesQueryInput,
-  TrackerCredentials, TrackerConnectionResponse, TrackerListQueryInput, TrackerSearchQueryInput, TrackerItemParams, TrackerItemQuery,
+  TrackerConnectionInput, TrackerConnectionResponse, TrackerSharedConnectionsResponse, TrackerSharedConnectionLink, TrackerListQueryInput, TrackerSearchQueryInput, TrackerItemParams, TrackerItemQuery,
 } from '@open-mercato/cezar-contract';
 import type { AppType } from './app-type.ts';
 
@@ -25,7 +25,14 @@ type Checks = [
   Assert<Mutual<TrackerWatchHandle, InferResponseType<typeof scoped.watch.$post, 200>>>,
   Assert<Mutual<TrackerWatchSnapshot, InferResponseType<typeof scoped.watch[':watchId']['$get'], 200>>>,
   Assert<Mutual<TrackerWatchSnapshot, InferResponseType<typeof scoped.watch[':watchId']['$post'], 200>>>,
-  Assert<Mutual<TrackerCredentials, InferRequestType<typeof scoped.connection.$put>['json']>>,
+  Assert<Mutual<TrackerConnectionInput, InferRequestType<typeof scoped.connection.$put>['json']>>,
+  Assert<Mutual<TrackerSharedConnectionsResponse, InferResponseType<typeof scoped.connection.shared.$get, 200>>>,
+  Assert<Mutual<TrackerSharedConnectionLink, InferRequestType<typeof scoped.connection.shared.$put>['json']>>,
+  Assert<Mutual<TrackerConnectionResponse, InferResponseType<typeof scoped.connection.shared.$put, 200>>>,
+  Assert<Mutual<TrackerErrorResponse, InferResponseType<typeof scoped.connection.shared.$put, 404>>>,
+  Assert<Mutual<TrackerErrorResponse, InferResponseType<typeof scoped.connection.shared.$put, 409>>>,
+  Assert<Mutual<TrackerConnectionResponse, InferResponseType<typeof scoped.connection.promote.$post, 200>>>,
+  Assert<Mutual<TrackerErrorResponse, InferResponseType<typeof scoped.connection.promote.$post, 409>>>,
   Assert<Mutual<TrackerConnectionResponse, InferResponseType<typeof scoped.connection.$get, 200>>>,
   Assert<Mutual<TrackerConnectionResponse, InferResponseType<typeof scoped.connection.$put, 200>>>,
   Assert<Mutual<TrackerClearedResponse, InferResponseType<typeof scoped.connection.$delete, 200>>>,

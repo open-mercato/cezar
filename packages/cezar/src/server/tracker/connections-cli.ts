@@ -10,12 +10,17 @@ export async function runTrackerConnectionsCommand(
     if (args.length === 1 && args[0] === 'list') {
       const records = await store.inventory();
       output.log('ID\tROOT\tPROVIDER\tSTATUS');
-      for (const record of records) output.log(`${record.id}\t${JSON.stringify(record.root ?? 'unknown')}\t${record.provider ?? 'unknown'}\t${record.status}`);
+      // Shared records (spec 2026-11-18-shared-tracker-connections) have no root of their own.
+      for (const record of records) output.log(`${record.id}\t${JSON.stringify(record.root ?? (record.links === undefined ? 'unknown' : '(shared)'))}\t${record.provider ?? 'unknown'}\t${record.status}`);
     } else if (args.length === 2 && args[0] === 'remove') {
-      await store.removeId(args[1]!);
+      const id = args[1] ?? '';
+      const links = id.startsWith('shared-')
+        ? (await store.inventory().catch(() => [])).find(record => record.id === id)?.links ?? 0 : 0;
+      await store.removeId(id);
       output.log('Local credential entry removed. This does not revoke the vendor token.');
+      if (links > 0) output.log(`${links} project(s) used this shared connection and must pick another one or save credentials.`);
     } else {
-      output.error('Usage: cez tracker-connections list | remove <64-hex-id>');
+      output.error('Usage: cez tracker-connections list | remove <64-hex-id | shared-<uuid>>');
       return 1;
     }
     return 0;

@@ -302,3 +302,100 @@ it.each(['jira', 'linear'] as const)('removing %s credentials removes the connec
   expect(screen.queryByRole('button', { name: 'Disconnect' })).toBeNull()
   expect(screen.queryByText(/This scope needs reconnection/)).toBeNull()
 })
+
+// Spec 2026-11-18-shared-tracker-connections.
+describe('shared tracker connections', () => {
+  const sharedId = '22222222-2222-4222-8222-222222222222'
+  const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status })
+
+  it('saves as a shared connection only when "Visible only for this project" is unchecked', async () => {
+    setApiScope('project-a')
+    const writes: unknown[] = []
+    let saved: { id: string; kind: string; shared: true } | null = null
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url.endsWith('/tracker/connection/shared')) return json({ connections: [], demo: false })
+      if (url.endsWith('/tracker/connection')) {
+        if (init?.method === 'PUT') { writes.push(JSON.parse(String(init.body))); saved = { id: '11111111-1111-4111-8111-111111111111', kind: 'linear', shared: true } }
+        return json({ connection: saved, demo: false })
+      }
+      return json({ association: null })
+    }))
+    render(<MemoryRouter><QueryClientProvider client={createQueryClient()}><TrackerSection /></QueryClientProvider></MemoryRouter>)
+    const configure = await screen.findByRole('button', { name: 'Configure Linear credentials' })
+    await waitFor(() => expect((configure as HTMLButtonElement).disabled).toBe(false))
+    fireEvent.click(configure)
+    const checkbox = screen.getByRole('checkbox', { name: /Visible only for this project/ }) as HTMLInputElement
+    expect(checkbox.checked).toBe(true)
+    fireEvent.click(checkbox)
+    fireEvent.change(screen.getByLabelText('API token'), { target: { value: 'shared-secret' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save shared credentials' }))
+    await waitFor(() => expect(writes).toEqual([{ kind: 'linear', key: 'shared-secret', shared: true }]))
+    expect(await screen.findByRole('button', { name: 'Stop using shared connection' })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Share with other projects' })).toBeNull()
+  })
+
+  it('lets another project pick a shared connection instead of re-typing credentials', async () => {
+    setApiScope('project-b')
+    const links: unknown[] = []
+    let linked = false
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url.endsWith('/tracker/connection/shared')) {
+        if (init?.method === 'PUT') { links.push({ url, body: JSON.parse(String(init.body)) }); linked = true; return json({ connection: { id: '33333333-3333-4333-8333-333333333333', kind: 'jira', shared: true }, demo: false }) }
+        return json({ connections: [{ id: sharedId, kind: 'jira', label: 'acme.atlassian.net — d…@acme.test', createdAt: '2026-11-18T10:00:00.000Z', current: linked }], demo: false })
+      }
+      if (url.endsWith('/tracker/connection')) return json({ connection: linked ? { id: '33333333-3333-4333-8333-333333333333', kind: 'jira', shared: true } : null, demo: false })
+      return json({ association: null })
+    }))
+    render(<MemoryRouter><QueryClientProvider client={createQueryClient()}><TrackerSection /></QueryClientProvider></MemoryRouter>)
+    expect(await screen.findByText('acme.atlassian.net — d…@acme.test')).toBeTruthy()
+    const use = screen.getByRole('button', { name: 'Use acme.atlassian.net — d…@acme.test' }) as HTMLButtonElement
+    await waitFor(() => expect(use.disabled).toBe(false))
+    fireEvent.click(use)
+    await waitFor(() => expect(links).toEqual([{ url: '/api/v1/p/project-b/tracker/connection/shared', body: { id: sharedId } }]))
+    // The current shared connection is no longer offered; browsing is ready.
+    await waitFor(() => expect(screen.queryByText('acme.atlassian.net — d…@acme.test')).toBeNull())
+    await waitFor(() => expect((screen.getByRole('button', { name: 'Browse Jira' }) as HTMLButtonElement).disabled).toBe(false))
+    expect(screen.getByText(/This project uses a shared connection/)).toBeTruthy()
+  })
+
+  it('shares an existing project connection with other projects', async () => {
+    setApiScope('project-a')
+    const own = { id: '11111111-1111-4111-8111-111111111111', kind: 'linear' }
+    let promoted = false
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url.endsWith('/tracker/connection/promote') && init?.method === 'POST') { promoted = true; return json({ connection: { ...own, shared: true }, demo: false }) }
+      if (url.endsWith('/tracker/connection/shared')) return json({ connections: [], demo: false })
+      if (url.endsWith('/tracker/connection')) return json({ connection: promoted ? { ...own, shared: true } : own, demo: false })
+      return json({ association: null })
+    }))
+    render(<MemoryRouter><QueryClientProvider client={createQueryClient()}><TrackerSection /></QueryClientProvider></MemoryRouter>)
+    fireEvent.click(await screen.findByRole('button', { name: 'Share with other projects' }))
+    expect(await screen.findByRole('button', { name: 'Stop using shared connection' })).toBeTruthy()
+    expect(promoted).toBe(true)
+  })
+
+  it('asks before a shared connection replaces the project\'s own credentials', async () => {
+    setApiScope('project-b')
+    const puts: string[] = []
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (init?.method === 'PUT') { puts.push(url); return json({ connection: { id: '55555555-5555-4555-8555-555555555555', kind: 'linear', shared: true }, demo: false }) }
+      if (url.endsWith('/tracker/connection/shared')) return json({ connections: [{ id: sharedId, kind: 'linear', label: 'Linear API key · saved 2026-11-18 · 2222', createdAt: '2026-11-18T10:00:00.000Z', current: false }], demo: false })
+      if (url.endsWith('/tracker/connection')) return json({ connection: { id: '44444444-4444-4444-8444-444444444444', kind: 'linear' }, demo: false })
+      return json({ association: null })
+    }))
+    render(<MemoryRouter><QueryClientProvider client={createQueryClient()}><TrackerSection /></QueryClientProvider></MemoryRouter>)
+    const use = await screen.findByRole('button', { name: 'Use Linear API key · saved 2026-11-18 · 2222' }) as HTMLButtonElement
+    await waitFor(() => expect(use.disabled).toBe(false))
+    fireEvent.click(use)
+    expect(await screen.findByText("Replace this project's credentials?")).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+    expect(puts).toEqual([])
+    fireEvent.click(use)
+    fireEvent.click(await screen.findByRole('button', { name: 'Use shared connection' }))
+    await waitFor(() => expect(puts).toEqual(['/api/v1/p/project-b/tracker/connection/shared']))
+  })
+})

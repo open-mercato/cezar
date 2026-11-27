@@ -17,7 +17,7 @@ import { deleteExpiredArchivedTasks } from '../runs/archived-cleanup.ts';
 import {
   trackerWatchInputSchema, trackerWatchParamsSchema, trackerWatchQuerySchema,
   trackerCandidatesQuerySchema, trackerListQuerySchema, trackerSearchQuerySchema, trackerItemQuerySchema, trackerReadScope,
-  trackerCredentialsSchema, trackerItemParamsSchema, trackerAssociationInputSchema, type TrackerChangedEvent,
+  trackerConnectionInputSchema, trackerSharedConnectionLinkSchema, trackerItemParamsSchema, trackerAssociationInputSchema, type TrackerChangedEvent,
   trackerContextSchema, trackerOperationInputSchema, trackerOperationResultSchema,
   secretParamsSchema, secretValueInputSchema, type SecretsList, type SecretValueInput,
   e2eSetupInputSchema, type E2eStatus, taskActionSurfaceSchema,
@@ -7818,7 +7818,7 @@ export function createAppParts(deps: ServerDeps) {
       return c.json(result, 200);
     })
     .get('/tracker/connection', async c => c.json(await trackers.connection(c.get('project').root)))
-    .put('/tracker/connection', jsonZodValidator(trackerCredentialsSchema, { message: 'Invalid tracker credentials. Check the required fields.' }), async c => {
+    .put('/tracker/connection', jsonZodValidator(trackerConnectionInputSchema, { message: 'Invalid tracker credentials. Check the required fields.' }), async c => {
       const project = c.get('project');
       return mutateTracker(project.dataDir, async () => {
         const result = await trackers.saveConnection(project.root, c.req.valid('json'));
@@ -7833,6 +7833,27 @@ export function createAppParts(deps: ServerDeps) {
         if (!await trackers.removeConnection(project.root)) return c.json({ error: 'Could not remove project credentials.' }, 409);
         await trackerChanged(project);
         return c.json({ cleared: true as const }, 200);
+      });
+    })
+    // Spec 2026-11-18-shared-tracker-connections. Two segments, so never shadowed by `/tracker/:id`.
+    .get('/tracker/connection/shared', async c => c.json(await trackers.sharedConnections(c.get('project').root), 200))
+    .put('/tracker/connection/shared', jsonZodValidator(trackerSharedConnectionLinkSchema), async c => {
+      const project = c.get('project');
+      return mutateTracker(project.dataDir, async () => {
+        const result = await trackers.linkSharedConnection(project.root, c.req.valid('json').id);
+        if ('missing' in result) return c.json({ error: 'This shared connection no longer exists. Refresh and pick another one.' }, 404);
+        if ('saveFailure' in result) return c.json({ error: result.saveFailure ?? 'Could not use the shared connection. Check local storage permissions. Demo mode cannot save credentials.' }, 409);
+        await trackerChanged(project);
+        return c.json(result, 200);
+      });
+    })
+    .post('/tracker/connection/promote', async c => {
+      const project = c.get('project');
+      return mutateTracker(project.dataDir, async () => {
+        const result = await trackers.promoteConnection(project.root);
+        if ('saveFailure' in result) return c.json({ error: result.saveFailure ?? 'Could not share these credentials. Check local storage permissions. Demo mode cannot save credentials.' }, 409);
+        await trackerChanged(project);
+        return c.json(result, 200);
       });
     })
     .get('/tracker/candidates', queryZodValidator(trackerCandidatesQuerySchema), async c => {

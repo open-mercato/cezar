@@ -2,11 +2,15 @@ import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { ExternalLinkIcon, LinkIcon, UnplugIcon } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
 
-import type { TrackerCandidate, TrackerKind } from '@open-mercato/cezar-api-client'
+import type { TrackerCandidate, TrackerConnection, TrackerKind, TrackerSharedConnection } from '@open-mercato/cezar-api-client'
 import { queryScope } from '@open-mercato/cezar-api-client'
 import { TRACKER_PROVIDERS, trackerProviders } from '@/lib/tracker-providers'
-import { clearTrackerAssociation, saveTrackerAssociation, saveTrackerConnection, removeTrackerConnection } from '@/api/client'
-import { queryKeys, useTrackerConnection, useTrackerAssociation, useTrackerCandidates, workspaceQueryKeys } from '@/api/queries'
+import { clearTrackerAssociation, linkTrackerSharedConnection, promoteTrackerConnection, saveTrackerAssociation, saveTrackerConnection, removeTrackerConnection } from '@/api/client'
+import { queryKeys, useTrackerConnection, useTrackerAssociation, useTrackerCandidates, useTrackerSharedConnections, workspaceQueryKeys } from '@/api/queries'
+import {
+  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription,
+  AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
+} from '@/components/ui/alert-dialog'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { toast } from '@/components/ui/toaster'
@@ -16,16 +20,20 @@ import { CardNote, FormRow, SettingsCard } from './form-row'
 export function TrackerSection() {
   const connection = useTrackerConnection()
   const association = useTrackerAssociation()
+  const sharedConnections = useTrackerSharedConnections(connection.data?.demo === false)
   const queryClient = useQueryClient()
   const [kind, setKind] = useState<TrackerKind>('jira')
   const [credentialKind, setCredentialKind] = useState<TrackerKind | null>(null)
   const [origin, setOrigin] = useState('')
   const [email, setEmail] = useState('')
   const [secret, setSecret] = useState('')
-  const resetSecrets = () => { setSecret(''); setEmail(''); setOrigin(''); setCredentialKind(null) }
+  // Spec 2026-11-18-shared-tracker-connections: checked (project-only) is today's behaviour.
+  const [projectOnly, setProjectOnly] = useState(true)
+  const resetSecrets = () => { setSecret(''); setEmail(''); setOrigin(''); setCredentialKind(null); setProjectOnly(true) }
   const activeProject = queryScope()
   useEffect(() => { resetSecrets(); setPickerOpen(false); setSelected(null) }, [activeProject])
   const [pickerOpen, setPickerOpen] = useState(false)
+  const [replacing, setReplacing] = useState<TrackerSharedConnection | null>(null)
   const [search, setSearch] = useState('')
   const [selected, setSelected] = useState<TrackerCandidate | null>(null)
   const candidates = useTrackerCandidates(kind, search, pickerOpen)
@@ -42,6 +50,8 @@ export function TrackerSection() {
 
   const refresh = async (projectId: string) => {
     await queryClient.invalidateQueries({ queryKey: queryKeys.tracker.allFor(projectId) })
+    // Every project's shared list: a save, share or pick here changes what the others can pick.
+    await queryClient.invalidateQueries({ predicate: query => query.queryKey[0] === 'tracker' && query.queryKey[2] === 'shared-connections' })
     await queryClient.invalidateQueries({ queryKey: workspaceQueryKeys.projects })
   }
   const connect = useMutation({
@@ -89,32 +99,57 @@ export function TrackerSection() {
     mutationFn: async () => {
       const projectId = queryScope()
       if (!credentialKind) throw new Error('Choose a provider.')
+      const shared = projectOnly ? {} : { shared: true }
       const result = await saveTrackerConnection(credentialKind === 'jira'
-        ? { kind: 'jira', origin: origin.trim(), email: email.trim(), token: secret }
-        : { kind: 'linear', key: secret })
+        ? { kind: 'jira', origin: origin.trim(), email: email.trim(), token: secret, ...shared }
+        : { kind: 'linear', key: secret, ...shared })
       return { ...result, projectId }
     },
     onSuccess: async result => {
       if (queryScope() === result.projectId) { resetSecrets(); setPickerOpen(false); setSelected(null) }
-      await queryClient.cancelQueries({ queryKey: queryKeys.tracker.allFor(result.projectId) })
-      queryClient.setQueryData(['tracker', result.projectId, 'connection'], { connection: result.connection, demo: result.demo })
-      await refresh(result.projectId)
-      toast('Credentials saved for this project. Browse and connect a scope.')
+      await settleConnection(result.projectId, result)
+      toast(result.connection?.shared
+        ? 'Credentials saved as a shared connection. Browse and connect a scope.'
+        : 'Credentials saved for this project. Browse and connect a scope.')
     },
     onError: (error: Error, _variables, projectId) => { if (queryScope() === projectId) setSecret(''); toast(error.message, { tone: 'danger' }) },
   })
+  const settleConnection = async (projectId: string, result: { connection: TrackerConnection | null; demo: boolean }) => {
+    await queryClient.cancelQueries({ queryKey: queryKeys.tracker.allFor(projectId) })
+    queryClient.setQueryData(['tracker', projectId, 'connection'], { connection: result.connection, demo: result.demo })
+    await refresh(projectId)
+  }
+  const pickShared = useMutation({
+    mutationFn: async (id: string) => { const projectId = queryScope(); return { ...await linkTrackerSharedConnection(id), projectId } },
+    onSuccess: async result => {
+      if (queryScope() === result.projectId) { resetSecrets(); setPickerOpen(false); setSelected(null) }
+      await settleConnection(result.projectId, result)
+      toast('Using the shared connection. Browse and connect a scope.')
+    },
+    onError: (error: Error) => toast(error.message, { tone: 'danger' }),
+  })
+  const promote = useMutation({
+    mutationFn: async () => { const projectId = queryScope(); return { ...await promoteTrackerConnection(), projectId } },
+    onSuccess: async result => {
+      await settleConnection(result.projectId, result)
+      toast('These credentials are now a shared connection other projects can pick.')
+    },
+    onError: (error: Error) => toast(error.message, { tone: 'danger' }),
+  })
   const removeCredentials = useMutation({
-    mutationFn: async () => { const projectId = queryScope(); await removeTrackerConnection(); return projectId },
-    onSuccess: async projectId => {
+    mutationFn: async () => { const projectId = queryScope(); const wasShared = shared; await removeTrackerConnection(); return { projectId, wasShared } },
+    onSuccess: async ({ projectId, wasShared }) => {
       if (queryScope() === projectId) { resetSecrets(); setPickerOpen(false); setSelected(null) }
       await queryClient.cancelQueries({ queryKey: queryKeys.tracker.allFor(projectId) })
       queryClient.setQueryData(['tracker', projectId, 'connection'], { connection: null, demo: false })
       await refresh(projectId)
-      toast('Project credentials removed')
+      toast(wasShared ? 'This project no longer uses the shared connection' : 'Project credentials removed')
     },
     onError: (error: Error) => toast(error.message, { tone: 'danger' }),
   })
-  const credentialBusy = saveCredentials.isPending || removeCredentials.isPending
+  const credentialBusy = saveCredentials.isPending || removeCredentials.isPending || pickShared.isPending || promote.isPending
+  const shared = connection.data?.connection?.shared === true
+  const pickable = (sharedConnections.data?.connections ?? []).filter(item => !item.current)
   const savedAssociation = association.data?.association
   const currentConnection = connection.data?.connection
   const scopeConnected = !!savedAssociation && (connection.data?.demo === true || (
@@ -132,7 +167,7 @@ export function TrackerSection() {
     <div className="flex w-full flex-col gap-5" data-slot="tracker-settings">
       <SettingsCard
         title="Issue tracker"
-        description="Connect a project or team from your issue tracker. Credentials belong only to this project and are stored locally outside the repository. Server-wide environment keys are not used."
+        description="Connect a project or team from your issue tracker. Credentials belong to this project unless you share them, and are stored encrypted outside the repository. Server-wide environment keys are not used."
       >
         <FormRow
           label={connected ? connected.externalName : 'Connected scope'}
@@ -160,13 +195,17 @@ export function TrackerSection() {
             <Button type="button" variant="outline" size="sm" onClick={() => void connection.refetch()}>Retry</Button>
           </div>
         ) : null}
-        <CardNote>For local credential cleanup, run <code>cez tracker-connections list</code>, then <code>cez tracker-connections remove &lt;id&gt;</code>. Local deletion does not revoke the vendor token.</CardNote>
+        {shared ? <CardNote>This project uses a shared connection. Other projects that picked it use the same credentials.</CardNote> : null}
+        <CardNote>For local credential cleanup, run <code>cez tracker-connections list</code>, then <code>cez tracker-connections remove &lt;id&gt;</code> (a shared connection's id is <code>shared-&lt;uuid&gt;</code>). Local deletion does not revoke the vendor token.</CardNote>
       </SettingsCard>
 
       <SettingsCard
         title="Connect a provider"
         action={connection.data?.connection ? (
-          <Button variant="outline" size="sm" disabled={credentialBusy} onClick={() => removeCredentials.mutate()}>Remove project credentials</Button>
+          <div className="flex flex-wrap gap-2">
+            {!shared ? <Button variant="outline" size="sm" disabled={credentialBusy} onClick={() => promote.mutate()}>Share with other projects</Button> : null}
+            <Button variant="outline" size="sm" disabled={credentialBusy} onClick={() => removeCredentials.mutate()}>{shared ? 'Stop using shared connection' : 'Remove project credentials'}</Button>
+          </div>
         ) : null}
       >
         {trackerProviders.map((provider) => {
@@ -195,11 +234,43 @@ export function TrackerSection() {
         })}
       </SettingsCard>
 
+      {!connection.data?.demo && pickable.length > 0 ? (
+        <SettingsCard
+          title="Use a shared connection"
+          description="Credentials saved for other projects too. Using one replaces this project's own credentials; then browse and connect a scope."
+        >
+          {pickable.map(item => (
+            <FormRow key={item.id} label={item.label} description={TRACKER_PROVIDERS[item.kind].label}>
+              <Button variant="outline" size="sm" aria-label={`Use ${item.label}`} disabled={credentialBusy || connection.isPending || connection.isError} onClick={() => {
+                // Using one deletes this project's own credentials; shared ones are only unlinked.
+                if (connection.data?.connection && !shared) setReplacing(item)
+                else pickShared.mutate(item.id)
+              }}>Use</Button>
+            </FormRow>
+          ))}
+        </SettingsCard>
+      ) : null}
+
+      <AlertDialog open={replacing !== null} onOpenChange={open => { if (!open) setReplacing(null) }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Replace this project's credentials?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This project's own credentials are deleted and it uses {replacing?.label} instead. Connect its scope again afterwards. The vendor token is not revoked.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={() => { if (replacing) pickShared.mutate(replacing.id); setReplacing(null) }}>Use shared connection</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
       {credentialKind ? (
         <form onSubmit={event => { event.preventDefault(); saveCredentials.mutate() }} autoComplete="off">
           <SettingsCard
             title={`${TRACKER_PROVIDERS[credentialKind].label} credentials for this project`}
-            description="Saved in a private .env file for this project, without encryption. Use read-only access limited to this project's data. Saving replaces this project's connection and requires selecting its scope again."
+            description="Encrypted and stored outside the repository. Use read-only access limited to the data you need. Saving replaces this project's connection and requires selecting its scope again."
           >
             {credentialKind === 'jira' ? <>
               <FormRow htmlFor="tracker-jira-origin" label="Jira site URL">
@@ -212,9 +283,13 @@ export function TrackerSection() {
             <FormRow htmlFor="tracker-token" label="API token">
               <Input id="tracker-token" aria-label="API token" type="password" autoComplete="new-password" required maxLength={8192} value={secret} onChange={event => setSecret(event.target.value)} className="h-8 w-72 max-w-full" />
             </FormRow>
+            <label className="flex items-start gap-2 px-4 py-2.5 text-ui">
+              <input type="checkbox" className="mt-0.5" checked={projectOnly} onChange={event => setProjectOnly(event.target.checked)} />
+              <span>Visible only for this project<span className="block text-meta text-muted-foreground">Uncheck to save these credentials as a shared connection other projects can pick. No other project uses them until you pick them there.</span></span>
+            </label>
             <div className="flex gap-2 px-4 py-3">
               <Button type="button" variant="outline" size="sm" disabled={credentialBusy} onClick={resetSecrets}>Cancel</Button>
-              <Button type="submit" size="sm" disabled={credentialBusy}>Save project credentials</Button>
+              <Button type="submit" size="sm" disabled={credentialBusy}>{projectOnly ? 'Save project credentials' : 'Save shared credentials'}</Button>
             </div>
           </SettingsCard>
         </form>

@@ -105,7 +105,7 @@ Usage:
   cezar init                scaffold .ai/cezar/ (example workflow + skill)
   cezar projects            list the projects this cockpit serves
                             (also: projects add [<dir>] · projects remove <id>)
-  cezar tracker-connections <list|remove ID>  inspect or delete local project credentials
+  cezar tracker-connections <list|remove ID>  inspect or delete local tracker credentials (project and shared)
   cezar secrets <list|set NAME|unset NAME>  this project's secrets (--workspace: the user's)
                             (set reads the value from stdin; agents never receive them)
   cezar telemetry [status|enable|disable|inspect]  opt-in usage data (off until you enable it)

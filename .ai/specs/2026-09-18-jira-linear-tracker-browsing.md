@@ -2,6 +2,8 @@
 
 > **Updated 2026-10-27:** connection records are encrypted and agents use mediated access; see the update sections at the end.
 
+> **Updated 2026-11-18:** a project may explicitly pick a shared connection; see the update section at the end.
+
 # Browse Jira and Linear tasks alongside GitHub
 
 ## 📝 TLDR
@@ -691,3 +693,11 @@ ID. Inherited capabilities are stripped from agent and check environments and re
 transcripts. Definitions without `access` need review before they poll again. User-facing
 behavior: docs/issue-trackers.md § Tracker automation access. This is a capability boundary, not
 isolation from same-user processes.
+
+## 📝 Update (2026-11-18): shared connections
+
+Credentials may also be saved as a shared connection that other projects explicitly pick in
+their own Settings, instead of re-typing them. Consent stays per project (a picked link,
+never automatic), each link has its own connection revision, and secrets stay encrypted,
+write-only and outside every repository. Full design:
+[Shared tracker connections](2026-11-18-shared-tracker-connections.md).
