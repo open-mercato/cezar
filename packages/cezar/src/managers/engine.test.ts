@@ -3816,7 +3816,37 @@ describe('ManagerEngine', () => {
         expect(requests.at(-1)?.body).toMatchObject({ runner: 'claude' });
       });
 
-      it('preserves native OMP models that belong to the selected account', async () => {
+      it('uses the host OMP catalog when falling back from a held gateway', async () => {
+        const engine = makeEngine({
+          accountLimit: async runner => ({ account: 'default', label: runner, ...(runner === 'codex' ? { until: RESET } : {}) }),
+          request: async (path, init) => {
+            if (path.startsWith('/api/v1/models?')) {
+              const omp = new URL(path, 'http://localhost').searchParams.get('runner') === 'omp';
+              return Response.json({ models: omp ? [{ id: 'team/personal-only' }] : [{ id: 'org/codex-only', via: { methodId: 'custom' } }] });
+            }
+            requests.push({ path, body: JSON.parse(String(init?.body)), method: 'POST' });
+            return Response.json({ id: 'new-run' });
+          },
+        });
+        const manager = await engine.create({ instructions: '', projects: 'all', runner: 'codex', cronMinutes: 0,
+          taskAgents: [{ runner: 'codex' }, { runner: 'omp', model: 'team/personal-only' }] });
+        if ('error' in manager) throw manager;
+        const result = await engine.createTask(manager.id, { projectId: 'alpha', task: 'Fix it', model: 'org/codex-only' });
+        expect(result).toMatchObject({ agent: { runner: 'omp' } });
+        expect(requests.at(-1)?.body).toMatchObject({
+          runner: 'omp', model: 'team/personal-only',
+          managerAgent: { fallback: [
+            { provider: 'codex', model: 'org/codex-only' }, { provider: 'omp', model: 'team/personal-only' },
+          ] },
+        });
+      });
+
+      it.each(['explicit', 'project'])('preserves native OMP models on the %s named account', async selection => {
+        await mergeWriteAgentAccounts(accounts => ({
+          ...accounts, accounts: [{ id: 'work', provider: 'omp', label: 'Work', configDir: join(home, 'omp-work'), addedAt: '' }],
+          selections: { [connected.root]: { omp: 'work' } },
+        }));
+        const account = selection === 'explicit' ? { agentProfile: 'work' } : {};
         const engine = makeEngine({
           request: async (path, init) => {
             if (path.startsWith('/api/v1/models?')) return Response.json({ models: [{ id: 'team/personal-only' }] });
@@ -3825,11 +3855,11 @@ describe('ManagerEngine', () => {
           },
         });
         const manager = await engine.create({ instructions: '', projects: 'all', runner: 'omp', cronMinutes: 0,
-          taskAgents: [{ runner: 'omp', agentProfile: 'work' }] });
+          taskAgents: [{ runner: 'omp', ...account }] });
         if ('error' in manager) throw manager;
-        const result = await engine.createTask(manager.id, { projectId: 'alpha', task: 'Fix it', model: 'team/work-only', agentProfile: 'work' });
+        const result = await engine.createTask(manager.id, { projectId: 'alpha', task: 'Fix it', model: 'team/work-only', ...account });
         expect(result).toMatchObject({ agent: { runner: 'omp' } });
-        expect(requests.at(-1)?.body).toMatchObject({ runner: 'omp', model: 'team/work-only', agentProfile: 'work' });
+        expect(requests.at(-1)?.body).toMatchObject({ runner: 'omp', model: 'team/work-only', ...account });
       });
 
       it('after a limit skip to another runner, fallbacks on the runner --model was meant for keep it', async () => {
