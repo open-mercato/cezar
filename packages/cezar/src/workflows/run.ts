@@ -1208,6 +1208,8 @@ export interface StartRunInput {
   /** A read-only Ask task (spec 2026-10-20-trunk-based-projects): in place, read-only tools,
    *  no repo-root lease, never lands. Wins over `worktree`, `newBranch` and dispatch. */
   readOnly?: boolean;
+  /** The GitHub item this task was handed from (#1601); recorded on the run, never read by the engine. */
+  sourceUrl?: string;
   /** With `readOnly`: the backend enforces it too, with no `gh` login and no private MCP, or the
    *  run refuses to start (spec 2026-10-31-managers). Only a manager sets it; Ask never does. */
   enforceReadOnly?: boolean;
@@ -2362,6 +2364,7 @@ export class RunManager {
     if (run.worktree === false && input.readOnly) {
       this.store.updateRun(run.id, { readOnly: true, ...(input.enforceReadOnly ? { enforceReadOnly: true as const } : {}) });
     }
+    if (input.sourceUrl) this.store.updateRun(run.id, { sourceUrl: input.sourceUrl });
     if (input.subject) this.store.updateRun(run.id, { subject: input.subject });
     if (input.startedByManager && input.managerAgent) {
       this.store.appendEvent(run.id, { type: 'lifecycle', tone: 'info', message: input.managerAgent.note });
