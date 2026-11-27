@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { AgentEvent, AgentSession } from './agent-runner.ts';
 import type { UiEvent } from './ui-events.ts';
-import { OpencodeServerRunner } from './opencode-server-runner.ts';
+import { isOpencodeMissingSessionError, OpencodeServerRunner } from './opencode-server-runner.ts';
 
 const bin = join(dirname(fileURLToPath(import.meta.url)), '__fixtures__/opencode/mock-opencode-v2-serve.mjs');
 const sessions: AgentSession[] = [];
@@ -164,6 +164,51 @@ describe('OpenCode V1 + V2 runner compatibility', () => {
       const result = await session.result;
       expect(events.filter((e) => e.type === 'error')).toEqual([]);
       expect(result.text).toContain('hello');
+    });
+  });
+
+  describe('reopening a V2 session on resume (#2543)', () => {
+    function resume(sessionId: string) {
+      const dir = mkdtempSync(join(tmpdir(), 'oc-v2-resume-'));
+      const file = join(dir, 'requests.log');
+      const events: AgentEvent[] = [];
+      const session = new OpencodeServerRunner({ bin, timeoutMs: 15_000 }).startSession({
+        userPrompt: 'continue the task', systemPrompt: 'SYSTEM', cwd: process.cwd(), sessionId, resume: true,
+        env: { MOCK_REQUESTS_FILE: file },
+      }, (event) => events.push(event), { autoEndAfterFirstTurn: true });
+      sessions.push(session);
+      const requests = () => (existsSync(file) ? readFileSync(file, 'utf8').split('\n').filter(Boolean) : []);
+      return { session, events, requests, cleanup: () => rmSync(dir, { recursive: true, force: true }) };
+    }
+
+    it('reopens the saved session instead of creating one, after settling earlier task sessions', async () => {
+      const { session, events, requests, cleanup } = resume('ses_v2_mock');
+      const result = await session.result;
+      expect(events.filter((e) => e.type === 'error')).toEqual([]);
+      expect(result.sessionId).toBe('ses_v2_mock');
+      expect(result.text).toContain('continue the task');
+      expect(result.text).toContain('SYSTEM');
+      const sent = requests();
+      expect(sent).toContain('GET /api/session/ses_v2_mock');
+      expect(sent).not.toContain('POST /api/session');
+      // A claim the server restarted on its own is interrupted before the reopened session is driven (#2468).
+      expect(sent.indexOf('POST /api/session/ses_old_same_dir/interrupt')).toBeGreaterThanOrEqual(0);
+      expect(sent.indexOf('POST /api/session/ses_old_same_dir/interrupt')).toBeLessThan(sent.indexOf('GET /api/session/ses_v2_mock'));
+      cleanup();
+    });
+
+    it.each([
+      ['the server no longer has', 'ses_gone'],
+      ['belongs to another directory', 'ses_moved_away'],
+    ])('a session that %s fails with the missing-session marker and posts no prompt', async (_why, id) => {
+      const { session, events, requests, cleanup } = resume(id);
+      await session.result;
+      const errors = events.filter((e): e is Extract<AgentEvent, { type: 'error' }> => e.type === 'error');
+      expect(errors).toHaveLength(1);
+      expect(isOpencodeMissingSessionError(errors[0]!.message)).toBe(true);
+      expect(events.some((e) => e.type === 'session')).toBe(false);
+      expect(requests().some((line) => line.endsWith('/prompt'))).toBe(false);
+      cleanup();
     });
   });
 });

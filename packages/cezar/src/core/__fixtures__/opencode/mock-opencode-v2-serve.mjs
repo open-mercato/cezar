@@ -33,9 +33,21 @@ const foreign = [
   { id: 'ses_user_same_dir', title: 'my own work', location: { directory: process.cwd() } },
   { id: 'ses_other_dir', title: 'cezar task', location: { directory: '/somewhere/else' } },
 ];
+// Sessions a resume can reopen (GET /api/session/:id), shaped like 2.2.6 answers; any other id is a 404.
+const stored = {
+  [sessionID]: { id: sessionID, title: 'cezar task', location: { directory: process.cwd() } },
+  ses_moved_away: { id: 'ses_moved_away', title: 'cezar task', location: { directory: '/somewhere/else' } },
+};
 const server = createServer((req, res) => {
   if (!password || req.headers.authorization !== authorization) return json(res, { error: 'Unauthorized' }, 401);
   const path = req.url;
+  // MOCK_REQUESTS_FILE: append every request line, so a test can tell a reopen from a create.
+  if (process.env.MOCK_REQUESTS_FILE) appendFileSync(process.env.MOCK_REQUESTS_FILE, `${req.method} ${path}\n`);
+  if (req.method === 'GET' && /^\/api\/session\/[^/?]+$/.test(path)) {
+    const id = decodeURIComponent(path.split('/')[3]);
+    if (stored[id]) return json(res, { data: stored[id] });
+    return json(res, { _tag: 'SessionNotFoundError', sessionID: id, message: `Session not found: ${id}` }, 404);
+  }
   if (req.method === 'GET' && path === '/api/info') {
     if (process.env.MOCK_V2_PROBE_UNAUTHORIZED === '1') return json(res, { error: 'Unauthorized' }, 401);
     return json(res, { version: '2.0.19', pid: process.pid, urls: [] });
