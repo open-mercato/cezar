@@ -71,15 +71,16 @@ Source: .ai/specs/2026-11-27-per-agent-provider-configuration.md
 
 ## Requirement: Models come from the endpoint
 
-The system SHALL list an openrouter or custom method's models from `GET {base}/v1/models`, and SHALL mark the
-method unusable when that request fails.
+The system SHALL list an openrouter or custom method's models from `GET {base}/v1/models`. A method needs a
+successful discovery before it can serve a model. If a later refresh fails, the last successful list stays
+available and the catalog is marked stale.
 
 ### Scenario: A default model is no longer offered
 - WHEN a refresh drops the model that is an agent's default
 - THEN the composer preselects `auto` and the agent's row shows "no longer offered" next to the default
 
 ### Scenario: Custom endpoint unreachable
-- WHEN a custom provider's models request times out
+- WHEN a custom provider's first models request times out
 - THEN the row shows the error and "Retry", the method offers no models, and runs cannot select it
 
 Source: .ai/specs/2026-11-27-per-agent-provider-configuration.md

@@ -1174,7 +1174,7 @@ agents:
         apiKeyFile: /run/secrets/gateway
 ```
 
-Each key source is resolved during application. Inline keys belong in standard input or a private file (`chmod 600`). Use environment variable names or file paths in arguments. A failed validation leaves the previous configuration in use. An invalid startup document logs an error and the cockpit continues to boot.
+Each key source is resolved during application. Inline keys belong in standard input or a private file (`chmod 600`). Use environment variable names or file paths in arguments. Cezar consumes the variables named by `apiKeyEnv` before starting Git or a login helper. A failed validation leaves the previous configuration in use. An invalid startup document logs an error and the cockpit continues to boot.
 
 | Command | Effect |
 | --- | --- |
@@ -1185,7 +1185,9 @@ Each key source is resolved during application. Inline keys belong in standard i
 
 Use **Continue** in the cockpit to resume a task that used a configured method. A native terminal resumes under its own CLI billing settings.
 
-The custom URL is the endpoint root, such as `https://gateway.example.com`. Cezar reads `/v1/models` there. An unavailable endpoint shows a retry action in Settings. Apply and set accept `--no-fetch` to postpone discovery. Hosted and paired cockpits can inspect the configuration. To change it, use the local cockpit or the CLI on the host.
+The custom URL is the endpoint root, such as `https://gateway.example.com`. Cezar reads `/v1/models` there. If discovery fails on the first attempt, retry from the agent’s row in workspace Settings. If a later refresh fails, the last successful list remains available and is marked stale. Apply and set accept `--no-fetch` to postpone discovery.
+
+Hosted and paired cockpits can inspect the configuration. To change it, use the local cockpit or the CLI on the host. Use the subscription row’s **Sign out** instructions to end a vendor login. Use **Remove** on a saved key to delete Cezar’s encrypted copy.
 
 ### Editing the agents' own config (Settings → Agent config)
 
