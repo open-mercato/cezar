@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { execFile as execFileCallback, spawn, type ChildProcess } from 'node:child_process';
 import { once } from 'node:events';
-import { mkdtemp, mkdir, realpath, rm } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, realpath, rm } from 'node:fs/promises';
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
@@ -82,6 +82,14 @@ test('the packaged CLI reuses one cockpit, registers a second CWD, and recovers 
     PROVIDER_TEST_VALUE: 'fixture-only-9876',
     CEZ_NO_BANNER: '1',
   };
+  // Git is the first child on startup and runs again after the cockpit takes its lease.
+  const trace = join(root, 'git-trace.jsonl');
+  const importEnv = {
+    ...env,
+    GIT_TRACE2_EVENT: trace,
+    GIT_TRACE2_ENV_VARS: 'PROVIDER_TEST_VALUE,PROVIDER_TEST_SENTINEL',
+    PROVIDER_TEST_SENTINEL: 'ordinary-inherited-value',
+  };
   let primary: ChildProcess | undefined;
   let recovery: ChildProcess | undefined;
   try {
@@ -105,7 +113,7 @@ test('the packaged CLI reuses one cockpit, registers a second CWD, and recovers 
     const secondary = await execFile(
       process.execPath,
       [cliPath, '--providers', document, '--repo', repoB, '--port', String(secondPort), '--no-open'],
-      { cwd: root, env, timeout: 60_000, maxBuffer: 10 * 1024 * 1024 },
+      { cwd: root, env: importEnv, timeout: 60_000, maxBuffer: 10 * 1024 * 1024 },
     );
     assert.match(secondary.stdout, /cockpit already running/);
     assert.match(secondary.stdout, new RegExp(`127\\.0\\.0\\.1:${firstPort}/p/[^/]+/`));
@@ -128,13 +136,16 @@ test('the packaged CLI reuses one cockpit, registers a second CWD, and recovers 
 
     await stop(primary, 'SIGKILL');
     primary = undefined;
-    recovery = spawn(process.execPath, [cliPath, '--repo', repoB, '--port', String(recoveryPort), '--no-open'], {
+    recovery = spawn(process.execPath, [cliPath, '--providers', document, '--repo', repoB, '--port', String(recoveryPort), '--no-open'], {
       cwd: root,
-      env,
+      env: importEnv,
       stdio: ['ignore', 'pipe', 'pipe'],
     });
     const recoveredHealth = await waitForHealth(`http://127.0.0.1:${recoveryPort}`);
     assert.notEqual(recoveredHealth.runtimeId, firstHealth.runtimeId, 'a replacement process mints a new runtime identity');
+    const inheritedByGit = await readFile(trace, 'utf8');
+    assert.ok(inheritedByGit.includes('ordinary-inherited-value'), 'Git must see the unrelated sentinel');
+    assert.ok(!inheritedByGit.includes('fixture-only-9876'), 'Git must never inherit the declared key source');
   } finally {
     if (primary) await stop(primary);
     if (recovery) await stop(recovery);
