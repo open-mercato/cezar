@@ -36,7 +36,9 @@ describe('dispatched child: Guard push authorization reaches the spawned agent (
   beforeAll(async () => {
     repoRoot = mkdtempSync(join(tmpdir(), 'cez-guard-prompt-'));
     argsFile = join(repoRoot, 'mock-args.ndjson');
-    for (const k of ['CEZ_DRY_RUN', 'CEZ_DISPATCH', 'CEZ_MOCK_ARGS_FILE']) saved[k] = process.env[k];
+    for (const k of ['CEZ_DRY_RUN', 'CEZ_DISPATCH', 'CEZ_MOCK_ARGS_FILE', 'CEZ_API_URL']) saved[k] = process.env[k];
+    // cezar exports CEZ_API_URL to every task agent; dispatchReachable() would flip on inside a task.
+    delete process.env.CEZ_API_URL;
     process.env.CEZ_DRY_RUN = '1';
     process.env.CEZ_DISPATCH = '1';
     process.env.CEZ_MOCK_ARGS_FILE = argsFile;
