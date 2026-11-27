@@ -34,3 +34,23 @@ export async function pickStartupPort(
   }
   return start;
 }
+
+/** One human line for a failed bind, so a taken port never surfaces as an uncaught exception. */
+export function listenErrorMessage(error: NodeJS.ErrnoException, port: number): string {
+  if (error.code === 'EADDRINUSE') {
+    return `port ${port} is already in use by another process. Stop it, or start cezar on a free port with --port <n>.`;
+  }
+  if (error.code === 'EACCES') {
+    return `no permission to listen on port ${port}. Pick another with --port <n>.`;
+  }
+  return `could not listen on port ${port}: ${error.message}`;
+}
+
+/** Route the server's 'error' event (EADDRINUSE and friends) to `onFatal` instead of letting it escape. */
+export function handleListenError(
+  server: { on(event: 'error', listener: (error: NodeJS.ErrnoException) => void): unknown },
+  port: number,
+  onFatal: (message: string) => void,
+): void {
+  server.on('error', (error) => onFatal(listenErrorMessage(error, port)));
+}

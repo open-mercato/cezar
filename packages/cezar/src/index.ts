@@ -59,7 +59,7 @@ import { runAutomationCommand } from './automations/automation-cli.ts';
 import { runManagerCommand } from './managers/manager-cli.ts';
 import { runHandoffCommand } from './handoff-cli.ts';
 import { apiOrigin } from './api-origin.ts';
-import { pickStartupPort } from './startup-port.ts';
+import { handleListenError, pickStartupPort } from './startup-port.ts';
 import { runTelemetryCommand } from './telemetry-cli.ts';
 import { reportInconclusiveProbe } from './server/provider-telemetry.ts';
 import { runRunsCommand } from './runs/runs-cli.ts';
@@ -634,6 +634,14 @@ async function serveCommand(
     webhooks,
     selfUpdate,
   }, port);
+  // A taken port (the probe above races the real bind, and installed/remote mode skips it) must
+  // end as one clear line, never an uncaught exception.
+  handleListenError(httpServer, port, (message) => {
+    console.error(`cezar: ${message}`);
+    process.exitCode = 1;
+    store.flush({ pretty: true });
+    void releaseRuntime().finally(() => process.exit(1));
+  });
   httpServer.once('listening', () => {
     const publication = cockpitLease
       ? publishCockpitRuntime(cockpitLease, { runtimeId, port, bindHost, version })
