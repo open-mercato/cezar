@@ -102,6 +102,7 @@ import type {
   GitPushResponse,
   GitStatusResponse,
   GithubChecksData,
+  GithubFingerprintData,
   GithubSearchData,
   GithubRefStatusData,
   GithubCommentsData,
@@ -1250,6 +1251,14 @@ export async function getGithubChecks(
       init(opts),
     ),
     '/github/checks',
+  )
+}
+
+/** The cheap change probe behind the GitHub tab's "new data" chip (#1870). */
+export async function getGithubFingerprint(opts?: ReadOptions): Promise<GithubFingerprintData> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].github.fingerprint.$get({ param: { projectId: queryScope() } }, init(opts)),
+    '/github/fingerprint',
   )
 }
 

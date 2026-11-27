@@ -3,7 +3,7 @@ import { matchPath, useLocation } from 'react-router'
 
 import { useManagers } from '@/api/managers'
 import { useAttention } from '@/api/attention'
-import { useHealth, useProjectRuns, useProjects, useRunsForProject, useSkillsUpdate, useStarCount, useTodos, useWorkspaceConfig, useWorkspaceUiState } from '@/api/queries'
+import { useGithubOffTabInvalidation, useHealth, useProjectRuns, useProjects, useRunsForProject, useSkillsUpdate, useStarCount, useTodos, useWorkspaceConfig, useWorkspaceUiState } from '@/api/queries'
 import type { HealthResponse, ProjectsResponse, RunRecord, SkillsUpdateState } from '@open-mercato/cezar-api-client'
 import { AppShell, type ProjectSwitcher as ProjectSwitcherData, type RepoChip } from '@/components/app-shell'
 import { CommandPalette } from '@/components/command-palette'
@@ -108,6 +108,7 @@ export const AppShellContainer = memo(function AppShellContainer({ children }: {
   const { pathname, search } = useLocation()
   const projectId = useActiveProjectId()
   const health = useHealth()
+  useGithubOffTabInvalidation()
   const workspaceConfig = useWorkspaceConfig()
   const branding = workspaceConfig.data?.branding
   const customBranding = branding !== undefined && (

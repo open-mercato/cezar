@@ -4,6 +4,7 @@ import { MemoryRouter, Route, Routes } from 'react-router'
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { createQueryClient } from '@/api/query-client'
+import { queryKeys } from '@/api/queries'
 import type {
   GithubComment,
   GithubCommentsData,
@@ -272,9 +273,9 @@ function stubFetch(
  *  is exercised the same way a real navigation would hit it AND `/github` → `/github/issues/:n`
  *  reconciles as one element type instead of remounting (#730). Getting either wrong here would
  *  hide the very bug the "opens a cross-state hit" tests below exist to catch. */
-function renderAt(entry: string) {
+function renderAt(entry: string, client = createQueryClient()) {
   render(
-    <QueryClientProvider client={createQueryClient()}>
+    <QueryClientProvider client={client}>
       <MemoryRouter initialEntries={[entry]}>
         <Routes>
           <Route path="/github" element={<GithubRoute view="issues" index />} />
@@ -3552,5 +3553,45 @@ describe('swipe a row to run (mobile) — no lasting side effects', () => {
     renderAt('/github/issues/142')
     await waitFor(() => expect(rows()).toHaveLength(2))
     expect(rows()[0]?.closest('li')?.className).not.toContain('overflow-hidden')
+  })
+})
+
+describe('change probe + non-destructive Refresh (#1870)', () => {
+  const texts = () => rows().map((r) => r.textContent)
+  const withFp = (fingerprint: string, extra: Partial<GithubData> = {}): GithubData => ({ ...GITHUB, fingerprint, ...extra })
+
+  it('shows a New data chip without swapping rows, and Refresh keeps the typed prompt, search and thread', async () => {
+    let list = withFp('a')
+    let probeFp = 'a'
+    const sent = stubFetch({
+      'GET /api/v1/github/fingerprint': () => jsonResponse({ available: true, fingerprint: probeFp }),
+      'GET /api/v1/github?limit=50': () => jsonResponse(list),
+      'GET /api/v1/github?refresh=1&limit=50': () => jsonResponse(list),
+    })
+    const queryClient = createQueryClient()
+    renderAt('/github', queryClient)
+    await waitFor(() => expect(rows().length).toBeGreaterThan(0))
+    expect(document.querySelector('[data-slot="gh-new-data"]')).toBeNull()
+
+    fireEvent.change(document.querySelector<HTMLInputElement>('[data-slot="gh-search"]')!, { target: { value: 'login' } })
+    fireEvent.change(document.querySelector<HTMLTextAreaElement>('[data-slot="gh-custom-prompt"]')!, { target: { value: 'my draft' } })
+    const before = texts()
+
+    // GitHub changed: a probe tick lands. The chip appears; the rows stay exactly as they were.
+    probeFp = 'b'
+    list = withFp('b', { issues: [{ ...ISSUE_142, number: 999, title: 'Brand new', url: 'https://github.com/acme/demo/issues/999' }, ISSUE_142, ISSUE_139] })
+    await act(async () => {
+      await queryClient.refetchQueries({ queryKey: queryKeys.githubFingerprint() })
+    })
+    await waitFor(() => expect(document.querySelector('[data-slot="gh-new-data"]')).not.toBeNull())
+    expect(texts()).toEqual(before)
+
+    fireEvent.click(document.querySelector<HTMLElement>('[data-slot="gh-new-data"]')!)
+    await waitFor(() => expect(document.querySelector('[data-slot="gh-new-data"]')).toBeNull())
+    expect(document.querySelector<HTMLInputElement>('[data-slot="gh-search"]')!.value).toBe('login')
+    expect(document.querySelector<HTMLTextAreaElement>('[data-slot="gh-custom-prompt"]')!.value).toBe('my draft')
+    // The thread asked for after Refresh is still #142, not the new top row.
+    const threadPaths = sent.filter((r) => r.path.startsWith('/api/v1/github/comments/')).map((r) => r.path)
+    expect(threadPaths.at(-1)).toContain('/issue/142')
   })
 })

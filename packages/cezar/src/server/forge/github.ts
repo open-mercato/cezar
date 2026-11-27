@@ -2,7 +2,7 @@ import { execFile } from 'node:child_process';
 import { ghEnv } from '../../core/gh-env.ts';
 import { promisify } from 'node:util';
 import { z } from 'zod';
-import { REFERENCE_STATUS_MAX } from '@open-mercato/cezar-contract';
+import { REFERENCE_STATUS_MAX, type GithubFingerprintData } from '@open-mercato/cezar-contract';
 import { autosaveCommit, taskRemotes } from '../../git-worktree.ts';
 import { parseRemote, splitRemoteRef } from '../../git-remotes.ts';
 import { GITHUB_COM, isGithubHost } from '../../github-hosts.ts';
@@ -195,6 +195,8 @@ export interface GithubData {
   prsTotal?: number;
   issuesNextCursor?: string | null;
   prsNextCursor?: string | null;
+  /** Change fingerprint the first page was built from (#1870). */
+  fingerprint?: string;
 }
 
 // `gh … --json` output — validated at the boundary, extras stripped.
@@ -457,12 +459,73 @@ export function parseOwnerName(nameWithOwner: string): { owner: string; name: st
 const listCache = new Map<string, { at: number; limit: number; data: GithubData }>();
 const LIST_CACHE_MAX = 50;
 const CACHE_MS = 60_000;
+/** The list cache outlives the other caches: the fingerprint probe, not the clock, drops it (#1870). */
+const LIST_CACHE_MS = 120_000;
+const FINGERPRINT_CACHE_MS = 15_000;
+/** Last fingerprint seen per repo, and the probe answer shared by every tab for a few seconds. */
+const knownFingerprint = new Map<string, string>();
+const fingerprintProbe = new Map<string, { at: number; result: GithubFingerprintData }>();
+
+function dropListCache(repoRoot: string): void {
+  for (const key of [...listCache.keys()]) if (key.startsWith(`${repoRoot}\0`)) listCache.delete(key);
+}
+
+const githubFingerprintQuery = `
+query ($owner: String!, $name: String!) {
+  repository(owner: $owner, name: $name) {
+    issues(states: OPEN, first: 1, orderBy: {field: UPDATED_AT, direction: DESC}) { totalCount nodes { number updatedAt } }
+    pullRequests(states: OPEN, first: 1, orderBy: {field: UPDATED_AT, direction: DESC}) { totalCount nodes { number updatedAt } }
+  }
+}`;
+const ghFingerprintSchema = z.object({
+  issues: z.object({ totalCount: z.number(), nodes: z.array(z.object({ number: z.number(), updatedAt: z.string() })) }),
+  pullRequests: z.object({ totalCount: z.number(), nodes: z.array(z.object({ number: z.number(), updatedAt: z.string() })) }),
+});
+
+export function parseGithubFingerprint(out: string): string {
+  const repo = ghFingerprintSchema.parse((JSON.parse(out) as { data?: { repository?: unknown } })?.data?.repository);
+  const side = (c: typeof repo.issues) => `${c.totalCount}:${c.nodes[0]?.number ?? 0}@${c.nodes[0]?.updatedAt ?? ''}`;
+  return `${side(repo.issues)}|${side(repo.pullRequests)}`;
+}
+
+/** One GraphQL point: open counts + newest `updatedAt` of each side (#1870). A change versus the
+ *  last fingerprint seen for this repo drops its cached list pages. Degrades like the list. */
+export async function fetchGithubFingerprint(repoRoot: string): Promise<GithubFingerprintData> {
+  if (process.env.CEZ_DRY_RUN === '1') return { available: true, fingerprint: 'dry-run' };
+  const hit = fingerprintProbe.get(repoRoot);
+  if (hit && Date.now() - hit.at < FINGERPRINT_CACHE_MS) return hit.result;
+  let result: GithubFingerprintData;
+  try {
+    const handle = await resolveRepoHandle(repoRoot);
+    if (!handle) {
+      result = { available: false, reason: 'repository handle unavailable' };
+    } else {
+      const out = await gh(
+        repoRoot,
+        ['api', 'graphql', '-f', `query=${githubFingerprintQuery}`, '-f', `owner=${handle.owner}`, '-f', `name=${handle.name}`],
+        15_000,
+      );
+      const fingerprint = parseGithubFingerprint(out);
+      const prev = knownFingerprint.get(repoRoot);
+      if (prev !== undefined && prev !== fingerprint) dropListCache(repoRoot);
+      knownFingerprint.set(repoRoot, fingerprint);
+      result = { available: true, fingerprint };
+    }
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    result = { available: false, reason: /ENOENT/.test(message) ? 'gh CLI not found — install it and run `gh auth login`' : whyLine(ghStderr(err) ?? message) };
+  }
+  if (result.available) fingerprintProbe.set(repoRoot, { at: Date.now(), result });
+  return result;
+}
 
 /** A sign-in changes what every cached `unavailable` answer means: a GitHub tab that cached "gh is
  *  not authenticated" would keep saying so for a minute after the user just signed in. Called by
  *  the login route the moment `gh` exits 0; the signed-in state is the only thing that moves. */
 export function forgetGithubListCache(): void {
   listCache.clear();
+  knownFingerprint.clear();
+  fingerprintProbe.clear();
   enterpriseHostByRoot.clear();
 }
 export const GH_MAX_LIMIT = 1000;
@@ -549,8 +612,13 @@ export async function fetchGithub(
   if (process.env.CEZ_DRY_RUN === '1') return mockGithubPage(limit, cursors);
   const capped = Math.min(Math.max(limit, 1), GH_MAX_LIMIT);
   const cacheKey = `${repoRoot}\0${cursors.issuesCursor ?? ''}\0${cursors.prsCursor ?? ''}\0${cursors.issuesDone ? 1 : 0}${cursors.prsDone ? 1 : 0}`;
+  // Refresh busts every page of this repo: a later page could otherwise outlive the first (#1870).
+  if (refresh) {
+    dropListCache(repoRoot);
+    fingerprintProbe.delete(repoRoot);
+  }
   const hit = listCache.get(cacheKey);
-  if (!refresh && hit && Date.now() - hit.at < CACHE_MS && hit.limit >= capped) {
+  if (!refresh && hit && Date.now() - hit.at < LIST_CACHE_MS && hit.limit >= capped) {
     return hit.data;
   }
   try {
@@ -566,6 +634,9 @@ export async function fetchGithub(
       }
       return gh(repoRoot, args, timeout);
     };
+    // Probe just before a first-page fetch so the rows carry the fingerprint they were built from.
+    const firstPage = !cursors.issuesCursor && !cursors.prsCursor && !cursors.issuesDone && !cursors.prsDone;
+    const probe = firstPage ? await fetchGithubFingerprint(repoRoot) : undefined;
     const page = await fetchGithubListPages(runGraphql, ownerName.owner, ownerName.name, capped, cursors);
     // One repo-wide label→color map, filled as we flatten each item's labels.
     const labelColors: Record<string, string> = {};
@@ -620,6 +691,7 @@ export async function fetchGithub(
       prsTotal: page.pullRequests.totalCount,
       issuesNextCursor: page.issues.pageInfo.hasNextPage ? page.issues.pageInfo.endCursor ?? null : null,
       prsNextCursor: page.pullRequests.pageInfo.hasNextPage ? page.pullRequests.pageInfo.endCursor ?? null : null,
+      ...(probe?.available ? { fingerprint: probe.fingerprint } : {}),
     };
     listCache.delete(cacheKey); // re-insert so this key becomes the newest
     listCache.set(cacheKey, { at: Date.now(), limit: capped, data });

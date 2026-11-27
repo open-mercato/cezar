@@ -42,6 +42,8 @@ import {
   forgetRefStatus,
   refNumberFromUrl,
   fetchGithub,
+  fetchGithubFingerprint,
+  forgetGithubListCache,
   searchGithubItems,
   GH_CHECKS_MAX,
   GH_SEARCH_MAX,
@@ -3979,5 +3981,96 @@ describe('fetchPrWatchFingerprint (#2040)', () => {
     const calls = execFileMock.mock.calls.length;
     expect(await fetchPrWatchFingerprint('/r', 7)).toBeNull();
     expect(execFileMock.mock.calls.length).toBe(calls);
+  });
+});
+
+describe('GitHub list cache + change fingerprint (#1870)', () => {
+  let stamp = '2026-07-01T00:00:00Z';
+  let listCalls = 0;
+  let probeCalls = 0;
+  let probeFails = false;
+  const root = '/repo/fingerprint/proj-a';
+
+  beforeEach(() => {
+    vi.stubEnv('CEZ_DRY_RUN', '');
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-07-01T00:00:00Z'));
+    forgetGithubListCache();
+    __clearRepoHandleCacheForTests();
+    stamp = '2026-07-01T00:00:00Z';
+    listCalls = probeCalls = 0;
+    probeFails = false;
+    execFileMock.mockReset();
+    execFileMock.mockImplementation((...args: unknown[]) => {
+      const argv = args[1] as string[];
+      const cb = args[args.length - 1] as (e: unknown, r: unknown) => void;
+      if (argv[0] === 'repo') return cb(null, { stdout: 'owner/a\n', stderr: '' });
+      const query = argv.find((a) => a.startsWith('query=')) ?? '';
+      if (query.includes('UPDATED_AT')) {
+        probeCalls++;
+        if (probeFails) return cb(new Error('boom'), { stdout: '', stderr: '' });
+        const side = { totalCount: 3, nodes: [{ number: 9, updatedAt: stamp }] };
+        return cb(null, { stdout: JSON.stringify({ data: { repository: { issues: side, pullRequests: side } } }), stderr: '' });
+      }
+      if (query.includes('issuesLimit')) {
+        listCalls++;
+        return cb(null, { stdout: JSON.stringify({ data: { repository: {
+          issues: { totalCount: 0, nodes: [], pageInfo: { hasNextPage: false, endCursor: null } },
+          pullRequests: { totalCount: 0, nodes: [], pageInfo: { hasNextPage: false, endCursor: null } },
+        } } }), stderr: '' });
+      }
+      return cb(null, { stdout: '[]', stderr: '' });
+    });
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllEnvs();
+  });
+
+  it('parses the probe into an opaque fingerprint and degrades without throwing', async () => {
+    expect(await fetchGithubFingerprint(root)).toEqual({ available: true, fingerprint: expect.stringContaining('3:9@') });
+    forgetGithubListCache();
+    probeFails = true;
+    expect(await fetchGithubFingerprint(root)).toMatchObject({ available: false });
+  });
+
+  it('serves a list from cache for 2 minutes with no gh list call, and stamps the fingerprint', async () => {
+    const first = await fetchGithub(root);
+    expect(first.fingerprint).toBeTruthy();
+    vi.setSystemTime(Date.now() + 119_000);
+    expect(await fetchGithub(root)).toBe(first);
+    expect(listCalls).toBe(1);
+    vi.setSystemTime(Date.now() + 2_000);
+    await fetchGithub(root);
+    expect(listCalls).toBe(2);
+  });
+
+  it('a changed fingerprint drops the cached list; an unchanged one keeps it', async () => {
+    await fetchGithub(root);
+    vi.setSystemTime(Date.now() + 20_000);
+    await fetchGithubFingerprint(root);
+    await fetchGithub(root);
+    expect(listCalls).toBe(1);
+    stamp = '2026-07-01T00:00:30Z';
+    vi.setSystemTime(Date.now() + 20_000);
+    expect((await fetchGithubFingerprint(root)).available).toBe(true);
+    await fetchGithub(root);
+    expect(listCalls).toBe(2);
+  });
+
+  it('shares one probe between callers inside the probe window', async () => {
+    await fetchGithubFingerprint(root);
+    await fetchGithubFingerprint(root);
+    expect(probeCalls).toBe(1);
+  });
+
+  it('refresh drops every cached page of the repo', async () => {
+    await fetchGithub(root);
+    await fetchGithub(root, false, 30, { issuesCursor: 'c', prsCursor: 'd' });
+    expect(listCalls).toBe(2);
+    await fetchGithub(root, true);
+    await fetchGithub(root, false, 30, { issuesCursor: 'c', prsCursor: 'd' });
+    expect(listCalls).toBe(4);
   });
 });

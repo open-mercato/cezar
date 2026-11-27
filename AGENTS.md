@@ -40,6 +40,7 @@ Practical rules:
   - Old cezar versions are pruned to the running version plus 2.
   - `worktreeIdleDays`/`resources.worktreeIdleDaysDefault`, `archivedTaskDeleteDays`/`resources.archivedTaskDeleteDaysDefault` and `versionRetention` set to 0 turn each off.
   - The archived-task deletion changes what archive means, from "hidden and kept" to "deleted after 90 days". It is listed here because it removes user data unattended. The opt-in version is a default of 0 in `DEFAULT_ARCHIVED_TASK_DELETE_DAYS`.
+- **Pending owner ratification (2026-11-27)**: the GitHub tab change probe (#1870) is default-on. While list pages are cached and the document is visible, the cockpit calls `GET /api/v1/github/fingerprint` every 60 s, which runs one `gh api graphql` call (1 GraphQL point; shared per repo for 15 s) with the user's own `gh` auth, and a first-page list fetch runs it once beforehand. It stops when no list pages are cached, never runs under `CEZ_DRY_RUN=1`, and any failure is `{ available: false }`. It replaces a clock-only freshness of the list cache (now 120 s) with a change check. The opt-in version is a `CEZ_*` flag defaulting the probe off.
 - A missing dependency, an absent peer, a read-only home: degrade to a smaller working cockpit, never fail the boot.
 - Prefer a proxy-free, daemon-free mechanism when one exists — and when it doesn't, keep the mechanism invisible: no process to manage, no port to remember, no file to edit.
 - Never trade a working default for a knob.
