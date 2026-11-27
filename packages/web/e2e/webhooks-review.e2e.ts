@@ -16,7 +16,7 @@ describe('fixture UI guards', () => {
       await gate
       await route.fulfill({ json: { deliveryId: 'test-fixture' } })
     })
-    await app.open('/p/default/settings/webhooks')
+    await app.open('/p/default/settings/integrations?integration=webhooks')
     await screen.getByRole('button', 'Send test').tap()
     await expect(screen.getByRole('button', 'Send test')).toBeDisabled()
     await screen.getByRole('button', 'Add receiver').tap()
@@ -63,7 +63,7 @@ test('delayed test 409 must not block a new Add draft', async ({ app, screen, br
     await gate
     await route.continue()
   })
-  await app.open('/p/default/settings/webhooks')
+  await app.open('/p/default/settings/integrations?integration=webhooks')
   await screen.getByRole('article').filter({ hasText: receiver.name }).getByRole('button', 'Send test').tap()
   await expect.poll(() => started).toBe(true)
   await screen.getByRole('button', 'Add receiver').tap()
