@@ -1,4 +1,5 @@
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -54,6 +55,46 @@ describe('ensureDataGitignore', () => {
     expect(lines).toContain('my-own-scratch/');
     expect(lines).toContain('drafts/');
     expect(lines.filter((l) => l === 'runs.json')).toHaveLength(1); // never duplicated
+  });
+
+  describe('a tracked .ai/cezar/.gitignore (#1486)', () => {
+    const git = (...a: string[]) => execFileSync('git', a, { cwd: repoRoot, stdio: 'pipe' }).toString();
+    const exclude = () => readFileSync(join(repoRoot, '.git', 'info', 'exclude'), 'utf8');
+    const trackFile = () => {
+      git('init', '-q');
+      mkdirSync(join(repoRoot, '.ai/cezar'), { recursive: true });
+      writeFileSync(join(repoRoot, '.ai/cezar', '.gitignore'), 'runs.json\n', 'utf8');
+      git('add', '-f', '.ai/cezar/.gitignore');
+      git('-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-qm', 'x');
+    };
+
+    it('leaves the committed file untouched and excludes the missing entries locally', () => {
+      trackFile();
+      ensureDataGitignore(repoRoot);
+      expect(gitignore()).toBe('runs.json\n');
+      expect(git('status', '--porcelain')).toBe('');
+      expect(exclude().split('\n')).toContain('/.ai/cezar/drafts/');
+      expect(exclude().split('\n')).not.toContain('/.ai/cezar/runs.json');
+      ensureDataGitignore(repoRoot);
+      expect(exclude().split('\n').filter((l) => l === '/.ai/cezar/drafts/')).toHaveLength(1);
+    });
+
+    it('never fails when info/exclude cannot be written', () => {
+      trackFile();
+      mkdirSync(join(repoRoot, '.git', 'info'), { recursive: true });
+      writeFileSync(join(repoRoot, '.git', 'info', 'exclude'), '', 'utf8');
+      chmodSync(join(repoRoot, '.git', 'info', 'exclude'), 0o444);
+      expect(() => ensureDataGitignore(repoRoot)).not.toThrow();
+      expect(gitignore()).toBe('runs.json\n');
+    });
+
+    it('keeps today\'s behaviour for an untracked file in a git repo', () => {
+      git('init', '-q');
+      mkdirSync(join(repoRoot, '.ai/cezar'), { recursive: true });
+      writeFileSync(join(repoRoot, '.ai/cezar', '.gitignore'), 'runs.json\n', 'utf8');
+      ensureDataGitignore(repoRoot);
+      expect(gitignore().split('\n')).toContain('drafts/');
+    });
   });
 
   it('is idempotent', () => {
