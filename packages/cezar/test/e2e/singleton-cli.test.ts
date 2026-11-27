@@ -75,11 +75,14 @@ test('the packaged CLI reuses one cockpit, registers a second CWD, and recovers 
   } = process.env;
   const env = {
     ...inherited,
+    HOME: home,
+    USERPROFILE: home,
     CEZ_HOME: home,
     CEZ_REMOTE: '0',
     CEZ_DRY_RUN: '1',
     CEZ_SECRETS_KEYCHAIN: '0',
     PROVIDER_TEST_VALUE: 'fixture-only-9876',
+    SECOND_PROVIDER_TEST_VALUE: 'second-fixture-1234',
     CEZ_NO_BANNER: '1',
   };
   // Git is the first child on startup and runs again after the cockpit takes its lease.
@@ -87,15 +90,26 @@ test('the packaged CLI reuses one cockpit, registers a second CWD, and recovers 
   const importEnv = {
     ...env,
     GIT_TRACE2_EVENT: trace,
-    GIT_TRACE2_ENV_VARS: 'PROVIDER_TEST_VALUE,PROVIDER_TEST_SENTINEL',
+    GIT_TRACE2_ENV_VARS: 'PROVIDER_TEST_VALUE,SECOND_PROVIDER_TEST_VALUE,PROVIDER_TEST_SENTINEL',
     PROVIDER_TEST_SENTINEL: 'ordinary-inherited-value',
   };
   let primary: ChildProcess | undefined;
   let recovery: ChildProcess | undefined;
+  const document = JSON.stringify({ version: 1, agents: {
+    claude: { active: 'openrouter', methods: { openrouter: { apiKeyEnv: 'PROVIDER_TEST_VALUE' } } },
+    gemini: { active: 'apiKey', methods: { apiKey: { apiKeyEnv: 'SECOND_PROVIDER_TEST_VALUE' } } },
+  } });
+  const assertGitEnv = async () => {
+    const inheritedByGit = await readFile(trace, 'utf8');
+    assert.ok(inheritedByGit.includes('ordinary-inherited-value'), 'Git must see the unrelated sentinel');
+    assert.ok(!inheritedByGit.includes('fixture-only-9876') && !inheritedByGit.includes('second-fixture-1234'),
+      'Git must never inherit either declared key source');
+  };
   try {
-    primary = spawn(process.execPath, [cliPath, '--providers', '{invalid-json', '--repo', repoA, '--port', String(firstPort), '--no-open'], {
+    const malformed = document.slice(0, -1) + ',}';
+    primary = spawn(process.execPath, [cliPath, '--providers', malformed, '--repo', repoA, '--port', String(firstPort), '--no-open'], {
       cwd: root,
-      env,
+      env: importEnv,
       stdio: ['ignore', 'pipe', 'pipe'],
     });
     let errors = '';
@@ -107,9 +121,8 @@ test('the packaged CLI reuses one cockpit, registers a second CWD, and recovers 
     assert.equal(errors.split('[cez] providers:').length - 1, 1);
     const initial = await (await fetch(firstOrigin + '/api/v1/agent-providers')).json() as { agents: { configured?: boolean }[] };
     assert.ok(initial.agents.every(agent => !agent.configured));
+    await assertGitEnv();
 
-    const document = JSON.stringify({ version: 1, agents: { claude: { active: 'openrouter',
-      methods: { openrouter: { apiKeyEnv: 'PROVIDER_TEST_VALUE' } } } } });
     const secondary = await execFile(
       process.execPath,
       [cliPath, '--providers', document, '--repo', repoB, '--port', String(secondPort), '--no-open'],
@@ -143,9 +156,7 @@ test('the packaged CLI reuses one cockpit, registers a second CWD, and recovers 
     });
     const recoveredHealth = await waitForHealth(`http://127.0.0.1:${recoveryPort}`);
     assert.notEqual(recoveredHealth.runtimeId, firstHealth.runtimeId, 'a replacement process mints a new runtime identity');
-    const inheritedByGit = await readFile(trace, 'utf8');
-    assert.ok(inheritedByGit.includes('ordinary-inherited-value'), 'Git must see the unrelated sentinel');
-    assert.ok(!inheritedByGit.includes('fixture-only-9876'), 'Git must never inherit the declared key source');
+    await assertGitEnv();
   } finally {
     if (primary) await stop(primary);
     if (recovery) await stop(recovery);

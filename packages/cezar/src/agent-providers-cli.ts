@@ -2,7 +2,7 @@ import { constants } from 'node:fs';
 import { open } from 'node:fs/promises';
 import { extname } from 'node:path';
 import { parseArgs, type ParseArgsConfig } from 'node:util';
-import { parse as parseYaml } from 'yaml';
+import { isMap, isNode, parse as parseYaml, parseDocument as parseYamlDocument } from 'yaml';
 import { providerFileMethodSchema, providersFileSchema, runnerSchema, type ProvidersFile, type Runner } from '@open-mercato/cezar-contract';
 import { authMethods } from './core/agent-auth-methods.ts';
 import { ProviderAuthService } from './core/provider-auth.ts';
@@ -46,17 +46,24 @@ async function boundedFile(path: string) {
 }
 
 function record(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
+  return typeof value === 'object' && value !== null && !Array.isArray(value) && !isNode(value);
 }
 
-// Serve continues after an invalid document. Remember recognizable sources even if a sibling fails validation.
+// On a syntax error, walk the surviving mapping nodes directly without resolving aliases.
+function field(value: unknown, key: string): unknown {
+  if (isMap(value)) return value.get(key);
+  return record(value) ? value[key] : undefined;
+}
+
+function values(value: unknown): unknown[] {
+  if (isMap(value)) return value.items.map(pair => pair.value);
+  return record(value) ? Object.values(value) : [];
+}
+
 function keySources(raw: unknown, names: Set<string>) {
-  if (!record(raw) || !record(raw.agents)) return;
-  for (const agent of Object.values(raw.agents)) {
-    if (!record(agent) || !record(agent.methods)) continue;
-    for (const method of Object.values(agent.methods)) {
-      if (!record(method)) continue;
-      const name = providerFileMethodSchema.shape.apiKeyEnv.safeParse(method.apiKeyEnv);
+  for (const agent of values(field(raw, 'agents'))) {
+    for (const method of values(field(agent, 'methods'))) {
+      const name = providerFileMethodSchema.shape.apiKeyEnv.safeParse(field(method, 'apiKeyEnv'));
       if (name.success && name.data) names.add(name.data);
     }
   }
@@ -70,7 +77,12 @@ async function readDocument(source: string, stdin: () => Promise<string>, source
   let raw: unknown;
   try {
     raw = inline || (file && extname(source).toLowerCase() === '.json') ? JSON.parse(text) : parseYaml(text);
-  } catch { throw new Error('Invalid providers JSON or YAML.'); }
+  } catch {
+    // This tree is for cleanup only. Keep the original parser's rejection and diagnostic.
+    const partial = parseYamlDocument(text, { logLevel: 'silent' });
+    keySources(partial.contents, sources);
+    throw new Error('Invalid providers JSON or YAML.');
+  }
   keySources(raw, sources);
   const parsed = providersFileSchema.safeParse(raw);
   if (!parsed.success) throw new Error('Invalid providers document at ' + (parsed.error.issues[0]?.path.join('.') || 'version/agents') + '.');
@@ -84,7 +96,7 @@ async function readDocument(source: string, stdin: () => Promise<string>, source
   return parsed.data;
 }
 
-async function changesFrom(doc: ProvidersFile): Promise<ProviderChange[]> {
+async function changesFrom(doc: ProvidersFile, keys: ReadonlyMap<string, string | undefined>): Promise<ProviderChange[]> {
   const changes: ProviderChange[] = [];
   for (const runner of runnerSchema.options) {
     const entry = doc.agents[runner];
@@ -92,7 +104,7 @@ async function changesFrom(doc: ProvidersFile): Promise<ProviderChange[]> {
     const methods: ProviderChange['methods'] = [];
     for (const [id, { apiKey, apiKeyFile, apiKeyEnv, ...rest }] of Object.entries(entry.methods ?? {})) {
       let key = apiKey;
-      if (apiKeyEnv) key = Object.hasOwn(process.env, apiKeyEnv) ? process.env[apiKeyEnv] : undefined;
+      if (apiKeyEnv) key = keys.get(apiKeyEnv);
       if (apiKeyFile) {
         try { key = (await boundedFile(apiKeyFile)).value.replace(/\r?\n$/, ''); }
         catch { throw new Error('Could not read the key file for ' + runner + '/' + id + '.'); }
@@ -115,7 +127,7 @@ async function loginStatus(runners?: Runner[], env = process.env): Promise<Provi
   return (await auth.status()).providers.map(row => ({ ...row, methods: auth.methodStatuses(row.provider) }));
 }
 
-async function applyChanges(changes: ProviderChange[], origin: 'cli' | 'file', logins: typeof loginStatus, sources = new Set<string>()) {
+async function applyChanges(changes: ProviderChange[], origin: 'cli' | 'file', logins: typeof loginStatus, present: Record<string, string> = {}) {
   const { agents } = await readAgentProviders();
   const runners = changes.filter(({ runner, active, methods }) => {
     const caps = authMethods(runner);
@@ -125,33 +137,46 @@ async function applyChanges(changes: ProviderChange[], origin: 'cli' | 'file', l
     return selected?.kind === 'subscription' || (!!selected?.hostKeyEnv &&
       !agents[runner]?.methods[selected.id] && !methods.some(method => method.id === selected.id));
   }).map(change => change.runner);
-  let rows: ProviderLogin[] = [];
-  if (runners.length) {
-    // Local credential detection still sees host keys. Only the CLI's subprocesses need a scrubbed environment.
-    const saved = Array.from(sources, name => [name, process.env[name]] as const);
-    const hostEnv = sources.size ? { ...process.env, ...Object.fromEntries(saved) } : process.env;
-    for (const name of sources) delete process.env[name];
-    try {
-      rows = await logins(runners, hostEnv);
-    } finally {
-      for (const [name, value] of saved) {
-        if (value !== undefined) process.env[name] = value;
-      }
+  if (!runners.length) return applyProviderChanges(changes, origin, []);
+  // Local status parsers need presence, while their child processes inherit the scrubbed environment.
+  const env = Object.keys(present).length ? { ...process.env, ...present } : process.env;
+  const rows = await logins(runners, env);
+  const evidence = rows.map(row => {
+    const methods = { ...row.methods };
+    for (const { id, hostKeyEnv } of authMethods(row.provider).methods) {
+      if (hostKeyEnv && Object.hasOwn(present, hostKeyEnv)) methods[id] = 'connected';
     }
-  }
-  return applyProviderChanges(changes, origin, rows);
+    return { ...row, methods };
+  });
+  return applyProviderChanges(changes, origin, evidence);
 }
 
-async function applyDocument(source: string, stdin: typeof stdinText, logins: typeof loginStatus, sources = new Set<string>()) {
-  const changes = await changesFrom(await readDocument(source, stdin, sources));
-  const fetches = await applyChanges(changes, 'file', logins, sources);
+async function importMethods(doc: ProvidersFile, origin: 'cli' | 'file', logins: typeof loginStatus, sources: Iterable<string>) {
+  // One import per CLI process. Take every input before the first await and never re-export it.
+  const keys = new Map(Array.from(sources, name => [name, Object.hasOwn(process.env, name) ? process.env[name] : undefined] as const));
+  const present: Record<string, string> = Object.create(null);
+  for (const [name, value] of keys) {
+    delete process.env[name];
+    if (value?.trim()) present[process.platform === 'win32' ? name.toUpperCase() : name] = '1';
+  }
+  const changes = await changesFrom(doc, keys);
+  const fetches = await applyChanges(changes, origin, logins, present);
   return { changes, fetches };
 }
 
-export async function applyProvidersAtStartup(source: string) {
+async function applyDocument(source: string, stdin: typeof stdinText, logins: typeof loginStatus) {
   const sources = new Set<string>();
-  try { return (await applyDocument(source, stdinText, loginStatus, sources)).fetches; }
-  finally { for (const name of sources) delete process.env[name]; }
+  let doc: ProvidersFile;
+  try { doc = await readDocument(source, stdin, sources); }
+  catch (error) {
+    for (const name of sources) delete process.env[name];
+    throw error;
+  }
+  return importMethods(doc, 'file', logins, sources);
+}
+
+export async function applyProvidersAtStartup(source: string) {
+  return (await applyDocument(source, stdinText, loginStatus)).fetches;
 }
 
 type MethodRef = { runner: ProviderChange['runner']; id: string };
@@ -215,8 +240,7 @@ export async function runProvidersCommand(argv: string[], io = { stdin: stdinTex
       } } });
       if (!doc.success) throw new Error('Invalid method settings.');
       const keyEnv = doc.data.agents[runner]?.methods?.[id]?.apiKeyEnv;
-      const sources = new Set(keyEnv ? [keyEnv] : []);
-      const fetches = await applyChanges(await changesFrom(doc.data), 'cli', io.logins, sources);
+      const { fetches } = await importMethods(doc.data, 'cli', io.logins, keyEnv ? [keyEnv] : []);
       if (!values['no-fetch']) await fetchAppliedProviders(fetches, io.error);
     }
     io.log('Updated ' + runner + '/' + id);

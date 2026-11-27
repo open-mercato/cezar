@@ -4,6 +4,8 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { applyProvidersAtStartup, runProvidersCommand } from './agent-providers-cli.ts';
 import { readAgentProviders, readAgentProviderKey } from './workspace/agent-providers.ts';
+import * as keyring from './workspace/secret-keyring.ts';
+import * as models from './agent-providers/models.ts';
 
 let home: string;
 const logins = async () => [{ provider: 'claude' as const, status: 'connected' as const, methods: { subscription: 'connected' as const } }];
@@ -17,7 +19,7 @@ beforeEach(async () => {
   vi.stubEnv('CEZ_TEST_PROVIDER', key);
   vi.clearAllMocks();
 });
-afterEach(async () => { vi.unstubAllEnvs(); await rm(home, { recursive: true, force: true }); });
+afterEach(async () => { vi.restoreAllMocks(); vi.unstubAllEnvs(); await rm(home, { recursive: true, force: true }); });
 
 it('applies inputs atomically, preserving unnamed methods and never printing the key', async () => {
   const doc = { version: 1, agents: { claude: { methods: { openrouter: { apiKeyEnv: 'CEZ_TEST_PROVIDER' } }, active: 'openrouter' } } };
@@ -26,9 +28,12 @@ it('applies inputs atomically, preserving unnamed methods and never printing the
   const first = await readAgentProviders();
   expect(first.agents.claude).toMatchObject({ active: 'openrouter', methods: { openrouter: { keyHint: '…1234', origin: 'file' } } });
   expect(await readAgentProviderKey('codex', 'custom')).toBe(key);
+  // Each command would inherit a fresh copy from its calling shell.
+  vi.stubEnv('CEZ_TEST_PROVIDER', key);
   expect(await runProvidersCommand(['apply', JSON.stringify(doc), '--no-fetch'], io)).toBe(0);
   expect(await readAgentProviders()).toEqual(first);
   const bad = { ...doc, agents: { ...doc.agents, cursor: { methods: { custom: { apiKeyEnv: 'CEZ_TEST_PROVIDER' } } } } };
+  vi.stubEnv('CEZ_TEST_PROVIDER', key);
   expect(await runProvidersCommand(['apply', JSON.stringify(bad)], io)).toBe(1);
   expect(await readAgentProviders()).toEqual(first);
   expect(await runProvidersCommand(['list', '--json'], io)).toBe(0);
@@ -77,12 +82,15 @@ it('resolves a key file once and leaves an empty agent entry unconfigured', asyn
 it('saves an explicitly selected key or additive method without starting a login probe', async () => {
   const noProbe = { ...io, logins: vi.fn(async () => { throw new Error('unexpected login probe'); }) };
   expect(await runProvidersCommand(['set', 'gemini', 'apiKey', '--key-env', 'CEZ_TEST_PROVIDER', '--active', '--no-fetch'], noProbe)).toBe(0);
+  expect(process.env.CEZ_TEST_PROVIDER).toBeUndefined();
+  vi.stubEnv('CEZ_TEST_PROVIDER', key);
   expect(await runProvidersCommand(['set', 'gemini', 'apiKey', '--key-env', 'CEZ_TEST_PROVIDER', '--no-fetch'], noProbe)).toBe(0);
   const additive = { version: 1, agents: { pi: { methods: { openrouter: { apiKeyEnv: 'CEZ_TEST_PROVIDER' } } } } };
+  vi.stubEnv('CEZ_TEST_PROVIDER', key);
   expect(await runProvidersCommand(['apply', JSON.stringify(additive), '--no-fetch'], noProbe)).toBe(0);
   expect(noProbe.logins).not.toHaveBeenCalled();
   expect(await readAgentProviderKey('pi', 'openrouter')).toBe(key);
-  expect(process.env.CEZ_TEST_PROVIDER).toBe(key);
+  expect(process.env.CEZ_TEST_PROVIDER).toBeUndefined();
 });
 
 it('keeps an existing subscription as the default when importing another method and discovers logins for list', async () => {
@@ -112,8 +120,8 @@ it('probes only the requested subscription in a mixed import and hides every sou
   expect(inspect).toHaveBeenCalledOnce();
   expect((await readAgentProviders()).agents.claude?.active).toBe('subscription');
   expect(await readAgentProviderKey('pi', 'openrouter')).toBe(key);
-  expect(process.env.CEZ_TEST_PROVIDER).toBe(key);
-  expect(process.env.SECOND_FIXTURE_KEY).toBe('fixture-second-5678');
+  expect(process.env.CEZ_TEST_PROVIDER).toBeUndefined();
+  expect(process.env.SECOND_FIXTURE_KEY).toBeUndefined();
 });
 
 it('clears recognized key sources before serve continues after a rejected document', async () => {
@@ -122,6 +130,54 @@ it('clears recognized key sources before serve continues after a rejected docume
   expect(process.env.CEZ_TEST_PROVIDER).toBeUndefined();
   expect(process.env.CEZ_HOME).toBe(home);
   expect((await readAgentProviders()).agents).toEqual({});
+});
+
+it.each(['inline', 'file'])('discards only the explicitly declared sources in malformed %s startup JSON', async (input) => {
+  vi.stubEnv('SECOND_FIXTURE_KEY', 'fixture-second-5678');
+  vi.stubEnv('UNRELATED_CONTROL', 'keep');
+  vi.stubEnv('true', 'keep');
+  const invalid = JSON.stringify({ version: 1, agents: {
+    claude: { methods: { custom: { apiKeyEnv: 'CEZ_TEST_PROVIDER', label: '"apiKeyEnv": "UNRELATED_CONTROL"' } } },
+    gemini: { methods: { apiKey: { apiKeyEnv: 'SECOND_FIXTURE_KEY' } } },
+    pi: { methods: { openrouter: { apiKeyEnv: true } } },
+  }, unrelated: { apiKeyEnv: 'UNRELATED_CONTROL' } }).slice(0, -1) + ',}';
+  const source = input === 'file' ? join(home, 'providers.json') : invalid;
+  if (input === 'file') await writeFile(source, invalid);
+  await expect(applyProvidersAtStartup(source)).rejects.toThrow('Invalid providers JSON or YAML');
+  expect(process.env.CEZ_TEST_PROVIDER).toBeUndefined();
+  expect(process.env.SECOND_FIXTURE_KEY).toBeUndefined();
+  expect(process.env.UNRELATED_CONTROL).toBe('keep');
+  expect(process.env.true).toBe('keep');
+  expect((await readAgentProviders()).agents).toEqual({});
+});
+
+it('keeps declared sources out of keyring reads, writes and model refresh', async () => {
+  vi.stubEnv('SECOND_FIXTURE_KEY', 'fixture-second-5678');
+  vi.stubEnv('UNRELATED_CONTROL', 'keep');
+  const observed: { operation: string; first: boolean; second: boolean; control?: string }[] = [];
+  function observe(operation: string) {
+    observed.push({ operation, first: Object.hasOwn(process.env, 'CEZ_TEST_PROVIDER'),
+      second: Object.hasOwn(process.env, 'SECOND_FIXTURE_KEY'), control: process.env.UNRELATED_CONTROL });
+  }
+  let dataKey: Buffer | null = null;
+  vi.spyOn(keyring, 'osKeychain').mockResolvedValue({
+    async get() { observe('keyring read'); return dataKey; },
+    async set(value) { observe('keyring write'); dataKey = value; },
+  });
+  vi.spyOn(models, 'fetchProviderModels').mockImplementation(async () => {
+    observe('models');
+    return [{ id: 'fixture-model' }];
+  });
+  const doc = { version: 1, agents: {
+    claude: { methods: { openrouter: { apiKeyEnv: 'CEZ_TEST_PROVIDER' } } },
+    gemini: { active: 'apiKey', methods: { apiKey: { apiKeyEnv: 'SECOND_FIXTURE_KEY' } } },
+  } };
+  const cli = { ...io, logins: async () => { observe('login'); return logins(); } };
+  expect(await runProvidersCommand(['apply', JSON.stringify(doc)], cli)).toBe(0);
+  expect(await readAgentProviderKey('claude', 'openrouter')).toBe(key);
+  expect(await readAgentProviderKey('gemini', 'apiKey')).toBe('fixture-second-5678');
+  expect(new Set(observed.map(row => row.operation))).toEqual(new Set(['login', 'keyring read', 'keyring write', 'models']));
+  for (const row of observed) expect(row, row.operation).toMatchObject({ first: false, second: false, control: 'keep' });
 });
 
 it('keeps a native host key active when importing it under its own name at startup', async () => {
