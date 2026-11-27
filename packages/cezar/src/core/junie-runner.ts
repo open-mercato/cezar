@@ -1,3 +1,4 @@
+import { AgentProviderUnavailable } from './agent-runner.ts';
 import type { ChildProcessWithoutNullStreams } from 'node:child_process';
 import type {
   AgentEvent,
@@ -156,7 +157,7 @@ class JunieSession implements AgentSession {
     private readonly opts: SessionOptions,
   ) {
     try {
-      this.child = spawnJunieAcp(bin, spec.cwd, spec.env);
+      this.child = spawnJunieAcp(bin, spec.cwd, spec.env, spec.provider);
       this.rpc = new JunieAcpRpc(this.child);
     } catch (err) {
       throw junieSpawnError(err, bin);
@@ -378,12 +379,20 @@ class JunieSession implements AgentSession {
       // Junie's model ids are opaque, junie-catalog strings (e.g.
       // `v1:12:jetbrains-ai:claude-sonnet-5`), never `provider/model` — a bad
       // id fails loud here rather than being swallowed (AGENT_PROTOCOL.md §9).
+      let configOptions = session.configOptions;
       if (this.spec.model) {
-        await this.rpc.request('session/set_config_option', {
+        const changed = await this.rpc.request('session/set_config_option', {
           sessionId,
           configId: 'model',
           value: this.spec.model,
         });
+        configOptions = changed.configOptions;
+      }
+      if (this.spec.provider?.kind === 'subscription' && process.env.CEZ_DRY_RUN !== '1') {
+        const option = Array.isArray(configOptions) && configOptions.find(value => isRecord(value) && value.id === 'model');
+        if (!isRecord(option) || typeof option.currentValue !== 'string' || !/^v1:[^:]+:jetbrains-ai:.+/.test(option.currentValue)) {
+          throw new AgentProviderUnavailable('Junie requires a JetBrains AI model for the selected subscription. Check Settings → Agents.', this.spec.provider.methodId);
+        }
       }
     } else {
       // `session/new`/`session/load` resolved without a `sessionId` — `drainQueue()` below

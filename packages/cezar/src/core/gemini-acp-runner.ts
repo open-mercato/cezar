@@ -1,3 +1,5 @@
+import { AgentProviderUnavailable } from './agent-runner.ts';
+import { geminiAllowsProviderKey } from './gemini-credentials.ts';
 import { readOnlyPermissionOutcome } from './junie-runner.ts';
 import { installHintCommand } from './agent-install.ts';
 import { spawn as nodeSpawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
@@ -92,8 +94,8 @@ export class GeminiAcpRunner implements AgentRunner {
 }
 
 /** The CLI flags for one run: ACP mode, the model, and the `auto` permission start mode (Q15). */
-export function buildGeminiArgs(spec: Pick<AgentRunSpec, 'model' | 'additionalDirectories' | 'enforceReadOnly'>): string[] {
-  const args = ['--acp'];
+export function buildGeminiArgs(spec: Pick<AgentRunSpec, 'model' | 'additionalDirectories' | 'enforceReadOnly' | 'provider'>): string[] {
+  const args = ['--acp', ...(spec.provider?.argv ?? [])];
   if (spec.model) args.push('--model', spec.model);
   // `default` asks before edits and the shell, and a read-only run refuses every ask.
   args.push('--approval-mode', spec.enforceReadOnly ? 'default' : 'yolo');
@@ -119,8 +121,8 @@ function isDirectory(path: string): boolean {
  * folder it has not been told to trust — so trust is granted per run, never written to the user's
  * `trustedFolders.json`.
  */
-export function buildGeminiEnv(backend: AgentBackend, extraEnv?: Record<string, string>): NodeJS.ProcessEnv {
-  return buildChildEnv({ backend, extraEnv: { ...extraEnv, GEMINI_CLI_TRUST_WORKSPACE: 'true' } });
+export function buildGeminiEnv(backend: AgentBackend, extraEnv?: Record<string, string>, provider?: AgentRunSpec['provider']): NodeJS.ProcessEnv {
+  return buildChildEnv({ backend, provider, extraEnv: { ...extraEnv, GEMINI_CLI_TRUST_WORKSPACE: 'true' } });
 }
 
 /** A cezar-authored line for an exit outside a prompt (spec § Phase 2 "Exit codes"). */
@@ -183,7 +185,10 @@ class GeminiAcpSession implements AgentSession {
     private readonly onEvent: ((event: AgentEvent) => void) | undefined,
     private readonly opts: SessionOptions,
   ) {
-    this.childEnv = buildGeminiEnv(backend, spec.env);
+    this.childEnv = buildGeminiEnv(backend, spec.env, spec.provider);
+    if (spec.provider?.kind === 'apiKey' && process.env.CEZ_DRY_RUN !== '1' && !geminiAllowsProviderKey(spec.cwd, this.childEnv)) {
+      throw new AgentProviderUnavailable('Gemini settings select another authentication method or cannot be read. Select Gemini API key in Gemini settings and retry.');
+    }
     // npm installs `gemini.cmd` on Windows, which Node cannot spawn bare (#1460).
     const [file, argv] = spawnableCommand(bin, buildGeminiArgs(spec));
     this.child = nodeSpawn(file, argv, { cwd: spec.cwd, env: this.childEnv });

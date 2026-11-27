@@ -1,3 +1,4 @@
+import { oneShotProvider } from '../core/agent-provider-env.ts';
 import { execFile } from 'node:child_process';
 import { z } from 'zod';
 import { loadConfig } from '../config.ts';
@@ -86,10 +87,12 @@ export async function generateCommitMessage(
       const userPrompt = attempt === 0
         ? prompt
         : `${prompt}\n\nYour previous answer was rejected (${reason}). Answer with only {"subject": "<imperative summary, at most 72 characters>"}.`;
-      const tracked = trackOneShot(config.defaultRunner, planAccount, INTERNAL_CONSUMERS.commit);
+      const provider = await oneShotProvider(config.defaultRunner, repoRoot, { model: choice.model });
+      const tracked = trackOneShot(config.defaultRunner, provider?.secret ? undefined : planAccount, INTERNAL_CONSUMERS.commit);
       let result: Awaited<ReturnType<typeof runner.run>> | undefined;
       try {
       result = await runner.run({
+        provider,
         systemPrompt: COMMIT_MESSAGE_SYSTEM_PROMPT,
         userPrompt,
         cwd: repoRoot,

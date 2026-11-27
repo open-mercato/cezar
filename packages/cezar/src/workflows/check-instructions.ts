@@ -1,3 +1,4 @@
+import { oneShotProvider } from '../core/agent-provider-env.ts';
 import { lstatSync, readdirSync, readFileSync, type Dirent } from 'node:fs';
 import { basename, dirname, isAbsolute, join } from 'node:path';
 import { z } from 'zod';
@@ -302,10 +303,12 @@ export async function resolveCheckCommand(input: {
     if (!choice) return asWritten(`global instructions: no cheap model for ${config.defaultRunner} to apply them, so this check runs as written`);
     const runner = createRunner(config.defaultRunner);
     const { env, profile } = await resolveProfileEnvForRoot(input.repoRoot, config.defaultRunner);
-    const tracked = trackOneShot(config.defaultRunner, await oneShotAccountRef(config.defaultRunner, profile), INTERNAL_CONSUMERS.checks);
+    const provider = await oneShotProvider(config.defaultRunner, input.repoRoot, { model: choice.model });
+    const tracked = trackOneShot(config.defaultRunner, provider?.secret ? undefined : await oneShotAccountRef(config.defaultRunner, profile), INTERNAL_CONSUMERS.checks);
     let result: Awaited<ReturnType<typeof runner.run>> | undefined;
     try {
       result = await runner.run({
+        provider,
         // Named here so the call is self-contained; `createRunner` sees the block and adds none.
         systemPrompt: `${FORMAT_BOUND_GLOBAL_HEADING}\n\n${instructions}\n\n---\n\n${CHECK_INSTRUCTIONS_SYSTEM_PROMPT}`,
         userPrompt: buildCheckInstructionsPrompt(input.command, changedFiles),

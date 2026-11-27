@@ -1,6 +1,7 @@
 import { redactSecrets } from '../core/secret-redaction.ts';
 
 type WireEvent = { type: string; stepId?: string; [key: string]: unknown };
+type Delta = { type: 'item.delta'; itemId: string; field: string; stepId?: string; delta: string };
 type Pending = { itemId: string; field: string; stepId?: string; text: string };
 
 /** Keep only an unresolved known-secret prefix between live delta frames.
@@ -10,7 +11,7 @@ type Pending = { itemId: string; field: string; stepId?: string; text: string };
 export class StreamRedaction {
   private readonly runs = new Map<string, Map<string, Pending>>();
 
-  transform(runId: string, event: WireEvent, secrets: readonly string[]): WireEvent {
+  transform<T extends WireEvent>(runId: string, event: T, secrets: readonly string[]): T {
     if (event.type === 'item.delta' && typeof event.itemId === 'string' &&
         typeof event.field === 'string' && typeof event.delta === 'string') {
       const context = { itemId: event.itemId, field: event.field, ...(event.stepId !== undefined ? { stepId: event.stepId } : {}) };
@@ -34,13 +35,13 @@ export class StreamRedaction {
   /** Drain before the terminal event receives its sequence number. These
    * tails cannot be full credentials: split() retained only proper prefixes.
    */
-  drain(runId: string, event: WireEvent): WireEvent[] {
+  drain(runId: string, event: WireEvent): Delta[] {
     const completed = event.type === 'item.completed';
     if (!completed && event.type !== 'turn.completed' && event.type !== 'session.ended') return [];
     const item = event.item as { id?: unknown } | undefined;
     const fields = this.runs.get(runId);
     if (!fields) return [];
-    const result: WireEvent[] = [];
+    const result: Delta[] = [];
     for (const [key, pending] of fields) {
       if (pending.stepId !== event.stepId || (completed && pending.itemId !== item?.id)) continue;
       fields.delete(key);

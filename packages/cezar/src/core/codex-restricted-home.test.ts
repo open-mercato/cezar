@@ -40,6 +40,22 @@ describe.skipIf(process.platform === 'win32')('restricted Codex homes', () => {
     expect(prepareRestrictedCodexHome({ cwd: other }, f.env).path).not.toBe(home.path);
     expect(realpathSync(f.native)).not.toBe(home.path);
   });
+  it('hands the gateway key only to app-server and keeps the isolated home and broker key-free', () => {
+    const f = setup();
+    const key = 'synthetic-gateway-key';
+    writeFileSync(join(f.native, 'config.toml'), 'model="native-model"\nmodel_provider="old-provider"\nmodel_reasoning_effort="medium"');
+    const home = prepareRestrictedCodexHome({ cwd: f.cwd, provider: {
+      methodId: 'custom', kind: 'custom', env: { CODEX_PROVIDER_API_KEY: key }, unsetEnv: ['OPENAI_API_KEY'],
+      codexConfig: { model_provider: 'cezar' }, secret: key,
+    } }, f.env);
+    expect(home.config).toMatchObject({ model: 'native-model', model_reasoning_effort: 'medium' });
+    expect(home.config).not.toHaveProperty('model_provider');
+    expect(home.env.CODEX_PROVIDER_API_KEY).toBe(key);
+    expect(home.env.OPENAI_API_KEY).toBeUndefined();
+    expect(Object.values(home.toolEnv)).not.toContain(key);
+    expect(readFileSync(join(home.path, 'config.toml'), 'utf8')).not.toContain(key);
+  });
+
   it('refuses a replaced isolated config symlink without overwriting its target', () => {
     const f = setup(); const home = prepareRestrictedCodexHome({ cwd: f.cwd }, f.env);
     const victim = join(f.root, 'victim'); writeFileSync(victim, 'keep');
