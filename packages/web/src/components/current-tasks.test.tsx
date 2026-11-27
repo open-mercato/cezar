@@ -1,5 +1,5 @@
 import { QueryClientProvider } from '@tanstack/react-query'
-import { cleanup, fireEvent, render, screen, within } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { MemoryRouter, useLocation } from 'react-router'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
@@ -123,6 +123,64 @@ describe('CurrentTasks', () => {
   })
 })
 
+describe('CurrentTasks subtasks (#2383)', () => {
+  const kid = (id: string, parent: string, over: Partial<RunRecord> = {}) =>
+    run({ id, title: `Kid ${id}`, dispatch: { rootRunId: parent, parentRunId: parent }, ...over })
+
+  it('folds subtasks under the parent, count and disclosure first, then expands them indented', () => {
+    const parent = run({ id: 'p', title: 'Parent' })
+    renderList([parent, kid('k1', 'p'), kid('k2', 'p'), run({ id: 'solo', title: 'Solo' })])
+    expect(rows().map((row) => row.getAttribute('data-run-id'))).toEqual(['p', 'solo'])
+    const toggle = screen.getByRole('button', { name: 'Expand 2 subtasks' })
+    expect(toggle.getAttribute('aria-expanded')).toBe('false')
+    fireEvent.click(toggle)
+    expect(rows().map((row) => row.getAttribute('data-run-id'))).toEqual(['p', 'k1', 'k2', 'solo'])
+    expect(rows()[1]!.getAttribute('data-depth')).toBe('1')
+    expect(screen.getByRole('button', { name: 'Collapse 2 subtasks' }).getAttribute('aria-expanded')).toBe('true')
+    fireEvent.click(screen.getByRole('button', { name: 'Collapse 2 subtasks' }))
+    expect(rows()).toHaveLength(2)
+  })
+
+  it('says a folded parent hides subtasks that need you, in the right number', () => {
+    renderList([run({ id: 'p' }), kid('k', 'p', { status: 'review' })])
+    expect(rows()).toHaveLength(1)
+    const badge = () => document.querySelector('[data-slot="task-row-needs-you"]')!
+    expect(badge().textContent).toContain('1 subtask needs you')
+    expect(badge().getAttribute('title')).toBe('1 subtask needs you')
+    cleanup()
+    renderList([run({ id: 'p' }), kid('k', 'p', { status: 'review' }), kid('k2', 'p', { status: 'failed' })])
+    expect(badge().textContent).toContain('2 subtasks need you')
+  })
+
+  it('labels the toggle with direct children, but counts needs-you at every depth', () => {
+    renderList([run({ id: 'p' }), kid('c', 'p'), kid('g1', 'c', { status: 'review' }), kid('g2', 'c')])
+    expect(screen.getByRole('button', { name: 'Expand 1 subtask' })).toBeTruthy()
+    expect(document.querySelector('[data-slot="task-row-needs-you"]')?.textContent).toContain('1 subtask needs you')
+  })
+
+  it('unfolds the open subtask\'s ancestors so its row is on screen and current, then lets them fold', () => {
+    const runs = [run({ id: 'p' }), kid('c', 'p'), kid('g', 'c'), run({ id: 'solo' })]
+    const view = renderList(runs, { currentRunId: 'g' })
+    expect(rows().map((row) => row.getAttribute('data-run-id'))).toEqual(['p', 'c', 'g', 'solo'])
+    expect(rows()[2]!.getAttribute('data-active')).toBe('true')
+    fireEvent.click(within(rows()[1]!).getByRole('button', { name: 'Collapse 1 subtask' }))
+    // Folding stays folded while the same task is open.
+    expect(rows().map((row) => row.getAttribute('data-run-id'))).not.toContain('g')
+    view.rerender(
+      <MemoryRouter initialEntries={['/p/cezar/']}>
+        <CurrentTasks runs={runs} now={NOW} currentRunId="g" />
+      </MemoryRouter>,
+    )
+    expect(rows().map((row) => row.getAttribute('data-run-id'))).not.toContain('g')
+  })
+
+  it('marks a subtask whose parent is absent so it does not look like a peer', () => {
+    renderList([kid('k', 'gone')])
+    expect(rows()).toHaveLength(1)
+    expect(document.querySelector('[data-slot="task-row-orphan"]')).not.toBeNull()
+  })
+})
+
 describe('CurrentTasksContainer', () => {
   const fetchMock = vi.fn<typeof fetch>()
   afterEach(() => {
@@ -153,5 +211,34 @@ describe('CurrentTasksContainer', () => {
     )
     const region = await screen.findByRole('region', { name: 'Scheduled tasks' })
     expect(within(region).getByRole('link', { name: /Later/ })).toBeTruthy()
+  })
+
+  it('asks for the chip status of the rows on screen, never of folded subtasks', async () => {
+    vi.stubGlobal('fetch', fetchMock)
+    const pr = (number: number) => `https://github.com/o/r/pull/${number}`
+    const kids = Array.from({ length: 60 }, (_, index) =>
+      run({ id: `k${index}`, status: 'running', finishedAt: undefined, pullRequestUrl: pr(100 + index), dispatch: { rootRunId: 'p', parentRunId: 'p' } }),
+    )
+    const runs = [run({ id: 'p', status: 'running', finishedAt: undefined }), ...kids, run({ id: 'later', pullRequestUrl: pr(7) })]
+    const statusUrls: string[] = []
+    fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+      const path = String(input)
+      if (path.includes('/ref-status')) {
+        statusUrls.push(path)
+        return new Response(JSON.stringify({ prs: {}, issues: {} }), { status: 200 })
+      }
+      const body = path === '/api/v1/health' ? { version: '1.0.0', bootProject: 'cezar', checks: [], capabilities: {} } : runs
+      return new Response(JSON.stringify(body), { status: 200 })
+    })
+    render(
+      <QueryClientProvider client={createQueryClient()}>
+        <MemoryRouter initialEntries={['/p/cezar/']}>
+          <CurrentTasksContainer />
+        </MemoryRouter>
+      </QueryClientProvider>,
+    )
+    await waitFor(() => expect(statusUrls.length).toBeGreaterThan(0))
+    const url = decodeURIComponent(statusUrls.at(-1)!)
+    expect(url).toMatch(/prs=7(&|$)/)
   })
 })

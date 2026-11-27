@@ -9,12 +9,13 @@ import { PinToggle } from '@/components/pin-toggle'
 import { TaskReferenceChip } from '@/components/reference-conflict-action'
 import { ReferenceStatusProvider } from '@/components/reference-status'
 import { StatusDot } from '@/components/status-dot'
+import { SubtaskToggle } from '@/components/subtask-toggle'
 import { ScheduledTasks } from '@/components/scheduled-tasks'
 import { RepoBaseContext, ROW_ACTION_BUTTON_CLASS, ROW_ACTIONS_CLASS, ROW_META_YIELD_CLASS } from '@/components/task-quick-list'
 import { toast } from '@/components/ui/toaster'
 import { UnreadMarker } from '@/components/unread-marker'
 import { deriveAttention } from '@/lib/attention'
-import { currentTasks } from '@/lib/current-tasks'
+import { currentTaskTree, needsYouCount } from '@/lib/current-tasks'
 import { shortAge } from '@/lib/format'
 import { Link, pathnameProjectId, useActiveProjectId, useProjectMatch } from '@/lib/project-router'
 import { isReadDoneItem, isUnread } from '@/lib/read-state'
@@ -22,10 +23,59 @@ import { isRunActive } from '@/lib/run-status'
 import { useScheduledTasksGate } from '@/lib/scheduled-tasks-gate'
 import { filterRunsByOrigin } from '@/lib/task-filters'
 import { lastActivityAt, queuePositions, refPrefixMatches, runTitle, splitRefPrefix } from '@/lib/task-groups'
+import { flattenTaskTree, subtaskLabel, taskTreeAncestorIds, type TaskTreeNode } from '@/lib/task-tree'
 import { useTaskOrigin } from '@/lib/task-origin'
 import { taskReference, taskReferences } from '@/lib/tasks-table'
 import { useNow } from '@/lib/use-now'
 import { cn } from '@/lib/utils'
+
+interface CurrentTasksProps {
+  runs: RunRecord[]
+  currentRunId?: string | null
+  now?: number
+  onTogglePin?: (run: RunRecord, pinned: boolean) => void
+  onToggleArchive?: (run: RunRecord, archived: boolean) => void
+}
+
+interface CurrentTaskFold {
+  /** The rows actually rendered, folded subtrees dropped. */
+  rows: TaskTreeNode<RunRecord>[]
+  expanded: ReadonlySet<string>
+  toggle: (id: string) => void
+}
+
+/**
+ * The sidebar tree and its fold state (#2383). Subtasks start folded, like the main list, but
+ * the open task's ancestors unfold once per task opened so its row is on screen and marked.
+ */
+function useCurrentTaskFold(runs: readonly RunRecord[] | undefined, currentRunId: string | null): CurrentTaskFold {
+  const tree = React.useMemo(() => (runs ? currentTaskTree(runs) : []), [runs])
+  const [expanded, setExpanded] = React.useState<ReadonlySet<string>>(new Set())
+  // The task whose ancestors were last revealed; a run not yet in the list is retried later.
+  const [revealedFor, setRevealedFor] = React.useState<string | null>(null)
+  let shownExpanded = expanded
+  if (currentRunId !== null && currentRunId !== revealedFor) {
+    const ancestors = taskTreeAncestorIds(tree, currentRunId)
+    if (ancestors !== null) {
+      setRevealedFor(currentRunId)
+      if (ancestors.some((id) => !expanded.has(id))) {
+        shownExpanded = new Set([...expanded, ...ancestors])
+        setExpanded(shownExpanded)
+      }
+    }
+  }
+  const toggle = React.useCallback(
+    (id: string) =>
+      setExpanded((current) => {
+        const next = new Set(current)
+        if (!next.delete(id)) next.add(id)
+        return next
+      }),
+    [],
+  )
+  const rows = React.useMemo(() => flattenTaskTree(tree, (id) => shownExpanded.has(id)), [tree, shownExpanded])
+  return { rows, expanded: shownExpanded, toggle }
+}
 
 /**
  * The sidebar's "Current tasks" (redesign, Proposal 1): the active project's tasks in the Now
@@ -33,20 +83,19 @@ import { cn } from '@/lib/utils'
  * full table. Each row keeps the quick-list's one-line shape and its pin / archive / unread
  * behaviour; only the ordering and the always-present age differ.
  */
-export function CurrentTasks({
+export function CurrentTasks(props: CurrentTasksProps) {
+  const fold = useCurrentTaskFold(props.runs, props.currentRunId ?? null)
+  return <CurrentTasksView {...props} fold={fold} />
+}
+
+function CurrentTasksView({
   runs,
   currentRunId = null,
   now = Date.now(),
   onTogglePin,
   onToggleArchive,
-}: {
-  runs: RunRecord[]
-  currentRunId?: string | null
-  now?: number
-  onTogglePin?: (run: RunRecord, pinned: boolean) => void
-  onToggleArchive?: (run: RunRecord, archived: boolean) => void
-}) {
-  const rows = currentTasks(runs)
+  fold: { rows, expanded, toggle },
+}: CurrentTasksProps & { fold: CurrentTaskFold }) {
   // Over the whole list, never the capped rows: `#2` is where the engine picks the run up.
   const positions = queuePositions(runs)
   const onNavigate = useSidebarNavigate()
@@ -56,12 +105,15 @@ export function CurrentTasks({
       {rows.length === 0 ? (
         <p className="px-3 py-1.5 text-xs text-soft-foreground">No tasks yet — describe one.</p>
       ) : (
-        rows.map((run) => (
+        rows.map((node) => (
           <CurrentTaskRow
-            key={run.id}
-            run={run}
-            current={run.id === currentRunId}
-            queuePosition={positions.get(run.id) ?? null}
+            key={node.run.id}
+            node={node}
+            run={node.run}
+            expanded={expanded.has(node.run.id)}
+            onToggleSubtasks={toggle}
+            current={node.run.id === currentRunId}
+            queuePosition={positions.get(node.run.id) ?? null}
             now={now}
             onTogglePin={onTogglePin}
             onToggleArchive={onToggleArchive}
@@ -81,14 +133,20 @@ export function CurrentTasks({
 }
 
 const CurrentTaskRow = React.memo(function CurrentTaskRow({
+  node,
   run,
+  expanded,
+  onToggleSubtasks,
   current,
   queuePosition,
   now,
   onTogglePin,
   onToggleArchive,
 }: {
+  node: TaskTreeNode<RunRecord>
   run: RunRecord
+  expanded: boolean
+  onToggleSubtasks: (id: string) => void
   current: boolean
   /** A queued run's place in line, shown instead of its age — carried nowhere else in the row. */
   queuePosition: number | null
@@ -107,12 +165,20 @@ const CurrentTaskRow = React.memo(function CurrentTaskRow({
   const displayTitle = refPrefixMatches(title, reference?.number) ? splitRefPrefix(title).rest : title
   const unread = isUnread(run)
   const readDone = isReadDoneItem(run)
+  const subtasks = subtaskLabel(node.childCount)
+  // A folded parent keeps saying that someone under it wants you, at any depth.
+  const hiddenNeedsYou = subtasks && !expanded ? needsYouCount(node) : 0
+  const needsYouText = hiddenNeedsYou === 1 ? '1 subtask needs you' : `${hiddenNeedsYou} subtasks need you`
+  // A subtask whose parent is not in the list stands alone, so it says what it is.
+  const orphan = node.depth === 0 && run.dispatch?.parentRunId !== undefined
   const age = queuePosition !== null ? `#${queuePosition}` : shortAge(lastActivityAt(run), now)
   return (
     <div
       data-slot="task-row"
       data-run-id={run.id}
+      data-depth={node.depth}
       data-active={current ? 'true' : undefined}
+      style={node.depth > 0 ? { marginLeft: `${Math.min(node.depth, 3) * 14}px` } : undefined}
       className={cn('group/task-row flex items-center gap-2 rounded-sm pl-2.5 hover:bg-muted', current && 'bg-muted')}
     >
       {/* Siblings of the row link, never children: an anchor inside an anchor is invalid. */}
@@ -147,6 +213,11 @@ const CurrentTaskRow = React.memo(function CurrentTaskRow({
         >
           {displayTitle}
         </span>
+        {orphan ? (
+          <span data-slot="task-row-orphan" title="Subtask of a task not shown here" className="shrink-0 rounded-full bg-muted px-1.5 text-micro text-muted-foreground">
+            subtask
+          </span>
+        ) : null}
         {age ? (
           <span data-slot="task-row-age" className={cn('shrink-0 text-meta text-soft-foreground tabular-nums', hasActions && ROW_META_YIELD_CLASS)}>
             {age}
@@ -154,6 +225,23 @@ const CurrentTaskRow = React.memo(function CurrentTaskRow({
         ) : null}
         {unread ? <UnreadMarker /> : null}
       </Link>
+      {subtasks ? (
+        <div className="flex shrink-0 items-center gap-1">
+          {hiddenNeedsYou > 0 ? (
+            <span data-slot="task-row-needs-you" title={needsYouText} className="inline-flex items-center gap-0.5 text-micro text-danger-strong tabular-nums">
+              <StatusDot tone="danger" />
+              <span className="sr-only">{needsYouText}</span>
+              <span aria-hidden="true">{hiddenNeedsYou}</span>
+            </span>
+          ) : null}
+          <SubtaskToggle
+            label={subtasks}
+            expanded={expanded}
+            onToggle={() => onToggleSubtasks(run.id)}
+            wordClassName="sr-only"
+          />
+        </div>
+      ) : null}
       {hasActions ? (
         <div data-slot="task-row-actions" className={ROW_ACTIONS_CLASS}>
           {onTogglePin ? (
@@ -200,14 +288,17 @@ export function CurrentTasksContainer() {
   )
   const projectId = useReferenceProjectId()
   const repoBase = useProjectRepoBase()
-  const rows = React.useMemo(() => (shown ? currentTasks(shown) : []), [shown])
-  // Only the rows on screen ask for their chip status.
+  const currentRunId = match?.params.id ?? exact?.params.id ?? null
+  const fold = useCurrentTaskFold(shown, currentRunId)
+  // Only the rows on screen ask for their chip status: folded subtasks never crowd them out.
   const referenceRequests = React.useMemo(
     () =>
       projectId === undefined
         ? []
-        : rows.flatMap((run) => taskReferences(run).map((reference) => ({ projectId, kind: reference.kind, number: reference.number }))),
-    [rows, projectId],
+        : fold.rows
+            .slice(0, 60)
+            .flatMap(({ run }) => taskReferences(run).map((reference) => ({ projectId, kind: reference.kind, number: reference.number }))),
+    [fold.rows, projectId],
   )
   // Nothing until the list has answered: an empty state would claim "no tasks" before we know.
   if (!shown) return null
@@ -215,9 +306,10 @@ export function CurrentTasksContainer() {
     <ReferenceStatusProvider projectId={projectId} requests={referenceRequests}>
       <RepoBaseContext.Provider value={repoBase}>
         {showScheduled ? <ScheduledTasks compact /> : null}
-        <CurrentTasks
+        <CurrentTasksView
           runs={shown}
-          currentRunId={match?.params.id ?? exact?.params.id ?? null}
+          fold={fold}
+          currentRunId={currentRunId}
           now={now}
           onTogglePin={onTogglePin}
           onToggleArchive={onToggleArchive}

@@ -256,9 +256,11 @@ beforeEach(() => {
   vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} })
 })
 
-afterEach(() => {
+afterEach(async () => {
   act(() => resetToasts())
   cleanup()
+  // A dialog's FocusScope dispatches on a 0ms timer after unmount; let it fire before jsdom goes.
+  await new Promise((resolve) => setTimeout(resolve, 0))
   vi.unstubAllGlobals()
 })
 

@@ -148,6 +148,21 @@ export function taskTreeRows<T extends TaskTreeInput>(
   return flattenTaskTree(buildTaskTree(runs), isExpanded)
 }
 
+/** Ids of `id`'s ancestors in `nodes`, root first; null when `id` is not in the tree. */
+export function taskTreeAncestorIds<T extends TaskTreeInput>(nodes: readonly TaskTreeNode<T>[], id: string): string[] | null {
+  const path: string[] = []
+  const walk = (level: readonly TaskTreeNode<T>[]): boolean => {
+    for (const node of level) {
+      if (node.run.id === id) return true
+      path.push(node.run.id)
+      if (walk(node.children)) return true
+      path.pop()
+    }
+    return false
+  }
+  return walk(nodes) ? path : null
+}
+
 /** "3 subtasks" — the count a parent row prints, or null when the run dispatched nothing. */
 export function subtaskLabel(childCount: number): string | null {
   if (childCount <= 0) return null

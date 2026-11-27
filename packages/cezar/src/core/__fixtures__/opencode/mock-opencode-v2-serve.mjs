@@ -52,7 +52,10 @@ const server = createServer((req, res) => {
     const q = new URL(path, 'http://x').searchParams;
     const parent = q.get('parentID');
     if (parent === 'null') return json(res, { data: foreign.map((s) => ({ ...s, parentID: null })) });
-    return json(res, { data: (children[parent] ?? []).map((id) => ({ id, parentID: parent })) });
+    // MOCK_TREE_DELAY_MS: a slow child listing, so teardown races the drain (a loaded machine).
+    const reply = () => json(res, { data: (children[parent] ?? []).map((id) => ({ id, parentID: parent })) });
+    const delay = Number(process.env.MOCK_TREE_DELAY_MS ?? 0);
+    return delay > 0 ? void setTimeout(reply, delay) : reply();
   }
   let body = '';
   req.on('data', (chunk) => { body += chunk; });

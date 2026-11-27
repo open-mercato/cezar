@@ -138,6 +138,21 @@ describe('OpenCode V1 + V2 runner compatibility', () => {
       rmSync(dirname(log.file), { recursive: true, force: true });
     });
 
+    it('keeps the server alive for a slow drain when bootstrap fails after an early interrupt', async () => {
+      const log = treeLog();
+      // Interrupt inside the `session` event itself, before the event stream connects, so the
+      // bootstrap's own failure reaches teardown while the (slow) drain is still listing children.
+      let interrupt = (): void => undefined;
+      const session = new OpencodeServerRunner({ bin, timeoutMs: 15_000 }).startSession({
+        userPrompt: '#quiet', systemPrompt: 'SYSTEM', cwd: process.cwd(), model: 'mock/mock-model#high',
+        env: { MOCK_TREE_LOG: log.file, MOCK_TREE_DELAY_MS: '300' },
+      }, (event) => { if (event.type === 'session') interrupt(); }, { autoEndAfterFirstTurn: false });
+      interrupt = () => session.interrupt();
+      await session.result;
+      expect(log.read()).toEqual(expect.arrayContaining(['ses_v2_mock', 'ses_child_1', 'ses_grandchild']));
+      rmSync(dirname(log.file), { recursive: true, force: true });
+    });
+
     it('aborts the tree on a normal end() too, before the server is killed', async () => {
       const log = treeLog();
       const { session } = start('hello', true, { MOCK_TREE_LOG: log.file });

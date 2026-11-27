@@ -238,7 +238,9 @@ class OpencodeSession implements AgentSession {
    *  question that decides whether a dropped prompt POST means anything. */
   private sseConnected = false;
   /** In-flight teardown of this task's session tree; `terminate()` waits for it (#2468). */
+  /** In flight while the session tree is being aborted; `terminate()` waits on it (#2468). */
   private drain: Promise<void> | undefined;
+  private drainStarted = false;
   private sseClosed = false;
   /** Protocol v2 emission — additive alongside v1 (`onEvent` keeps flowing
    *  byte-identical); the channel is `opts.onUiEvent` (RunManager wiring
@@ -405,11 +407,10 @@ class OpencodeSession implements AgentSession {
   private terminate(): void {
     if (this.signalled || this.hasExited()) return;
     // Abort requests need the server alive: killing it first leaves the execution claims unreleased,
-    // which the next server start resumes (#2468).
+    // which the next server start resumes (#2468). Every caller waits while the drain is in flight:
+    // an interrupt's bootstrap failure reaches the result's `finally` before a slow drain ends.
     if (this.drain) {
-      const drain = this.drain;
-      this.drain = undefined;
-      void drain.then(() => this.terminate());
+      void this.drain.then(() => this.terminate());
       return;
     }
     this.signalled = true;
@@ -430,14 +431,15 @@ class OpencodeSession implements AgentSession {
    * Best effort — a server without the endpoints, or one that is slow, is simply killed as before.
    */
   private drainSessionTree(): void {
-    if (this.drain || !this.baseUrl || !this.sessionId || this.hasExited()) return;
+    if (this.drainStarted || !this.baseUrl || !this.sessionId || this.hasExited()) return;
+    this.drainStarted = true;
     const root = this.sessionId;
     const signal = AbortSignal.timeout(TREE_ABORT_MS);
     this.drain = (async () => {
       const ids = await this.listDescendants(root, signal);
       // Children first: aborting a parent can make it spawn or notify its children again.
       await Promise.all([...ids.reverse(), root].map((id) => this.abortSession(id, signal)));
-    })().catch(() => undefined);
+    })().catch(() => undefined).finally(() => { this.drain = undefined; });
   }
 
   private async abortSession(id: string, signal: AbortSignal): Promise<void> {

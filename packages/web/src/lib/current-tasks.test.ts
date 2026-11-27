@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import type { RunRecord } from '@open-mercato/cezar-api-client'
 
-import { CURRENT_TASKS_LIMIT, currentTasks } from './current-tasks'
+import { CURRENT_TASKS_LIMIT, currentTaskTree, currentTasks, needsYouCount } from './current-tasks'
 
 let seq = 0
 function run(over: Partial<RunRecord> = {}): RunRecord {
@@ -62,5 +62,47 @@ describe('currentTasks', () => {
   it('honours an explicit limit', () => {
     const runs = [run(), run(), run()]
     expect(currentTasks(runs, 2)).toHaveLength(2)
+  })
+})
+
+describe('currentTaskTree (#2383)', () => {
+  const child = (id: string, parent: string, over: Partial<RunRecord> = {}) =>
+    run({ id, dispatch: { rootRunId: parent, parentRunId: parent }, ...over })
+
+  it('keeps a child under its parent even when the child alone would outrank the parent', () => {
+    const parent = run({ id: 'p', finishedAt: '2026-07-14T01:00:00.000Z' })
+    const kid = child('k', 'p', { status: 'review' })
+    const tree = currentTaskTree([kid, parent])
+    expect(tree.map((n) => n.run.id)).toEqual(['p'])
+    expect(tree[0]!.children.map((n) => n.run.id)).toEqual(['k'])
+    expect(needsYouCount(tree[0]!)).toBe(1)
+  })
+
+  it('groups before the cap: the budget counts top-level groups, children are never peers', () => {
+    const parent = run({ id: 'p' })
+    const kids = Array.from({ length: 8 }, (_, i) => child(`k${i}`, 'p'))
+    const others = Array.from({ length: 5 }, (_, i) => run({ id: `o${i}`, finishedAt: `2026-07-14T1${i}:00:00.000Z` }))
+    const tree = currentTaskTree([...kids, parent, ...others])
+    expect(tree).toHaveLength(6)
+    expect(tree.find((n) => n.run.id === 'p')!.childCount).toBe(8)
+    expect(tree.some((n) => n.run.id.startsWith('k'))).toBe(false)
+  })
+
+  it('ranks a group by its most urgent member and nests descendants', () => {
+    const calm = run({ id: 'calm', finishedAt: '2026-07-14T23:00:00.000Z' })
+    const p = run({ id: 'p', finishedAt: '2026-07-14T01:00:00.000Z' })
+    const mid = child('mid', 'p')
+    const deep = child('deep', 'mid', { status: 'waiting' })
+    const tree = currentTaskTree([calm, p, mid, deep])
+    expect(tree.map((n) => n.run.id)).toEqual(['p', 'calm'])
+    expect(tree[0]!.children[0]!.children[0]!.run.id).toBe('deep')
+    expect(tree[0]!.descendantCount).toBe(2)
+  })
+
+  it('roots a child whose parent is absent or archived', () => {
+    const archived = run({ id: 'a', archived: true })
+    const orphan = child('o', 'a')
+    const missing = child('m', 'gone')
+    expect(currentTaskTree([archived, orphan, missing]).map((n) => n.run.id).sort()).toEqual(['m', 'o'])
   })
 })
