@@ -406,6 +406,8 @@ export const runRecordSchema = z.object({
   /** What the pending resume waits out: a usage limit's reset, or a transient provider failure's
    *  retry backoff. Absent on records written before it existed — read as `usage_limit`. */
   autoResumeReason: z.enum(['usage_limit', 'transient']).optional(),
+  /** The resumed session observed the usage window open; its account hold is released (#2525). */
+  autoResumeWindowOpen: z.boolean().optional(),
   /** ISO-8601 instant the run's session ended (inactivity, a crash, a restart) while a `CEZ:ASK`
    *  question was still unanswered. Present only on a `failed` run; the cockpit keeps such a run
    *  under "needs you" until the answer reopens it. Absent on records written before it existed. */
