@@ -16,9 +16,13 @@ name: Desktop release
 # seven days: no release, no tag, no download link changes. That is how to try an installer
 # before anyone else can find it.
 #
-# Signing is secret-gated and degrades loudly: without the Apple/Windows secrets the job still
-# builds and uploads UNSIGNED installers and says so in the summary. Do not publish those to a
-# landing page — Gatekeeper and SmartScreen turn them into support tickets.
+# Signing is secret-gated, and publishing fails closed: without a Developer ID (macOS) or a
+# release-signing SignPath signature (Windows) the legs still build, but `publish` refuses to
+# release them, and never touches `desktop-latest`, `desktop-latest.json` or the Homebrew cask.
+# `allow_untrusted` publishes such a build as a PRERELEASE only, for a maintainer to try.
+#
+# Manual runs start from `main` or a `desktop-v*` tag only, and the jobs that read signing
+# secrets run in the `desktop-release` environment (docs/code-signing-policy.md § Roles).
 
 on:
   push:
@@ -28,6 +32,11 @@ on:
     inputs:
       dry_run:
         description: 'Build the installers as run artifacts only: no release, no tag, no download links'
+        required: false
+        default: false
+        type: boolean
+      allow_untrusted:
+        description: 'Publish a test-signed, unsigned or ad-hoc-signed build as a prerelease only: no desktop-latest, no updater manifest, no Homebrew cask'
         required: false
         default: false
         type: boolean
@@ -55,6 +64,18 @@ jobs:
       version: ${{ steps.version.outputs.version }}
       tag: ${{ steps.version.outputs.tag }}
     steps:
+      # A manual run from an unreviewed branch would sign and ship code that never reached
+      # `main` through a pull request (docs/code-signing-policy.md § Roles).
+      - name: Check the ref a manual run starts from
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          REF: ${{ github.ref }}
+        run: |
+          case "$REF" in
+            refs/heads/main|refs/tags/desktop-v*) echo "manual run from $REF" ;;
+            *) echo "::error::a desktop release runs from main or a desktop-v* tag, not $REF"; exit 1 ;;
+          esac
+
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -78,8 +99,15 @@ jobs:
           TAG: ${{ steps.version.outputs.tag }}
           VERSION: ${{ steps.version.outputs.version }}
         run: |
-          if gh release view "$TAG" >/dev/null 2>&1; then
-            echo "release $TAG already exists — assets will be replaced"
+          # A PUBLISHED release is never rebuilt in place: the legs would overwrite its signed
+          # installer, its DMGs and their `.sig`/`.sha256` before anything is checked, breaking
+          # the updater manifest and the cask's pinned sha256. Ship a new version instead.
+          IS_DRAFT=$(gh release view "$TAG" --json isDraft -q .isDraft 2>/dev/null || echo missing)
+          if [ "$IS_DRAFT" = "false" ]; then
+            echo "::error::release $TAG is already published — bump the version in tauri.conf.json instead of re-releasing it"
+            exit 1
+          elif [ "$IS_DRAFT" = "true" ]; then
+            echo "draft release $TAG already exists — its assets will be replaced"
           else
             gh release create "$TAG" --draft --title "cezar desktop v$VERSION" --target "$GITHUB_SHA" \
               --notes "Desktop shell v$VERSION. Installers below; the shell installs and updates cezar itself from the cockpit."
@@ -88,6 +116,15 @@ jobs:
   build:
     name: Build ${{ matrix.name }}
     needs: prepare
+    # Reads the Apple, updater and SignPath secrets.
+    environment: desktop-release
+    # How each leg was signed, one key per leg: a matrix job's outputs are shared, and a leg
+    # sets only its own key, so none overwrites another. `publish` treats a missing key as
+    # untrusted.
+    outputs:
+      windows: ${{ steps.trust.outputs.windows }}
+      macos_aarch64: ${{ steps.trust.outputs.macos_aarch64 }}
+      macos_x86_64: ${{ steps.trust.outputs.macos_x86_64 }}
     strategy:
       fail-fast: false
       matrix:
@@ -265,13 +302,14 @@ jobs:
 
       # Under the onboarding `test-signing` policy the signature is SignPath's self-signed test
       # certificate, which Windows does not trust either, so a failed request falls back to the
-      # unsigned installer with a warning. Under `release-signing` a failure stops the release.
+      # unsigned installer with a warning (and `publish` refuses it). Under any other policy,
+      # an unknown or mistyped one included, a failure stops the release.
       # v3, not v2: v2's deprecated githubactions.connectors.signpath.io intermittently answers
       # "Invalid URL for GitHub API" (2 of 3 desktop-v0.1.12 attempts); v3 uses the Pipeline Connector.
       - name: Sign the installer with SignPath
         id: signpath
         if: runner.os == 'Windows' && steps.signing.outputs.signpath == 'true'
-        continue-on-error: ${{ (vars.SIGNPATH_SIGNING_POLICY_SLUG || 'release-signing') != 'release-signing' }}
+        continue-on-error: ${{ vars.SIGNPATH_SIGNING_POLICY_SLUG == 'test-signing' }}
         uses: signpath/github-action-submit-signing-request@a2c5b60d9c75f073142b653c354b632eedce097b # v3.2
         with:
           api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
@@ -290,7 +328,7 @@ jobs:
           SIGNPATH_SIGNING_POLICY: ${{ vars.SIGNPATH_SIGNING_POLICY_SLUG || 'release-signing' }}
         run: |
           echo "::warning::SignPath ($SIGNPATH_SIGNING_POLICY) failed — the Windows installer ships UNSIGNED."
-          echo "⚠️ SignPath ($SIGNPATH_SIGNING_POLICY) failed: the Windows installer is UNSIGNED — SmartScreen will warn on install." >> "$GITHUB_STEP_SUMMARY"
+          echo "⚠️ SignPath ($SIGNPATH_SIGNING_POLICY) failed: the Windows installer is UNSIGNED — SmartScreen will warn on install, and publish will refuse it without allow_untrusted." >> "$GITHUB_STEP_SUMMARY"
 
       - name: Put the signed installer in place
         if: runner.os == 'Windows' && steps.signing.outputs.signpath == 'true' && steps.signpath.outcome == 'success'
@@ -310,7 +348,7 @@ jobs:
           test -f "signed/$NAME" || { echo "::error::SignPath returned no $NAME"; ls -R signed; exit 1; }
           cp "signed/$NAME" "$INSTALLER"
           # Test-signing uses SignPath's self-signed test certificate during onboarding, so
-          # prove an Authenticode signer exists there. Release signing must chain to trust.
+          # prove an Authenticode signer exists there. Every other policy must chain to trust.
           cat > verify-signpath-signature.ps1 <<'POWERSHELL'
           $signature = Get-AuthenticodeSignature $env:INSTALLER
           $signature | Format-List Status, SignerCertificate
@@ -318,8 +356,8 @@ jobs:
             Write-Error "SignPath returned an installer without an Authenticode signer"
             exit 1
           }
-          if ($env:SIGNPATH_SIGNING_POLICY -eq 'release-signing' -and $signature.Status -ne 'Valid') {
-            Write-Error "The release-signed installer is not trusted by Windows: $($signature.Status)"
+          if ($env:SIGNPATH_SIGNING_POLICY -ne 'test-signing' -and $signature.Status -ne 'Valid') {
+            Write-Error "The installer signed under policy '$env:SIGNPATH_SIGNING_POLICY' is not trusted by Windows: $($signature.Status)"
             exit 1
           }
           if ($signature.Status -ne 'Valid') {
@@ -362,6 +400,38 @@ jobs:
           test -f "${apps[0]}/Contents/Resources/Assets.car" || { echo "::error::no Assets.car in the bundle"; exit 1; }
           test "$(plutil -extract CFBundleIconName raw "${apps[0]}/Contents/Info.plist")" = cezar || { echo "::error::CFBundleIconName is not cezar"; exit 1; }
           test -n "$(plutil -extract CFBundleIconFile raw "${apps[0]}/Contents/Info.plist")" || { echo "::error::no CFBundleIconFile"; exit 1; }
+
+      # What `publish` decides on: only `trusted` (Windows, a release-policy SignPath signature
+      # Windows accepts) and `developer-id` (macOS, signed and notarized) may reach the
+      # rolling release, the updater manifest or the cask.
+      - name: Record the signing outcome
+        id: trust
+        if: runner.os != 'Linux'
+        shell: bash
+        working-directory: ${{ env.DESKTOP_DIR }}
+        env:
+          KEY: ${{ runner.os == 'Windows' && 'windows' || startsWith(matrix.target, 'aarch64') && 'macos_aarch64' || 'macos_x86_64' }}
+          HAS_APPLE: ${{ steps.signing.outputs.apple }}
+          SIGNPATH_OUTCOME: ${{ steps.signpath.outcome }}
+          SIGNPATH_SIGNING_POLICY: ${{ vars.SIGNPATH_SIGNING_POLICY_SLUG || 'release-signing' }}
+        run: |
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            # The Authenticode check above already required `Valid` for any non-test policy.
+            if [ "$SIGNPATH_OUTCOME" != "success" ]; then STATE=unsigned
+            elif [ "$SIGNPATH_SIGNING_POLICY" = "test-signing" ]; then STATE=test-signed
+            else STATE=trusted
+            fi
+          else
+            shopt -s nullglob
+            apps=( src-tauri/target/*/release/bundle/macos/*.app )
+            if [ "$HAS_APPLE" = "true" ] && ! codesign -dv "${apps[0]}" 2>&1 | grep -q 'Signature=adhoc'; then
+              STATE=developer-id
+            else
+              STATE=ad-hoc
+            fi
+          fi
+          echo "$KEY: $STATE"
+          echo "$KEY=$STATE" >> "$GITHUB_OUTPUT"
 
       # Stable, versionless copies: the landing page's Download button and the package-manager
       # manifests link these, so shipping a version never means editing a link.
@@ -545,11 +615,52 @@ jobs:
     needs: [prepare, build, arch]
     if: ${{ !inputs.dry_run }}
     runs-on: ubuntu-latest
+    # Reads the updater key's presence and is the gate in front of every public surface.
+    environment: desktop-release
+    outputs:
+      trusted: ${{ steps.trust.outputs.trusted }}
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           sparse-checkout: packages/desktop/scripts
+
+      # Fails closed: a missing, test-signed, unsigned or ad-hoc outcome is untrusted. An
+      # untrusted build is refused unless `allow_untrusted` publishes it as a prerelease, and
+      # even then it never reaches desktop-latest, desktop-latest.json or the cask.
+      - name: Check how every installer was signed
+        id: trust
+        env:
+          WINDOWS: ${{ needs.build.outputs.windows }}
+          MACOS_AARCH64: ${{ needs.build.outputs.macos_aarch64 }}
+          MACOS_X86_64: ${{ needs.build.outputs.macos_x86_64 }}
+          ALLOW_UNTRUSTED: ${{ inputs.allow_untrusted }}
+        run: |
+          TRUSTED=true
+          [ "$WINDOWS" = "trusted" ] || TRUSTED=false
+          [ "$MACOS_AARCH64" = "developer-id" ] || TRUSTED=false
+          [ "$MACOS_X86_64" = "developer-id" ] || TRUSTED=false
+          {
+            echo "### Signing"
+            echo ""
+            echo "| Installer | Signature |"
+            echo "|---|---|"
+            echo "| Windows | ${WINDOWS:-unknown} |"
+            echo "| macOS (Apple silicon) | ${MACOS_AARCH64:-unknown} |"
+            echo "| macOS (Intel) | ${MACOS_X86_64:-unknown} |"
+            echo ""
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "trusted=$TRUSTED" >> "$GITHUB_OUTPUT"
+          if [ "$TRUSTED" = "true" ]; then
+            echo "✅ Every installer is release-signed: Windows trusted by SmartScreen, macOS signed with a Developer ID and notarized." >> "$GITHUB_STEP_SUMMARY"
+          elif [ "$ALLOW_UNTRUSTED" = "true" ]; then
+            echo "::warning::untrusted build (windows=${WINDOWS:-unknown}, macos=${MACOS_AARCH64:-unknown}/${MACOS_X86_64:-unknown}) — publishing as a PRERELEASE only"
+            echo "⚠️ NOT release-signed. Published as a PRERELEASE only (allow_untrusted): desktop-latest, desktop-latest.json and the Homebrew cask were left untouched. Not fit for a landing page." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "::error::refusing to publish an untrusted build (windows=${WINDOWS:-unknown}, macos=${MACOS_AARCH64:-unknown}/${MACOS_X86_64:-unknown}); the release stays a draft. Run again with allow_untrusted for a prerelease."
+            echo "⛔ NOT published: the installers are not release-signed. The release stays a draft; desktop-latest, desktop-latest.json and the Homebrew cask are untouched." >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
 
       - name: Write the updater manifest and publish
         env:
@@ -558,7 +669,16 @@ jobs:
           TAG: ${{ needs.prepare.outputs.tag }}
           VERSION: ${{ needs.prepare.outputs.version }}
           HAS_UPDATER_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY != '' }}
+          TRUSTED: ${{ steps.trust.outputs.trusted }}
         run: |
+          # A draft that predates this job writing the manifest still carries tauri-action's.
+          gh release delete-asset "$TAG" latest.json --yes --repo "$REPO" 2>/dev/null || true
+          if [ "$TRUSTED" != "true" ]; then
+            # allow_untrusted: no manifest, so no installed shell can adopt this build.
+            gh release edit "$TAG" --draft=false --prerelease --latest=false --repo "$REPO"
+            echo "published $TAG as a prerelease, without an updater manifest"
+            exit 0
+          fi
           # Every updater bundle's `.sig` is on the release, re-made after any later signing, so
           # the manifest is built from them here. The shells poll `desktop-latest.json`, a name
           # that cannot collide with a future cezar (CLI) manifest on the same release page.
@@ -572,20 +692,30 @@ jobs:
           else
             echo "::warning::no updater manifest on $TAG — installed shells will not see this release. Is TAURI_SIGNING_PRIVATE_KEY configured?"
           fi
-          # A draft that predates this job writing the manifest still carries tauri-action's.
-          gh release delete-asset "$TAG" latest.json --yes --repo "$REPO" 2>/dev/null || true
           gh release edit "$TAG" --draft=false --latest=false --repo "$REPO"
 
       # `releases/latest/download/…` follows the repo's "latest" release, and that is cezar's own
       # `v*` release — which carries no installers. The permanent URLs therefore hang off a
       # ROLLING release, `desktop-latest`, whose assets are replaced on every shell release.
       - name: Refresh the rolling desktop-latest release
+        if: steps.trust.outputs.trusted == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
           TAG: ${{ needs.prepare.outputs.tag }}
           VERSION: ${{ needs.prepare.outputs.version }}
         run: |
+          # A re-run of an older release must not roll the download links and the updater
+          # manifest back (the cask has the same guard, bump-homebrew-cask.mjs). The title names
+          # the version desktop-latest points at.
+          CURRENT=$(gh release view desktop-latest --repo "$REPO" --json name -q .name 2>/dev/null | sed -n 's/.*(latest: v\([^)]*\)).*/\1/p')
+          if [ -n "$CURRENT" ] && node --input-type=module -e \
+            "import { isOlderVersion } from './packages/desktop/scripts/bump-homebrew-cask.mjs'; process.exit(isOlderVersion(process.argv[1], process.argv[2]) ? 0 : 1)" \
+            "$VERSION" "$CURRENT"; then
+            echo "::warning::desktop-latest is already at v$CURRENT; not downgrading it to v$VERSION."
+            echo "⚠️ desktop-latest stays at v$CURRENT: v$VERSION is older." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
           mkdir rolling
           # Every installer or none: `--clobber` replaces by name, so a file missing here would
           # leave the PREVIOUS release's asset under the same permanent URL — a download page
@@ -619,7 +749,9 @@ jobs:
           VERSION: ${{ needs.prepare.outputs.version }}
           TAG: ${{ needs.prepare.outputs.tag }}
           REPO: ${{ github.repository }}
-          HAS_APPLE: ${{ secrets.APPLE_CERTIFICATE != '' }}
+          TRUSTED: ${{ steps.trust.outputs.trusted }}
+          # The same condition the build legs sign under.
+          HAS_APPLE: ${{ secrets.APPLE_CERTIFICATE != '' && secrets.APPLE_ID != '' }}
           HAS_UPDATER_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY != '' }}
           HAS_SIGNPATH: ${{ secrets.SIGNPATH_API_TOKEN != '' && secrets.SIGNPATH_ORGANIZATION_ID != '' }}
         run: |
@@ -628,13 +760,17 @@ jobs:
             echo ""
             echo "Release: https://github.com/${REPO}/releases/tag/${TAG}"
             echo ""
-            echo "| Platform | Stable download |"
-            echo "|---|---|"
-            for f in cezar-macos-aarch64.dmg cezar-macos-x86_64.dmg cezar-windows-x86_64-setup.exe cezar-linux-x86_64.AppImage cezar-linux-x86_64.deb cezar-linux-x86_64.pkg.tar.zst; do
-              echo "| \`$f\` | https://github.com/${REPO}/releases/download/desktop-latest/$f |"
-            done
+            if [ "$TRUSTED" = "true" ]; then
+              echo "| Platform | Stable download |"
+              echo "|---|---|"
+              for f in cezar-macos-aarch64.dmg cezar-macos-x86_64.dmg cezar-windows-x86_64-setup.exe cezar-linux-x86_64.AppImage cezar-linux-x86_64.deb cezar-linux-x86_64.pkg.tar.zst; do
+                echo "| \`$f\` | https://github.com/${REPO}/releases/download/desktop-latest/$f |"
+              done
+            else
+              echo "Prerelease only — the stable download links still point at the previous release."
+            fi
             echo ""
-            [ "$HAS_APPLE" = "true" ] || echo "⚠️ macOS builds are UNSIGNED (no APPLE_* secrets) — Gatekeeper will refuse them. Not fit for a landing page."
+            [ "$HAS_APPLE" = "true" ] || echo "⚠️ macOS builds are ad-hoc signed, not notarized (no APPLE_CERTIFICATE/APPLE_ID) — Gatekeeper asks the user to allow them. Not fit for a landing page."
             [ "$HAS_SIGNPATH" = "true" ] || echo "⚠️ The Windows installer is UNSIGNED (no SIGNPATH_* secrets) — SmartScreen will warn on install."
             [ "$HAS_UPDATER_KEY" = "true" ] || echo "⚠️ No updater manifest (no TAURI_SIGNING_PRIVATE_KEY) — installed shells will not auto-update to this version."
           } >> "$GITHUB_STEP_SUMMARY"
@@ -644,8 +780,11 @@ jobs:
   homebrew-tap:
     name: Update Homebrew tap
     needs: [prepare, publish]
-    if: ${{ !inputs.dry_run }}
+    # Only a release-signed build reaches the cask; an `allow_untrusted` prerelease never does.
+    if: ${{ !inputs.dry_run && needs.publish.outputs.trusted == 'true' }}
     runs-on: ubuntu-latest
+    # Reads RELEASE_APP_PRIVATE_KEY.
+    environment: desktop-release
     timeout-minutes: 10
     permissions:
       contents: read # only downloads release assets; the tap push uses the tap-scoped app token

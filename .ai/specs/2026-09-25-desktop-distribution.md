@@ -63,16 +63,36 @@ nothing), and:
    flips the draft to published with `--latest=false` (cezar's `v*` releases stay the repo's
    "latest"), copies the stable-named installers and `desktop-latest.json` onto the rolling
    `desktop-latest` release (its assets and title change; its tag stays where the first
-   release put it, because the workflow's token may not move a tag), and writes a summary with the stable links and loud warnings for anything unsigned.
+   release put it, because the workflow's token may not move a tag), and writes a summary with the signing state of every installer, the stable links and loud warnings for anything unsigned.
 
 `createUpdaterArtifacts` is passed **only in CI** (`--config`), never in the checked-in
 config, so a local `tauri build` does not demand the signing key.
 
 ## Signing — the real gate on "easy install"
 
-Secret-gated, all-or-nothing per platform, and the workflow degrades to unsigned builds with a
-warning rather than failing — unsigned builds are fine for a maintainer to test and NOT fit for
-a Download button (Gatekeeper reports them "damaged"; SmartScreen blocks them).
+Secret-gated, all-or-nothing per platform. The build legs degrade to unsigned (Windows) or
+ad-hoc signed (macOS) builds with a warning, but **publishing fails closed**: each leg reports
+how it was signed (`build` outputs `windows`, `macos_aarch64`, `macos_x86_64`), and `publish`
+refuses, leaving the draft a draft, unless Windows is `trusted` (a SignPath signature under any
+policy but `test-signing` that Windows accepts) and both macOS legs are `developer-id` (signed
+and notarized). The manual `allow_untrusted` input publishes such a build as a **prerelease
+only**: no `desktop-latest`, no `desktop-latest.json`, no cask. Only the exact
+`SIGNPATH_SIGNING_POLICY_SLUG` `test-signing` lets a failed SignPath request fall back to the
+unsigned installer; any other slug fails the leg. Untrusted builds are fine for a maintainer to
+test and NOT fit for a Download button (Gatekeeper asks the user to allow them; SmartScreen warns).
+
+Three more guards (post-merge audit of #2350, #2352 and #2355):
+- A manual run starts only from `main` or a `desktop-v*` tag.
+- `prepare` refuses a version whose release is already published, before anything is uploaded:
+  re-releasing in place would overwrite signed installers, `.sig` files and the DMGs the cask pins.
+- The rolling `desktop-latest` refresh never moves back to an older version (the cask's guard in
+  `bump-homebrew-cask.mjs`).
+
+The jobs that read signing or release-app secrets (`build`, `publish`, `homebrew-tap`) run in
+the `desktop-release` GitHub environment. A maintainer creates it in the repository settings,
+with required reviewers (the approvers in `docs/code-signing-policy.md`) and deployment refs
+limited to `main` and `desktop-v*`. Until it exists, GitHub creates it on first use without
+protection rules, and the release still runs.
 
 | Secret | Used for |
 | --- | --- |

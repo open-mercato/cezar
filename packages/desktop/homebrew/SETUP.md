@@ -26,7 +26,7 @@ rolling `desktop-latest` release, whose files change under a fixed `sha256`.
 ## What each release does
 
 The `homebrew-tap` job in `.github/workflows/desktop-release.yml` runs after **Publish release**,
-on real releases only (never `dry_run`). It downloads the two `cezar-macos-*.dmg.sha256` assets,
+on real, release-signed releases only (never `dry_run`, never an `allow_untrusted` prerelease). It downloads the two `cezar-macos-*.dmg.sha256` assets,
 runs `packages/desktop/scripts/bump-homebrew-cask.mjs` on the tap's `Casks/cezar.rb` and pushes a
 `cezar <version>` commit to the tap's `main` with a release-app token scoped to the tap alone
 (`owner: open-mercato`, `repositories: homebrew-tap`, `permission-contents: write`). A re-run is a

@@ -26,7 +26,9 @@ Every change reaches `main` through a pull request. A desktop release is started
 approver running the **Desktop release** workflow from GitHub Actions or by pushing a
 `desktop-v*` tag whose version matches the checked-in desktop version. In both cases the
 installer is signed only inside that GitHub Actions release workflow, and SignPath may enforce
-its own manual approval before it completes the signing request.
+its own manual approval before it completes the signing request. The workflow refuses a manual
+run from any other branch, and its signing jobs run in the `desktop-release` GitHub
+environment, whose required reviewers are the approvers above.
 
 ## Privacy policy
 
