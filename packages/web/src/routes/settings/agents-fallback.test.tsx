@@ -67,9 +67,10 @@ function serve({ policy, getStatus = 200, getError = 'agent fallback is local-on
   return state
 }
 
-function renderAgents() {
+function renderAgents(methods?: unknown) {
   const client = createQueryClient()
   client.setDefaultOptions({ queries: { ...client.getDefaultOptions().queries, retry: false } })
+  if (methods) client.setQueryData(workspaceQueryKeys.agentProviders, methods)
   client.setQueryData(queryKeys.health, { bootProject: 'boot' })
   client.setQueryData(workspaceQueryKeys.projects, { projects: [PROJECT], bootProject: 'boot', projectsDir: '~/p' })
   render(
@@ -114,6 +115,17 @@ afterEach(() => {
 })
 
 describe('automatic fallback settings', () => {
+  it('disables every account of a runner without an active method and keeps connected alternatives available', async () => {
+    serve()
+    renderAgents({ editable: true, agents: [
+      { runner: 'claude', mode: 'one', active: 'custom', methods: [{ id: 'custom', kind: 'custom', label: 'Gateway', state: 'connected' }] },
+      { runner: 'codex', mode: 'one', active: null, methods: [{ id: 'subscription', kind: 'subscription', label: 'ChatGPT', state: 'connected' }] },
+    ] })
+    fireEvent.keyDown(await screen.findByRole('combobox', { name: 'Agent to add' }), { key: 'ArrowDown' })
+    expect((await screen.findByRole('option', { name: 'codex · Work · unavailable' })).getAttribute('aria-disabled')).toBe('true')
+    expect(screen.getByRole('option', { name: 'claude · Default' }).hasAttribute('aria-disabled')).toBe(false)
+  })
+
   it('starts empty with the switch disabled and explains scope, cost and the stop condition', async () => {
     serve()
     renderAgents()

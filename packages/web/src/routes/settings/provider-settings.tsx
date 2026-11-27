@@ -81,7 +81,7 @@ function withProviderEnabled(
   }
 }
 
-export function ProviderSettings() {
+export function ProviderSettings({ folded = false, open = false }: { folded?: boolean; open?: boolean } = {}) {
   const status = useProviderStatus()
   const refresh = useRefreshProviderStatus()
   const retry = useRetryProviderAuth()
@@ -202,14 +202,7 @@ export function ProviderSettings() {
     }
   }
 
-  return (
-    <SettingsCard
-      id="providers"
-      slot="provider-settings"
-      title="Providers"
-      description="Connect the coding agents available on this computer."
-      className="scroll-mt-20"
-    >
+  const rows = <>
       {status.isError ? (
         <div
           role="alert"
@@ -371,6 +364,14 @@ export function ProviderSettings() {
         )
       })}
       {sheet.element}
-    </SettingsCard>
+    </>
+  return folded ? (
+    <details id="providers" data-slot="provider-settings" open={open} className="scroll-mt-20">
+      <summary className="cursor-pointer px-4 py-3 text-ui font-medium">Agent sign-in and enablement</summary>
+      {rows}
+    </details>
+  ) : (
+    <SettingsCard id="providers" slot="provider-settings" title="Providers"
+      description="Connect the coding agents available on this computer." className="scroll-mt-20">{rows}</SettingsCard>
   )
 }

@@ -99,8 +99,10 @@ function serve({
   providerStatusAfterFirstError,
   agentProfiles,
   hostModels = {},
+  methods,
 }: {
-  config?: Partial<ConfigResponse>
+  methods?: unknown
+  config?: Partial<ConfigResponse> & { projectDefaultModels?: Record<string, string> }
   putStatus?: number
   putError?: string
   providerStatus?: unknown
@@ -144,6 +146,7 @@ function serve({
       const method = init?.method ?? 'GET'
       const body = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : undefined
       requests.push({ method, url, body })
+      if (url === '/api/v1/agent-providers' && methods) return json(methods)
       if (url === '/api/v1/config' && method === 'GET') return json(state)
       if (url === '/api/v1/providers/status' && method === 'GET') {
         if (providerStatusPending) return new Promise<never>(() => {})
@@ -286,7 +289,27 @@ afterEach(() => {
 })
 
 describe('the agents form', () => {
-  it('puts the anchored Providers section first', async () => {
+  it('uses the active method in default and fallback choices and links directly to workspace settings', async () => {
+    serve({ methods: { editable: true, agents: [
+      { runner: 'claude', mode: 'one', active: 'custom', methods: [{ id: 'custom', kind: 'custom', label: 'Fake gateway', state: 'connected' }] },
+      { runner: 'codex', mode: 'one', active: null, methods: [{ id: 'subscription', kind: 'subscription', label: 'ChatGPT', state: 'connected' }] },
+    ] }, config: { defaultModels: { claude: 'fake-model' }, projectDefaultModels: {} } })
+    const client = renderAt('/settings/agents')
+    await screen.findByRole('radio', { name: 'codex · no provider' })
+    expect(screen.getByRole('radio', { name: 'codex · no provider' }).hasAttribute('disabled')).toBe(true)
+    expect(screen.getByRole('radio', { name: 'claude' }).hasAttribute('disabled')).toBe(false)
+    expect(modelSelect('codex').disabled).toBe(true)
+    expect(modelSelect('claude').textContent).toContain('Inherit (fake-model)')
+    expect(screen.getByRole('link', { name: 'No provider · Configure providers' }).getAttribute('href')).toBe('/settings/global/agents#agent-codex')
+    expect(screen.getAllByRole('link', { name: 'via Fake gateway · Manage providers' })[0]?.getAttribute('href')).toBe('/settings/global/agents#agent-claude')
+    await pick(modelSelect('claude'), /auto \(default\)/)
+    await waitFor(() => expect(puts().at(-1)?.body).toMatchObject({ defaultModelsAuto: { claude: true } }))
+    act(() => client.setQueryData(queryKeys.config, (old: ConfigResponse) => ({ ...old, projectDefaultModels: { claude: '' } })))
+    await pick(modelSelect('claude'), /Inherit/)
+    await waitFor(() => expect(puts().at(-1)?.body).toEqual({ defaultModels: { claude: null }, defaultModelsAuto: { claude: false } }))
+  })
+
+  it('keeps the provider controls reachable inside Default agent', async () => {
     serve()
     renderAt('/settings/agents')
 
@@ -295,7 +318,7 @@ describe('the agents form', () => {
     expect(providers.id).toBe('providers')
     expect(providers.className).toContain('scroll-mt-20')
     expect(providers.className).not.toContain('scroll-mt-6')
-    expect(form()?.firstElementChild).toBe(providers)
+    expect(form()?.firstElementChild?.contains(providers)).toBe(true)
   })
 
   it('keeps a saved disconnected runner selected while disabling its runner and model controls', async () => {
@@ -341,7 +364,7 @@ describe('the agents form', () => {
     expect((codex as HTMLButtonElement).disabled).toBe(true)
     expect(modelSelect('codex').disabled).toBe(true)
     expect(
-      screen.getByText('This provider is disabled. Enable it above or choose another provider.'),
+      screen.getByText('This provider is disabled. Open agent sign-in and enablement to turn it on.'),
     ).toBeTruthy()
   })
 
