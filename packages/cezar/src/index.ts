@@ -69,6 +69,9 @@ import { runUsageCommand } from './usage-ledger/cli.ts';
 
 import { runTrackerConnectionsCommand } from './server/tracker/connections-cli.ts';
 import { runTrackerCommand } from './server/tracker/task-cli.ts';
+import { applyProvidersDocument, fetchAppliedProviders, runProvidersCommand } from './agent-providers-cli.ts';
+import { configuredAuthStatus } from './agent-providers/service.ts';
+import { readAgentProviders } from './workspace/agent-providers.ts';
 import { runSecretsCommand } from './workspace/secrets-cli.ts';
 import { launchPageUrl } from './cockpit-address.ts';
 import {
@@ -106,6 +109,7 @@ Usage:
   cezar projects            list the projects this cockpit serves
                             (also: projects add [<dir>] · projects remove <id>)
   cezar tracker-connections <list|remove ID>  inspect or delete local project credentials
+  cezar providers <apply|set|select|remove|list>  configure workspace agent providers
   cezar secrets <list|set NAME|unset NAME>  this project's secrets (--workspace: the user's)
                             (set reads the value from stdin; agents never receive them)
   cezar telemetry [status|enable|disable|inspect]  opt-in usage data (off until you enable it)
@@ -127,6 +131,7 @@ Usage:
 Options:
   -p, --port <n>              cockpit port (default 4321; server-install: this
                               instance's loopback port — auto-picked per domain)
+      --providers <file|json|->    apply workspace agent methods before serving
       --repo <dir>            repo to operate on (default: cwd)
       --workflow <name>       workflow for \`run\` (default: quick-task)
       --model <model>         model override for \`run\`
@@ -163,7 +168,10 @@ async function main(): Promise<void> {
     process.exitCode = await runTrackerConnectionsCommand(process.argv.slice(3));
     return;
   }
-  // Local-only, like tracker-connections: `set` reads its value from stdin, never argv.
+  if (process.argv[2] === 'providers') {
+    process.exitCode = await runProvidersCommand(process.argv.slice(3));
+    return;
+  }
   if (process.argv[2] === 'secrets') {
     process.exitCode = await runSecretsCommand(process.argv.slice(3));
     return;
@@ -235,6 +243,7 @@ async function main(): Promise<void> {
     options: {
       port: { type: 'string', short: 'p', default: '4321' },
       repo: { type: 'string' },
+      providers: { type: 'string' },
       workflow: { type: 'string' },
       model: { type: 'string' },
       effort: { type: 'string' },
@@ -275,7 +284,7 @@ async function main(): Promise<void> {
 
   switch (command) {
     case 'serve':
-      await serveCommand(repoRoot, Number(values.port), !values['no-open'], values['bind-host']);
+      await serveCommand(repoRoot, Number(values.port), !values['no-open'], values['bind-host'], values.providers);
       return;
     case 'run':
       await runCommand(repoRoot, positionals.slice(1).join(' ').trim(), values.workflow, values.model, values.effort);
@@ -349,6 +358,7 @@ async function serveCommand(
   preferredPort: number,
   openBrowser: boolean,
   bindHost?: string,
+  providers?: string,
 ): Promise<void> {
   // A failing request or task must not take the whole cockpit down, and must leave a trace.
   installCrashLogging({ report: (reason) => reportError(reason, { source: 'process', handler: 'unhandledRejection' }) });
@@ -362,7 +372,13 @@ async function serveCommand(
       console.warn(`[cez] could not clean cockpit runtime state (${error instanceof Error ? error.message : String(error)})`);
     });
   };
+  let providerRefresh: Awaited<ReturnType<typeof applyProvidersDocument>>['fetches'] = [];
+  if (providers !== undefined) {
+    try { providerRefresh = (await applyProvidersDocument(providers)).fetches; }
+    catch (error) { console.error('[cez] providers: ' + (error instanceof Error ? error.message : 'invalid configuration')); }
+  }
   const joinRunningCockpit = async (runtime: CockpitRuntimeRecord): Promise<void> => {
+    await fetchAppliedProviders(providerRefresh);
     if (await shouldRegisterProject(repoRoot).catch(() => false)) {
       await handoffProject(runtime, repoRoot, { openBrowser, open: openUrl });
       return;
@@ -635,6 +651,7 @@ async function serveCommand(
     selfUpdate,
   }, port);
   httpServer.once('listening', () => {
+    void fetchAppliedProviders(providerRefresh);
     const publication = cockpitLease
       ? publishCockpitRuntime(cockpitLease, { runtimeId, port, bindHost, version })
       : Promise.resolve();
@@ -770,15 +787,12 @@ async function runCommand(
       providerAuth.status(),
       loadWorkspaceConfig(),
     ]);
-    const blocked = unavailableProviderMessage(
-      requiredProviders,
-      await withSelectedAccounts(
-        applyProviderEnablement(discovered, workspace.disabledProviders),
-        requiredProviders,
-        { repoRoot },
-        providerAuth,
-      ),
-    );
+    const judged = await withSelectedAccounts(applyProviderEnablement(discovered, workspace.disabledProviders),
+      requiredProviders, { repoRoot }, providerAuth);
+    const providers = await readAgentProviders();
+    const blocked = unavailableProviderMessage(requiredProviders, {
+      ...judged, providers: judged.providers.map(row => configuredAuthStatus(providers, row)),
+    });
     if (blocked) {
       console.error(blocked);
       process.exitCode = 1;

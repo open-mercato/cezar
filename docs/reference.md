@@ -1149,6 +1149,40 @@ topic`) for anything else - a dev server proxying a `localhost` page to
 says so and falls back to the authenticated same-origin route instead of showing
 `sampling…` forever.
 
+### Configure an agent's provider from the host
+
+Open **Settings → Global → Agents** and expand the agent to see the login and key-based methods its CLI supports. A single-provider agent uses its active method. On a multi-provider agent the model choice also identifies the method. Projects can inherit or override accounts and models. Provider methods apply across the workspace.
+
+The same settings can be applied before the cockpit listens with `cezar serve --providers providers.yaml`, or to a running workspace with `cezar providers apply providers.yaml`. The default serve command also accepts `--providers`. Both accept a JSON or YAML file, inline JSON, or `-` for standard input.
+
+```yaml
+version: 1
+agents:
+  claude:
+    active: openrouter
+    methods:
+      openrouter:
+        apiKeyEnv: OPENROUTER_API_KEY
+  codex:
+    active: custom
+    methods:
+      custom:
+        label: Company gateway
+        baseUrl: https://gateway.example.com
+        apiKeyFile: /run/secrets/gateway
+```
+
+Each key source is resolved during application. Inline keys belong in standard input or a private file (`chmod 600`). Use environment variable names or file paths in arguments. A failed validation leaves the previous configuration in use. An invalid startup document logs an error and the cockpit continues to boot.
+
+| Command | Effect |
+| --- | --- |
+| `cezar providers list [--json]` | Show connection state, origin, masked hint and model count. |
+| `cezar providers set codex custom --base-url https://gateway.example.com --key-stdin --active` | Read a key on standard input, save the method and select it. Also accepts `--key-file`, `--key-env` and `--label`. |
+| `cezar providers select claude subscription` | Use the existing vendor login. Use `none` to clear the selection. |
+| `cezar providers remove codex custom` | Remove the saved method and its encrypted key. |
+
+The custom URL is the endpoint root, such as `https://gateway.example.com`. Cezar reads `/v1/models` there. An unavailable endpoint shows a retry action in Settings. Apply and set accept `--no-fetch` to postpone discovery. Hosted and paired cockpits can inspect the configuration. To change it, use the local cockpit or the CLI on the host.
+
 ### Editing the agents' own config (Settings → Agent config)
 
 cezar picks *which* agent runs; **Settings → Agent config** lets you edit *how* it
