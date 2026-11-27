@@ -74,6 +74,8 @@ export function syncFailureReason(res: GitResult, fallback: string): string {
 
 /** Per-file patch cap — the GUI shows a "truncated" note past this. */
 const PATCH_CAP = 200_000;
+/** Whole-payload patch budget (#2248); each file is still capped by `PATCH_CAP`. */
+const AGGREGATE_PATCH_CAP = 4_000_000;
 export interface ChangedFile {
   path: string;
   /** Rename/copy source — present only when `status` is renamed/copied. */
@@ -99,6 +101,8 @@ export interface ChangesPayload {
   /** The commit the diff is measured against, resolved to a sha so the old side of an image can
    *  be fetched by it (`/files?raw=1&rev=`). Absent when the anchor does not resolve. */
   baseSha?: string;
+  /** The whole-payload patch budget ran out: later files keep their counts with an empty patch (#2248). */
+  truncated?: boolean;
 }
 
 export type ChangesResult = { ok: true; changes: ChangesPayload } | { ok: false; error: string };
@@ -283,6 +287,9 @@ export async function collectChanges(
     runStartedAt?: string;
     /** Leave cezar's own `.ai/cezar/` out — an in-place task's Changes show what would land. */
     excludeCezarData?: boolean;
+    /** Caller-chosen anchor (#2248): `worktree` = HEAD (uncommitted only), `ref` = merge-base of that
+     *  ref with HEAD. Absent keeps the `resolveTaskDiffBase` answer. */
+    anchor?: { kind: 'worktree' } | { kind: 'ref'; ref: string };
   } = {},
 ): Promise<ChangesResult> {
   if (!isSafeGitRef(baseBranch)) return { ok: false, error: 'refusing option-like base ref' };
@@ -310,7 +317,7 @@ export async function collectChanges(
     // refreshes and rewrites the index it reads. On the user's real main tree that would be a
     // read-only GET writing their index, and it would measure against a different index than
     // the listing below. The ref lookups themselves ignore `GIT_INDEX_FILE`.
-    const { base, repointedHead } = await resolveTaskDiffBase(
+    let { base, repointedHead } = await resolveTaskDiffBase(
       (args) => git(dir, args, env),
       baseBranch,
       {
@@ -318,6 +325,19 @@ export async function collectChanges(
         runStartedAt: opts.runStartedAt,
       },
     );
+    if (opts.anchor?.kind === 'worktree') {
+      base = 'HEAD';
+      repointedHead = undefined;
+    } else if (opts.anchor?.kind === 'ref') {
+      const ref = opts.anchor.ref;
+      if (!isSafeGitRef(ref)) return { ok: false, error: 'refusing option-like base ref' };
+      const verified = await git(dir, ['rev-parse', '--verify', '--quiet', '--end-of-options', `${ref}^{commit}`], env);
+      const sha = verified.ok ? verified.stdout.trim() : '';
+      if (!isCommitSha(sha)) return { ok: false, error: `unknown base ref: ${ref}` };
+      const mb = await git(dir, ['merge-base', sha, 'HEAD'], env);
+      base = mb.ok && isCommitSha(mb.stdout.trim()) ? mb.stdout.trim() : sha;
+      repointedHead = undefined;
+    }
 
     // Three independent read-only listings, run concurrently. `GIT_OPTIONAL_LOCKS=0` keeps them
     // from racing each other for `index.lock` over the opportunistic stat refresh `git diff` writes,
@@ -389,6 +409,17 @@ export function assemblePayload(
     };
   });
 
+  // Aggregate cap (#2248): past it, later files keep their stat but lose their patch.
+  let total = 0;
+  let truncated = false;
+  for (const f of files) {
+    total += f.patch.length;
+    if (total > AGGREGATE_PATCH_CAP && f.patch) {
+      f.patch = '';
+      truncated = true;
+    }
+  }
+
   return {
     files,
     stat: {
@@ -396,7 +427,24 @@ export function assemblePayload(
       dels: files.reduce((sum, f) => sum + f.dels, 0),
       files: files.length,
     },
+    ...(truncated ? { truncated: true } : {}),
   };
+}
+
+/** The base branch the repo's own Changes view compares against: the configured one, else the
+ *  base remote's default branch, else `main`/`master` when one exists. Null when nothing resolves. */
+export async function resolveRepoBaseBranch(dir: string, configured?: string | null): Promise<string | null> {
+  if (configured && isSafeGitRef(configured)) return configured;
+  const remotes = await resolveTaskRemotes((args) => git(dir, args));
+  if (remotes.base) {
+    const head = await git(dir, ['symbolic-ref', '-q', '--short', `refs/remotes/${remotes.base}/HEAD`]);
+    const name = head.ok ? head.stdout.trim().slice(remotes.base.length + 1) : '';
+    if (name && isSafeGitRef(name)) return name;
+  }
+  for (const name of ['main', 'master']) {
+    if ((await git(dir, ['rev-parse', '--verify', '--quiet', `refs/heads/${name}`])).ok) return name;
+  }
+  return null;
 }
 
 // ---- run commit log ---------------------------------------------------------

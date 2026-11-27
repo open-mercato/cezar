@@ -2,13 +2,22 @@ import { FileDiffIcon, TriangleAlertIcon } from 'lucide-react'
 import { useMemo, useRef, useState } from 'react'
 
 import { ApiError } from '@/api/client'
-import { useRepoChanges } from '@/api/queries'
+import { useRepo, useRepoChanges } from '@/api/queries'
 import { CenteredState } from '@/components/centered-state'
 import { canPreviewMarkdown, Diff, type DiffHandle, type DiffMode } from '@/components/diff'
 import { useIsDesktop } from '@/lib/use-desktop'
 import { cn } from '@/lib/utils'
 
 import { ChangesTree } from '../task-git/changes-tree'
+import {
+  baseParam,
+  ChangesBaseSelect,
+  TruncatedNote,
+  useViewedFiles,
+  ViewedCounter,
+  viewedScope,
+  type ChangesBase,
+} from '../task-git/changes-review'
 import { TreePaneResizeHandle, treePaneWidthProps, useTreePaneWidth } from '../task-git/tree-pane-resize'
 import { DiffViewToggles } from '../task-git/diff-controls'
 import { buildFileTree } from '../task-git/file-tree'
@@ -25,7 +34,13 @@ import { AnimatedDiffStat } from '../task-git/git-toolbar'
  * per-file sticky headers carry the names.
  */
 export function RepoChangesSection() {
-  const changes = useRepoChanges()
+  // Default: the current branch against the project's base branch (#2248) — the same
+  // committed + uncommitted view a PR shows. "Uncommitted only" is the old answer.
+  const [base, setBase] = useState<ChangesBase>({ kind: 'merge-base', ref: '' })
+  const sendBase = baseParam(base, null)
+  const repo = useRepo()
+  // An unfinished ref ("vs another ref…" with nothing typed) keeps showing the last answer.
+  const changes = useRepoChanges(sendBase ?? 'merge-base')
   const desktop = useIsDesktop()
 
   const [mode, setMode] = useState<DiffMode>('unified')
@@ -43,6 +58,10 @@ export function RepoChangesSection() {
   const files = changes.data?.files ?? []
   const tree = useMemo(() => buildFileTree(files), [files])
   const hasMarkdown = useMemo(() => files.some(canPreviewMarkdown), [files])
+  const viewed = useViewedFiles(
+    viewedScope({ id: 'repo', branch: repo.data?.info?.branch, base: sendBase ?? 'merge-base' }),
+    files,
+  )
 
   const effectiveMode: DiffMode = desktop ? mode : 'unified'
   const effectiveWrap = desktop ? wrap : true
@@ -59,8 +78,9 @@ export function RepoChangesSection() {
         data-slot="repo-changes-toolbar"
         className="flex flex-wrap items-center gap-x-2.5 gap-y-1.5 border-b border-border px-4 py-2 md:px-6"
       >
-        <span className="text-xs text-muted-foreground">Uncommitted changes</span>
+        <ChangesBaseSelect value={base} onChange={setBase} />
         {changes.data ? <AnimatedDiffStat stat={changes.data.stat} /> : null}
+        <ViewedCounter state={viewed} />
         {/* Same rule as the task toolbar: toggles exist ≥md only — phones force unified+wrap. */}
         <span className="ml-auto hidden items-center gap-1 md:flex">
           <DiffViewToggles
@@ -73,6 +93,8 @@ export function RepoChangesSection() {
           />
         </span>
       </div>
+
+      <TruncatedNote show={Boolean(changes.data?.truncated)} />
 
       {changes.isPending ? (
         <p data-slot="changes-loading" className="px-4 py-6 text-center text-label text-soft-foreground md:px-6">
@@ -91,8 +113,12 @@ export function RepoChangesSection() {
           icon={<FileDiffIcon />}
           tone="neutral"
           heading="h2"
-          title="Working tree clean"
-          subtitle="No uncommitted changes in the main working tree. Edits show up here as they happen."
+          title={base.kind === 'worktree' ? 'Working tree clean' : 'No changes'}
+          subtitle={
+            base.kind === 'worktree'
+              ? 'No uncommitted changes in the main working tree. Edits show up here as they happen.'
+              : 'Nothing differs from the comparison base. Edits show up here as they happen.'
+          }
         />
       ) : (
         // Below md the diff scrolls in `main` under the repo header, which (unlike the task tabs'
@@ -110,7 +136,7 @@ export function RepoChangesSection() {
               treeWidthProps.className,
             )}
           >
-            <ChangesTree root={tree} selected={selected} onSelect={selectFile} />
+            <ChangesTree root={tree} selected={selected} onSelect={selectFile} viewed={viewed} />
           </aside>
           <TreePaneResizeHandle
             paneRef={treePaneRef}

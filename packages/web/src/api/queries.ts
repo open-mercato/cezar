@@ -224,7 +224,8 @@ export const queryKeys = {
     list: () => [queryScope(), 'runs', 'list'] as const,
     detail: (id: string) => [queryScope(), 'runs', 'detail', id] as const,
     diff: (id: string) => [queryScope(), 'runs', 'diff', id] as const,
-    changes: (id: string) => [queryScope(), 'runs', 'changes', id] as const,
+    changes: (id: string, base?: string) =>
+      (base ? ([queryScope(), 'runs', 'changes', id, base] as const) : ([queryScope(), 'runs', 'changes', id] as const)),
     gitStatus: (id: string) => [queryScope(), 'runs', 'git-status', id] as const,
     file: (id: string, path: string) => [queryScope(), 'runs', 'files', id, path] as const,
     /** Under `runs`, so the reconnect reconcile (`runs.all`) refetches it too. */
@@ -284,9 +285,8 @@ export const queryKeys = {
   },
   /** Children of `repo` on purpose: invalidating `queryKeys.repo` (a branch switch, a new
    *  commit) prefix-matches the working-tree diff and every cached commit diff too. */
-  get repoChanges() {
-    return [queryScope(), 'repo', 'changes'] as const
-  },
+  repoChanges: (base?: string) =>
+    (base ? ([queryScope(), 'repo', 'changes', base] as const) : ([queryScope(), 'repo', 'changes'] as const)),
   repoCommit: (sha: string) => [queryScope(), 'repo', 'commit', sha] as const,
   /** Under `repo`, so a branch switch or a pull refreshes ahead/behind with everything else. */
   get repoSync() {
@@ -1490,10 +1490,10 @@ export function useRunDiff(id: string | undefined) {
 /** The structured session diff behind the Changes tab (R5). A 409 (for example, a reclaimed
  *  worktree whose directory is unavailable) is a real answer, not a network hiccup — retrying
  *  cannot change it, so retries are off and the view renders the server's own reason. */
-export function useRunChanges(id: string | undefined, live = false) {
+export function useRunChanges(id: string | undefined, live = false, base?: string) {
   return useQuery({
-    queryKey: queryKeys.runs.changes(id ?? ''),
-    queryFn: ({ signal }) => getRunChanges(id as string, { signal }),
+    queryKey: queryKeys.runs.changes(id ?? '', base),
+    queryFn: ({ signal }) => getRunChanges(id as string, { signal, base }),
     enabled: Boolean(id),
     retry: false,
     // While the run is active the agent is still writing — poll so the Changes tab keeps up
@@ -1827,10 +1827,10 @@ export function useRepoSyncAction() {
 
 /** The main working tree's structured diff behind the repo view's Changes section (R5 1.7).
  *  Same 409 stance as `useRunChanges`: "not a git repository" is an answer, not a hiccup. */
-export function useRepoChanges() {
+export function useRepoChanges(base?: string) {
   return useQuery({
-    queryKey: queryKeys.repoChanges,
-    queryFn: ({ signal }) => getRepoChanges({ signal }),
+    queryKey: queryKeys.repoChanges(base),
+    queryFn: ({ signal }) => getRepoChanges({ signal, base }),
     retry: false,
   })
 }

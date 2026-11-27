@@ -160,7 +160,7 @@ function stubFetch(overrides: Record<string, () => Response> = {}): SentRequest[
       const override = overrides[`${method} ${path}`]
       if (override) return override()
       if (method === 'GET' && path === '/api/v1/repo') return jsonResponse(REPO)
-      if (method === 'GET' && path === '/api/v1/repo/changes') return jsonResponse(CHANGES)
+      if (method === 'GET' && path.split('?')[0] === '/api/v1/repo/changes') return jsonResponse(CHANGES)
       if (method === 'GET' && path === '/api/v1/repo/sync') return jsonResponse(SYNC)
       if (method === 'GET' && path === '/api/v1/repo/tree') return jsonResponse(TREE)
       if (method === 'GET' && path === '/api/v1/repo/commit/abc1234?structured=1') return jsonResponse(COMMIT)
@@ -266,17 +266,38 @@ describe('the repo view Changes segment', () => {
 
   it('a clean tree renders the honest empty state', async () => {
     stubFetch({
-      'GET /api/v1/repo/changes': () => jsonResponse({ files: [], stat: { adds: 0, dels: 0, files: 0 } }),
+      'GET /api/v1/repo/changes?base=worktree': () => jsonResponse({ files: [], stat: { adds: 0, dels: 0, files: 0 } }),
+      'GET /api/v1/repo/changes?base=merge-base': () => jsonResponse({ files: [], stat: { adds: 0, dels: 0, files: 0 } }),
     })
     renderAt('/git')
+    await waitFor(() => expect(screen.getByRole('heading', { level: 2, name: 'No changes' })).toBeTruthy())
+    fireEvent.click(document.querySelector('[data-slot="changes-base"] [data-kind="worktree"]')!)
     await waitFor(() =>
       expect(screen.getByRole('heading', { level: 2, name: 'Working tree clean' })).toBeTruthy(),
     )
   })
 
+  it('compares against the base branch by default, switches base, and marks files viewed (#2248)', async () => {
+    localStorage.clear()
+    const sent = stubFetch()
+    renderAt('/git')
+    await waitFor(() => expect(document.querySelector('[data-slot="changes-tree"]')).not.toBeNull())
+    expect(sent.some((r) => r.path === '/api/v1/repo/changes?base=merge-base')).toBe(true)
+
+    fireEvent.click(document.querySelector('[data-slot="changes-base"] [data-kind="ref"]')!)
+    fireEvent.change(screen.getByLabelText('Base ref'), { target: { value: 'release/v1' } })
+    await waitFor(() => expect(sent.some((r) => r.path === '/api/v1/repo/changes?base=release%2Fv1')).toBe(true))
+
+    const counter = () => document.querySelector('[data-slot="viewed-counter"]')?.textContent ?? ''
+    await waitFor(() => expect(counter()).toContain('0 /'))
+    fireEvent.click(document.querySelector('[data-slot="tree-viewed"]')!)
+    await waitFor(() => expect(counter()).toContain('1 /'))
+    expect(localStorage.getItem('cez:changes-viewed:v1')).toContain('release/v1')
+  })
+
   it('a 409 from /changes renders the server reason, not an error explosion', async () => {
     stubFetch({
-      'GET /api/v1/repo/changes': () => jsonResponse({ error: 'not a git repository' }, 409),
+      'GET /api/v1/repo/changes?base=merge-base': () => jsonResponse({ error: 'not a git repository' }, 409),
     })
     renderAt('/git')
     await waitFor(() =>
