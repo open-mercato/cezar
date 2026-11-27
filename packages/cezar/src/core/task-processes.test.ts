@@ -1,5 +1,6 @@
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
+import { once } from 'node:events';
 import { describe, expect, it } from 'vitest';
 import {
   describeReaped,
@@ -117,6 +118,23 @@ describe('reapTaskProcesses', () => {
 });
 
 describe.runIf(process.platform === 'linux')('reaping real processes (linux)', () => {
+  it('finds a check run marker in a child process environment', async () => {
+    const runId = randomUUID();
+    const child = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 30_000)'], {
+      env: { ...process.env, CEZ_RUN_ID: runId },
+      stdio: 'ignore',
+    });
+    const closed = once(child, 'close');
+    try {
+      expect(await waitFor(async () =>
+        (await listTaskProcesses()).some(({ pid, taskId }) => pid === child.pid && taskId === runId),
+      )).toBe(true);
+    } finally {
+      child.kill('SIGTERM');
+      await closed;
+    }
+  });
+
   it('finds and stops a re-parented setsid process carrying the marker, and nothing else', async () => {
     const taskId = randomUUID();
     const other = randomUUID();
@@ -161,16 +179,11 @@ describe('check-step marker fallback (#2467)', () => {
     expect(taskIdFromEnviron('XCEZ_RUN_ID=nope\0')).toBeUndefined();
   });
 
-  it('applies the same fallback and precedence to macOS ps output', () => {
+  it('uses only the existing task marker in macOS ps output', () => {
     const { procs } = parsePsEnvOutput([
-      '  201     1 sleep 118 PATH=/bin CEZ_RUN_ID=run-9 HOME=/h',
-      '  202     1 sleep 118 CEZ_RUN_ID=run-9 CEZ_TASK_ID=task-1 HOME=/h',
-      '  203     1 sleep 118 CEZ_TASK_ID= CEZ_RUN_ID=run-9',
-      '  204     1 sleep 118 XCEZ_RUN_ID=run-9',
+      '  201     1 node check.js CEZ_RUN_ID=run-9 HOME=/h',
+      '  202     1 node agent.js CEZ_RUN_ID=run-9 CEZ_TASK_ID=task-1 HOME=/h',
     ].join('\n'));
-    expect(procs.map(({ pid, taskId }) => ({ pid, taskId }))).toEqual([
-      { pid: 201, taskId: 'run-9' },
-      { pid: 202, taskId: 'task-1' },
-    ]);
+    expect(procs.map(({ pid, taskId }) => ({ pid, taskId }))).toEqual([{ pid: 202, taskId: 'task-1' }]);
   });
 });

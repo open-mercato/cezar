@@ -1,7 +1,7 @@
 /**
  * Processes a task leaves running after it settles (#1411). Descendants inherit the agent's
- * `CEZ_TASK_ID` or the check step's `CEZ_RUN_ID`, even if they leave the original process group.
- * These markers find what a process-tree walk misses and still cover orphans from older versions.
+ * `CEZ_TASK_ID`, even if they leave the original process group. On Linux, the reaper also
+ * recognizes the check step's `CEZ_RUN_ID` in the process environment.
  *
  * Linux reads `/proc/<pid>/environ`; macOS parses `ps -E`; anything else finds nothing. Every
  * failure degrades to "found nothing" — this must never affect a run.
@@ -12,8 +12,6 @@ import { readdir, readFile } from 'node:fs/promises';
 
 const MARKER = 'CEZ_TASK_ID';
 const CHECK_MARKER = 'CEZ_RUN_ID';
-const PS_TASK_MARKER = new RegExp(`(?:^|\\s)${MARKER}=(\\S*)`);
-const PS_CHECK_MARKER = new RegExp(`(?:^|\\s)${CHECK_MARKER}=(\\S*)`);
 const SCAN_BATCH = 64;
 
 export interface TaskProcess {
@@ -29,7 +27,7 @@ export function taskProcessReapEnabled(env: NodeJS.ProcessEnv = process.env): bo
   return env.CEZ_TASK_PROCESS_REAP !== '0';
 }
 
-/** The task ID, falling back to the check run ID when it is absent. */
+/** Read the task ID or check run ID from a NUL-separated `/proc/<pid>/environ` blob. */
 export function taskIdFromEnviron(environ: string): string | undefined {
   let fallback: string | undefined;
   for (const entry of environ.split('\0')) {
@@ -56,7 +54,8 @@ export function parsePsEnvOutput(text: string): { procs: TaskProcess[]; parents:
     const pid = Number(match[1]);
     parents.set(pid, Number(match[2]));
     const rest = match[3] ?? '';
-    const marker = PS_TASK_MARKER.exec(rest) ?? PS_CHECK_MARKER.exec(rest);
+    // ps merges argv and the environment. Check ownership needs a separate environment read.
+    const marker = new RegExp(`(?:^|\\s)${MARKER}=(\\S+)`).exec(rest);
     if (!marker?.[1]) continue;
     procs.push({ pid, taskId: marker[1], command: capCommand(rest.slice(0, marker.index)) });
   }
