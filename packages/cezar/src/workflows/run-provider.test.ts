@@ -198,7 +198,7 @@ it('retries a provider-blocked repair through the check that requested it', asyn
   }, { timeout: 10000 });
   await wait('failed');
   metadata.agents.claude.active = null;
-  expect(manager.switchAgent(id, { runner: 'claude', model: 'vendor/model', changedBy: 'fixture' })).toHaveProperty('summary');
+  expect(manager.switchAgent(id, { runner: 'claude', agentProfile: 'default', model: 'vendor/model', changedBy: 'fixture' })).toHaveProperty('summary');
   await wait('waiting');
   metadata.agents.claude = { active: 'custom', methods: { custom: gateway } };
   expect(manager.continueRun(id, { model: 'vendor/model', text: 'mock:done' }).ok).toBe(true);
