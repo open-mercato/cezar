@@ -267,6 +267,15 @@ describe('Agent accounts → Defaults for new projects', () => {
     expect(rowFor('claude', '')?.getAttribute('aria-checked')).toBe('true')
   })
 
+  it('changing the default runner preserves the named account for the previous runner', async () => {
+    serve({ accounts: { ...ACCOUNTS, defaults: { claude: 'klaudiusz' } } })
+    renderAccounts()
+    fireEvent.click(await enabledRow('codex'))
+    await waitFor(() => expect(rowFor('codex')?.getAttribute('aria-checked')).toBe('true'))
+    expect(configPuts().map((r) => r.body)).toEqual([{ agentDefaults: { runner: 'codex' } }])
+    expect(selections()).toHaveLength(0)
+  })
+
   it('writes the runner to the WORKSPACE config, never the committable repo one', async () => {
     serve()
     renderAccounts()
