@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import type { ProcessUsage, RunRecord } from '@open-mercato/cezar-api-client'
 import {
@@ -58,19 +58,25 @@ describe('formatMem', () => {
 })
 
 describe('scheduledResume', () => {
-  const NOW = new Date('2026-08-03T19:00:00.000Z')
+  // Local-time dates: a fixed UTC instant lands on another calendar day east of UTC.
+  const NOW = new Date(2026, 7, 3, 10, 0)
+  beforeEach(() => {
+    vi.useFakeTimers()
+    vi.setSystemTime(NOW)
+  })
+  afterEach(() => vi.useRealTimers())
   const scheduled = (autoResumeAt?: string) =>
-    scheduledResume(run({ status: 'failed', autoResumeAt }), NOW)
+    scheduledResume(run({ status: 'failed', autoResumeAt }))
 
   it('is the clock time alone for an appointment later the same day', () => {
-    const answer = scheduled('2026-08-03T19:33:53.000Z')
+    const answer = scheduled(new Date(2026, 7, 3, 14, 33, 53).toISOString())
     // Locale-formatted, so assert the SHAPE rather than a fixed spelling: a bare time, no date.
     expect(answer?.label).toMatch(/^\d{1,2}[:.]\d{2}(\s?[AP]M)?$/)
     expect(answer?.title).toContain('Resumes automatically at')
   })
 
   it('puts a short date in front once the appointment is not today', () => {
-    const answer = scheduled('2026-08-05T07:15:00.000Z')
+    const answer = scheduled(new Date(2026, 7, 5, 7, 15).toISOString())
     expect(answer?.label).not.toMatch(/^\d{1,2}[:.]\d{2}(\s?[AP]M)?$/)
     expect(answer?.label.length).toBeGreaterThan(5)
   })
@@ -80,7 +86,7 @@ describe('scheduledResume', () => {
     // A row must never print `Invalid Date` beside the word "scheduled".
     expect(scheduled('not-a-date')).toBeUndefined()
     // Only a FAILED run is waiting on one — a running record with a stale stamp is not.
-    expect(scheduledResume(run({ status: 'running', autoResumeAt: '2026-08-03T19:33:53.000Z' }), NOW))
+    expect(scheduledResume(run({ status: 'running', autoResumeAt: new Date(2026, 7, 3, 14, 33, 53).toISOString() })))
       .toBeUndefined()
   })
 })
