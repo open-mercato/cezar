@@ -618,6 +618,15 @@ describe('picker data flows', () => {
     expect(postedBody()).toMatchObject({ task: 'Think hard', model: 'opus', reasoningEffort: 'max' })
   })
 
+  it('falls back from a disconnected installed Codex draft to the connected runner', async () => {
+    writeDraft({ ...readDraft(), runner: 'codex', text: 'Run the fake task' })
+    serve({ health: HEALTH_MULTI, providerStatus: PROVIDERS_CONNECTED })
+    renderNewTask()
+    await pillReady()
+    await startTask()
+    expect(postedBody()).toMatchObject({ task: 'Run the fake task', runner: 'claude' })
+  })
+
   it('excludes disconnected providers from the runner choices even when health detects them', async () => {
     serve({ health: HEALTH_ALL, providerStatus: PROVIDERS_MULTI })
     renderNewTask()
