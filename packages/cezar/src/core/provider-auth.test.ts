@@ -2637,3 +2637,158 @@ describe('inconclusive probe reports', () => {
     expect(onInconclusive).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('method evidence from the existing provider probes', () => {
+  it('keeps the wire rows unchanged and reads both the cache and host methods without spawning', async () => {
+    const run = runner((executable) => executable === 'claude'
+      ? { stdout: '{"loggedIn":true,"authMethod":"claude.ai","email":"private@example.test"}', stderr: '', exitCode: 0 }
+      : resultFor(executable));
+    const service = new ProviderAuthService({
+      runCommand: run,
+      env: {
+        PI_CODING_AGENT_DIR: ompAgentDir, GEMINI_CLI_HOME: ompAgentDir,
+        OPENROUTER_API_KEY: 'fixture-router', CURSOR_API_KEY: 'fixture-cursor', GOOGLE_API_KEY: 'fixture-gemini',
+      },
+    });
+
+    expect(service.methodStatuses('claude')).toEqual({});
+    expect(run).not.toHaveBeenCalled();
+    const { providers } = await service.status();
+    expect(providers.every(row => Object.keys(row).join(',') === 'provider,status')).toBe(true);
+    expect(service.methodStatuses('claude')).toEqual({ subscription: 'connected' });
+    expect(service.methodStatuses('codex')).toEqual({ subscription: 'connected' });
+    expect(service.methodStatuses('gemini')).toEqual({ apiKey: 'connected' });
+    expect(service.methodStatuses('cursor')).toEqual({ apiKey: 'connected' });
+    expect(service.methodStatuses('pi')).toEqual({ openrouter: 'connected' });
+    expect(service.methodStatuses('omp')).toEqual({ openrouter: 'connected' });
+    expect(service.methodStatuses('opencode')).toMatchObject({ openrouter: 'connected' });
+    expect(service.methodStatuses('kimi')).toEqual({});
+    // The cursor key precheck bypasses even its ordinary probe.
+    expect(run).toHaveBeenCalledTimes(PROBE_ROUND - 1);
+  });
+
+  it('uses the existing OpenCode fallback JSON and leaves its wire status aggregate', async () => {
+    const fallback = JSON.stringify([{ id: 'openai', connections: [{ type: 'credential', method: 'oauth' }] }]);
+    const run = runner((executable, args) => {
+      if (executable !== 'opencode') return resultFor(executable);
+      return args.includes('--standalone')
+        ? { stdout: fallback, stderr: '', exitCode: 0 }
+        : { stdout: '', stderr: 'Error: Server process exited with code 1', exitCode: 1 };
+    });
+    const service = new ProviderAuthService({ runCommand: run, env: { PI_CODING_AGENT_DIR: ompAgentDir, GEMINI_CLI_HOME: ompAgentDir } });
+    expect((await service.status()).providers).toContainEqual({ provider: 'opencode', status: 'connected' });
+    expect(service.methodStatuses('opencode')).toEqual({ openai: 'connected' });
+    expect(run).toHaveBeenCalledTimes(PROBE_ROUND + 1);
+  });
+
+  it('keeps a conflicting Cursor status inconclusive while preserving the aggregate status', async () => {
+    const run = runner(executable => executable === 'agent'
+      ? { stdout: '{"status":"authenticated","isAuthenticated":false}', stderr: '', exitCode: 0 }
+      : resultFor(executable));
+    const service = new ProviderAuthService({ runCommand: run, env: { PI_CODING_AGENT_DIR: ompAgentDir, GEMINI_CLI_HOME: ompAgentDir } });
+    expect((await service.status()).providers).toContainEqual({ provider: 'cursor', status: 'connected' });
+    expect(service.methodStatuses('cursor')).toEqual({});
+  });
+
+  it('updates method evidence with a runtime recheck, and ignores synthetic bypass rows', async () => {
+    let codex: ProviderCommandResult = { stdout: '', stderr: 'Logged in using an API key', exitCode: 0 };
+    const run = runner(executable => executable.includes('codex') ? codex : resultFor(executable));
+    const service = new ProviderAuthService({ runCommand: run, env: { PI_CODING_AGENT_DIR: ompAgentDir, GEMINI_CLI_HOME: ompAgentDir } });
+    await service.status();
+    expect(service.methodStatuses('codex')).toEqual({});
+    service.reportRuntimeAuthFailure('codex');
+    codex = connectedResults.codex!;
+    expect(await service.verifyRuntimeAuthFailure('codex')).toEqual({ provider: 'codex', status: 'connected' });
+    expect(service.methodStatuses('codex')).toEqual({ subscription: 'connected' });
+    process.env.CEZ_AGENT_MODELS_LOCKED = '1';
+    expect(service.methodStatuses('codex')).toEqual({});
+    delete process.env.CEZ_AGENT_MODELS_LOCKED;
+    process.env.CEZ_DRY_RUN = '1';
+    expect(service.methodStatuses('codex')).toEqual({});
+  });
+
+  it('does not turn a key, an opaque connection, or a bridged timeout into a subscription', async () => {
+    let codex = connectedResults.codex!;
+    const run = runner(executable => executable.includes('codex') ? codex : resultFor(executable));
+    const service = new ProviderAuthService({ runCommand: run, env: { PI_CODING_AGENT_DIR: ompAgentDir, GEMINI_CLI_HOME: ompAgentDir } });
+
+    await service.status();
+    expect(service.methodStatuses('claude').subscription).toBeUndefined();
+    expect(service.methodStatuses('pi')).toEqual({});
+    expect(service.methodStatuses('omp')).toEqual({});
+    codex = { stdout: '', stderr: 'API key configured - sk-proj-***ABCDE', exitCode: 0 };
+    await service.status({ refresh: true });
+    expect(service.methodStatuses('codex').subscription).not.toBe('connected');
+    expect(JSON.stringify(service.methodStatuses('codex'))).not.toContain('ABCDE');
+    codex = connectedResults.codex!;
+    await service.status({ refresh: true });
+    expect(service.methodStatuses('codex').subscription).toBe('connected');
+    codex = { stdout: '', stderr: '', timedOut: true, exitCode: null };
+    expect((await service.status({ refresh: true })).providers).toContainEqual({ provider: 'codex', status: 'connected' });
+    expect(service.methodStatuses('codex')).toEqual({});
+  });
+
+  it.each([
+    ['api_key', 'firstParty'],
+    ['oauth_token', 'firstParty'],
+    ['api_key_helper', 'firstParty'],
+    ['third_party', 'bedrock'],
+    ['claude.ai', 'gateway'],
+  ])('keeps the Claude subscription unknown for %s on %s', async (authMethod, apiProvider) => {
+    const service = new ProviderAuthService({ runCommand: runner(executable => executable === 'claude'
+      ? { stdout: JSON.stringify({ loggedIn: true, authMethod, apiProvider }), stderr: '', exitCode: 0 }
+      : resultFor(executable)) });
+    const row = await service.profileStatus('claude', { id: 'test', configDir: ompAgentDir });
+    expect(row).toEqual({ provider: 'claude', status: 'connected', profileId: 'test' });
+    expect(service.methodStatuses('claude', ompAgentDir)).toEqual({});
+  });
+
+  it('joins concurrent same-directory refreshes and drops a late answer after repointing', async () => {
+    let finishOld!: (answer: ProviderCommandResult) => void;
+    const profile = { id: 'second', configDir: ompAgentDir };
+    const moved = { ...profile, configDir: join(ompAgentDir, 'moved') };
+    const run: RunProviderCommand = vi.fn(async (_bin, _args, _ms, env) => env?.CODEX_HOME === profile.configDir
+      ? new Promise<ProviderCommandResult>(resolve => { finishOld = resolve; })
+      : { stdout: 'Not logged in', stderr: '', exitCode: 1 });
+    const service = new ProviderAuthService({ runCommand: run });
+    const first = service.profileStatus('codex', profile);
+    service.forgetProfileStatus('codex', profile.id);
+    const second = service.profileStatus('codex', profile);
+    expect(run).toHaveBeenCalledTimes(1);
+    await service.profileStatus('codex', moved);
+    finishOld(connectedResults.codex!);
+    await Promise.all([first, second]);
+    expect(service.methodStatuses('codex', moved.configDir)).toEqual({ subscription: 'disconnected' });
+    expect(service.methodStatuses('codex', profile.configDir)).toEqual({});
+  });
+
+  it('does not republish a removed account when its last probe completes', async () => {
+    let finish!: (answer: ProviderCommandResult) => void;
+    const service = new ProviderAuthService({ runCommand: () => new Promise(resolve => { finish = resolve; }) });
+    const pending = service.profileStatus('codex', { id: 'old', configDir: ompAgentDir });
+    service.forgetProfile('codex', 'old');
+    finish(connectedResults.codex!);
+    await pending;
+    expect(service.methodStatuses('codex', ompAgentDir)).toEqual({});
+  });
+
+  it('scopes evidence to the probed directory, clears it with the account, and respects runtime failures', async () => {
+    const profile = { id: 'work', configDir: join(ompAgentDir, 'work') };
+    const run: RunProviderCommand = vi.fn(async (executable, _args, _timeout, env) => executable === 'claude'
+      ? env?.CLAUDE_CONFIG_DIR === profile.configDir
+        ? { stdout: '{"loggedIn":true,"authMethod":"claude.ai"}', stderr: '', exitCode: 0 }
+        : { stdout: '{"loggedIn":false}', stderr: '', exitCode: 1 }
+      : resultFor(executable));
+    const service = new ProviderAuthService({ runCommand: run, env: { PI_CODING_AGENT_DIR: ompAgentDir, GEMINI_CLI_HOME: ompAgentDir } });
+    await Promise.all([service.status(), service.profileStatus('claude', profile)]);
+    expect(service.methodStatuses('claude')).toEqual({ subscription: 'disconnected' });
+    expect(service.methodStatuses('claude', profile.configDir)).toEqual({ subscription: 'connected' });
+    expect(service.methodStatuses('claude', join(ompAgentDir, 'other'))).toEqual({});
+    service.reportRuntimeAuthFailure('codex');
+    expect(service.methodStatuses('codex')).toEqual({});
+    service.reportProfileAuthFailure('claude', profile.id);
+    expect(service.methodStatuses('claude', profile.configDir)).toEqual({});
+    service.forgetProfile('claude', profile.id);
+    expect(service.methodStatuses('claude', profile.configDir)).toEqual({});
+  });
+});
