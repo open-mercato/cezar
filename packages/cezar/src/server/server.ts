@@ -9045,6 +9045,7 @@ export function createAppParts(deps: ServerDeps) {
     archived: run.archived,
     ...(run.autoResumeAt !== undefined ? { autoResumeAt: run.autoResumeAt } : {}),
     ...(run.awaitingAnswerSince !== undefined ? { awaitingAnswerSince: run.awaitingAnswerSince } : {}),
+    ...(run.monitorHandoff !== undefined ? { monitorHandoff: run.monitorHandoff } : {}),
     ...(run.idleClosedAt !== undefined ? { idleClosedAt: run.idleClosedAt } : {}),
     ...(run.parked !== undefined ? { parked: run.parked } : {}),
     workflow: run.workflow,

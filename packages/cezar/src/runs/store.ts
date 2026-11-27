@@ -367,6 +367,21 @@ export const runRecordSchema = z.object({
    */
   awaitingAnswerSince: z.string().datetime().optional().catch(undefined),
   /**
+   * A monitoring park handed off at its wake-up cap or liveness bound (#1945), with who owns the
+   * next move. Durable so a settle, a restart or a cold read can tell it from a `CEZ:ASK` park
+   * without parsing the error: its closed session settles `failed` WITHOUT `awaitingAnswerSince`.
+   * Additive and optional (BACKWARD_COMPATIBILITY §3). Invariant: only a `waiting` or `failed`
+   * run carries it — `updateRun` and `reconcileLoadedRun` retire it on any other status.
+   */
+  monitorHandoff: z
+    .object({
+      reason: z.enum(['wake-cap', 'liveness']),
+      owner: z.enum(['user', 'parent']),
+      since: z.string().datetime(),
+    })
+    .optional()
+    .catch(undefined),
+  /**
    * When the inactivity timer closed the session of a run parked on the user. Housekeeping, not a
    * state change (spec 2026-11-04-idle-closed-attention-state § Revision): the run stays `waiting`
    * with no process, and the next message reopens it. Older records and dispatched children carry
@@ -1090,7 +1105,8 @@ export function reconcileLoadedRun(run: RunRecord, opts?: { keepLive?: boolean }
   ) {
     // A run parked on an unanswered `CEZ:ASK` still owes the user that question — the same
     // answer `RunManager.recover()` gives, so this reader and the manager agree on "needs you".
-    const askParked = run.status === 'waiting' && (run.askParked === true || run.attentionRequest !== undefined);
+    // A monitoring hand-off (#1945) is parked the same way but asked nothing.
+    const askParked = run.status === 'waiting' && (run.askParked === true || run.attentionRequest !== undefined) && !run.monitorHandoff;
     // A wait has no `finishedAt`, and a cold read persists nothing: `now` would move on every read.
     // A record from before `waitingSince` falls back to its last step, not its start.
     const lastStepAt = run.steps.flatMap((step) => step.finishedAt ?? step.startedAt ?? []).sort().at(-1);
@@ -1114,6 +1130,7 @@ export function reconcileLoadedRun(run: RunRecord, opts?: { keepLive?: boolean }
   if (run.status !== 'failed') run.autoResumeAt = undefined;
   // Likewise an unanswered question only means anything on the `failed` run it stopped.
   if (run.status !== 'failed') run.awaitingAnswerSince = undefined;
+  if (run.status !== 'failed' && run.status !== 'waiting') run.monitorHandoff = undefined;
   if (run.status !== 'failed' && run.status !== 'waiting') run.idleClosedAt = undefined;
   if (run.status !== 'waiting') run.parked = undefined;
   if (run.status !== 'waiting' && run.awaitingAnswerSince === undefined) run.waitingSince = undefined;
@@ -1654,6 +1671,11 @@ export class RunStore extends EventEmitter {
       }
     } else if (('awaitingAnswerSince' in normalized ? normalized.awaitingAnswerSince : run.awaitingAnswerSince) === undefined) {
       normalized.waitingSince = undefined;
+    }
+    // A monitoring hand-off (#1945) lives on its `waiting` park and the `failed` settle after it;
+    // the reply or Continue that resumes the run retires it.
+    if (normalized.status && normalized.status !== 'failed' && normalized.status !== 'waiting') {
+      normalized.monitorHandoff = undefined;
     }
     // Seed the list from the old values BEFORE applying a patch. Callers that update a scalar
     // projection often provide the replacement URL/number in the same patch; seeding afterward
