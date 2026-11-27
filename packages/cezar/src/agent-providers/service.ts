@@ -1,7 +1,7 @@
 import { homedir } from 'node:os';
 import {
   RUNNER_IDS, providerBaseUrlSchema, providerMethodInputSchema,
-  type AgentProviderEntry, type AgentProviderMethod, type ProviderMethodKind, type ProviderStatus,
+  type AgentProviderEntry, type AgentProviderMethod, type AgentProvidersResponse, type ProviderMethodKind, type ProviderStatus,
   type Runner, type RunnerModelCatalogResponse, type RunnerModelOption,
 } from '@open-mercato/cezar-contract';
 import { discoverKimiModels, kimiSubscriptionModel } from '../core/kimi-model-catalog.ts';
@@ -106,14 +106,27 @@ export async function providerEntries(logins: readonly ProviderLogin[]) {
 }
 
 /** Validate against the latest snapshot under the writer lock. Throwing discards the whole edit. */
-export async function applyProviderChanges(changes: ProviderChange[], origin: Origin, logins: readonly ProviderLogin[]) {
+export async function applyProviderChanges(changes: ProviderChange[], origin: Origin, evidence: readonly ProviderLogin[] | AgentProvidersResponse) {
   const fetches: { runner: Runner; id: string }[] = [];
   await updateAgentProviders((state, keys) => {
     for (const { runner, methods, active } of changes) {
       if (!methods.length && active === undefined) continue;
-      const login = logins.find(p => p.provider === runner);
-      const previous = providerEntry(runner, state, login);
-      const entry = state.agents[runner] ??= { ...(previous.active != null ? { active: previous.active } : {}), methods: {} };
+      const caps = authMethods(runner);
+      const owner = 'agents' in evidence ? evidence.agents.find(agent => agent.runner === runner) : undefined;
+      if ('agents' in evidence && !owner) throw new Error(`The running cockpit did not report ${runner}. Check Settings → Agents there and retry the import.`);
+      const login = 'agents' in evidence ? undefined : evidence.find(p => p.provider === runner);
+      const available = (def: Definition, saved?: StoredProviderMethod) => {
+        // Saved keys use the locked store. Only the serving process can attest to its native credentials.
+        if (owner && (!saved || def.kind === 'subscription')) {
+          return owner.methods.find(m => m.id === def.id && (m.kind === 'subscription' || m.origin === 'host'));
+        }
+        return methodView(runner, def, saved, login);
+      };
+      let entry = state.agents[runner];
+      if (!entry) {
+        const initial = caps.mode === 'one' ? caps.methods.find(m => available(m)?.state === 'connected') : undefined;
+        entry = state.agents[runner] = { ...(initial ? { active: initial.id } : {}), methods: {} };
+      }
       for (const { id, ...input } of methods) {
         const def = definition(runner, id);
         const value = providerMethodInputSchema.parse({ ...input, kind: input.kind ?? def.kind });
@@ -140,13 +153,16 @@ export async function applyProviderChanges(changes: ProviderChange[], origin: Or
         if (remote(def.kind)) fetches.push({ runner, id });
       }
       if (active !== undefined) {
-        if (authMethods(runner).mode !== 'one') throw new Error(runner + ' uses all connected methods.');
+        if (caps.mode !== 'one') throw new Error(runner + ' uses all connected methods.');
         if (active !== null) {
           const def = definition(runner, active);
           const saved = entry.methods[active];
-          const method = methodView(runner, def, saved, login);
+          const method = available(def, saved);
           const pendingFetch = methods.some(m => m.id === active) && remote(def.kind) && saved?.keyHint;
-          if (!pendingFetch && method.state !== 'connected' && !method.verifyAtLaunch) throw new Error('Connect the method before selecting it.');
+          if (!pendingFetch && method?.state !== 'connected' && !method?.verifyAtLaunch) {
+            if (owner) throw new Error(`${runner}/${active} is unavailable in the running cockpit. Connect it in Settings → Agents or restart the cockpit with the required credentials.`);
+            throw new Error('Connect the method before selecting it.');
+          }
         }
         entry.active = active;
       }

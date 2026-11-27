@@ -2,7 +2,7 @@ import { chmod, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-import { applyProvidersAtStartup, runProvidersCommand } from './agent-providers-cli.ts';
+import { applyProvidersAtStartup, prepareProvidersDocument, runProvidersCommand } from './agent-providers-cli.ts';
 import { readAgentProviders, readAgentProviderKey } from './workspace/agent-providers.ts';
 import * as keyring from './workspace/secret-keyring.ts';
 import * as models from './agent-providers/models.ts';
@@ -126,7 +126,7 @@ it('probes only the requested subscription in a mixed import and hides every sou
 
 it('clears recognized key sources before serve continues after a rejected document', async () => {
   const invalid = { version: 1, agents: { gemini: { methods: { apiKey: { apiKeyEnv: 'CEZ_TEST_PROVIDER' } } }, typo: {} } };
-  await expect(applyProvidersAtStartup(JSON.stringify(invalid))).rejects.toThrow('Invalid providers document');
+  await expect(prepareProvidersDocument(JSON.stringify(invalid))).rejects.toThrow('Invalid providers document');
   expect(process.env.CEZ_TEST_PROVIDER).toBeUndefined();
   expect(process.env.CEZ_HOME).toBe(home);
   expect((await readAgentProviders()).agents).toEqual({});
@@ -143,7 +143,7 @@ it.each(['inline', 'file'])('discards only the explicitly declared sources in ma
   }, unrelated: { apiKeyEnv: 'UNRELATED_CONTROL' } }).slice(0, -1) + ',}';
   const source = input === 'file' ? join(home, 'providers.json') : invalid;
   if (input === 'file') await writeFile(source, invalid);
-  await expect(applyProvidersAtStartup(source)).rejects.toThrow('Invalid providers JSON or YAML');
+  await expect(prepareProvidersDocument(source)).rejects.toThrow('Invalid providers JSON or YAML');
   expect(process.env.CEZ_TEST_PROVIDER).toBeUndefined();
   expect(process.env.SECOND_FIXTURE_KEY).toBeUndefined();
   expect(process.env.UNRELATED_CONTROL).toBe('keep');
@@ -183,16 +183,47 @@ it('keeps declared sources out of keyring reads, writes and model refresh', asyn
 it('keeps a native host key active when importing it under its own name at startup', async () => {
   vi.stubEnv('GEMINI_API_KEY', key);
   const doc = { version: 1, agents: { gemini: { methods: { apiKey: { apiKeyEnv: 'GEMINI_API_KEY' } } } } };
-  await applyProvidersAtStartup(JSON.stringify(doc));
+  await applyProvidersAtStartup(await prepareProvidersDocument(JSON.stringify(doc)));
   expect((await readAgentProviders()).agents.gemini?.active).toBe('apiKey');
   expect(await readAgentProviderKey('gemini', 'apiKey')).toBe(key);
   expect(process.env.GEMINI_API_KEY).toBeUndefined();
 });
 
+it('discards a prepared import when the serving cockpit cannot confirm its native method', async () => {
+  expect(await runProvidersCommand(['set', 'codex', 'custom', '--base-url', 'http://127.0.0.1:9000',
+    '--key-env', 'CEZ_TEST_PROVIDER', '--active', '--no-fetch'], io)).toBe(0);
+  const prior = await readFile(join(home, 'agent-providers.json'), 'utf8');
+  vi.stubEnv('GOOGLE_API_KEY', 'joiner-only-fixture');
+  vi.stubEnv('GEMINI_API_KEY', 'undeclared-joiner-fixture');
+  const prepared = await prepareProvidersDocument(JSON.stringify({ version: 1, agents: {
+    codex: { active: 'custom', methods: { custom: { apiKeyEnv: 'GOOGLE_API_KEY', label: 'replacement' } } },
+    gemini: { active: 'apiKey' },
+  } }));
+  expect(process.env.GOOGLE_API_KEY).toBeUndefined();
+  expect(await readFile(join(home, 'agent-providers.json'), 'utf8')).toBe(prior);
+  const owner = 'http://127.0.0.1:4321';
+  const request = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(new Response(null, { status: 404 }));
+  await expect(applyProvidersAtStartup(prepared, owner)).rejects.toThrow(/running cockpit.*retry/i);
+  request.mockResolvedValueOnce(Response.json({ editable: true, agents: [
+    { runner: 'codex', mode: 'one', methods: [] },
+    { runner: 'gemini', mode: 'one', methods: [{ id: 'apiKey', kind: 'apiKey', label: 'Gemini key', state: 'disconnected' }] },
+  ] }));
+  await expect(applyProvidersAtStartup(prepared, owner)).rejects.toThrow(/gemini\/apiKey.*running cockpit/i);
+  for (const [url, options] of request.mock.calls) {
+    expect(String(url)).toBe(owner + '/api/v1/agent-providers');
+    expect(options?.method ?? 'GET').toBe('GET');
+    expect(options?.body).toBeUndefined();
+  }
+  expect(await readFile(join(home, 'agent-providers.json'), 'utf8')).toBe(prior);
+  expect(await readAgentProviderKey('codex', 'custom')).toBe(key);
+  expect(await readAgentProviderKey('gemini', 'apiKey')).toBeUndefined();
+});
+
 it.each(['GEMINI_API_KEY', 'GOOGLE_API_KEY'])('retains %s only for the explicitly selected host method after a successful startup', async source => {
   // Each startup owns its captured credentials for the lifetime of that server.
   vi.resetModules();
-  const { applyProvidersAtStartup: startup } = await import('./agent-providers-cli.ts');
+  const { applyProvidersAtStartup, prepareProvidersDocument } = await import('./agent-providers-cli.ts');
+  const startup = async (source: string) => applyProvidersAtStartup(await prepareProvidersDocument(source));
   const { authMethods, providerHostKey, providerLaunch } = await import('./core/agent-auth-methods.ts');
   const gemini = authMethods('gemini').methods.find(method => method.id === 'apiKey')!;
   const cursor = authMethods('cursor').methods.find(method => method.id === 'apiKey')!;

@@ -3,7 +3,7 @@ import { open } from 'node:fs/promises';
 import { extname } from 'node:path';
 import { parseArgs, type ParseArgsConfig } from 'node:util';
 import { isMap, isNode, parse as parseYaml, parseDocument as parseYamlDocument } from 'yaml';
-import { providerFileMethodSchema, providersFileSchema, runnerSchema, type ProvidersFile, type Runner } from '@open-mercato/cezar-contract';
+import { agentProvidersResponseSchema, providerFileMethodSchema, providersFileSchema, runnerSchema, type ProvidersFile, type Runner } from '@open-mercato/cezar-contract';
 import { authMethods, providerHostKey, retainStartupHostKey } from './core/agent-auth-methods.ts';
 import { ProviderAuthService } from './core/provider-auth.ts';
 import { applyProviderChanges, providerEntries, refreshProviderModels, removeProviderMethod, type ProviderChange, type ProviderLogin } from './agent-providers/service.ts';
@@ -155,7 +155,7 @@ async function applyChanges(changes: ProviderChange[], origin: 'cli' | 'file', l
   return applyProviderChanges(changes, origin, evidence);
 }
 
-async function importMethods(doc: ProvidersFile, origin: 'cli' | 'file', logins: typeof loginStatus, sources: Iterable<string>) {
+async function prepareMethods(doc: ProvidersFile, sources: Iterable<string>) {
   // One import per CLI process. Take every input before the first await and never re-export it.
   const keys = new Map(Array.from(sources, name => [envName(name), Object.hasOwn(process.env, name) ? process.env[name] : undefined] as const));
   const present: Record<string, string> = Object.create(null);
@@ -164,11 +164,10 @@ async function importMethods(doc: ProvidersFile, origin: 'cli' | 'file', logins:
     if (value?.trim()) present[name] = '1';
   }
   const changes = await changesFrom(doc, keys);
-  const fetches = await applyChanges(changes, origin, logins, present);
-  return { changes, fetches, keys };
+  return { changes, present, keys };
 }
 
-async function applyDocument(source: string, stdin: typeof stdinText, logins: typeof loginStatus) {
+export async function prepareProvidersDocument(source: string, stdin = stdinText) {
   const sources = new Set<string>();
   let doc: ProvidersFile;
   try { doc = await readDocument(source, stdin, sources); }
@@ -176,11 +175,27 @@ async function applyDocument(source: string, stdin: typeof stdinText, logins: ty
     for (const name of sources) delete process.env[name];
     throw error;
   }
-  return importMethods(doc, 'file', logins, sources);
+  return prepareMethods(doc, sources);
 }
 
-export async function applyProvidersAtStartup(source: string) {
-  const { changes, fetches, keys } = await applyDocument(source, stdinText, loginStatus);
+type PreparedProviders = Awaited<ReturnType<typeof prepareProvidersDocument>>;
+
+export async function applyProvidersAtStartup({ changes, present, keys }: PreparedProviders, ownerOrigin?: string) {
+  if (ownerOrigin) {
+    // The verified singleton already exposes the per-method evidence used by its own Settings.
+    let owner;
+    try {
+      const response = await fetch(new URL('/api/v1/agent-providers', ownerOrigin), {
+        redirect: 'error', signal: AbortSignal.timeout(15_000),
+      });
+      if (!response.ok) throw new Error();
+      owner = agentProvidersResponseSchema.parse(await response.json());
+    } catch {
+      throw new Error('Could not verify providers in the running cockpit. Check Settings → Agents there and retry the import.');
+    }
+    return applyProviderChanges(changes, 'file', owner);
+  }
+  const fetches = await applyChanges(changes, 'file', loginStatus, present);
   if (keys.size) {
     const { agents } = await readAgentProviders();
     for (const { runner, active } of changes) {
@@ -230,7 +245,8 @@ export async function runProvidersCommand(argv: string[], io = { stdin: stdinTex
       return 0;
     }
     if (command === 'apply') {
-      const { changes, fetches } = await applyDocument(positionals[0]!, io.stdin, io.logins);
+      const { changes, present } = await prepareProvidersDocument(positionals[0]!, io.stdin);
+      const fetches = await applyChanges(changes, 'file', io.logins, present);
       if (!values['no-fetch']) await fetchAppliedProviders(fetches, io.error);
       for (const change of changes) {
         for (const method of change.methods) io.log('Saved ' + change.runner + '/' + method.id);
@@ -254,7 +270,8 @@ export async function runProvidersCommand(argv: string[], io = { stdin: stdinTex
       } } });
       if (!doc.success) throw new Error('Invalid method settings.');
       const keyEnv = doc.data.agents[runner]?.methods?.[id]?.apiKeyEnv;
-      const { fetches } = await importMethods(doc.data, 'cli', io.logins, keyEnv ? [keyEnv] : []);
+      const { changes, present } = await prepareMethods(doc.data, keyEnv ? [keyEnv] : []);
+      const fetches = await applyChanges(changes, 'cli', io.logins, present);
       if (!values['no-fetch']) await fetchAppliedProviders(fetches, io.error);
     }
     io.log('Updated ' + runner + '/' + id);

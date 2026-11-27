@@ -92,7 +92,7 @@ test('the packaged CLI reuses one cockpit, registers a second CWD, and recovers 
   const importEnv = {
     ...env,
     GIT_TRACE2_EVENT: trace,
-    GIT_TRACE2_ENV_VARS: 'PROVIDER_TEST_VALUE,GEMINI_API_KEY,PROVIDER_TEST_SENTINEL',
+    GIT_TRACE2_ENV_VARS: 'PROVIDER_TEST_VALUE,GEMINI_API_KEY,GOOGLE_API_KEY,CODEX_FIXTURE,PROVIDER_TEST_SENTINEL',
     PROVIDER_TEST_SENTINEL: 'ordinary-inherited-value',
   };
   let primary: ChildProcess | undefined;
@@ -140,6 +140,22 @@ test('the packaged CLI reuses one cockpit, registers a second CWD, and recovers 
     assert.equal(configured.active, 'openrouter');
     assert.equal(configured.methods.find((method: { id: string }) => method.id === 'openrouter').modelCount, 2);
 
+    const metadata = join(home, 'agent-providers.json');
+    const prior = await readFile(metadata, 'utf8');
+    for (const alias of ['GEMINI_API_KEY', 'GOOGLE_API_KEY']) {
+      const mixed = { ...agents, gemini: { active: 'apiKey' }, codex: { active: 'custom', methods: {
+        custom: { ...agents.codex.methods.custom, apiKeyEnv: alias, label: 'Should roll back' },
+      } } };
+      const joined = await execFile(process.execPath,
+        [cliPath, '--providers', JSON.stringify({ version: 1, agents: mixed }), '--repo', repoB, '--no-open'],
+        { cwd: root, env: { ...importEnv, GEMINI_API_KEY: '', [alias]: env.GEMINI_API_KEY }, timeout: 60_000 });
+      assert.equal(await readFile(metadata, 'utf8'), prior, 'a joiner-only key must not publish any part of the import');
+      assert.match(joined.stderr, /gemini\/apiKey.*running cockpit.*restart/i);
+      assert.match(joined.stdout, /cockpit already running/);
+      assert.equal((await waitForHealth(firstOrigin)).runtimeId, firstHealth.runtimeId);
+    }
+    await assertGitEnv();
+
     const projectsResponse = await fetch(`${firstOrigin}/api/v1/projects`);
     assert.equal(projectsResponse.status, 200);
     const projects = await projectsResponse.json() as { projects: Array<{ root: string }> };
@@ -172,6 +188,16 @@ test('the packaged CLI reuses one cockpit, registers a second CWD, and recovers 
       const gateway = codex?.methods.find(method => method.id === 'custom');
       assert.deepEqual([codex?.active, gateway?.state, gateway?.origin], ['custom', 'connected', 'file']);
     };
+    await assertSharedMethods();
+    // The owner retained the host key. A joiner with only a separate Codex key can select it.
+    const equivalent = JSON.stringify({ version: 1, agents: { gemini: { active: 'apiKey' }, ...agents,
+      codex: { active: 'custom', methods: { custom: { ...agents.codex.methods.custom, apiKeyEnv: 'CODEX_FIXTURE' } } },
+    } });
+    const joined = await execFile(process.execPath, [cliPath, '--providers', equivalent, '--repo', repoB, '--no-open'], {
+      cwd: repoB, env: { ...importEnv, GEMINI_API_KEY: '', CODEX_FIXTURE: env.GEMINI_API_KEY }, timeout: 60_000,
+    });
+    assert.doesNotMatch(joined.stderr, /\[cez\] providers:/);
+    assert.match(joined.stdout, /cockpit already running/);
     await assertSharedMethods();
     await execFile(process.execPath, [cliPath, 'providers', 'apply', sharedKeyDocument, '--no-fetch'], {
       cwd: repoB, env: importEnv, timeout: 60_000,
