@@ -12,6 +12,13 @@ vi.mock('@/api/plan-usage', () => ({
   useSetPlanUsageTracking: () => ({ isPending: false, mutate }),
 }))
 
+let usageSwitches: Record<string, boolean> = {}
+const setSwitch = vi.fn()
+vi.mock('@/api/account-usage', () => ({
+  useAccountUsageSwitches: () => ({ isPending: false, data: { accounts: usageSwitches } }),
+  useSetAccountUsageSwitch: () => ({ isPending: false, mutate: setSwitch }),
+}))
+
 const { AccountPlanUsage, fiveHourLine, weeklyLine } = await import('./account-plan-usage')
 
 const account = { key: 'claude:default', provider: 'claude' as const, accountId: 'default', label: 'Claude · default' }
@@ -29,6 +36,8 @@ beforeEach(() => {
   mutate.mockReset()
   tracking = { enabled: true, retentionDays: 90, accounts: {} }
   windows = {}
+  usageSwitches = {}
+  setSwitch.mockReset()
 })
 afterEach(cleanup)
 
@@ -69,15 +78,31 @@ describe('AccountPlanUsage', () => {
   it('reflects a per-account opt-out', () => {
     tracking = { enabled: true, retentionDays: 90, accounts: { 'codex:work': false } }
     render(<AccountPlanUsage provider="codex" accountId="work" />)
-    expect(screen.getByRole('switch').getAttribute('aria-checked')).toBe('false')
+    expect(screen.getAllByRole('switch')[0]!.getAttribute('aria-checked')).toBe('false')
   })
 
   it('is disabled with the reason when CEZ_USAGE_LOG=0 turned tracking off', () => {
     tracking = { enabled: false, reason: 'CEZ_USAGE_LOG=0 turns plan usage tracking off.', retentionDays: 90, accounts: {} }
     render(<AccountPlanUsage provider="claude" accountId="default" />)
-    const toggle = screen.getByRole('switch')
+    const toggle = screen.getAllByRole('switch')[0]!
     expect(toggle.hasAttribute('disabled')).toBe(true)
     expect(toggle.getAttribute('aria-checked')).toBe('false')
     expect(document.querySelector('[data-slot="account-plan-tracking-off"]')!.textContent).toBe('CEZ_USAGE_LOG=0 turns plan usage tracking off.')
+  })
+})
+
+describe('usage-check switch (#1745)', () => {
+  it('is off by default and saves the account key when turned on', () => {
+    render(<AccountPlanUsage provider="codex" accountId="work" />)
+    const toggle = document.querySelector('[data-slot="account-usage-check"]') as HTMLElement
+    expect(toggle.getAttribute('aria-checked')).toBe('false')
+    fireEvent.click(toggle)
+    expect(setSwitch).toHaveBeenCalledWith({ account: 'codex:work', allowed: true }, expect.anything())
+  })
+
+  it('reflects a stored allow for this account only', () => {
+    usageSwitches = { 'codex:work': true }
+    render(<AccountPlanUsage provider="codex" accountId="work" />)
+    expect(document.querySelector('[data-slot="account-usage-check"]')!.getAttribute('aria-checked')).toBe('true')
   })
 })

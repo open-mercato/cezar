@@ -216,7 +216,7 @@ async function main(): Promise<void> {
     });
     return;
   }
-  // `cez usage` (plan-limit usage, design rev 3): reads the local ledger, no server, own flags.
+  // `cez usage` (plan-limit usage, design rev 3): reads the local ledger, no server, own flags; `--live` asks the cockpit (#1745).
   if (process.argv[2] === 'usage') {
     process.exitCode = await runUsageCommand(process.argv.slice(3));
     return;

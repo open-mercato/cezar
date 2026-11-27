@@ -1,6 +1,7 @@
 import { useId } from 'react'
 import type { PlanUsageReport, PlanUsageWindow } from '@open-mercato/cezar-api-client'
 import { usePlanUsage, usePlanUsageTracking, useSetPlanUsageTracking } from '@/api/plan-usage'
+import { useAccountUsageSwitches, useSetAccountUsageSwitch } from '@/api/account-usage'
 import { Switch } from '@/components/ui/switch'
 import { toast } from '@/components/ui/toaster'
 import { approxPp, clockTime, exactPp } from '@/lib/plan-usage'
@@ -52,6 +53,9 @@ export function AccountPlanUsage({ provider, accountId }: { provider: 'claude' |
   const globalOff = tracking.data?.enabled === false
   const on = !globalOff && tracking.data?.accounts[key] !== false
   const retention = tracking.data?.retentionDays ?? 90
+  const usageSwitchId = useId()
+  const usageSwitches = useAccountUsageSwitches()
+  const setUsageSwitch = useSetAccountUsageSwitch()
 
   return (
     <div data-slot="account-plan-usage" className="mt-3 flex flex-col gap-2 border-t border-border/60 pt-2.5 text-label">
@@ -85,6 +89,23 @@ export function AccountPlanUsage({ provider, accountId }: { provider: 'claude' |
               {tracking.data?.reason ?? 'Turned off on this computer (CEZ_USAGE_LOG=0).'}
             </p>
           ) : null}
+        </div>
+      </div>
+      <div className="flex items-start gap-3">
+        <Switch
+          id={usageSwitchId}
+          data-slot="account-usage-check"
+          checked={usageSwitches.data?.accounts[key] === true}
+          disabled={usageSwitches.isPending || setUsageSwitch.isPending}
+          onCheckedChange={(allowed) =>
+            setUsageSwitch.mutate({ account: key, allowed }, { onError: (error) => toast(error.message, { tone: 'danger' }) })
+          }
+        />
+        <div className="min-w-0">
+          <label htmlFor={usageSwitchId} className="font-medium text-foreground">Allow agents to check this account's usage</label>
+          <p className="text-muted-foreground">
+            Lets a task run <code>cez usage --live</code> to see used % and reset times. Agents get numbers only, never a login. Off: this account is never queried.
+          </p>
         </div>
       </div>
     </div>

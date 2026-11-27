@@ -211,6 +211,7 @@ import { currentUsage, currentTimedUsage, onUsage } from '../core/process-usage.
 import { DashboardReader } from '../workspace/dashboard.ts';
 import { dashboardRoutes } from './dashboard.ts';
 import { planUsageRoutes } from './plan-usage.ts';
+import { accountUsageRoutes } from './account-usage.ts';
 import { managerAccountLimit } from '../managers/account-limit.ts';
 
 /** Authenticates the manager engine's in-process calls that assign or switch a task's agent. */
@@ -9956,6 +9957,7 @@ export function createAppParts(deps: ServerDeps) {
     .route('/', phonePushRoutes)
     .route('/', dashboardRoutes(dashboard, () => ({ tokens: capabilities().tokenUsageMetrics, cost: capabilities().costMetrics }), () => capabilities().automations))
     .route('/', planUsageRoutes())
+    .route('/', accountUsageRoutes(accountsEnabled))
     .route('/', workspaceEventsRoutes)
     .route('/', telemetryRoutes);
 

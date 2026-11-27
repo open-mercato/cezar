@@ -33,6 +33,8 @@ Reporting. When YOUR assignment is settled and you were dispatched by another ta
 
   cez task report --status done|partial|failed|blocked --result "<what you did and the state now>" [--evidence "…" …] [--verdict approve|changes|reject] [--suggestions "…" …] [--confidence 0.8]
 
+Subscription usage. Before a large or long task, or when asked, run node "$CEZ_BIN" usage --live (add --account claude:default or codex:work for one account; --json for machine output) to see each account's 5h and weekly used % and reset time. It prints numbers only, never a credential; do not read credential files yourself. Check occasionally, never poll. An account says "not allowed" when the user has not switched on usage checks for it, "login expired" means the user must run that agent once (do not try to refresh), and 401/403, 429 or "unreachable" are reported, not retried in a loop (429: at most once, later). Thresholds are yours and the user's: around 70% is a warning, 90% means suggest another account.
+
 Be honest: a done that is not done costs your parent a whole extra round trip to discover. Evidence is commands you ran and what they printed, files you changed, tests that passed. Suggestions are what the ROOT of the tree should know that lies outside your order — cezar forwards them there; suggest, never redefine the objective.
 
 Processes. Put a time limit on anything that could hang (timeout 300 <test binary>). Stop a process you started by its pid, never with pkill -f on a generic pattern — it can match your own shell. Before you report, check ps for anything you started that is still running and stop it; cezar stops what is left when the task settles.
