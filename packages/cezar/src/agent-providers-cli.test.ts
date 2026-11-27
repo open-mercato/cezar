@@ -189,6 +189,22 @@ it('keeps a native host key active when importing it under its own name at start
   expect(process.env.GEMINI_API_KEY).toBeUndefined();
 });
 
+it('joins without reading owner status for edits resolved entirely by the provider store', async () => {
+  const owner = 'http://127.0.0.1:4321';
+  const request = vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('Native login still warming'));
+  const join = async (agents: object) => applyProvidersAtStartup(
+    await prepareProvidersDocument(JSON.stringify({ version: 1, agents })), owner,
+  );
+  await join({ codex: { active: 'custom', methods: { custom: { baseUrl: 'https://gateway.test', apiKeyEnv: 'CEZ_TEST_PROVIDER' } } } });
+  await join({ codex: { methods: { custom: { label: 'Team gateway' } } } });
+  await join({ gemini: { active: null } });
+  expect(request).not.toHaveBeenCalled();
+  const { agents } = await readAgentProviders();
+  expect(agents.codex).toMatchObject({ active: 'custom', methods: { custom: { label: 'Team gateway' } } });
+  expect(agents.gemini?.active).toBeNull();
+  expect(await readAgentProviderKey('codex', 'custom')).toBe(key);
+});
+
 it('discards a prepared import when the serving cockpit cannot confirm its native method', async () => {
   expect(await runProvidersCommand(['set', 'codex', 'custom', '--base-url', 'http://127.0.0.1:9000',
     '--key-env', 'CEZ_TEST_PROVIDER', '--active', '--no-fetch'], io)).toBe(0);

@@ -6,7 +6,7 @@ import { isMap, isNode, parse as parseYaml, parseDocument as parseYamlDocument }
 import { agentProvidersResponseSchema, providerFileMethodSchema, providersFileSchema, runnerSchema, type ProvidersFile, type Runner } from '@open-mercato/cezar-contract';
 import { authMethods, providerHostKey, retainStartupHostKey } from './core/agent-auth-methods.ts';
 import { ProviderAuthService } from './core/provider-auth.ts';
-import { applyProviderChanges, providerEntries, refreshProviderModels, removeProviderMethod, type ProviderChange, type ProviderLogin } from './agent-providers/service.ts';
+import { applyProviderChanges, OwnerProviderStatusRequired, providerEntries, refreshProviderModels, removeProviderMethod, type ProviderChange, type ProviderLogin } from './agent-providers/service.ts';
 import { readAgentProviders } from './workspace/agent-providers.ts';
 
 const LIMIT = 1024 * 1024;
@@ -182,7 +182,14 @@ type PreparedProviders = Awaited<ReturnType<typeof prepareProvidersDocument>>;
 
 export async function applyProvidersAtStartup({ changes, present, keys }: PreparedProviders, ownerOrigin?: string) {
   if (ownerOrigin) {
-    // The verified singleton already exposes the per-method evidence used by its own Settings.
+    // An edit to managed keys or metadata needs only the locked store. If it needs a
+    // native login, the first transaction leaves the store untouched. Read the actual
+    // owner's evidence outside the lock, then validate the whole edit against current state.
+    try {
+      return await applyProviderChanges(changes, 'file', 'store-only');
+    } catch (error) {
+      if (!(error instanceof OwnerProviderStatusRequired)) throw error;
+    }
     let owner;
     try {
       const response = await fetch(new URL('/api/v1/agent-providers', ownerOrigin), {

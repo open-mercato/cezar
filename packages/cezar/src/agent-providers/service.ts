@@ -105,18 +105,25 @@ export async function providerEntries(logins: readonly ProviderLogin[]) {
     providerEntry(runner, store, await configuredLogin(logins.find(p => p.provider === runner), store))));
 }
 
+export class OwnerProviderStatusRequired extends Error {}
+
 /** Validate against the latest snapshot under the writer lock. Throwing discards the whole edit. */
-export async function applyProviderChanges(changes: ProviderChange[], origin: Origin, evidence: readonly ProviderLogin[] | AgentProvidersResponse) {
+export async function applyProviderChanges(changes: ProviderChange[], origin: Origin, evidence: readonly ProviderLogin[] | AgentProvidersResponse | 'store-only') {
   const fetches: { runner: Runner; id: string }[] = [];
   await updateAgentProviders((state, keys) => {
     for (const { runner, methods, active } of changes) {
       if (!methods.length && active === undefined) continue;
       const caps = authMethods(runner);
-      const owner = 'agents' in evidence ? evidence.agents.find(agent => agent.runner === runner) : undefined;
-      if ('agents' in evidence && !owner) throw new Error(`The running cockpit did not report ${runner}. Check Settings → Agents there and retry the import.`);
-      const login = 'agents' in evidence ? undefined : evidence.find(p => p.provider === runner);
+      const joined = evidence !== 'store-only' && 'agents' in evidence;
+      const owner = joined ? evidence.agents.find(agent => agent.runner === runner) : undefined;
+
+      const login = evidence === 'store-only' || joined ? undefined : evidence.find(p => p.provider === runner);
       const available = (def: Definition, saved?: StoredProviderMethod) => {
         // Saved keys use the locked store. Only the serving process can attest to its native credentials.
+        if (def.kind === 'subscription' || (!saved && def.hostKeyEnv)) {
+          if (evidence === 'store-only') throw new OwnerProviderStatusRequired();
+          if (joined && !owner) throw new Error(`The running cockpit did not report ${runner}. Check Settings → Agents there and retry the import.`);
+        }
         if (owner && (!saved || def.kind === 'subscription')) {
           return owner.methods.find(m => m.id === def.id && (m.kind === 'subscription' || m.origin === 'host'));
         }
@@ -124,7 +131,7 @@ export async function applyProviderChanges(changes: ProviderChange[], origin: Or
       };
       let entry = state.agents[runner];
       if (!entry) {
-        const initial = caps.mode === 'one' ? caps.methods.find(m => available(m)?.state === 'connected') : undefined;
+        const initial = active === undefined && caps.mode === 'one' ? caps.methods.find(m => available(m)?.state === 'connected') : undefined;
         entry = state.agents[runner] = { ...(initial ? { active: initial.id } : {}), methods: {} };
       }
       for (const { id, ...input } of methods) {
