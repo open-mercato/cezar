@@ -1,0 +1,134 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Project settings · cezar · Agents (mockup)</title>
+<link rel="stylesheet" href="cockpit.css">
+<link rel="stylesheet" href="settings-shell.css">
+<style>
+  .pick { display:flex; gap:8px; }
+  .pick .select { height:34px; font-size:var(--text-ui); }
+  .mrow .agentname { font-family:var(--mono); font-size:var(--text-ui); }
+  .mrow .select { width:260px; height:32px; font-size:var(--text-ui); }
+  .prov { display:inline-flex; align-items:center; gap:6px; font-size:var(--text-meta); color:var(--muted-foreground); text-decoration:none; }
+  .prov:hover { color:var(--foreground); }
+  ol.chain { list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:6px; }
+  ol.chain li { display:flex; align-items:center; gap:10px; border:1px solid var(--border); border-radius:var(--radius-sm); background:var(--background); padding:6px 8px 6px 12px; }
+  ol.chain li .n { color:var(--muted-foreground); font-size:var(--text-label); width:16px; }
+  ol.chain li .who { flex:1; }
+  ol.chain li .who small { display:block; font-size:var(--text-meta); color:var(--muted-foreground); }
+  .add { display:flex; gap:8px; }
+  .add .select { height:32px; font-size:var(--text-ui); flex:1; }
+</style>
+</head>
+<body>
+<div class="app">
+  <aside class="side" aria-label="Settings">
+    <div class="brand"><span class="brand-mark" aria-hidden="true"></span>cezar
+      <a class="btn btn-link muted" style="margin-left:auto;font-family:var(--sans);font-size:var(--text-ui)" href="composer.html"><svg class="i" viewBox="0 0 24 24"><path d="M19 12H5M12 19l-7-7 7-7"/></svg>Back</a></div>
+    <div class="side-h">Workspace</div>
+    <a class="nav" href="settings.html"><svg class="i" viewBox="0 0 24 24"><rect x="4" y="7" width="16" height="12" rx="2"/><path d="M12 3v4M9 13h.01M15 13h.01"/></svg>Agents</a>
+    <div class="side-h">Project settings</div>
+    <a class="nav" href="#"><svg class="i" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></svg>cezar</a>
+    <a class="nav side-sub" href="#">General</a>
+    <a class="nav side-sub active" href="project-agents.html" aria-current="page">Agents</a>
+    <a class="nav side-sub" href="#">Tasks</a>
+    <a class="nav side-sub" href="#">Agent config</a>
+  </aside>
+
+  <div class="main">
+    <div class="topbar"><h1>Agents</h1><span class="muted">cezar · Default agent, models and fallback for this repository. Providers are set once, in Workspace → Agents.</span></div>
+    <div class="content"><div class="column">
+
+      <section class="scard">
+        <header><h2>Default agent</h2>
+          <p>Preselected for new tasks in THIS repo, and used by the chain planner. Each task can still pick another agent or account. The account is stored on this machine only.</p></header>
+        <div class="rows"><div class="frow stacked">
+          <div class="l"><b>Agent and account</b></div>
+          <div class="pick">
+            <select class="select" id="defAgent" aria-label="Default agent"></select>
+            <select class="select" id="defAccount" aria-label="Account"></select>
+          </div>
+          <a class="prov" id="defProv" href="settings.html"></a>
+        </div></div>
+      </section>
+
+      <section class="scard">
+        <header><h2>Default models</h2><p>The model preselected in the composer for each agent. Inherit uses the workspace default.</p></header>
+        <div class="rows" id="models"></div>
+      </section>
+
+      <section class="scard">
+        <header><h2>Automatic fallback</h2><p>When the agent working on a task runs out of its usage allowance, the next agent below continues the same task.</p></header>
+        <div class="rows"><div class="frow stacked">
+          <div class="l"><b>Fallback order</b><span>Agents take over in this order, each tried once. Only agents with a provider can be added.</span></div>
+          <ol class="chain" id="chain" aria-label="Fallback order"></ol>
+          <div class="add"><select class="select" id="addSel" aria-label="Agent to add"></select><button class="btn btn-sm" id="addBtn" style="height:32px">Add</button></div>
+        </div></div>
+      </section>
+
+    </div></div>
+  </div>
+</div>
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+<script>
+// Same simulated setup as settings.html starts with.
+const AGENTS = {
+  claude:   { name:'claude',   provider:'Claude subscription', accounts:['user@example.com','work@example.com'], models:['opus','sonnet','haiku'], global:'sonnet' },
+  codex:    { name:'codex',    provider:null, accounts:[], models:[], global:'auto' },
+  pi:       { name:'pi',       provider:'Claude subscription + OpenRouter', accounts:['user@example.com'], models:['opus','sonnet','haiku','openrouter/gpt-5','openrouter/kimi-k2'], global:'sonnet' },
+  opencode: { name:'opencode', provider:null, accounts:[], models:[], global:'auto' },
+};
+const S = { agent:'claude', account:'user@example.com', models:{}, chain:[{ id:'claude', account:'work@example.com' }, { id:'pi' }] };
+const $ = s => document.querySelector(s);
+const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const toast = m => { const t=$('#toast'); t.textContent=m; t.classList.add('show'); clearTimeout(t._h); t._h=setTimeout(()=>t.classList.remove('show'),1600); };
+const ARROW = '<svg class="i" viewBox="0 0 24 24" style="width:12px;height:12px"><path d="M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/></svg>';
+
+function provLine(id) {
+  const a = AGENTS[id];
+  return a.provider
+    ? `<a class="prov" href="settings.html#agent=${id}"><span class="dot ok"></span>via ${esc(a.provider)} · Manage providers ${ARROW}</a>`
+    : `<a class="prov" href="settings.html#agent=${id}" style="color:var(--pending-strong)"><span class="dot warn"></span>No provider · Configure providers ${ARROW}</a>`;
+}
+
+function render() {
+  $('#defAgent').innerHTML = Object.entries(AGENTS).map(([id,a]) => `<option value="${id}" ${id===S.agent?'selected':''} ${a.provider?'':'disabled'}>${a.name}${a.provider?'':' · no provider'}</option>`).join('');
+  const acc = AGENTS[S.agent].accounts;
+  if (!acc.includes(S.account)) S.account = acc[0];
+  $('#defAccount').innerHTML = acc.map(x => `<option ${x===S.account?'selected':''}>${esc(x)}</option>`).join('');
+  $('#defAccount').disabled = acc.length < 2;
+  $('#defProv').outerHTML = `<span id="defProv">${provLine(S.agent)}</span>`;
+
+  $('#models').innerHTML = Object.entries(AGENTS).map(([id,a]) => {
+    const cur = S.models[id] ?? 'inherit';
+    const opts = [`<option value="inherit" ${cur==='inherit'?'selected':''}>Inherit (${esc(a.global)})</option>`, `<option value="auto" ${cur==='auto'?'selected':''}>auto</option>`]
+      .concat(a.models.map(m => `<option ${cur===m?'selected':''}>${esc(m)}</option>`)).join('');
+    return `<div class="frow mrow"><div class="l"><b class="agentname">${a.name}</b>${provLine(id)}</div>
+      <select class="select" aria-label="Default model for ${a.name}" data-model="${id}" ${a.provider?'':'disabled'}>${opts}</select></div>`;
+  }).join('');
+
+  $('#chain').innerHTML = S.chain.map((c,i) => {
+    const a = AGENTS[c.id];
+    return `<li><span class="n">${i+1}.</span><span class="who">${a.name}${c.account?` · ${esc(c.account)}`:''}<small>via ${esc(a.provider)} · ${esc(S.models[c.id] && S.models[c.id]!=='inherit' ? S.models[c.id] : a.global)}</small></span>
+      <button class="btn btn-icon" aria-label="Move ${a.name} up" data-mv="${i}" data-d="-1" ${i===0?'disabled':''}>↑</button>
+      <button class="btn btn-icon" aria-label="Move ${a.name} down" data-mv="${i}" data-d="1" ${i===S.chain.length-1?'disabled':''}>↓</button>
+      <button class="btn btn-icon" aria-label="Remove ${a.name} from fallback" data-rm="${i}" style="color:var(--danger)">✕</button></li>`;
+  }).join('') || '<li class="muted">No fallback. A task waits when its agent runs out.</li>';
+  $('#addSel').innerHTML = Object.entries(AGENTS).map(([id,a]) => `<option value="${id}" ${a.provider?'':'disabled'}>${a.name}${a.provider?'':' · no provider'}</option>`).join('');
+}
+$('#defAgent').addEventListener('change', e => { S.agent = e.target.value; render(); toast('Saved'); });
+$('#defAccount').addEventListener('change', e => { S.account = e.target.value; toast('Saved'); });
+document.addEventListener('change', e => { if (e.target.dataset.model) { S.models[e.target.dataset.model] = e.target.value; render(); toast('Saved'); } });
+document.addEventListener('click', e => {
+  const mv = e.target.closest('[data-mv]'), rm = e.target.closest('[data-rm]');
+  if (mv) { const i=+mv.dataset.mv, j=i+(+mv.dataset.d); [S.chain[i],S.chain[j]]=[S.chain[j],S.chain[i]]; render(); }
+  if (rm) { S.chain.splice(+rm.dataset.rm,1); render(); }
+});
+$('#addBtn').addEventListener('click', () => { S.chain.push({ id:$('#addSel').value }); render(); });
+render();
+</script>
+</body>
+</html>

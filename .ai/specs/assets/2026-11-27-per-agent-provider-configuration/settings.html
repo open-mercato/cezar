@@ -1,0 +1,345 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Settings · Agents (mockup)</title>
+<link rel="stylesheet" href="cockpit.css">
+<link rel="stylesheet" href="settings-shell.css">
+<style>
+  /* one agent = one row of the Agents card, expanding in place */
+  .agent > .ahead { display:flex; align-items:center; gap:10px; padding:0 10px 0 14px; height:50px; cursor:pointer; }
+  .agent > .ahead .chev { color:var(--muted-foreground); transition:transform .15s; }
+  .agent.open > .ahead .chev { transform:rotate(90deg); }
+  .agent .name { font-size:var(--text-body); font-weight:600; }
+  .agent .status { color:var(--muted-foreground); }
+  .ver { font-family:var(--mono); font-size:var(--text-micro); color:var(--muted-foreground); border:1px solid var(--border); border-radius:6px; padding:0 5px; }
+  .modepill { margin-left:auto; font-size:var(--text-meta); color:var(--muted-foreground); border:1px solid var(--border); border-radius:999px; padding:1px 8px; }
+  .star.on { color:var(--pending); }
+  .star.on svg { fill:currentColor; }
+  .agent .abody { display:none; background:var(--background); border-top:1px solid var(--border); }
+  .agent.open .abody { display:block; }
+  .agent.missing .name { color:var(--muted-foreground); }
+
+  .sect { display:flex; justify-content:space-between; gap:12px; padding:10px 16px 8px; font-size:var(--text-ui); }
+  .row { display:flex; align-items:center; gap:10px; min-height:44px; padding:5px 12px 5px 16px; border-top:1px solid var(--border); font-size:var(--text-body); }
+  .row.on { background:#10183a; }
+  .row .label { flex:1; min-width:0; }
+  .row .label small { display:block; font-size:var(--text-label); color:var(--muted-foreground); }
+  .acct { position:relative; }
+  .acct > button { display:inline-flex; align-items:center; gap:6px; font-size:var(--text-ui); max-width:240px; padding:4px 6px; border-radius:6px; }
+  .acct > button:hover { background:var(--muted); }
+  .acct > button span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .acct .pop { left:auto; right:0; min-width:260px; }
+  .acts { display:flex; align-items:center; gap:4px; min-width:76px; justify-content:flex-end; }
+  .radio { width:16px; height:16px; border-radius:50%; border:1.5px solid var(--soft-foreground); flex:none; display:grid; place-items:center; }
+  .radio.on { border-color:var(--violet); }
+  .radio.on::after { content:""; width:8px; height:8px; border-radius:50%; background:var(--violet); }
+  .radio[aria-disabled=true] { opacity:.35; cursor:not-allowed; }
+  .custom { display:grid; grid-template-columns:1fr 1fr; gap:10px; padding:4px 16px 14px 42px; background:var(--card); border-top:1px solid var(--border); }
+  .custom label { display:grid; gap:4px; font-size:var(--text-label); color:var(--muted-foreground); padding-top:10px; }
+  .custom .full, .custom .end { grid-column:1/-1; }
+  .custom .end { display:flex; justify-content:flex-end; gap:8px; }
+  .model { padding:12px 16px 14px; border-top:1px solid var(--border); }
+  .model label { display:block; font-size:var(--text-ui); margin-bottom:6px; }
+  .hint { margin-top:6px; font-size:var(--text-meta); color:var(--muted-foreground); }
+  .afoot { display:flex; gap:16px; align-items:center; padding:10px 16px; border-top:1px solid var(--border); font-size:var(--text-label); color:var(--muted-foreground); }
+  .afoot a { color:var(--muted-foreground); text-decoration:none; display:inline-flex; gap:6px; align-items:center; }
+  .afoot a:hover { color:var(--foreground); }
+  .repo { display:flex; gap:8px; }
+  .repo .input:first-child { flex:2; } .repo .input { flex:1; }
+  dialog { background:var(--card); color:var(--foreground); border:1px solid var(--border); border-radius:var(--radius-lg); padding:20px; width:min(420px,90vw); }
+  dialog::backdrop { background:rgba(0,0,0,.6); }
+  dialog h2 { margin:0 0 6px; font-size:var(--text-lead); }
+  dialog .end { display:flex; justify-content:flex-end; gap:8px; margin-top:14px; }
+</style>
+</head>
+<body>
+<div class="app">
+  <aside class="side" aria-label="Settings">
+    <div class="brand"><span class="brand-mark" aria-hidden="true"></span>cezar
+      <a class="btn btn-link muted" style="margin-left:auto;font-family:var(--sans);font-size:var(--text-ui)" href="composer.html"><svg class="i" viewBox="0 0 24 24"><path d="M19 12H5M12 19l-7-7 7-7"/></svg>Back</a></div>
+    <div class="side-h">You</div>
+    <a class="nav" href="#"><svg class="i" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 3a9 9 0 0 0 0 18"/></svg>Appearance</a>
+    <a class="nav" href="#"><svg class="i" viewBox="0 0 24 24"><rect x="2" y="6" width="20" height="12" rx="2"/><path d="M6 10h.01M10 10h.01M14 10h.01M18 10h.01M8 14h8"/></svg>Keyboard</a>
+    <a class="nav" href="#"><svg class="i" viewBox="0 0 24 24"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10 21h4"/></svg>Notifications</a>
+    <div class="side-h">Workspace</div>
+    <a class="nav active" href="settings.html" aria-current="page"><svg class="i" viewBox="0 0 24 24"><rect x="4" y="7" width="16" height="12" rx="2"/><path d="M12 3v4M9 13h.01M15 13h.01"/></svg>Agents</a>
+    <a class="nav" href="#"><svg class="i" viewBox="0 0 24 24"><path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M1 14h6M9 8h6M17 16h6"/></svg>Behaviour</a>
+    <a class="nav" href="#"><svg class="i" viewBox="0 0 24 24"><path d="M12 3 4 6v6c0 5 3.5 8 8 9 4.5-1 8-4 8-9V6z"/></svg>Data &amp; privacy</a>
+    <div class="side-h">Project settings</div>
+    <a class="nav" href="project-agents.html"><svg class="i" viewBox="0 0 24 24"><path d="m9 6 6 6-6 6"/></svg>cezar</a>
+    <a class="nav side-sub" href="project-agents.html">Agents</a>
+  </aside>
+
+  <div class="main">
+    <div class="topbar"><h1>Agents</h1><span class="muted">Global instructions for every task and manager, and which coding agents run your tasks, with which providers, models and skills.</span>
+      <button id="reset" class="btn btn-sm" style="margin-left:auto">Reset mockup</button></div>
+    <div class="content"><div class="column">
+
+      <section class="scard" id="global-instructions">
+        <header><h2>Global instructions</h2></header>
+        <div class="rows"><div class="frow stacked">
+          <div class="l"><b>System prompt for every task and manager</b>
+            <span>Read by every agent step of every task in every project, and by every manager. These take precedence over repository, project, workflow and skill instructions.</span></div>
+          <textarea class="ta" aria-label="System prompt for every task and manager" placeholder="General rules for every project — conventions, tone, review requirements…"></textarea>
+        </div></div>
+      </section>
+
+      <section class="scard" id="agents-card">
+        <header>
+          <h2>Agents</h2><span class="count" id="installedCount"></span>
+          <div class="act"><button class="btn btn-sm" id="toggleMissing" aria-expanded="false"></button></div>
+          <p>Each agent runs on its providers. Claude and Codex use one at a time. pi and OpenCode use any combination, and each connected provider adds its models. The star marks the agent new projects start with.</p>
+        </header>
+        <div class="rows" id="agents"></div>
+      </section>
+
+      <section class="scard" id="skills">
+        <header><h2>Skill repositories</h2></header>
+        <div class="rows">
+          <div class="frow stacked">
+            <div class="l"><b>Organisation skills repositories</b><span>Skills from these repositories are available in every project.</span></div>
+            <div class="repo"><input class="input" aria-label="Repository" placeholder="my-org/skills"><input class="input" aria-label="Branch or ref" placeholder="main"><button class="btn btn-sm" style="height:34px">Add</button></div>
+          </div>
+          <div class="frow">
+            <div class="l"><b>Update Open Mercato skills automatically</b><span>Checks at most once every six hours, after cezar starts.</span></div>
+            <button class="switch" role="switch" aria-checked="true" aria-label="Update Open Mercato skills automatically" data-act="switch"></button>
+          </div>
+        </div>
+      </section>
+
+    </div></div>
+  </div>
+</div>
+
+<dialog id="keyDialog">
+  <form method="dialog">
+    <h2 id="keyTitle">Add API key</h2>
+    <label for="keyInput" class="muted" style="display:block;margin-bottom:8px">Paste the key. The mockup keeps only its last four characters.</label>
+    <input id="keyInput" class="input" autocomplete="off" placeholder="sk-…" required>
+    <div class="end"><button value="cancel" formnovalidate class="btn">Cancel</button><button value="ok" class="btn btn-outline">Save</button></div>
+  </form>
+</dialog>
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+<script>
+const ICON = {
+  chev:'<svg class="i chev" viewBox="0 0 24 24"><path d="m9 6 6 6-6 6"/></svg>',
+  down:'<svg class="i" viewBox="0 0 24 24" style="color:var(--muted-foreground)"><path d="m6 9 6 6 6-6"/></svg>',
+  star:'<svg class="i" style="width:17px;height:17px" viewBox="0 0 24 24"><path d="m12 3 2.8 5.7 6.2.9-4.5 4.4 1.1 6.2L12 17.3 6.4 20.2l1.1-6.2L3 9.6l6.2-.9z"/></svg>',
+  ext:'<svg class="i" viewBox="0 0 24 24"><path d="M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/></svg>',
+  plus:'<svg class="i" style="width:17px;height:17px" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>',
+  out:'<svg class="i" style="width:16px;height:16px" viewBox="0 0 24 24"><path d="M14 4H6a1 1 0 0 0-1 1v14a1 1 0 0 0 1 1h8M10 12h11M18 9l3 3-3 3"/></svg>',
+  pen:'<svg class="i" style="width:15px;height:15px" viewBox="0 0 24 24"><path d="M16 3l5 5L8 21H3v-5z"/></svg>',
+  trash:'<svg class="i" style="width:15px;height:15px" viewBox="0 0 24 24"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13M10 11v6M14 11v6"/></svg>',
+  file:'<svg class="i" viewBox="0 0 24 24"><path d="M14 3H6a1 1 0 0 0-1 1v16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V8z"/><path d="M14 3v5h5"/></svg>',
+  up:'<svg class="i" viewBox="0 0 24 24"><path d="M12 19V5M5 12l7-7 7 7"/></svg>',
+};
+const PROVIDERS = {
+  anthropicSub:{ label:'Claude subscription', kind:'signin', multi:true, models:['Opus','Sonnet','Haiku'] },
+  openaiSub:   { label:'ChatGPT subscription', kind:'signin', multi:true, models:['GPT-5','GPT-5 mini'] },
+  openrouter:  { label:'OpenRouter API key', kind:'key', models:['openrouter/sonnet','openrouter/gpt-5','openrouter/kimi-k2'] },
+  custom:      { label:'Custom provider', kind:'custom', models:[] },
+};
+const AGENTS = [
+  { id:'claude',   name:'Claude',   mode:'one', providers:['anthropicSub','openrouter','custom'], version:'2.1.332', update:null },
+  { id:'codex',    name:'Codex',    mode:'one', providers:['openaiSub','openrouter','custom'], version:'0.63.0', update:'0.64.1' },
+  { id:'pi',       name:'pi',       mode:'any', providers:['anthropicSub','openaiSub','openrouter','custom'], version:'0.10.2', update:null },
+  { id:'opencode', name:'OpenCode', mode:'any', providers:['anthropicSub','openaiSub','openrouter','custom'], version:'1.0.120', update:null },
+];
+const MISSING = [
+  { id:'cursor', name:'Cursor', cmd:'curl https://cursor.com/install -fsS | bash' },
+  { id:'gemini', name:'Gemini CLI', cmd:'npm i -g @google/gemini-cli' },
+  { id:'kimi', name:'Kimi Code', cmd:'uv tool install kimi-cli' },
+];
+function initialState() {
+  return {
+    open:{ claude:true, pi:true }, star:'claude', showMissing:false, acctOpen:null,
+    // a subscription can hold several logins; `use` is the one new projects pick
+    accounts:{ claude:{ anthropicSub:{ list:['user@example.com','work@example.com'], use:0 } }, codex:{}, pi:{ anthropicSub:{ list:['user@example.com'], use:0 } }, opencode:{} },
+    keys:{ claude:{}, codex:{}, opencode:{}, pi:{ openrouter:'…9662' } },
+    customCfg:{ claude:null, codex:null, opencode:null, pi:null },
+    active:{ claude:'anthropicSub', codex:null },
+    model:{ claude:'Sonnet', codex:null, opencode:null, pi:'Sonnet' },
+    editing:{},
+  };
+}
+let S = initialState();
+const $ = s => document.querySelector(s);
+const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const toast = m => { const t=$('#toast'); t.textContent=m; t.classList.add('show'); clearTimeout(t._h); t._h=setTimeout(()=>t.classList.remove('show'),1800); };
+
+const acc = (a,p) => S.accounts[a.id][p];
+const connected = (a,p) => p==='custom' ? !!S.customCfg[a.id] : PROVIDERS[p].kind==='signin' ? !!acc(a,p)?.list.length : !!S.keys[a.id][p];
+const label = (a,p) => p==='custom' && S.customCfg[a.id] ? S.customCfg[a.id].name : PROVIDERS[p].label;
+const modelsOf = (a,p) => p==='custom' ? (S.customCfg[a.id] ? [S.customCfg[a.id].model] : []) : PROVIDERS[p].models;
+const live = a => a.mode==='one' ? (S.active[a.id] && connected(a,S.active[a.id]) ? [S.active[a.id]] : []) : a.providers.filter(p => connected(a,p));
+function status(a) {
+  const l = live(a);
+  if (!l.length) return { ok:false, text:'no credential' };
+  return { ok:true, text: a.mode==='one' ? label(a,l[0]) : `${l.length} of ${a.providers.length} connected` };
+}
+
+function accountCell(a,p) {
+  const A = acc(a,p), key = a.id+':'+p, open = S.acctOpen===key;
+  const extra = A.list.length > 1 ? ` <span class="muted">+${A.list.length-1}</span>` : '';
+  return `<div class="acct"><button aria-haspopup="menu" aria-expanded="${open}" data-act="acct" data-a="${a.id}" data-p="${p}"><span>${esc(A.list[A.use])}</span>${extra}${ICON.down}</button>
+    ${open ? `<div class="pop" role="menu">
+      <div class="pop-group" style="padding-left:10px">Account new projects use</div>
+      ${A.list.map((x,i)=>`<button class="item" role="menuitemradio" aria-checked="${i===A.use}" aria-selected="${i===A.use}" data-act="acct-use" data-a="${a.id}" data-p="${p}" data-i="${i}"><span class="mark"><span></span></span><span class="t">${esc(x)}</span></button>`).join('')}
+      <div class="pop-foot"><button class="item" data-act="acct-add" data-a="${a.id}" data-p="${p}"><span class="mark"></span>${ICON.plus}<span class="t">Add another account</span></button></div>
+    </div>` : ''}</div>`;
+}
+
+function actions(a,p) {
+  const P = PROVIDERS[p];
+  if (p==='custom') {
+    if (!S.customCfg[a.id]) return `<div class="acts"><button class="btn btn-icon violet" aria-label="Configure a custom provider for ${a.name}" data-act="custom-edit" data-a="${a.id}">${ICON.plus}</button></div>`;
+    return `<span class="muted" style="font-size:var(--text-ui)">${esc(S.customCfg[a.id].url)}</span>
+      <div class="acts"><button class="btn btn-icon" aria-label="Edit custom provider" data-act="custom-edit" data-a="${a.id}">${ICON.pen}</button><button class="btn btn-icon" aria-label="Remove custom provider" data-act="custom-del" data-a="${a.id}">${ICON.trash}</button></div>`;
+  }
+  if (!connected(a,p)) {
+    return P.kind==='signin'
+      ? `<button class="btn btn-link" data-act="ext">Get a plan ${ICON.ext}</button><div class="acts"><button class="btn btn-outline btn-sm" data-act="signin" data-a="${a.id}" data-p="${p}">Sign in</button></div>`
+      : `<button class="btn btn-link" data-act="ext">Get a key ${ICON.ext}</button><div class="acts"><button class="btn btn-icon violet" aria-label="Add ${P.label}" data-act="addkey" data-a="${a.id}" data-p="${p}">${ICON.plus}</button></div>`;
+  }
+  return P.kind==='signin'
+    ? `${accountCell(a,p)}<div class="acts"><button class="btn btn-icon" aria-label="Sign out of ${P.label}" data-act="disconnect" data-a="${a.id}" data-p="${p}">${ICON.out}</button></div>`
+    : `<span style="font-size:var(--text-ui)">${esc(S.keys[a.id][p])}</span><div class="acts"><button class="btn btn-icon" aria-label="Replace key" data-act="addkey" data-a="${a.id}" data-p="${p}">${ICON.pen}</button><button class="btn btn-icon" aria-label="Remove ${P.label}" data-act="disconnect" data-a="${a.id}" data-p="${p}">${ICON.trash}</button></div>`;
+}
+
+function customForm(a) {
+  const c = S.customCfg[a.id] || { name:'', url:'', model:'' };
+  const compat = a.id==='codex' ? 'OpenAI-compatible' : a.id==='claude' ? 'Anthropic-compatible' : 'OpenAI- or Anthropic-compatible';
+  return `<form class="custom" data-a="${a.id}" data-act="custom-save">
+    <label>Name<input class="input" name="name" required value="${esc(c.name)}" placeholder="Company gateway"></label>
+    <label>Model id<input class="input" name="model" required value="${esc(c.model)}" placeholder="claude-sonnet"></label>
+    <label class="full">Base URL, ${compat}<input class="input" name="url" type="url" required value="${esc(c.url)}" placeholder="https://llm.example.com/v1"></label>
+    <label class="full">API key<input class="input" name="key" ${S.customCfg[a.id]?'':'required'} placeholder="${S.customCfg[a.id]?'Leave empty to keep the current key':'sk-…'}"></label>
+    <div class="end"><button type="button" class="btn btn-sm" data-act="custom-cancel" data-a="${a.id}">Cancel</button><button class="btn btn-outline btn-sm">Save provider</button></div>
+  </form>`;
+}
+
+function row(a,p) {
+  const ok = connected(a,p);
+  let on, lead = '', sub = '';
+  if (a.mode==='one') {
+    on = S.active[a.id]===p && ok;
+    lead = `<span class="radio ${on?'on':''}" role="radio" tabindex="${ok?0:-1}" aria-checked="${on}" aria-disabled="${!ok}" aria-label="Run ${a.name} on ${PROVIDERS[p].label}" data-act="pick" data-a="${a.id}" data-p="${p}"></span>`;
+    if (ok && !on) sub = 'Connected, not in use';
+  } else {
+    on = ok;
+    if (ok) { const n = modelsOf(a,p).length; sub = `${n} model${n===1?'':'s'} unlocked`; }
+  }
+  return `<div class="row ${on?'on':''}">${lead}<span class="label">${esc(label(a,p))}${sub?`<small>${sub}</small>`:''}</span>${actions(a,p)}</div>${S.editing[a.id] && p==='custom' ? customForm(a) : ''}`;
+}
+
+function modelBlock(a) {
+  const l = live(a), ms = l.flatMap(p => modelsOf(a,p).map(m => ({p,m})));
+  if (!ms.length) return `<div class="model"><label>Default model</label><select class="select" disabled><option>Connect a provider to pick a model</option></select></div>`;
+  if (S.model[a.id] !== 'auto' && !ms.some(x=>x.m===S.model[a.id])) S.model[a.id] = 'auto';
+  const opt = m => `<option value="${esc(m)}" ${m===S.model[a.id]?'selected':''}>${esc(m)}</option>`;
+  const opts = opt('auto') + (a.mode==='one' ? ms.map(x=>opt(x.m)).join('') : l.map(p=>`<optgroup label="${esc(label(a,p))}">${modelsOf(a,p).map(opt).join('')}</optgroup>`).join(''));
+  return `<div class="model"><label for="m-${a.id}">Default model</label><select class="select" id="m-${a.id}" data-act="model" data-a="${a.id}">${opts}</select>
+    <div class="hint">Preselected in the composer. Auto lets ${a.name} decide per task. A project can override it.</div></div>`;
+}
+
+function agentRow(a) {
+  const s = status(a), open = !!S.open[a.id];
+  return `<section class="agent ${open?'open':''}" id="agent-${a.id}" aria-labelledby="h-${a.id}">
+    <div class="ahead" data-act="fold" data-a="${a.id}" tabindex="0" role="button" aria-expanded="${open}">
+      ${ICON.chev}<span class="name" id="h-${a.id}">${a.name}</span><span class="ver">${a.version}</span><span class="dot ${s.ok?'ok':''}"></span><span class="status">${esc(s.text)}</span>
+      <span class="modepill">${a.mode==='one'?'one at a time':'any combination'}</span>
+      <button class="btn btn-icon star ${S.star===a.id?'on':''}" aria-pressed="${S.star===a.id}" aria-label="Start new projects with ${a.name}" data-act="star" data-a="${a.id}">${ICON.star}</button>
+    </div>
+    <div class="abody">
+      <div class="sect"><span>Auth methods</span><span class="muted">${a.mode==='one'?'one at a time · the agent runs on the selected one':'any combination · each one unlocks its models'}</span></div>
+      <div role="${a.mode==='one'?'radiogroup':'group'}" aria-label="${a.name} auth methods">${a.providers.map(p=>row(a,p)).join('')}</div>
+      ${modelBlock(a)}
+      <div class="afoot">
+        <span>Installed <span class="mono">${a.version}</span>${a.update?` · <button class="btn btn-link" style="height:auto;padding:0;font-size:inherit;color:var(--violet)" data-act="update" data-a="${a.id}">Update to ${a.update}</button>`:' · up to date'}</span>
+        <a href="#" data-act="config" data-a="${a.id}" style="margin-left:auto">${ICON.file}Config files and MCP</a>
+      </div>
+    </div></section>`;
+}
+function missingRow(m) {
+  return `<div class="agent missing"><div class="ahead" style="cursor:default">
+    <span style="width:14px"></span><span class="name">${m.name}</span><span class="status">not installed</span>
+    <code class="cmd" style="margin-left:auto">${esc(m.cmd)}</code>
+    <button class="btn btn-sm" data-act="install" data-a="${m.id}">Install</button></div></div>`;
+}
+
+function render() {
+  $('#installedCount').textContent = AGENTS.length + ' installed';
+  $('#toggleMissing').textContent = S.showMissing ? `Hide ${MISSING.length} not installed` : `Show ${MISSING.length} not installed`;
+  $('#toggleMissing').setAttribute('aria-expanded', String(S.showMissing));
+  $('#agents').innerHTML = AGENTS.map(agentRow).join('') + (S.showMissing ? MISSING.map(missingRow).join('') : '');
+}
+
+let pendingKey = null;
+document.addEventListener('click', e => {
+  const t = e.target.closest('[data-act]');
+  if (!t) { if (S.acctOpen && !e.target.closest('.pop')) { S.acctOpen=null; render(); } return; }
+  const a = AGENTS.find(x=>x.id===t.dataset.a), p = t.dataset.p;
+  switch (t.dataset.act) {
+    case 'fold': S.open[a.id] = !S.open[a.id]; break;
+    case 'star': e.stopPropagation(); S.star = a.id; toast(`New projects start with ${a.name}`); break;
+    case 'ext': toast('Opens the provider page in a new tab'); return;
+    case 'signin': S.accounts[a.id][p] = { list:['user@example.com'], use:0 }; if (a.mode==='one' && !S.active[a.id]) S.active[a.id]=p; toast(PROVIDERS[p].label+' signed in'); break;
+    case 'acct': e.stopPropagation(); S.acctOpen = S.acctOpen===a.id+':'+p ? null : a.id+':'+p; break;
+    case 'acct-use': acc(a,p).use = +t.dataset.i; S.acctOpen=null; toast('New projects use '+acc(a,p).list[acc(a,p).use]); break;
+    case 'acct-add': { const A=acc(a,p); A.list.push(`account${A.list.length+1}@example.com`); S.acctOpen=null; toast('Signed in a second account (simulated)'); break; }
+    case 'addkey': pendingKey={a,p}; $('#keyTitle').textContent=`${PROVIDERS[p].label} for ${a.name}`; $('#keyInput').value=''; $('#keyDialog').showModal(); return;
+    case 'disconnect':
+      if (PROVIDERS[p].kind==='signin') delete S.accounts[a.id][p]; else delete S.keys[a.id][p];
+      if (a.mode==='one' && S.active[a.id]===p) { S.active[a.id]=null; toast(`${a.name} has no provider now. Pick another one.`); }
+      break;
+    case 'pick': if (!connected(a,p)) { toast(`Connect ${PROVIDERS[p].label} first`); return; } S.active[a.id]=p; toast(`${a.name} now runs on ${label(a,p)}`); break;
+    case 'custom-edit': S.editing[a.id]=true; break;
+    case 'custom-cancel': S.editing[a.id]=false; break;
+    case 'custom-del': S.customCfg[a.id]=null; if (S.active[a.id]==='custom') S.active[a.id]=null; break;
+    case 'update': toast(`Opens a terminal that updates ${a.name} to ${a.update}`); return;
+    case 'config': e.preventDefault(); toast(`Opens Agent config, filtered to ${a.name}`); return;
+    case 'install': toast(`Opens a terminal that runs the ${t.dataset.a} install`); return;
+    case 'switch': t.setAttribute('aria-checked', String(t.getAttribute('aria-checked')!=='true')); return;
+    default: return;
+  }
+  render();
+});
+$('#toggleMissing').addEventListener('click', () => { S.showMissing = !S.showMissing; render(); });
+document.addEventListener('keydown', e => {
+  if (e.key==='Escape' && S.acctOpen) { S.acctOpen=null; render(); }
+  if ((e.key==='Enter'||e.key===' ') && e.target.matches('[role=radio],.ahead[data-act]')) { e.preventDefault(); e.target.click(); }
+});
+document.addEventListener('submit', e => {
+  const f = e.target.closest('form[data-act=custom-save]'); if (!f) return;
+  e.preventDefault();
+  const a = AGENTS.find(x=>x.id===f.dataset.a), d = new FormData(f);
+  S.customCfg[a.id] = { name:d.get('name'), url:d.get('url'), model:d.get('model') };
+  S.editing[a.id]=false;
+  if (a.mode==='one' && !S.active[a.id]) S.active[a.id]='custom';
+  toast('Custom provider saved'); render();
+});
+document.addEventListener('change', e => { if (e.target.dataset.act==='model') S.model[e.target.dataset.a]=e.target.value; });
+$('#keyDialog').addEventListener('close', () => {
+  if ($('#keyDialog').returnValue!=='ok' || !pendingKey) return;
+  const {a,p} = pendingKey, v = $('#keyInput').value.trim(); if (!v) return;
+  S.keys[a.id][p]='…'+v.slice(-4);
+  if (a.mode==='one' && !S.active[a.id]) S.active[a.id]=p;
+  pendingKey=null; toast('Key saved'); render();
+});
+$('#reset').addEventListener('click', () => { S=initialState(); render(); toast('Mockup reset'); });
+// Deep link from the composer: settings.html#agent=codex opens and highlights that agent.
+function focusFromHash() {
+  const id = new URLSearchParams(location.hash.slice(1)).get('agent');
+  if (!AGENTS.some(a=>a.id===id)) return;
+  S.open[id]=true; render();
+  const el = $('#agent-'+id); el.style.boxShadow='inset 0 0 0 2px var(--violet)'; el.scrollIntoView({block:'start'});
+  setTimeout(()=>el.style.boxShadow='', 1800);
+}
+window.addEventListener('hashchange', focusFromHash);
+render(); focusFromHash();
+</script>
+</body>
+</html>
