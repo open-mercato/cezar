@@ -292,7 +292,7 @@ describe('the agents form', () => {
   it('uses the active method in default and fallback choices and links directly to workspace settings', async () => {
     serve({ methods: { editable: true, agents: [
       { runner: 'claude', mode: 'one', active: 'custom', methods: [{ id: 'custom', kind: 'custom', label: 'Fake gateway', state: 'connected' }] },
-      { runner: 'codex', mode: 'one', active: null, methods: [{ id: 'subscription', kind: 'subscription', label: 'ChatGPT', state: 'connected' }] },
+      { runner: 'codex', mode: 'one', configured: true, active: null, methods: [{ id: 'subscription', kind: 'subscription', label: 'ChatGPT', state: 'connected' }] },
     ] }, config: { defaultModels: { claude: 'fake-model' }, projectDefaultModels: {} } })
     const client = renderAt('/settings/agents')
     await screen.findByRole('radio', { name: 'codex · no provider' })

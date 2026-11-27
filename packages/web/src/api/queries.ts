@@ -1052,6 +1052,7 @@ export function useRecheckAgentAccount() {
         const status = merged.providers.find((row) => row.provider === answer.status.provider)
         if (status) verified = { status }
       }
+      void queryClient.invalidateQueries({ queryKey: workspaceQueryKeys.agentProviders })
       queryClient.setQueryData(workspaceQueryKeys.agentAccountStatus(routeId), verified)
       void queryClient.invalidateQueries({ queryKey: workspaceQueryKeys.agentAccountDetails(routeId) })
       if (answer.status.provider === 'cursor') {

@@ -205,11 +205,11 @@ export function modelsForRunner(
 ): readonly ModelPreset[] {
   const presets = MODELS_BY_RUNNER[runner] ?? MODELS_BY_RUNNER.claude
   const listed = catalog?.models ?? []
-  const methodCatalog = listed.some(model => model.via) || !!entry?.methods.some(method =>
+  const methodCatalog = !!entry?.configured && entry.methods.some(method =>
     (entry.mode === 'any' || entry.active === method.id) && method.state === 'connected' &&
     (method.kind === 'custom' || method.kind === 'openrouter') && method.origin !== 'host',
   )
-  const discovered = methodCatalog || runnerDiscoversModels(runner) ? listed : []
+  const discovered = listed
   // A live catalog REPLACES the presets rather than extending them: the whole point is that the
   // host CLI, not this file, decides which models exist. The presets come back the moment
   // discovery has nothing — a missing, old or logged-out CLI leaves a usable picker, never an
@@ -397,6 +397,7 @@ export function buildCreateRunBody(opts: {
   /** `null` — nothing picked — runs the built-in `quick-task`. */
   source: TaskSource | null
   model: string
+  agentMethod?: string
   /** Empty means the selected Codex model's native default; it is omitted on the wire. */
   reasoningEffort?: string
   /** Native coding-agent settings stay visible, but a locked model is never a request override. */
@@ -465,6 +466,7 @@ export function buildCreateRunBody(opts: {
     ...(source?.source === 'skill'
       ? { steps: [{ id: 'task', name: source.ref, skill: source.ref, prompt: '{{task}}' }] }
       : { workflow: source?.ref ?? QUICK_TASK }),
+    ...(opts.agentMethod ? { agentMethod: opts.agentMethod } : {}),
     model: modelsLocked ? undefined : model || undefined,
     ...(modelsLocked || !reasoningEffort ? {} : { reasoningEffort }),
     runner: runnerOverride(runner, defaultRunner, runnerExplicit),

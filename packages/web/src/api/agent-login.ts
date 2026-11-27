@@ -70,6 +70,7 @@ export function applyAccountReconnectedEvent(queryClient: QueryClient, payload: 
     workspaceQueryKeys.accountReconnected(event.provider, event.profileId),
     { at: new Date().toISOString(), resumed: event.resumed },
   )
+  void queryClient.invalidateQueries({ queryKey: workspaceQueryKeys.agentProviders })
   void queryClient.invalidateQueries({ queryKey: workspaceQueryKeys.providerStatus })
   void queryClient.invalidateQueries({ queryKey: workspaceQueryKeys.agentProfiles })
   void queryClient.invalidateQueries({ queryKey: queryKeys.runs.all })

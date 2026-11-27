@@ -7,6 +7,8 @@ import { createQueryClient } from '@/api/query-client'
 import { workspaceQueryKeys } from '@/api/queries'
 import type {
   AgentProfilesResponse,
+  AgentProvidersResponse,
+  RunnerModelCatalogResponse,
   ConfigResponse,
   HealthResponse,
   ProviderStatusResponse,
@@ -215,6 +217,8 @@ function serve(overrides: {
   /** Host authentication state, or a delayed answer for pending/refresh tests. */
   providerStatus?: ProviderStatusResponse | (() => Promise<Response>)
   providerStatusStatus?: number
+  agentProviders?: AgentProvidersResponse
+  modelCatalog?: RunnerModelCatalogResponse
   skills?: Skill[]
   workflows?: WorkflowsResponse
   repo?: RepoResponse
@@ -270,6 +274,8 @@ function serve(overrides: {
       if (url === '/api/v1/health') {
         return typeof data.health === 'function' ? data.health() : json(data.health)
       }
+      if (url === '/api/v1/agent-providers' && data.agentProviders) return json(data.agentProviders)
+      if (data.modelCatalog && url === `/api/v1/models?runner=${data.modelCatalog.runner}`) return json(data.modelCatalog)
       if (url === '/api/v1/providers/status') {
         return typeof data.providerStatus === 'function'
           ? data.providerStatus()
@@ -618,13 +624,59 @@ describe('picker data flows', () => {
     expect(postedBody()).toMatchObject({ task: 'Think hard', model: 'opus', reasoningEffort: 'max' })
   })
 
-  it('falls back from a disconnected installed Codex draft to the connected runner', async () => {
-    writeDraft({ ...readDraft(), runner: 'codex', text: 'Run the fake task' })
-    serve({ health: HEALTH_MULTI, providerStatus: PROVIDERS_CONNECTED })
+  it('keeps disconnected Codex selectable, preserves the draft, and links the model chip to its row', async () => {
+    writeDraft({ ...readDraft(), runner: 'codex', text: 'Keep this prompt' })
+    serve({ health: HEALTH_MULTI, agentProviders: { editable: true, agents: [
+      { runner: 'claude', mode: 'one', active: 'subscription', methods: [{ id: 'subscription', kind: 'subscription', label: 'Claude subscription', state: 'connected' }] },
+      { runner: 'codex', mode: 'one', active: null, methods: [{ id: 'subscription', kind: 'subscription', label: 'ChatGPT', state: 'disconnected' }] },
+    ] } })
+    renderNewTask()
+    await pillReady()
+    expect(screen.getByRole('link', { name: 'Configure providers' }).getAttribute('href')).toBe('/settings/global/agents#agent-codex')
+    expect(screen.getByRole('button', { name: 'Start task' }).hasAttribute('disabled')).toBe(true)
+    fireEvent.keyDown(screen.getByRole('button', { name: 'Runner' }), { key: 'ArrowDown' })
+    fireEvent.click(await screen.findByRole('menuitemradio', { name: /claude/i }))
+    await startTask()
+    expect(postedBody()).toMatchObject({ task: 'Keep this prompt', runner: 'claude' })
+    expect(postedBody()).not.toHaveProperty('agentMethod')
+  })
+
+  it('groups duplicate model ids by method and sends the selected method even without a vendor login', async () => {
+    writeDraft({ ...readDraft(), runner: 'pi', text: 'Use a fake provider', model: 'retired-model' })
+    const gateway = { methodId: 'custom', label: 'Fake gateway' }
+    const router = { methodId: 'openrouter', label: 'OpenRouter' }
+    serve({ providerStatus: { providers: [{ provider: 'pi', status: 'disconnected', enabled: true }] },
+      agentProviders: { editable: true, agents: [{ runner: 'pi', mode: 'any', configured: true, methods: [
+        { id: 'custom', kind: 'custom', label: gateway.label, state: 'connected' },
+        { id: 'openrouter', kind: 'openrouter', label: router.label, state: 'connected' },
+      ] }] },
+      modelCatalog: { runner: 'pi', source: 'live', stale: false, models: [gateway, router].map(via => ({
+        id: 'same', label: 'Shared model', description: '', via,
+      })) } })
+    renderNewTask()
+    await pillReady()
+    const chip = screen.getByRole('button', { name: 'Model' })
+    expect(chip.textContent).toContain('auto')
+    fireEvent.keyDown(chip, { key: 'ArrowDown' })
+    expect(await screen.findByText('Fake gateway')).toBeTruthy()
+    expect(screen.getByText('OpenRouter')).toBeTruthy()
+    expect(screen.getByRole('menuitem', { name: 'Manage providers' }).getAttribute('href')).toBe('/settings/global/agents#agent-pi')
+    fireEvent.click(screen.getByRole('menuitemradio', { name: /Shared model.*via OpenRouter/ }))
+    await startTask()
+    expect(postedBody()).toMatchObject({ runner: 'pi', model: 'same', agentMethod: 'openrouter' })
+  })
+
+  it('lets the historically runnable unknown probe start without a configured method override', async () => {
+    writeDraft({ ...readDraft(), runner: 'omp', text: 'Try the native login' })
+    serve({ providerStatus: { providers: [{ provider: 'omp', status: 'unknown', enabled: true }] },
+      agentProviders: { editable: true, agents: [{ runner: 'omp', mode: 'any', methods: [
+        { id: 'subscription', kind: 'subscription', label: 'Native login', state: 'unknown' },
+      ] }] } })
     renderNewTask()
     await pillReady()
     await startTask()
-    expect(postedBody()).toMatchObject({ task: 'Run the fake task', runner: 'claude' })
+    expect(postedBody()).toMatchObject({ runner: 'omp' })
+    expect(postedBody()).not.toHaveProperty('agentMethod')
   })
 
   it('excludes disconnected providers from the runner choices even when health detects them', async () => {

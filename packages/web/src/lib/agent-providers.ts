@@ -13,7 +13,9 @@ export function servingMethods(entry: AgentProviderEntry): AgentProviderMethod[]
 
 export function canUseAgent(entry: AgentProviderEntry | undefined, login: ProviderStatus | undefined): boolean {
   if (!login?.enabled || login.status === 'not-installed') return false
-  return entry ? servingMethods(entry).length > 0 : providerRowRunnable(login)
+  if (entry?.configured) return servingMethods(entry).length > 0
+  // An offline login probe can establish that an agent runs without identifying its provider.
+  return providerRowRunnable(login) || !!entry && servingMethods(entry).length > 0
 }
 
 export function methodSummary(entry: AgentProviderEntry): string {

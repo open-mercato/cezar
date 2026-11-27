@@ -26,6 +26,7 @@ import {
   useConfig,
   useHealth,
   useProviderStatus,
+  useAgentProviders,
   useProjects,
   useRepo,
   useModelRefreshAction,
@@ -76,6 +77,8 @@ import {
   orderSkillsByUsage,
 } from '@/lib/skills'
 import { cn } from '@/lib/utils'
+import { agentProvidersPath, canUseAgent, servingMethods } from '@/lib/agent-providers'
+import { composerModelOptions } from './composer-model-options'
 import { usableRunners } from '@/lib/provider-status'
 
 import {
@@ -206,7 +209,7 @@ export function NewTaskRoute() {
     const stored = readDraft(draftProjectId)
     return {
       ...stored,
-      ...(requestedRunner ? { runner: requestedRunner, agentProfile: null, model: null, reasoningEffort: null } : {}),
+      ...(requestedRunner ? { runner: requestedRunner, agentProfile: null, model: null, agentMethod: undefined, reasoningEffort: null } : {}),
       ...(deepLink.ref !== '' ? { text: deepLink.ref } : {}),
       ...(deepLink.skill !== ''
         ? { source: { source: 'skill', ref: deepLink.skill } as TaskSource }
@@ -310,21 +313,35 @@ export function NewTaskRoute() {
   }, [autoText, sourcesReady])
 
   const providers = useProviderStatus()
-  const runners = usableRunners(providers.data)
+  const methods = useAgentProviders()
+  const legacyProviders = methods.error instanceof ApiError && methods.error.status === 404
+  const providerPending = providers.isPending || methods.isPending
+  const providerError = providers.isError || (methods.isError && !legacyProviders)
+  const runners = methods.data ? (providers.data?.providers ?? [])
+    .filter(row => row.enabled && row.status !== 'not-installed')
+    .map(row => row.provider) : usableRunners(providers.data)
   const defaultRunner = config.data?.defaultRunner
   const preferredRunner = defaultRunner ?? 'claude'
   const runner = runners.length > 0 ? resolveRunner(draft.runner, runners, preferredRunner) : null
   const displayRunner = runner ?? preferredRunner
-  const providersReady = providers.isSuccess && runners.length > 0
+  const entry = methods.data?.agents.find(agent => agent.runner === displayRunner)
+  const missingMethod = methods.isSuccess && runner !== null && !canUseAgent(entry, providers.data?.providers.find(p => p.provider === runner))
+  const providersReady = !providerPending && !providerError && runners.length > 0
   const catalog = useRunnerModels(displayRunner)
   const refreshModels = useModelRefreshAction(displayRunner)
   const modelsLocked = config.data?.modelsLocked === true
   const models = runner === null
     ? []
-    : modelsForRunner(runner, catalog.data, [draft.model, config.data?.defaultModels?.[runner]])
+    : modelsForRunner(runner, catalog.data, [draft.model, config.data?.defaultModels?.[runner]], entry)
   const model = runner === null
     ? ''
-    : resolveModel(modelsLocked ? null : draft.model, runner, config.data?.defaultModels, catalog.data)
+    : resolveModel(modelsLocked ? null : draft.model, runner, config.data?.defaultModels, catalog.data, entry)
+  const modelOptions = composerModelOptions(models, catalog.data, entry)
+  const selected = modelOptions.find(m => m.model === model && m.method === draft.agentMethod) ?? modelOptions.find(m => m.model === model)
+  const serving = entry && servingMethods(entry)
+  const selectedMethod = entry?.mode === 'one' ? serving?.[0]?.id : selected?.method
+  const agentMethod = entry?.configured ? selectedMethod : undefined
+  const providerModelsPending = !!entry?.configured && catalog.isPending && !!(draft.model || config.data?.defaultModels?.[displayRunner])
   const reasoningEffort = runner === null
     ? ''
     : resolveReasoningEffort(draft.reasoningEffort, runner, model, catalog.data)
@@ -344,7 +361,8 @@ export function NewTaskRoute() {
     ? draft.agentProfile
     : null
   // The account this task will actually run on — what the server's gate judges (ac53a6ef).
-  const accountCheck = useSelectedAccountCheck(displayRunner, agentProfile ?? repoAccount?.[displayRunner])
+  const usesLogin = !agentMethod || entry?.methods.find(m => m.id === agentMethod)?.kind === 'subscription'
+  const accountCheck = useSelectedAccountCheck(displayRunner, usesLogin ? agentProfile ?? repoAccount?.[displayRunner] : null)
 
   // A cold /new load mounts the textarea disabled while provider status is checked. Restore
   // the route's autofocus contract once that check enables the form, but never steal focus if
@@ -478,14 +496,14 @@ export function NewTaskRoute() {
   useEffect(() => {
     if (deepLinkHandled.current) return
     if (!deepLink.auto || deepLink.ref === '') return
-    if (providers.isPending) return
+    if (providerPending) return
     if (scheduleRequest.current) {
       deepLinkHandled.current = true
       setAutoStarting(false)
       setNotice({ kind: 'prefill' })
       return
     }
-    if (!providersReady || runner === null) {
+    if (!providersReady || missingMethod || runner === null) {
       deepLinkHandled.current = true
       // Authentication could not be established: keep the deep-link intent in the disabled
       // composer and let the provider gate explain whether this is an error or missing setup.
@@ -541,7 +559,7 @@ export function NewTaskRoute() {
       }
       setAutoStarting(false)
     })()
-  }, [config.isPending, defaultRunner, providers.isPending, providersReady, runner]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [config.isPending, defaultRunner, providerPending, providersReady, missingMethod, runner]) // eslint-disable-line react-hooks/exhaustive-deps
   // The prefill toast waits for the pickers' data: whether the skill exists decides the
   // wording, and the unknown-skill case rewrites the draft the way legacy did (intent into
   // the text, quick-task as the source — its planner resolves skills from prose).
@@ -629,6 +647,7 @@ export function NewTaskRoute() {
         task: text.trim(),
         source,
         model,
+        agentMethod,
         reasoningEffort,
         modelsLocked,
         runner: runner ?? defaultRunner ?? 'claude',
@@ -675,11 +694,11 @@ export function NewTaskRoute() {
   }
   const submit = async (text: string, submitted: AttachmentEntry[]) => {
     if (scheduleRequest.current) throw new Error('Recover the original schedule before starting another task.')
-    if (!providersReady || runner === null) {
+    if (!providersReady || missingMethod || runner === null) {
       throw new Error(
-        providers.isPending
+        providerPending
           ? 'Checking agent providers…'
-          : providers.isError
+          : providerError
             ? 'Provider authentication could not be verified.'
             : 'Connect an agent provider before starting a task.',
       )
@@ -759,18 +778,19 @@ export function NewTaskRoute() {
             update({
               runner: next,
               agentProfile: picked,
-              ...(next === displayRunner ? {} : { model: null, reasoningEffort: null }),
+              ...(next === displayRunner ? {} : { model: null, agentMethod: undefined, reasoningEffort: null }),
             })
           }
           disabled={!providersReady}
         />
       ) : null}
-      <PickerPill
+      {missingMethod ? <GlobalLink data-slot="configure-providers" to={agentProvidersPath(displayRunner)}
+        className={cn(chipClass, 'text-pending-strong')}>Configure providers</GlobalLink> : <PickerPill
         slot="model-pill"
         ariaLabel="Model"
         // Without a runner pill the agent's name rides the model's label — still one value.
         label={runnerChoice ? modelLabel : `${displayRunner} · ${modelLabel}`}
-        value={model}
+        value={selected?.value ?? model}
         disabled={!providersReady}
         readOnly={modelsLocked}
         className={runnerChoice ? engineRightClass : modelPillClass}
@@ -781,12 +801,16 @@ export function NewTaskRoute() {
             ? 'Model selection is locked to native coding-agent settings.'
             : undefined
         }
-        onPick={(next) => update({ model: next, reasoningEffort: null })}
-        options={models.map((m) => ({ value: m.id, label: m.label, desc: m.desc }))}
+        onPick={value => {
+          const choice = modelOptions.find(m => m.value === value)
+          if (choice) update({ model: choice.model, agentMethod: choice.method, reasoningEffort: null })
+        }}
+        options={modelOptions}
+        footerLink={entry ? { label: 'Manage providers', to: agentProvidersPath(displayRunner) } : undefined}
         searchPlaceholder="Search models…"
         status={modelCatalogStatus(displayRunner, catalog.data, catalog.isError)}
         action={refreshModels}
-      />
+      />}
     </span>
   )
   const sourcePill = (
@@ -1043,12 +1067,12 @@ export function NewTaskRoute() {
           ariaLabel="Describe a task for the agent"
           sendAriaLabel={startChoice ? 'Schedule task' : 'Start task'}
           sendLabel={startChoice ? 'Schedule task' : 'Start'}
-          submitDisabled={!!scheduleRecovery || recovering || !sourcesReady || (!!startChoice && !scheduleReady)}
+          submitDisabled={missingMethod || providerModelsPending || !!scheduleRecovery || recovering || !sourcesReady || (!!startChoice && !scheduleReady)}
           disabled={!providersReady}
           disabledReason={
-            providers.isPending
+            providerPending
               ? 'Checking agent providers…'
-              : providers.isError
+              : providerError
                 ? 'Provider authentication could not be verified.'
                 : 'Connect an agent provider before starting a task.'
           }
@@ -1152,7 +1176,7 @@ export function NewTaskRoute() {
                   {scheduleBlocked}
                 </span>
               ) : null}
-              {!providersReady && !providers.isPending ? (
+              {!providersReady && !providerPending ? (
                 <Link
                   to="/settings/agents#providers"
                   className="text-xs font-medium text-foreground underline underline-offset-4"

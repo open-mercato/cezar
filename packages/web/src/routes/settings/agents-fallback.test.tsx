@@ -119,7 +119,7 @@ describe('automatic fallback settings', () => {
     serve()
     renderAgents({ editable: true, agents: [
       { runner: 'claude', mode: 'one', active: 'custom', methods: [{ id: 'custom', kind: 'custom', label: 'Gateway', state: 'connected' }] },
-      { runner: 'codex', mode: 'one', active: null, methods: [{ id: 'subscription', kind: 'subscription', label: 'ChatGPT', state: 'connected' }] },
+      { runner: 'codex', mode: 'one', configured: true, active: null, methods: [{ id: 'subscription', kind: 'subscription', label: 'ChatGPT', state: 'connected' }] },
     ] })
     fireEvent.keyDown(await screen.findByRole('combobox', { name: 'Agent to add' }), { key: 'ArrowDown' })
     expect((await screen.findByRole('option', { name: 'codex · Work · unavailable' })).getAttribute('aria-disabled')).toBe('true')

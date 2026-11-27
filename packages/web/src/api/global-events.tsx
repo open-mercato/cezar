@@ -483,6 +483,7 @@ async function reconcile(queryClient: QueryClient): Promise<void> {
     queryKeys.worktrees,
     lifecycleQueryKeys.all(),
     workspaceQueryKeys.providerStatus,
+    workspaceQueryKeys.agentProviders,
     // Host totals (spec 2026-09-20-host-resource-telemetry): a remote cockpit's only refresh is
     // this reconcile, so the Machine card must be in the list — the local cockpit ignores it
     // because its frames arrive over the `host` topic.
@@ -717,6 +718,10 @@ export function useGlobalEvents(usage: UsageStore, url: string = SSE_URL): void 
     const applyProviderStatusEvent = (row: ProviderStatusEventRow): void => {
       const key = workspaceQueryKeys.providerStatus
       const response = queryClient.getQueryData<ProviderStatusResponse>(key)
+      if (response?.providers.find(p => p.provider === row.provider)?.status !== row.status) {
+        void queryClient.invalidateQueries({ queryKey: workspaceQueryKeys.agentProviders })
+        void queryClient.invalidateQueries({ queryKey: workspaceQueryKeys.models(row.provider) })
+      }
       const updated = applyProviderStatusRow(response, row)
       if (updated !== undefined) {
         queryClient.setQueryData(key, updated)
