@@ -5,6 +5,7 @@ import {
   dispatchKindLabel,
   flattenTaskTree,
   subtaskLabel,
+  taskTreeAncestorIds,
   taskTreeRows,
   type TaskTreeInput,
 } from './task-tree'
@@ -180,6 +181,15 @@ describe('taskTreeRows with isExpanded', () => {
   it('no predicate means everything expanded — the pre-accordion behavior', () => {
     const runs = [run('p'), run('c', 'p')]
     expect(taskTreeRows(runs).map((node) => node.run.id)).toEqual(['p', 'c'])
+  })
+})
+
+describe('taskTreeAncestorIds', () => {
+  it('names every ancestor root first, nothing for a root, null for an absent id', () => {
+    const tree = buildTaskTree([run('p'), run('c', 'p'), run('g', 'c'), run('solo')])
+    expect(taskTreeAncestorIds(tree, 'g')).toEqual(['p', 'c'])
+    expect(taskTreeAncestorIds(tree, 'solo')).toEqual([])
+    expect(taskTreeAncestorIds(tree, 'gone')).toBeNull()
   })
 })
 
