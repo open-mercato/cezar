@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const io = vi.hoisted(() => ({ read: vi.fn(), list: vi.fn(), ps: vi.fn(), psSync: vi.fn() }));
 vi.mock('node:fs', () => ({ readFileSync: io.read, readdirSync: io.list }));
@@ -27,6 +27,7 @@ function fixture() {
     files.set(`/proc/${pid}/stat`, stat(pid, ppid, pgid));
     files.set(`/proc/${pid}/cmdline`, pid === elevated ? '/usr/bin/sudo\0build\0' : '/bin/bash\0');
     files.set(`/proc/${pid}/task/${pid}/children`, children.join(' '));
+    files.set(`/proc/${pid}/task/${pid}/stat`, stat(pid, ppid, pgid));
     dirs.set(`/proc/${pid}/task`, [String(pid)]);
   }
   io.ps.mockImplementation((_file, _args, _options, callback) => callback(null, `${root} 1 node\n${shell} ${root} bash\n`));
@@ -47,9 +48,25 @@ function fixture() {
   return { files, dirs, access };
 }
 
-afterEach(() => { vi.restoreAllMocks(); vi.clearAllMocks(); resetProcessSnapshot(); });
+const gone = (code = 'ENOENT') => Object.assign(new Error('gone'), { code });
 
-describe.skipIf(process.platform !== 'linux')('Linux terminal proc access (#2349)', () => {
+/** Fail `path` with `code` from its `nth` read on (1-based), delegating everything else. */
+function failRead(path: string, code: string, nth = 1) {
+  const read = io.read.getMockImplementation();
+  let count = 0;
+  io.read.mockImplementation((p: string) => {
+    if (p === path && ++count >= nth) throw gone(code);
+    return read?.(p);
+  });
+}
+
+const platform = Object.getOwnPropertyDescriptor(process, 'platform')!;
+afterEach(() => { vi.restoreAllMocks(); vi.clearAllMocks(); resetProcessSnapshot(); Object.defineProperty(process, 'platform', platform); });
+
+// Every fs read is mocked, so this runs on every OS; only the dispatchers need to think it is Linux.
+describe('Linux terminal proc access (#2349)', () => {
+  beforeEach(() => { Object.defineProperty(process, 'platform', { ...platform, value: 'linux' }); });
+
   it('retains elevated children and descendant groups without opening unrelated proc files', async () => {
     const { access } = fixture();
     const rows = await readLinuxProcesses();
@@ -74,7 +91,13 @@ describe.skipIf(process.platform !== 'linux')('Linux terminal proc access (#2349
   it('bounds shutdown with a killable helper and validates its output', () => {
     fixture();
     expect(readLinuxProcessTreeSync()).not.toBeNull();
-    expect(io.psSync).toHaveBeenCalledWith(process.execPath, expect.any(Array), expect.objectContaining({ timeout: 1_500, killSignal: 'SIGKILL' }));
+    const [file, args, options] = io.psSync.mock.calls[0]!;
+    expect(file).toBe(process.execPath);
+    // Source runs load THIS package's tsx by absolute URL, from the helper's own directory.
+    expect(args[0]).toBe('--import');
+    expect(args[1]).toMatch(/^file:\/\/.*\/node_modules\/tsx\//);
+    expect(args.slice(2)).toEqual([expect.stringMatching(/linux-proc\.ts$/), '--terminal-proc-tree', String(root)]);
+    expect(options).toEqual(expect.objectContaining({ timeout: 5_000, killSignal: 'SIGKILL', cwd: expect.stringMatching(/terminal$/) }));
     io.psSync.mockImplementation(() => { throw new Error('timed out'); });
     expect(readLinuxProcessTreeSync()).toBeNull();
     io.psSync.mockReturnValue('[{"pid":12,"ppid":"wrong","pgid":12}]');
@@ -137,6 +160,40 @@ describe.skipIf(process.platform !== 'linux')('Linux terminal proc access (#2349
     expect(readProcessTreeSync()).toBeNull();
     expect(io.ps).not.toHaveBeenCalled();
     expect(io.psSync.mock.calls.some(([file]) => file === 'ps')).toBe(false);
+  });
+
+  it('skips a hidden child whose parent thread exited during the hidepid recheck', async () => {
+    const { files } = fixture();
+    files.delete(`/proc/${elevated}/stat`);
+    failRead(`/proc/${shell}/task/${shell}/children`, 'ENOENT', 2);
+    expect(readLinuxProcessesSync()?.map((row) => row.pid)).toEqual([root, shell]);
+    fixture().files.delete(`/proc/${elevated}/stat`);
+    failRead(`/proc/${shell}/task/${shell}/children`, 'ESRCH', 2);
+    expect((await readLinuxProcesses())?.map((row) => row.pid)).toEqual([root, shell]);
+  });
+
+  it('keeps a descendant that exited before its threads were listed, without its subtree', async () => {
+    fixture();
+    const list = io.list.getMockImplementation();
+    io.list.mockImplementation((path: string) => {
+      if (path === `/proc/${elevated}/task`) throw gone();
+      return list?.(path);
+    });
+    expect(readLinuxProcessesSync()?.map((row) => row.pid)).toEqual([root, shell, elevated]);
+    expect((await readLinuxProcesses())?.map((row) => row.pid)).toEqual([root, shell, elevated]);
+  });
+
+  it.each(['ENOENT', 'ESRCH'])('skips a thread that exited between listing and reading its children (%s)', async (code) => {
+    const { files, dirs } = fixture();
+    dirs.set(`/proc/${shell}/task`, [String(shell), String(shell + 1)]);
+    files.set(`/proc/${shell}/task/${shell + 1}/children`, '');
+    failRead(`/proc/${shell}/task/${shell + 1}/children`, code);
+    // Its task stat is gone too, so this is an exit, not a kernel without children files.
+    expect(readLinuxProcessesSync()?.map((row) => row.pid)).toEqual([root, shell, elevated, job]);
+    expect(descendantGroups((await readLinuxProcesses()) ?? [], shell, root)).toEqual([shell, elevated, job]);
+    // The root's own worker threads may exit mid-walk as well.
+    dirs.set(`/proc/${root}/task`, [String(root), String(root + 1)]);
+    expect(readLinuxProcessesSync()?.map((row) => row.pid)).toEqual([root, shell, elevated, job]);
   });
 
   it('fails unknown for missing root, missing children support and malformed stats', async () => {

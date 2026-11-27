@@ -21,8 +21,8 @@ import { resolveShell } from './shells.ts';
  * enough: a PTY's shell is a session and group leader, but an interactive shell runs with job
  * control and puts every job in its OWN group, so a signal to `-shellPid` alone reached the shell
  * and nothing it started (`npm run dev &` survived a restart; a HUP-ignoring job survived a tab
- * close). `process-tree.ts` reads the table and names every group; a host with no `ps` falls back
- * to the shell's own group. Windows has no process groups, so there the binding's own `kill()` is
+ * close). `process-tree.ts` reads the table (Linux: cezar's descendants via /proc, #2349; else
+ * `ps`) and names every group; a host whose table cannot be read falls back to the shell's own group. Windows has no process groups, so there the binding's own `kill()` is
  * the whole story — it terminates the job object node-pty created.
  */
 
@@ -245,7 +245,7 @@ export class TerminalSessions {
   }
 
   /**
-   * Fold one `ps` snapshot into every live session's label and busy flag.
+   * Fold one process snapshot (`processSnapshot`) into every live session's label and busy flag.
    *
    * Takes the rows rather than reading them so ONE snapshot serves every tab (and so this stays
    * synchronous and testable). An exited session is left exactly as it was: its last command is
@@ -392,8 +392,8 @@ export class TerminalSessions {
     }
   }
 
-  /** Every process group under this shell, or null when the table cannot say (no `ps`, an exited
-   *  shell) — the caller then signals the shell's own group, as before. */
+  /** Every process group under this shell, or null when the table cannot say (no readable
+   *  process table, an exited shell) — the caller then signals the shell's own group, as before. */
   private groupsOf(pty: PtyProcess, rows: TreeRow[] | null): number[] | null {
     return rows === null ? null : descendantGroups(rows, pty.pid);
   }

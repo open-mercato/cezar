@@ -1,7 +1,9 @@
 import { execFileSync } from 'node:child_process';
 import { readFileSync, readdirSync } from 'node:fs';
 import { readFile, readdir } from 'node:fs/promises';
-import { fileURLToPath } from 'node:url';
+import { createRequire } from 'node:module';
+import { dirname } from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { z } from 'zod';
 
 interface ProcRow {
@@ -43,6 +45,16 @@ function vanished(error: unknown): boolean {
     (error.code === 'ENOENT' || error.code === 'ESRCH');
 }
 
+/** A children list, or null when its task exited between listing and reading (#2349). */
+function* readChildren(path: string): Generator<Request, number[] | null, string> {
+  try {
+    return ids(yield { kind: 'read', path });
+  } catch (error) {
+    if (vanished(error)) return null;
+    throw error;
+  }
+}
+
 /** One traversal for both drivers; no /proc enumeration or UID filter (#2349). */
 function* traverse(commands: boolean, root: number): Generator<Request, ProcRow[] | null, string> {
   const rows: ProcRow[] = [];
@@ -57,10 +69,11 @@ function* traverse(commands: boolean, root: number): Generator<Request, ProcRow[
       row = parseProcStat(yield { kind: 'read', path: `/proc/${entry.pid}/stat` });
     } catch (error) {
       if (entry.childrenPath && vanished(error)) {
-        // hidepid=2 also reports ENOENT for live elevated descendants. Only
-        // discard a missing child once its visible parent's link is gone.
-        const siblings = ids(yield { kind: 'read', path: entry.childrenPath });
-        if (siblings.includes(entry.pid)) return null;
+        // hidepid=2 also reports ENOENT for live elevated descendants. Only discard a
+        // missing child once its visible parent's link is gone — or the parent's own
+        // children file is gone too, because that thread exited (#2349).
+        const siblings = yield* readChildren(entry.childrenPath);
+        if (siblings?.includes(entry.pid)) return null;
         continue;
       }
       throw error;
@@ -87,7 +100,18 @@ function* traverse(commands: boolean, root: number): Generator<Request, ProcRow[
     if (threads.length === 0) return null;
     for (const tid of threads) {
       const childrenPath = `/proc/${row.pid}/task/${tid}/children`;
-      const children = ids(yield { kind: 'read', path: childrenPath });
+      const children = yield* readChildren(childrenPath);
+      if (children === null) {
+        // ENOENT is also a kernel without CONFIG_PROC_CHILDREN: only a thread whose own stat
+        // is gone too has exited. Its children were reparented; skip the branch.
+        try {
+          yield { kind: 'read', path: `/proc/${row.pid}/task/${tid}/stat` };
+        } catch (error) {
+          if (vanished(error)) continue;
+          throw error;
+        }
+        return null;
+      }
       for (const pid of children) queue.push({ pid, parent: row.pid, childrenPath });
     }
   }
@@ -146,22 +170,29 @@ export function readLinuxProcessesSync(root = process.pid): ProcRow[] | null {
   }
 }
 
-
 const treeSchema = z.array(z.object({
   pid: z.number().int().positive(),
   ppid: z.number().int().nonnegative(),
   pgid: z.number().int().nonnegative(),
 })).nullable();
 
-/** Keep shutdown's hard ps timeout even if a proc syscall stalls (#2349). */
+/** Source (dev/test) runs pay a cold tsx start before the walk's own budget begins. */
+const SOURCE_HELPER_TIMEOUT_MS = 5_000;
+
+/**
+ * Keep shutdown's hard ps timeout even if a proc syscall stalls (#2349). Synchronous, so it
+ * blocks the event loop for one node start plus the walk — the same trade the old `ps` made.
+ */
 export function readLinuxProcessTreeSync(): z.infer<typeof treeSchema> {
   try {
     const entry = fileURLToPath(import.meta.url);
-    // Source tests need the repo's loader; the published .js helper needs only Node.
-    const loader = entry.endsWith('.ts') ? ['--import', 'tsx'] : [];
+    // Source runs resolve tsx from THIS package, never from the server's cwd; the
+    // published .js helper needs only Node.
+    const source = entry.endsWith('.ts');
+    const loader = source ? ['--import', pathToFileURL(createRequire(import.meta.url).resolve('tsx')).href] : [];
     const output = execFileSync(process.execPath, [...loader, entry, '--terminal-proc-tree', String(process.pid)], {
-      encoding: 'utf8', timeout: BUDGET_MS, killSignal: 'SIGKILL',
-      maxBuffer: 8 * 1024 * 1024, stdio: ['ignore', 'pipe', 'ignore'],
+      encoding: 'utf8', timeout: source ? SOURCE_HELPER_TIMEOUT_MS : BUDGET_MS, killSignal: 'SIGKILL',
+      cwd: dirname(entry), maxBuffer: 8 * 1024 * 1024, stdio: ['ignore', 'pipe', 'ignore'],
     });
     return treeSchema.parse(JSON.parse(output));
   } catch {
