@@ -206,6 +206,17 @@ describe('Linux terminal proc access (#2349)', () => {
     expect(readLinuxProcessesSync()).toBeNull();
   });
 
+  it('gives up as unknown once the walk reaches its read cap', async () => {
+    const { dirs } = fixture();
+    // 100,001 empty threads: one children read each pushes the walk past MAX_READS.
+    dirs.set(`/proc/${root}/task`, Array.from({ length: 100_001 }, (_, i) => String(root + i)));
+    const read = io.read.getMockImplementation();
+    io.read.mockImplementation((path: string) =>
+      path.startsWith(`/proc/${root}/task/`) && path.endsWith('/children') && path !== `/proc/${root}/task/${root}/children` ? '' : read?.(path));
+    expect(readLinuxProcessesSync()).toBeNull();
+    expect(await readLinuxProcesses()).toBeNull();
+  }, 30_000);
+
   it('bounds both traversals and never returns a partial successful table', async () => {
     fixture();
     let clock = 0;

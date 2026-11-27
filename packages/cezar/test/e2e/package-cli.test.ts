@@ -77,6 +77,17 @@ test('the release tarball installs and runs the dry-run CLI workflow', { timeout
     assert.match(help.stdout, /cezar run "<task>"/);
     assert.match(help.stdout, /--effort <value>/);
 
+    // Shutdown's compiled proc helper must still recognise direct execution once packed (#2349):
+    // a broken entry check prints nothing, and every shutdown silently falls back.
+    const helper = await execFile(
+      process.execPath,
+      [join(packageRoot, 'dist/server/terminal/linux-proc.js'), '--terminal-proc-tree', String(process.pid)],
+      { cwd: consumerDir, timeout: 30_000 },
+    );
+    const tree = JSON.parse(helper.stdout) as Array<{ pid: number }> | null;
+    if (process.platform === 'linux') assert.ok(tree?.some((row) => row.pid === process.pid), 'helper should list its root');
+    else assert.equal(tree, null, 'without /proc the helper reports unknown');
+
     // The installed CLI renders an impact report from its packed template (spec 2026-10-22).
     const impact = await execFile(process.execPath, [cliPath, 'impact', 'render', '--demo', '--out', join(root, 'impact-demo.html')], {
       cwd: consumerDir,

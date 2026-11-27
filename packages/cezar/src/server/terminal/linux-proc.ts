@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { readFileSync, readdirSync } from 'node:fs';
+import { readFileSync, readdirSync, realpathSync } from 'node:fs';
 import { readFile, readdir } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { dirname } from 'node:path';
@@ -200,8 +200,17 @@ export function readLinuxProcessTreeSync(): z.infer<typeof treeSchema> {
   }
 }
 
+/** Node realpaths the module URL but not argv[1], so a symlinked spelling must still match. */
+function isDirectRun(): boolean {
+  try {
+    return process.argv[1] !== undefined && realpathSync(process.argv[1]) === fileURLToPath(import.meta.url);
+  } catch {
+    return false;
+  }
+}
+
 // Only direct helper execution writes stdout; importing the module has no side effects.
-if (process.argv[1] === fileURLToPath(import.meta.url) && process.argv[2] === '--terminal-proc-tree') {
+if (process.argv[2] === '--terminal-proc-tree' && isDirectRun()) {
   const root = process.argv[3];
   const pid = Number(root);
   const rows = root && /^[1-9]\d*$/.test(root) && Number.isSafeInteger(pid)
