@@ -1,4 +1,4 @@
-import { agentProviderEnv, verifyProviderLogin, type AgentProviderLaunch } from '../core/agent-provider-env.ts';
+import { providerQuotaKey, agentProviderEnv, verifyProviderLogin, type AgentProviderLaunch } from '../core/agent-provider-env.ts';
 import { withoutEnv } from '../core/agent-env.ts';
 import { randomUUID } from 'node:crypto';
 import { chmodSync, closeSync, existsSync, fstatSync, mkdirSync, openSync, readFileSync, readSync, realpathSync, writeFileSync } from 'node:fs';
@@ -189,7 +189,7 @@ export interface ManagerEngineDeps {
   accountError: (runner: RunnerId, agentProfile: string) => Promise<string | null>;
   /** An account's resolved id, label and usage-limit reset (epoch ms) from the workspace holds.
    *  Absent: every account has capacity. */
-  accountLimit?: (runner: RunnerId, agentProfile: string | undefined, repoRoot?: string) => Promise<{ account: string; label: string; until?: number }>;
+  accountLimit?: (runner: RunnerId, agentProfile: string | undefined, repoRoot?: string, model?: string) => Promise<{ account: string; label: string; quotaKey?: string; until?: number }>;
   /** Running tasks per `runner:account` across the workspace (spec 2026-11-25-manager-task-routing). Absent: none. */
   accountLoad?: () => ReadonlyMap<string, number>;
   /** The cockpit's own routes, in process: POST /runs, merge, enable have exactly one implementation. */
@@ -400,6 +400,7 @@ interface Runtime {
 type Progress = () => { text: string; commands: ManagerCommand[] };
 
 interface DriveResult {
+  agentMethod?: string;
   text: string;
   commands: ManagerCommand[];
   costUsd: number;
@@ -2557,7 +2558,7 @@ export class ManagerEngine {
       ...(planAccount ? { onUsageWindows: (observation) => recordUsageObservation(planAccount, observation) } : {}),
       ...(manager.model && !locked ? { model: manager.model } : {}),
       // Another backend refuses an explicit effort, so a manager moved off one drops it.
-      ...(manager.effort && runnerSupportsReasoningEffort(runner) ? { reasoningEffort: manager.effort } : {}),
+      ...(!locked && manager.effort && runnerSupportsReasoningEffort(runner) ? { reasoningEffort: manager.effort } : {}),
     };
     // Claude's Bash inherits the cockpit's env plus the turn's; the broker runs Codex's commands in the same.
     if (runner === 'codex') base.brokeredShell = codexManagerShell(manager.bashAllow, withoutEnv({ ...process.env, ...base.env }, provider?.unsetEnv));
@@ -2684,7 +2685,7 @@ export class ManagerEngine {
         // A retry can outlive a key rotation or removal. Read the same method again.
         spec.provider = await agentProviderEnv(runnerId, { saved: base.provider.methodId, savedHost: base.provider.hostKey, model: base.model, modelsLocked: agentModelsLocked() });
       }
-      spec.model = spec.provider?.model ?? base.model;
+      if (spec.provider?.model) spec.model = spec.provider.model;
       await verifyProviderLogin(runnerId, spec.provider, spec.cwd, spec.env);
       if (turn.stopped) {
         planUsage?.close();
@@ -2730,7 +2731,7 @@ export class ManagerEngine {
         };
       });
     }
-    return { text: committed || draft, commands, costUsd, ...(error ? { error } : {}) };
+    return { text: committed || draft, commands, costUsd, agentMethod: spec.provider?.methodId, ...(error ? { error } : {}) };
   }
 
   // ---- the timer ---------------------------------------------------------------------------
@@ -2836,14 +2837,14 @@ export class ManagerEngine {
 
   private async rowInfo(row: ChainRow): Promise<RowInfo> {
     const runner = row.runner !== undefined && isRunnerId(row.runner) ? row.runner : await this.deps.defaultRunner();
-    const limit = await this.deps.accountLimit?.(runner, row.agentProfile).catch(() => undefined);
+    const limit = await this.deps.accountLimit?.(runner, row.agentProfile, undefined, row.model).catch(() => undefined);
     const account = limit?.account ?? row.agentProfile ?? DEFAULT_AGENT_ACCOUNT_ID;
     const label = limit?.label ?? (row.agentProfile ?? 'default account');
     return {
       row,
       ref: { slot: row.slot, runner, profileId: account, label, ...(row.model ? { model: row.model } : {}) },
       key: rowKey(runner, account),
-      accountKey: `${runner}:${account}`,
+      accountKey: limit?.quotaKey ?? `${runner}:${account}`,
       ...(limit?.until !== undefined ? { workspaceUntil: limit.until } : {}),
     };
   }
@@ -2851,7 +2852,7 @@ export class ManagerEngine {
   /** Why this row cannot answer now: its own hold, or a workspace hold on its account. */
   private rowHold(id: string, info: RowInfo, now: number): ChainHold | undefined {
     const own = this.deps.store.state(id).chain?.holds[info.key];
-    if (own && msOf(own.until) > now) return own;
+    if (own && msOf(own.until) > now && (!own.accountKey || own.accountKey === info.accountKey)) return own;
     if (info.workspaceUntil !== undefined && info.workspaceUntil > now) return { until: new Date(info.workspaceUntil).toISOString(), reason: 'held' };
     return undefined;
   }
@@ -2985,7 +2986,7 @@ export class ManagerEngine {
       }
       const reset = resetAt?.getTime() ?? (reason === 'usage-limit' ? parseUsageLimit(cause!, now)?.resetAt.getTime() : undefined);
       const hold = holdFor(reason, this.deps.store.state(id).chain?.holds[info.key], now, reset);
-      this.updateChain(id, (chain) => ({ ...chain, holds: { ...chain.holds, [info.key]: { ...hold, ...(reason === 'usage-limit' ? { accountKey: info.accountKey } : {}) } } }));
+      this.updateChain(id, (chain) => ({ ...chain, holds: { ...chain.holds, [info.key]: { ...hold, ...(reason === 'usage-limit' ? { accountKey: providerQuotaKey(info.ref.runner as RunnerId, info.ref.runner + ':' + info.ref.profileId, result.agentMethod) } : {}) } } }));
       const next = nextRow(rows, row.slot, attempted, (candidate) => this.rowHold(id, infos[candidate.slot]!, now));
       if (!next) {
         // Every row is out: wait for the first reset, as a manager without backups waits for its own.

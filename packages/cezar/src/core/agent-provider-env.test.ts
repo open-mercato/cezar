@@ -241,3 +241,35 @@ it('names a task on its saved gateway and substitutes an offered cheap model for
     expect(readAgentProviderKey).not.toHaveBeenCalled();
   } finally { rmSync(cwd, { recursive: true, force: true }); }
 });
+
+it('keeps an untagged native Pi pin on its subscription even when the gateway serves that ID', async () => {
+  const native = 'anthropic/claude-sonnet-4-5';
+  vi.stubEnv('CEZ_DRY_RUN', '1');
+  vi.mocked(readAgentProviders).mockResolvedValue({ agents: { pi: { methods: {
+    custom: { ...method, models: { fetchedAt: '', ids: [{ id: native }] } },
+  } } } });
+  expect((await agentProviderEnv('pi', { model: native }))?.methodId).toBe('anthropic');
+  expect((await agentProviderEnv('pi', { model: native, requested: 'custom' }))?.methodId).toBe('custom');
+});
+
+it('delegates new launches to native auth under the environment lock and refuses a pinned provider', async () => {
+  vi.stubEnv('CEZ_AGENT_MODELS_LOCKED', '1');
+  vi.mocked(readAgentProviders).mockResolvedValue({ agents: { claude: { active: 'custom', methods: { custom: method } } } });
+  expect(await agentProviderEnv('claude')).toBeUndefined();
+  await expect(agentProviderEnv('claude', { saved: 'custom' })).rejects.toThrow(/native/);
+  expect(readAgentProviders).not.toHaveBeenCalled();
+  const start = vi.spyOn(ClaudeCliRunner.prototype, 'startSession').mockImplementation(() => ({
+    result: Promise.resolve({ text: '', toolCalls: [], tokensUsed: 0 }), open: false, end() {}, interrupt() {}, sendMessage: () => false,
+  }));
+  await createRunner('claude').run({ cwd: tmpdir(), userPrompt: 'fixture', model: 'opus', reasoningEffort: 'high' });
+  expect(start.mock.calls[0]?.[0].model).toBeUndefined();
+  expect(start.mock.calls[0]?.[0].reasoningEffort).toBeUndefined();
+});
+
+it('can launch a model from the last successful gateway discovery', async () => {
+  vi.stubEnv('CEZ_DRY_RUN', '1');
+  vi.mocked(readAgentProviders).mockResolvedValue({ agents: { claude: { active: 'custom', methods: {
+    custom: { ...method, models: { ...method.models, error: 'offline' } },
+  } } } });
+  expect((await agentProviderEnv('claude', { model }))?.catalogModel).toBe(model);
+});

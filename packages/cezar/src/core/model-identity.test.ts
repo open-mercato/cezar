@@ -279,3 +279,12 @@ describe('normalizeModelForBackend', () => {
     expect(normalized && formatModelIdentity(normalized.identity)).toBe('anthropic/sonnet');
   });
 });
+
+it.each([
+  ['native', 'kimi-code', 'native'],
+  ['Private/Chat', 'private', 'Chat'],
+])('passes Kimi config alias %s verbatim to ACP', (alias, provider, model) => {
+  expect(normalizeModelForBackend('kimi', alias)).toEqual({
+    backendModel: alias, identity: { provider, model },
+  });
+});

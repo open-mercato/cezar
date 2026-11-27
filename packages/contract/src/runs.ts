@@ -143,6 +143,12 @@ export const modelUsageSchema = z.object({
 });
 export type ModelUsage = z.infer<typeof modelUsageSchema>;
 
+// A Continue issued before a graph node can authenticate applies to that node on retry.
+export const providerRetrySchema = z.object({
+  runner: runnerSchema, model: z.string().optional(), reasoningEffort: z.string().optional(),
+  agentProfile: z.string().optional(),
+});
+
 /** One step of a run's chain. */
 export const stepStateSchema = z.object({
   id: z.string(),
@@ -169,6 +175,7 @@ export const stepStateSchema = z.object({
   backend: runnerSchema.optional(),
   agentMethod: providerMethodIdSchema.optional(),
   agentMethodHost: z.literal(true).optional(),
+  providerRetry: providerRetrySchema.optional(),
   /** Reasoning level selected when this agent step started. Absent means the native default. */
   reasoningEffort: reasoningEffortSchema.optional(),
   /** Agent account (spec 2026-07-29-agent-profiles) that owns `sessionId` — `default`, or a

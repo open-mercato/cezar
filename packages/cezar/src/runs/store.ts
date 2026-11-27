@@ -1,4 +1,4 @@
-import { RUN_PR_REF_RANK, providerMethodIdSchema, stepToolPolicySchema, deferredBindingSchema, modelUsageSchema, queueWaitReasonSchema, runAgentSwitchSchema, taskAskRecordSchema, trackerAccessSchema, type QuestionClosed, type QuestionStale, type TaskAskRecord } from '@open-mercato/cezar-contract';
+import { RUN_PR_REF_RANK, providerMethodIdSchema, providerRetrySchema, stepToolPolicySchema, deferredBindingSchema, modelUsageSchema, queueWaitReasonSchema, runAgentSwitchSchema, taskAskRecordSchema, trackerAccessSchema, type QuestionClosed, type QuestionStale, type TaskAskRecord } from '@open-mercato/cezar-contract';
 import { EventEmitter } from 'node:events';
 import { runLifecycleSnapshot, type RunLifecycleObserver, type RunLifecycleSnapshot } from './lifecycle.ts';
 import { createHash, randomUUID } from 'node:crypto';
@@ -133,6 +133,7 @@ const stepStateSchema = z.object({
   profileId: z.string().optional(),
   agentMethod: providerMethodIdSchema.optional(),
   agentMethodHost: z.literal(true).optional(),
+  providerRetry: providerRetrySchema.optional().catch(undefined),
   /** A Continue opened with `freshContext` (#2513): a restart while it is queued must not resume. */
   freshContext: z.literal(true).optional().catch(undefined),
   /** A queued fresh Continue's instruction, so a restart opens it with that text; cleared on open

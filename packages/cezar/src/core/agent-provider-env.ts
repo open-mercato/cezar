@@ -4,11 +4,12 @@ import { resolveClaudeExecutable } from './claude-cli-runner.ts';
 import { spawnableCommand } from './windows-shim.ts';
 import { isClaudeSubscription, openCodeSubscriptionStatus } from './provider-method-status.ts';
 import { piSubscriptionStatus } from '../agent-providers/pi-subscriptions.ts';
+import { providerAuthChecksDisabled } from './provider-auth.ts';
 import { agentModelsLocked } from './agent-model-policy.ts';
 import { pickCheapModel } from '../runs/namer-model.ts';
 import { AgentProviderUnavailable, type RunnerId } from './agent-runner.ts';
 import { authMethods, providerLaunch } from './agent-auth-methods.ts';
-import { readAgentProviderKey, readAgentProviders } from '../workspace/agent-providers.ts';
+import { readAgentProviderKey, readAgentProviders, type StoredAgentProviders } from '../workspace/agent-providers.ts';
 
 export { AgentProviderUnavailable } from './agent-runner.ts';
 
@@ -35,9 +36,43 @@ export interface MethodSelection {
 
 const REMOVED = "This task's provider was removed. Pick another in Settings → Agents.";
 
+/** Resolve an unpinned method from public metadata. Queue checks must never open a key. */
+function implicitProviderMethod(runner: RunnerId, entry: StoredAgentProviders['agents'][RunnerId], model?: string, preferCheapModel = false) {
+  if (!entry) return undefined;
+  const { mode, methods } = authMethods(runner);
+  if (mode === 'one') return entry.active ?? undefined;
+  const prefix = model?.includes('/') ? model.split('/')[0] : undefined;
+  const native = methods.find(method => method.id === prefix);
+  if (native?.kind === 'subscription') return native.id;
+  const matches = Object.entries(entry.methods).filter(([, method]) => model && method.models?.ids.some(item => item.id === model));
+  if (matches.length > 1) throw new AgentProviderUnavailable('Several providers serve this model. Pick its provider in the model menu.');
+  if (matches.length === 1 || native) return matches[0]?.[0] ?? native?.id;
+  if (!model || preferCheapModel) {
+    const ids = Object.keys(entry.methods);
+    if (ids.length === 1) return ids[0];
+    if (ids.length > 1) throw new AgentProviderUnavailable('Pick a model to choose which provider serves this task.');
+  }
+  return undefined;
+}
+
+/** Managed keys are shared across login profiles. Historical native holds keep their account key. */
+export function providerQuotaKey(runner: RunnerId, accountKey: string, methodId?: string, store?: StoredAgentProviders, model?: string) {
+  if (!methodId && store && !providerAuthChecksDisabled()) {
+    try { methodId = implicitProviderMethod(runner, store.agents[runner], model === 'auto' ? undefined : model); }
+    catch { /* An ambiguous request has no known provider budget. Launch will ask for a choice. */ }
+  }
+  if (!methodId || methodId === 'subscription') return accountKey;
+  const method = authMethods(runner).methods.find(item => item.id === methodId);
+  return method?.kind === 'subscription' ? accountKey + ':' + methodId : runner + ':provider:' + methodId;
+}
+
 export async function agentProviderEnv(runner: RunnerId, selection: MethodSelection = {}): Promise<AgentProviderLaunch | undefined> {
-  const entry = (await readAgentProviders()).agents[runner];
   const { requested, saved } = selection;
+  if (providerAuthChecksDisabled()) {
+    if (saved || requested) throw new AgentProviderUnavailable('Provider selection is locked to native agent authentication.', saved ?? requested);
+    return undefined;
+  }
+  const entry = (await readAgentProviders()).agents[runner];
   const model = selection.model?.trim() === 'auto' ? undefined : selection.model;
   if (!entry && !requested && !saved) return undefined;
   const { mode, methods } = authMethods(runner);
@@ -49,18 +84,7 @@ export async function agentProviderEnv(runner: RunnerId, selection: MethodSelect
     }
     methodId = entry.active;
   }
-  if (!methodId && mode === 'any' && entry) {
-    const matches = Object.entries(entry.methods).filter(([, method]) => model && method.models?.ids.some(item => item.id === model));
-    if (matches.length > 1) throw new AgentProviderUnavailable('Several providers serve this model. Pick its provider in the model menu.');
-    methodId = matches[0]?.[0];
-    // Native provider-qualified models can belong to a CLI login outside the managed catalog.
-    if (!methodId && model) methodId = methods.find(method => method.id === model.split('/')[0])?.id;
-    if (!methodId && (!model || selection.preferCheapModel)) {
-      const connected = Object.keys(entry.methods);
-      if (connected.length === 1) methodId = connected[0];
-      if (connected.length > 1) throw new AgentProviderUnavailable('Pick a model to choose which provider serves this task.');
-    }
-  }
+  methodId ??= implicitProviderMethod(runner, entry, model, selection.preferCheapModel);
   if (!methodId) throw new AgentProviderUnavailable('Pick a model and its provider in Settings → Agents.');
   const method = methods.find(item => item.id === methodId);
   const stored = entry?.methods[methodId];
@@ -69,7 +93,7 @@ export async function agentProviderEnv(runner: RunnerId, selection: MethodSelect
   let hostKey: true | undefined;
   if (method.kind !== 'subscription') {
     if (!stored && saved && !selection.savedHost) throw new AgentProviderUnavailable(REMOVED, methodId);
-    if (stored && (method.kind === 'custom' || method.kind === 'openrouter') && (stored.models?.error || !stored.models?.ids.length)) {
+    if (stored && (method.kind === 'custom' || method.kind === 'openrouter') && !stored.models?.ids.length) {
       throw new AgentProviderUnavailable('This provider has no available models. Refresh them in Settings → Agents.', methodId);
     }
     if (stored) {
@@ -128,7 +152,7 @@ export async function agentProviderEnv(runner: RunnerId, selection: MethodSelect
 export async function verifyProviderLogin(
   runner: RunnerId, provider: AgentProviderLaunch | undefined, cwd: string, extraEnv?: Record<string, string>,
 ): Promise<void> {
-  if (provider?.kind !== 'subscription' || process.env.CEZ_DRY_RUN === '1') return;
+  if (provider?.kind !== 'subscription' || process.env.CEZ_DRY_RUN === '1' || providerAuthChecksDisabled()) return;
   if (!['claude', 'pi', 'opencode'].includes(runner)) return;
   const env = buildChildEnv({ backend: runner, provider, extraEnv });
   const probe = (bin: string, args: string[]): Promise<string> => {

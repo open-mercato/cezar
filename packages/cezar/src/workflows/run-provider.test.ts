@@ -141,3 +141,48 @@ it('launches the fallback on its own gateway when its catalog offers a foreign n
   }), { timeout: 10000 });
   expect(store.getRun(id)?.steps[0]).toMatchObject({ backend: 'claude', agentMethod: 'subscription' });
 }, 20000);
+
+it('runs the remaining required check when Continue supplies an override at a provider checkpoint', async () => {
+  metadata.agents.claude = { active: null, methods: {} };
+  const { id } = manager.startRun({ ...workflow, steps: [workflow.steps[0]!, { id: 'check', command: 'exit 1' }] }, {
+    task: 'mock:done', runner: 'claude', worktree: false,
+  });
+  await vi.waitFor(() => expect(store.getRun(id)?.status === 'waiting' && !manager.isActive(id)).toBe(true), { timeout: 10000 });
+  metadata.agents.claude = { active: 'custom', methods: { custom: gateway } };
+  expect(manager.continueRun(id, { model: 'vendor/model', text: 'mock:done' }).ok).toBe(true);
+  await vi.waitFor(() => expect(store.getRun(id)?.steps.find(s => s.id === 'check')?.status).toBe('failed'), { timeout: 10000 });
+  expect(store.getRun(id)?.steps[0]?.modelIdentity).toBe('custom/vendor/model');
+}, 20000);
+
+it('keeps the effective gateway model on same-session Continue after the catalog is reordered', async () => {
+  const ids = [{ id: 'team/small' }, { id: 'team/large' }];
+  metadata.agents.claude = { active: 'custom', methods: { custom: { ...gateway, models: { fetchedAt: '', ids } } } };
+  const { id } = manager.startRun({ ...workflow, steps: workflow.steps.slice(0, 1) }, {
+    task: 'mock:done', runner: 'claude', worktree: false,
+  });
+  const settled = () => vi.waitFor(() => expect(store.getRun(id)?.status === 'done' && !manager.isActive(id)).toBe(true), { timeout: 10000 });
+  await settled();
+  ids.reverse();
+  expect(manager.continueRun(id, { text: 'mock:done' }).ok).toBe(true);
+  await settled();
+  expect(store.getRun(id)?.steps.at(-1)?.modelIdentity).toBe('custom/team/small');
+}, 25000);
+
+it('holds the limited gateway while letting the same runner use its subscription', async () => {
+  metadata.agents.claude = { active: 'custom', methods: { custom: gateway } };
+  await putAgentFallbackPolicy(repo, { expectedRevision: 0, expectedIncarnation: null, enabled: true,
+    candidates: [{ provider: 'codex', profileId: 'default' }] });
+  const flow = { ...workflow, steps: workflow.steps.slice(0, 1) };
+  const start = (task: string) => manager.startRun(flow, { task, runner: 'claude', worktree: false }).id;
+  const limited = start('mock:limit');
+  await vi.waitFor(() => expect(store.getRun(limited)?.usageLimitHolds?.length).toBe(1), { timeout: 10000 });
+  expect(manager.accountHolds().deadline.has('claude:default')).toBe(false);
+  manager.cancel(limited);
+  const next = start('mock:done');
+  await vi.waitFor(() => expect(store.getRun(next)?.queueWaitReason?.kind).toBe('usage-reset'), { timeout: 10000 });
+  manager.cancel(next);
+  metadata.agents.claude.active = 'subscription';
+  const subscription = start('mock:done');
+  await vi.waitFor(() => expect(store.getRun(subscription)?.status).toBe('done'), { timeout: 10000 });
+  expect(store.getRun(subscription)?.steps[0]?.agentMethod).toBe('subscription');
+}, 25000);

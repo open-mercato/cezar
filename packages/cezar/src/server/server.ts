@@ -9384,7 +9384,7 @@ export function createAppParts(deps: ServerDeps) {
       return 'error' in account ? account.error : null;
     },
     // The same holds the queue enforces (spec 2026-08-03-auto-resume-after-usage-limit).
-    accountLimit: (runner, agentProfile, repoRoot) => managerAccountLimit(() => deps.semaphore?.accountHolds(), runner, agentProfile, repoRoot),
+    accountLimit: (...args) => managerAccountLimit(() => deps.semaphore?.accountHolds(), ...args),
     accountLoad: () => deps.semaphore?.accountLoad() ?? new Map(),
     request: (path, init) => {
       if (!managerLoopback.request) throw new Error('the cockpit is not ready');

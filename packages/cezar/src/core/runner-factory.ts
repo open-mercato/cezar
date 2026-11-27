@@ -151,9 +151,13 @@ function guardWorkingDirectory(runner: AgentRunner): AgentRunner {
     const input = provider ? {
       ...spec,
       provider,
-      model: agentModelsLocked(spec.cwd) ? undefined : provider.model ?? spec.model,
+      model: provider.model ?? spec.model,
       onUsageWindows: provider.secret ? undefined : spec.onUsageWindows,
     } : spec;
+    if (agentModelsLocked(spec.cwd)) {
+      const { model: _model, reasoningEffort: _effort, ...native } = input;
+      return runner.run.call(this, instructSpec(native), onEvent);
+    }
     return runner.run.call(this, instructSpec(input), onEvent);
   };
   return guarded;
