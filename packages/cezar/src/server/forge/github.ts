@@ -2861,6 +2861,60 @@ async function existingPrUrl(worktree: string, repoArgs: string[]): Promise<stri
   return hit && PR_URL_RE.test(hit.url) ? hit.url : null;
 }
 
+const parentPrsSchema = z.array(z.object({ state: z.string() }));
+const prBaseRefSchema = z.object({ baseRefName: z.string(), state: z.string() });
+const defaultBranchSchema = z.object({ defaultBranchRef: z.object({ name: z.string() }).nullish() });
+
+/** Stacked PRs (#1759): a task started from another task's branch targets that branch only while the
+ *  parent has an open PR there. Any other answer — no PR, merged, closed, no gh — is `undefined` and
+ *  the caller falls back to today's repo-default base. `merged` marks a parent PR that landed. */
+export async function parentPrState(
+  worktree: string,
+  repoArgs: string[],
+  parentBranch: string,
+): Promise<'open' | 'merged' | undefined> {
+  const repoAt = repoArgs.indexOf('--repo');
+  const res = await execTool(
+    ['pr', 'list', ...(repoAt >= 0 ? ['--repo', repoArgs[repoAt + 1] as string] : []), '--head', parentBranch, '--state', 'all', '--json', 'state', '--limit', '20'],
+    worktree,
+    'gh',
+  );
+  if (!res.ok) return undefined;
+  try {
+    const states = parentPrsSchema.parse(JSON.parse(res.stdout)).map((p) => p.state);
+    if (states.includes('OPEN')) return 'open';
+    return states.includes('MERGED') ? 'merged' : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Is this base another task's branch? A dispatched child always is; otherwise the default `cez/` prefix. */
+const isTaskBranchBase = (run: DraftPrInput['run'], base: string) => Boolean(run.dispatch?.parentRunId) || base.startsWith('cez/');
+
+/** Parent PR merged → move the child's PR to the repo default branch. Best effort, never throws. */
+async function retargetMergedStack(worktree: string, repoArgs: string[], prUrl: string, parentBranch: string): Promise<void> {
+  const repoAt = repoArgs.indexOf('--repo');
+  const repo = repoAt >= 0 ? (repoArgs[repoAt + 1] as string) : undefined;
+  const view = await execTool(['pr', 'view', prUrl, '--json', 'baseRefName,state'], worktree, 'gh');
+  if (!view.ok) return;
+  try {
+    const pr = prBaseRefSchema.parse(JSON.parse(view.stdout));
+    if (pr.state !== 'OPEN' || pr.baseRefName !== parentBranch) return;
+  } catch {
+    return;
+  }
+  const repoInfo = await execTool(['repo', 'view', ...(repo ? [repo] : []), '--json', 'defaultBranchRef'], worktree, 'gh');
+  if (!repoInfo.ok) return;
+  let def: string | undefined;
+  try {
+    def = defaultBranchSchema.parse(JSON.parse(repoInfo.stdout)).defaultBranchRef?.name;
+  } catch {
+    return;
+  }
+  if (def && def !== parentBranch) await execTool(['pr', 'edit', prUrl, '--base', def], worktree, 'gh');
+}
+
 const nothingToPropose = (branch: string, base: string | undefined) =>
   `nothing to propose — ${branch} has no commits that ${base ?? 'the base branch'} does not already have`;
 
@@ -2919,15 +2973,25 @@ export async function createDraftPr(input: DraftPrInput): Promise<DraftPrOutcome
   if (!push.ok) {
     return { ok: false, error: `git push failed — ${tail(push.stderr) || 'unknown error'}` };
   }
-  if (existing) return { ok: true, url: existing, dryRun: false, updated: true };
+  if (existing) {
+    if (prBase && isTaskBranchBase(run, prBase)) {
+      const repoArgs = await prRepoArgs(worktree, remotes.base, remotes.push, branch);
+      if ((await parentPrState(worktree, repoArgs, prBase)) === 'merged') {
+        await retargetMergedStack(worktree, repoArgs, existing, prBase);
+      }
+    }
+    return { ok: true, url: existing, dryRun: false, updated: true };
+  }
 
   const body = buildPrBody(input.handoffText, run.task);
   // Target the branch the worktree forked from (config `baseBranch`) — without
   // --base, gh aims at the repo default (main) even when work started on
   // develop. `<remote>/x` normalizes to `x`; a raw sha (detached-HEAD fork
   // point) can't be a PR base, so gh falls back to the default branch.
-  const baseArgs = prBase && !/^[0-9a-f]{7,40}$/i.test(prBase) ? ['--base', prBase] : [];
   const repoArgs = await prRepoArgs(worktree, remotes.base, remotes.push, branch);
+  // A task branch as base needs an open parent PR to stack on; else the repo default (#1759).
+  const stackable = prBase && isTaskBranchBase(run, prBase) ? (await parentPrState(worktree, repoArgs, prBase)) === 'open' : true;
+  const baseArgs = prBase && stackable && !/^[0-9a-f]{7,40}$/i.test(prBase) ? ['--base', prBase] : [];
   const createArgs = ['pr', 'create', ...(input.draft === false ? [] : ['--draft']), ...repoArgs, ...baseArgs, '--title', run.title, '--body', body];
   let pr = await execTool(createArgs, worktree, 'gh', PUSH_TIMEOUT_MS);
   for (let attempt = 1; !pr.ok && !pr.notFound; attempt++) {
