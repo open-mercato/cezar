@@ -17,7 +17,7 @@ it('reads both catalog shapes and requests the base path on the server', async (
 
 it('refuses an origin change before forwarding any credentials', async () => {
   vi.stubEnv('CEZ_DRY_RUN', '0');
-  const request = vi.fn(async () => Response.redirect('https://other.test/models'));
+  const request = vi.fn(async () => Response.redirect('https://other.test/models', 302));
   await expect(fetchProviderModels('https://example.test', 'fixture-key', request)).rejects.toThrow('Could not load models');
   expect(request).toHaveBeenCalledTimes(1);
 });

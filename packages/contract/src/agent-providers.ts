@@ -50,6 +50,7 @@ export type AgentProviderMethod = z.infer<typeof agentProviderMethodSchema>;
 export const agentProviderEntrySchema = z.object({
   runner: runnerSchema,
   mode: z.enum(['one', 'any']),
+  configured: z.literal(true).optional(),
   active: providerMethodIdSchema.nullable().optional(),
   methods: z.array(agentProviderMethodSchema),
 });

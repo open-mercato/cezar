@@ -3,7 +3,7 @@ import { z } from 'zod';
 
 const MAX_BYTES = 2 * 1024 * 1024;
 const modelSchema = z.object({
-  id: z.string().min(1).max(512),
+  id: z.string().min(1).max(200),
   name: z.string().max(256).optional(),
   display_name: z.string().max(256).optional(),
   context_length: z.number().int().positive().optional(),

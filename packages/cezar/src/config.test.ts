@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { RUNNER_IDS } from './core/agent-runner.ts';
-import { DEFAULT_SKILLS_REPOS, gatedSkillsRepos, loadConfig, resolveWorktreeRetention } from './config.ts';
+import { DEFAULT_SKILLS_REPOS, gatedSkillsRepos, loadConfig, projectModelDefaults, resolveWorktreeRetention } from './config.ts';
 
 /**
  * `config.json` schema roundtrips (R2 2.3: `systemPrompt?`). The invariants
@@ -339,6 +339,13 @@ describe('loadConfig machine-wide agent defaults', () => {
     writeFileSync(join(repoRoot, '.ai/cezar', 'config.json'), JSON.stringify(value), 'utf8');
   const writeMachine = (agentDefaults: unknown) =>
     writeFileSync(join(cezHome, 'config.json'), JSON.stringify({ agentDefaults }), 'utf8');
+
+  it('distinguishes an inherited model from a project pin or explicit auto', async () => {
+    writeMachine({ models: { claude: 'same-id', codex: 'workspace-model', pi: 'inherited' } });
+    writeRepo({ defaultModels: { claude: 'same-id' }, defaultModelsAuto: { codex: true } });
+    expect(await projectModelDefaults(repoRoot)).toEqual({ claude: 'same-id', codex: '' });
+    expect((await loadConfig(repoRoot)).defaultModels).toEqual({ claude: 'same-id', pi: 'inherited' });
+  });
 
   it('fills a repo that has no config file at all', async () => {
     writeMachine({ runner: 'codex', models: { codex: 'gpt-5' } });
