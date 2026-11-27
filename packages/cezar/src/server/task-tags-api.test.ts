@@ -142,6 +142,12 @@ describe('task tags API', () => {
       const res = await send('POST', `/api/v1/runs/${run.id}/tags`, { add: [{ name: 'eleven' }] });
       expect(res.status).toBe(400);
       expect(store.getRun(run.id)?.tags).toHaveLength(10);
+      // …including the registry: the refused name ref must not create its tag.
+      expect((await loadTaskTags()).tags.map((t) => t.name)).not.toContain('eleven');
+      // A swap within the cap still works: remove one, add a new one, in one delta.
+      const swapped = await send('POST', `/api/v1/runs/${run.id}/tags`, { add: [{ name: 'eleven' }], remove: [store.getRun(run.id)!.tags![0]!.id] });
+      expect(swapped.status).toBe(200);
+      expect(store.getRun(run.id)?.tags).toHaveLength(10);
     });
 
     // D8's regression test: each delta reads the run AFTER its own await, so two concurrent adds

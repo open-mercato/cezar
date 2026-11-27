@@ -345,12 +345,17 @@ export async function resolveTagRefs(
   refs: readonly TaskTagRef[],
   projectRoot: string | null,
   now = new Date(),
+  /** Runs on the resolved tags before anything is written; a throw aborts the write, so a refused
+   *  add (e.g. the run's 10-tag cap) never leaves a new tag behind. */
+  guard?: (tags: RunTag[]) => void,
 ): Promise<{ tags: RunTag[] }> {
   if (refs.length === 0) return { tags: [] };
   let result: { tags: RunTag[]; created: boolean } | undefined;
   try {
     await mergeWriteTaskTags((store) => {
-      result = resolveTagRefsIn(store, refs, projectRoot, now);
+      const resolved = resolveTagRefsIn(store, refs, projectRoot, now);
+      guard?.(resolved.tags);
+      result = resolved;
     });
   } catch (error) {
     if (!(error instanceof TaskTagWriteError) || result === undefined || result.created) throw error;

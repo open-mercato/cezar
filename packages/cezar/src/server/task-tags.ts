@@ -117,8 +117,14 @@ export function runTagsRoutes() {
     let added: Awaited<ReturnType<typeof resolveTagRefs>>['tags'];
     try {
       // Resolve FIRST — it may write the registry and await. Only then read the run's tags and
-      // write the delta with no await in between, so concurrent edits compose (D8).
-      added = (await resolveTagRefs(body.add ?? [], root)).tags;
+      // write the delta with no await in between, so concurrent edits compose (D8). The guard
+      // pre-checks the cap so a refused add creates no tag; the delta below re-checks it.
+      const remove = body.remove ?? [];
+      added = (
+        await resolveTagRefs(body.add ?? [], root, new Date(), (tags) => {
+          applyRunTagDelta(store.getRun(id)?.tags, tags, remove);
+        })
+      ).tags;
     } catch (error) {
       return taskTagError(c, error);
     }
