@@ -21,6 +21,7 @@ import {
 } from '@/api/managers'
 import { useHealth, useProjects } from '@/api/queries'
 import type { AttachmentEntry } from '@open-mercato/cezar-api-client'
+import { AccountUsageWidget } from '@/components/account-usage-widget'
 import { MyMessagesPill } from '@/components/my-messages/my-messages-pill'
 import { useShellManagerMode, useShellTasksTab } from '@/components/app-shell'
 import { cachedAt } from '@/api/query-persist'
@@ -710,6 +711,8 @@ function ManagerChat({ manager }: { manager: ManagerSummary }) {
           {inactive ? <p className="text-xs text-muted-foreground md:hidden">Inactive</p> : null}
           <CacheStatusChip queryKey={managerKeys.messages(id)} isFetching={chat.isFetching} isError={chat.isError} className="mt-0.5 max-w-full" />
         </div>
+        <AccountUsageWidget runner={manager.runner} agentProfile={manager.agentProfile} className="max-md:hidden" />
+        <AccountUsageWidget runner={manager.runner} agentProfile={manager.agentProfile} compact className="md:hidden" />
         {usageProps ? <ManagerUsageChip {...usageProps} /> : null}
         <Button variant="outline" size="sm" className="max-md:hidden" data-slot="manager-check-now" disabled={inactive} title={inactive ? 'Reactivate to check' : undefined} onClick={checkNow}>
           <RefreshCwIcon aria-hidden="true" className="size-3.5" />

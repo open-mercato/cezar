@@ -34,6 +34,7 @@ import type {
   configResponseSchema,
   diskGuardStatusSchema,
   hostUsageSchema,
+  accountUsageResponseSchema,
   planUsageReportSchema,
   planUsageConsumersResponseSchema,
   planUsageTrackingSchema,
@@ -147,6 +148,7 @@ describe('src/contract projects/workspace schemas match the routes exactly', () 
   type StageUploadBody = InferRequestType<typeof client.api.v1.workspace.uploads.$post>['json'];
   type DeleteUpload200 = InferResponseType<(typeof client.api.v1.workspace.uploads)[':uploadId']['$delete'], 200>;
   type HostUsage200 = InferResponseType<(typeof client.api.v1.workspace)['host-usage']['$get'], 200>;
+  type AccountUsage200 = InferResponseType<(typeof client.api.v1.workspace)['account-usage']['$get'], 200>;
   type PlanUsage200 = InferResponseType<(typeof client.api.v1.workspace)['plan-usage']['$get'], 200>;
   type PlanUsageConsumers200 = InferResponseType<(typeof client.api.v1.workspace)['plan-usage']['consumers']['$get'], 200>;
   type PlanUsageTracking200 = InferResponseType<(typeof client.api.v1.workspace)['plan-usage']['tracking']['$get'], 200>;
@@ -283,6 +285,7 @@ describe('src/contract projects/workspace schemas match the routes exactly', () 
     // the request half: a real `File`, not whatever `parseBody()` used to hand the handler
     Assert<Exact<z.input<typeof brandingLogoUploadSchema>, BrandingLogoUploadBody>>,
     Assert<Exact<z.infer<typeof hostUsageSchema>, HostUsage200>>,
+    Assert<Exact<z.infer<typeof accountUsageResponseSchema>, AccountUsage200>>,
     Assert<Exact<z.infer<typeof planUsageReportSchema>, PlanUsage200>>,
     Assert<Exact<z.infer<typeof planUsageConsumersResponseSchema>, PlanUsageConsumers200>>,
     Assert<Exact<z.infer<typeof planUsageTrackingSchema>, PlanUsageTracking200>>,

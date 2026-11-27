@@ -85,6 +85,7 @@ import {
   getWorkflows,
   getWorkflowNodes,
   getWorkspaceConfig,
+  getWorkspaceAccountUsage,
   getWorkspaceUiState,
   getSkillsUpdate,
   getSelfUpdate,
@@ -492,6 +493,8 @@ export const workspaceQueryKeys = {
    *  on mount and on the visibility/reconnect reconcile. Workspace-led because the machine is
    *  the machine, whichever project is on screen. */
   hostUsage: ['workspace', 'host-usage'] as const,
+  /** Plan-window gauges per agent account (#1625 cockpit extension). */
+  accountUsage: ['workspace', 'account-usage'] as const,
   /** Agent accounts via `GET /api/v1/workspace/agent-profiles` (spec 2026-07-29-agent-profiles).
    *  Workspace-led like the registry: an account describes the machine, not a repo. */
   agentProfiles: ['workspace', 'agent-profiles'] as const,
@@ -1971,6 +1974,16 @@ export function useAgentProfiles() {
   return useQuery({
     queryKey: workspaceQueryKeys.agentProfiles,
     queryFn: ({ signal }) => getAgentProfiles({ signal }),
+  })
+}
+
+/** Sidebar plan-window gauges: local store only, workspace-led. */
+export function useAccountUsage() {
+  return useQuery({
+    queryKey: workspaceQueryKeys.accountUsage,
+    queryFn: ({ signal }) => getWorkspaceAccountUsage({ signal }),
+    refetchInterval: 30_000,
+    refetchIntervalInBackground: false,
   })
 }
 

@@ -31,6 +31,22 @@ function toneFor(usedFraction: number): LiveUsageTone {
   return 'success'
 }
 
+/** The most loaded plan window still running: the phone header's one-glance reading. */
+export function peakUsage(
+  usage: RunLiveUsage | undefined,
+  now = Date.now(),
+): { label: string; percent: number; tone: LiveUsageTone } | undefined {
+  let peak: { label: string; percent: number; tone: LiveUsageTone } | undefined
+  for (const limit of usage?.limits ?? []) {
+    if (!(Date.parse(limit.resetsAt) > now)) continue
+    const percent = Math.round(limit.utilization * 100)
+    if (peak && percent <= peak.percent) continue
+    const label = WINDOW_LABELS[limit.window] ?? limit.window.replace(/_/g, ' ')
+    peak = { label, percent, tone: toneFor(limit.utilization) }
+  }
+  return peak
+}
+
 /** `2h19m`, `3d11h`, `42m`: the remaining time in Claude Code's status line style. */
 export function timeLeft(ms: number): string {
   const minutes = Math.max(0, Math.round(ms / 60_000))
@@ -44,6 +60,11 @@ export function timeLeft(ms: number): string {
  *  spending while this one idles. */
 export const LIVE_USAGE_STALE_MS = 5 * 60_000
 
+/** Cockpit sidebar: plan windows change slowly; stale readings stay visible but dimmed longer. */
+export const COCKPIT_USAGE_STALE_MS = 30 * 60_000
+
+export type LiveUsageFraction = 'remaining' | 'used'
+
 /** The account part from the on-demand identity route: the org tells accounts apart (one email can
  *  sign in to several Claude organizations), the email goes on hover. */
 export function accountPart(details: AgentAccountDetailsResponse | undefined): LiveUsagePart | undefined {
@@ -56,17 +77,32 @@ export function accountPart(details: AgentAccountDetailsResponse | undefined): L
 
 /** The header's gauge parts, e.g. `5h 81% left 2h19m`, `CTX 416k 41%`. A window that has
  *  already reset is dropped: its reading is stale and the next event replaces it. */
-export function liveUsageParts(usage: RunLiveUsage | undefined, now = Date.now()): LiveUsagePart[] {
+function formatUsageSeenAgo(ms: number): string {
+  const minutes = Math.max(1, Math.round(ms / 60_000))
+  if (minutes < 60) return `${minutes}m`
+  const hours = Math.floor(minutes / 60)
+  if (hours < 48) return `${hours}h`
+  return `${Math.floor(hours / 24)}d`
+}
+
+export function liveUsageParts(
+  usage: RunLiveUsage | undefined,
+  now = Date.now(),
+  options?: { fraction?: LiveUsageFraction },
+): LiveUsagePart[] {
   if (usage === undefined) return []
+  const fraction = options?.fraction ?? 'remaining'
   const parts: LiveUsagePart[] = []
   for (const limit of usage.limits ?? []) {
     const resetsIn = Date.parse(limit.resetsAt) - now
     if (!(resetsIn > 0)) continue
     const label = WINDOW_LABELS[limit.window] ?? limit.window.replace(/_/g, ' ')
-    parts.push({
-      text: `${label} ${Math.round((1 - limit.utilization) * 100)}% left ${timeLeft(resetsIn)}`,
-      tone: toneFor(limit.utilization),
-    })
+    const usedPct = Math.round(limit.utilization * 100)
+    const text =
+      fraction === 'used'
+        ? `${label} ${usedPct}% ${timeLeft(resetsIn)}`
+        : `${label} ${Math.round((1 - limit.utilization) * 100)}% left ${timeLeft(resetsIn)}`
+    parts.push({ text, tone: toneFor(limit.utilization) })
   }
   if (usage.contextTokens !== undefined) {
     const fill = usage.contextWindow ? usage.contextTokens / usage.contextWindow : undefined
@@ -78,21 +114,70 @@ export function liveUsageParts(usage: RunLiveUsage | undefined, now = Date.now()
   return parts
 }
 
+/** `inline`: run footer; `bracketed`: cockpit chips like `[ACCOUNT] [5h … · 7d …]`. */
+type LiveUsageLayout = 'inline' | 'bracketed'
+
 /** The account, then plan usage windows and context fill: what Claude Code's own status line shows. */
 export function LiveUsage({
   usage,
   account,
   className,
+  fraction = 'remaining',
+  staleMs = LIVE_USAGE_STALE_MS,
+  staleLabel = 'as-of',
+  layout = 'inline',
 }: {
   usage: RunLiveUsage | undefined
   account?: LiveUsagePart
   className?: string
+  fraction?: LiveUsageFraction
+  staleMs?: number
+  /** `as-of` = time of reading; `seen-ago` = cockpit sidebar copy. */
+  staleLabel?: 'as-of' | 'seen-ago'
+  layout?: LiveUsageLayout
 }) {
   const now = useNow(30_000)
-  const gauges = liveUsageParts(usage, now)
-  if (gauges.length === 0) return null
+  const gauges = liveUsageParts(usage, now, { fraction })
+  if (gauges.length === 0 && !account) return null
   const at = Date.parse(usage?.at ?? '')
-  const stale = now - at > LIVE_USAGE_STALE_MS
+  const stale = Number.isFinite(at) && now - at > staleMs
+  const staleTitle =
+    stale && staleLabel === 'seen-ago'
+      ? `seen ${formatUsageSeenAgo(now - at)} ago`
+      : stale
+        ? `as of ${new Date(at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`
+        : undefined
+  if (layout === 'bracketed') {
+    return (
+      <span data-slot="live-usage" data-layout="bracketed" className={cn('font-mono tabular-nums', className)}>
+        {account ? (
+          <span data-slot="live-usage-account" title={account.title} className="text-warning">
+            [{account.text}]
+          </span>
+        ) : null}
+        {gauges.length > 0 ? (
+          <span data-slot="live-usage-windows" className={account ? 'ml-1' : undefined}>
+            [
+            {gauges.map((part, index) => (
+              <Fragment key={index}>
+                {index > 0 ? ' · ' : null}
+                <span
+                  data-tone={part.tone}
+                  data-stale={stale ? '' : undefined}
+                  title={stale ? staleTitle : undefined}
+                  className={cn(TONE_CLASS[part.tone], stale && 'opacity-50')}
+                >
+                  {part.text}
+                </span>
+              </Fragment>
+            ))}
+            ]
+          </span>
+        ) : null}
+      </span>
+    )
+  }
+
   const parts = account ? [account, ...gauges] : gauges
   return (
     <span data-slot="live-usage" className={cn('font-mono tabular-nums', className)}>
@@ -102,7 +187,7 @@ export function LiveUsage({
           <span
             data-tone={part.tone}
             data-stale={stale && part !== account ? '' : undefined}
-            title={part !== account && stale ? `as of ${new Date(at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}` : part.title}
+            title={part !== account && stale ? staleTitle : part.title}
             className={cn(TONE_CLASS[part.tone], part !== account && stale && 'opacity-50')}
           >
             {part.text}

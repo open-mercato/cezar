@@ -113,6 +113,7 @@ import type {
   GroupResponse,
   HealthResponse,
   HostUsage,
+  AccountUsageResponse,
   AttachmentEntry,
   AttachmentInput,
   DeleteUploadResponse,
@@ -2828,6 +2829,14 @@ export async function getWorkspaceHostUsage(opts?: ReadOptions): Promise<HostUsa
   return unwrap(
     await cez.api.v1.workspace['host-usage'].$get({}, init(opts)),
     '/workspace/host-usage',
+  )
+}
+
+/** Cached plan-window readings per claude/codex account (`~/.cezar/usage-windows.json`). */
+export async function getWorkspaceAccountUsage(opts?: ReadOptions): Promise<AccountUsageResponse> {
+  return unwrap(
+    await cez.api.v1.workspace['account-usage'].$get({}, init(opts)),
+    '/workspace/account-usage',
   )
 }
 

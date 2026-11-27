@@ -48,6 +48,7 @@ export * from './deferred-start.ts';
 export * from './questions.ts';
 export * from './attention.ts';
 export * from './usage-windows.ts';
+export * from './account-usage.ts';
 export * from './plan-usage.ts';
 
 export * from './tracker-operations.ts';
