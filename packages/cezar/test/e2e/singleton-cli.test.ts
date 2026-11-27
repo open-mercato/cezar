@@ -78,27 +78,43 @@ test('the packaged CLI reuses one cockpit, registers a second CWD, and recovers 
     CEZ_HOME: home,
     CEZ_REMOTE: '0',
     CEZ_DRY_RUN: '1',
+    CEZ_SECRETS_KEYCHAIN: '0',
+    PROVIDER_TEST_VALUE: 'fixture-only-9876',
     CEZ_NO_BANNER: '1',
   };
   let primary: ChildProcess | undefined;
   let recovery: ChildProcess | undefined;
   try {
-    primary = spawn(process.execPath, [cliPath, '--repo', repoA, '--port', String(firstPort), '--no-open'], {
+    primary = spawn(process.execPath, [cliPath, '--providers', '{invalid-json', '--repo', repoA, '--port', String(firstPort), '--no-open'], {
       cwd: root,
       env,
       stdio: ['ignore', 'pipe', 'pipe'],
     });
+    let errors = '';
+    primary.stderr?.on('data', chunk => { errors += String(chunk); });
     const firstOrigin = `http://127.0.0.1:${firstPort}`;
     const firstHealth = await waitForHealth(firstOrigin);
     assert.match(String(firstHealth.runtimeId), /^[0-9a-f-]{36}$/);
 
+    assert.equal(errors.split('[cez] providers:').length - 1, 1);
+    const initial = await (await fetch(firstOrigin + '/api/v1/agent-providers')).json() as { agents: { configured?: boolean }[] };
+    assert.ok(initial.agents.every(agent => !agent.configured));
+
+    const document = JSON.stringify({ version: 1, agents: { claude: { active: 'openrouter',
+      methods: { openrouter: { apiKeyEnv: 'PROVIDER_TEST_VALUE' } } } } });
     const secondary = await execFile(
       process.execPath,
-      [cliPath, '--repo', repoB, '--port', String(secondPort), '--no-open'],
+      [cliPath, '--providers', document, '--repo', repoB, '--port', String(secondPort), '--no-open'],
       { cwd: root, env, timeout: 60_000, maxBuffer: 10 * 1024 * 1024 },
     );
     assert.match(secondary.stdout, /cockpit already running/);
     assert.match(secondary.stdout, new RegExp(`127\\.0\\.0\\.1:${firstPort}/p/[^/]+/`));
+
+    const methods = await (await fetch(firstOrigin + '/api/v1/agent-providers')).text();
+    assert.doesNotMatch(methods, /fixture-only-9876/);
+    const configured = JSON.parse(methods).agents.find((agent: { runner: string }) => agent.runner === 'claude');
+    assert.equal(configured.active, 'openrouter');
+    assert.equal(configured.methods.find((method: { id: string }) => method.id === 'openrouter').modelCount, 2);
 
     const projectsResponse = await fetch(`${firstOrigin}/api/v1/projects`);
     assert.equal(projectsResponse.status, 200);
