@@ -1159,6 +1159,28 @@ describe('reduceThread — AskUser cards (#473)', () => {
     expect(askOf(events, options, NEWER.requestId)).toMatchObject({ resolved: false })
   })
 
+  describe('Claude permission cards (claude-permission-…)', () => {
+    const PERM = {
+      requestId: 'claude-permission-req_7',
+      questions: [{ header: 'Permission', question: 'Run Bash: npm test?', options: [{ label: 'Allow once' }, { label: 'Always allow' }, { label: 'Reject' }] }],
+    }
+    const events = [
+      line(1, 'ask.requested', PERM),
+      line(2, 'user-message', { text: 'a child task reported back', imageCount: 0 }),
+    ]
+
+    it('a tracked card survives a following user-message and closes only on ask.closed', () => {
+      const options = { trackedAsks: [{ requestId: PERM.requestId }] }
+      expect(askOf(events, options, PERM.requestId)).toMatchObject({ resolved: false })
+      const expired = askOf([...events, line(3, 'ask.closed', { requestId: PERM.requestId, reason: 'expired', detail: 'session ended' })], options, PERM.requestId)
+      expect(expired).toMatchObject({ resolved: true, closed: { reason: 'expired', detail: 'session ended' } })
+    })
+
+    it('stays open after a user-message even when the record does not list it (never the legacy reply rule)', () => {
+      expect(askOf(events, { trackedAsks: [] }, PERM.requestId)).toMatchObject({ resolved: false })
+    })
+  })
+
   it('a graph gate asked after a closed CEZ:ASK card still closes on the next reply', () => {
     const CARD = { ...ASK, requestId: 'ask_2' }
     const GATE = { ...ASK, requestId: 'gate_1', source: 'workflow' }
