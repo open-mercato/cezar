@@ -29,7 +29,7 @@ import {
   useAgentProviders,
   useProjects,
   useRepo,
-  useModelRefreshAction,
+  useModelPickerActions,
   useRunnerModels,
   useSkills,
   useUiState,
@@ -312,25 +312,31 @@ export function NewTaskRoute() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [autoText, sourcesReady])
 
+  const { accounts: accountChoices, repoAccount, pending: accountsPending } = useAgentAccounts()
   const providers = useProviderStatus()
   const methods = useAgentProviders()
   const legacyProviders = methods.error instanceof ApiError && methods.error.status === 404
-  const providerPending = providers.isPending || methods.isPending
+  const providerPending = providers.isPending || methods.isPending || (accountsPending && !!draft.agentProfile)
   const providerError = providers.isError || (methods.isError && !legacyProviders)
-  const runners = methods.data ? (providers.data?.providers ?? [])
-    .filter(row => row.enabled && row.status !== 'not-installed')
-    .map(row => row.provider) : usableRunners(providers.data)
+  const nativeAuth = methods.data?.nativeAuth === true
+  const rows = providers.data?.providers ?? []
+  const runners = methods.data ? rows.filter(row => {
+    if (!nativeAuth) return row.enabled && row.status !== 'not-installed'
+    const picked = accountChoices.find(a => a.provider === row.provider && a.id === draft.agentProfile)
+    const named = accountChoices.find(a => a.provider === row.provider && !a.isDefault &&
+      a.id === (picked?.id ?? repoAccount?.[row.provider]))
+    return canUseAgent(undefined, row, { namedAccount: !!named })
+  }).map(row => row.provider) : usableRunners(providers.data)
   const defaultRunner = config.data?.defaultRunner
   const preferredRunner = defaultRunner ?? 'claude'
   const runner = runners.length > 0 ? resolveRunner(draft.runner, runners, preferredRunner) : null
   const displayRunner = runner ?? preferredRunner
-  const entry = methods.data?.agents.find(agent => agent.runner === displayRunner)
+  const entry = nativeAuth ? undefined : methods.data?.agents.find(agent => agent.runner === displayRunner)
   const login = providers.data?.providers.find(provider => provider.provider === displayRunner)
-  const missingMethod = methods.isSuccess && runner !== null && !canUseAgent(entry, login)
   const providersReady = !providerPending && !providerError && runners.length > 0
   const catalog = useRunnerModels(displayRunner)
-  const refreshModels = useModelRefreshAction(displayRunner)
-  const modelsLocked = config.data?.modelsLocked === true
+  const modelActions = useModelPickerActions(displayRunner)
+  const modelsLocked = nativeAuth || config.data?.modelsLocked === true
   const models = useMemo(() => runner === null
     ? []
     : modelsForRunner(runner, catalog.data, [draft.model, config.data?.defaultModels?.[runner]], entry),
@@ -339,11 +345,32 @@ export function NewTaskRoute() {
     ? ''
     : resolveModel(modelsLocked ? null : draft.model, runner, config.data?.defaultModels, catalog.data, modelsLocked ? undefined : entry),
   [runner, modelsLocked, draft.model, config.data?.defaultModels, catalog.data, entry])
-  const modelOptions = useMemo(() => composerModelOptions(models, catalog.data, entry), [models, catalog.data, entry])
-  const selected = (!modelsLocked && model === draft.model ? modelOptions.find(m => m.model === model && m.method === draft.agentMethod) : undefined)
-    ?? modelOptions.find(m => m.model === model)
-  const serving = entry && servingMethods(entry)
-  const selectedMethod = entry?.mode === 'one' ? serving?.[0]?.id : modelsLocked ? undefined : selected?.method
+  // Agent accounts (spec 2026-07-29-agent-profiles). These are rows of the RUNNER pill rather than
+  // a pill of their own — `claude · Default` / `claude · Klaudiusz` / `codex` — so what will run is
+  // readable at a glance instead of assembled from two controls. An agent with a single login stays
+  // a single row, which is why a host with no extra accounts sees the list it always saw.
+  // A draft account belonging to ANOTHER runner is ignored rather than sent: switching runner must
+  // not silently carry a foreign account along.
+  const agentProfile = accountChoices.some(
+    (choice) => choice.provider === displayRunner && choice.id === draft.agentProfile,
+  )
+    ? draft.agentProfile
+    : null
+  const selectedAccount = agentProfile ?? repoAccount?.[displayRunner] ?? DEFAULT_AGENT_ACCOUNT_ID
+  const modelOptions = useMemo(() => {
+    const offered = composerModelOptions(models, catalog.data, entry)
+    if (!entry?.configured && !draft.agentMethod) return offered
+    const serving = entry && servingMethods(entry, { namedAccount: selectedAccount !== DEFAULT_AGENT_ACCOUNT_ID })
+    return offered.filter(option => !option.method || serving?.some(method => method.id === option.method))
+  }, [models, catalog.data, entry, selectedAccount, draft.agentMethod])
+  // A saved method/model pair identifies one endpoint, even if another offers the same ID.
+  const pinnedMethod = !modelsLocked ? draft.agentMethod : undefined
+  const selected = pinnedMethod
+    ? modelOptions.find(m => m.method === pinnedMethod && m.model === draft.model &&
+      (!draft.runner || draft.runner === runner))
+    : modelOptions.find(m => m.model === model)
+  const missingModel = !!pinnedMethod && !selected
+  const selectedMethod = entry?.mode === 'one' ? entry.active ?? undefined : modelsLocked ? undefined : selected?.method
   const agentMethod = entry?.configured ? selectedMethod : undefined
   const providerModelsPending = !!entry?.configured && catalog.isPending && !!(draft.model || config.data?.defaultModels?.[displayRunner])
   const reasoningEffort = runner === null
@@ -352,21 +379,10 @@ export function NewTaskRoute() {
   const reasoningEfforts = runner === null
     ? []
     : reasoningEffortsForModel(runner, model, catalog.data)
-  // Agent accounts (spec 2026-07-29-agent-profiles). These are rows of the RUNNER pill rather than
-  // a pill of their own — `claude · Default` / `claude · Klaudiusz` / `codex` — so what will run is
-  // readable at a glance instead of assembled from two controls. An agent with a single login stays
-  // a single row, which is why a host with no extra accounts sees the list it always saw.
-  const { accounts: accountChoices, repoAccount } = useAgentAccounts()
-  // A draft account belonging to ANOTHER runner is ignored rather than sent: switching runner must
-  // not silently carry a foreign account along.
-  const agentProfile = accountChoices.some(
-    (choice) => choice.provider === displayRunner && choice.id === draft.agentProfile,
-  )
-    ? draft.agentProfile
-    : null
   // The account this task will actually run on — what the server's gate judges (ac53a6ef).
   const usesLogin = !agentMethod || entry?.methods.find(m => m.id === agentMethod)?.kind === 'subscription'
   const accountCheck = useSelectedAccountCheck(displayRunner, usesLogin ? agentProfile ?? repoAccount?.[displayRunner] : null)
+  const missingMethod = methods.isSuccess && runner !== null && !canUseAgent(entry, login, { namedAccount: accountCheck.named, pinned: agentMethod })
 
   // A cold /new load mounts the textarea disabled while provider status is checked. Restore
   // the route's autofocus contract once that check enables the form, but never steal focus if
@@ -507,7 +523,7 @@ export function NewTaskRoute() {
       setNotice({ kind: 'prefill' })
       return
     }
-    if (!providersReady || missingMethod || runner === null) {
+    if (!providersReady || missingMethod || missingModel || runner === null) {
       deepLinkHandled.current = true
       // Authentication could not be established: keep the deep-link intent in the disabled
       // composer and let the provider gate explain whether this is an error or missing setup.
@@ -563,7 +579,7 @@ export function NewTaskRoute() {
       }
       setAutoStarting(false)
     })()
-  }, [config.isPending, defaultRunner, providerPending, providersReady, missingMethod, runner]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [config.isPending, defaultRunner, providerPending, providersReady, missingMethod, missingModel, runner]) // eslint-disable-line react-hooks/exhaustive-deps
   // The prefill toast waits for the pickers' data: whether the skill exists decides the
   // wording, and the unknown-skill case rewrites the draft the way legacy did (intent into
   // the text, quick-task as the source — its planner resolves skills from prose).
@@ -698,6 +714,7 @@ export function NewTaskRoute() {
   }
   const submit = async (text: string, submitted: AttachmentEntry[]) => {
     if (scheduleRequest.current) throw new Error('Recover the original schedule before starting another task.')
+    if (missingModel) throw new Error('The saved provider no longer offers this model. Choose a model to continue.')
     if (!providersReady || missingMethod || runner === null) {
       throw new Error(
         providerPending
@@ -763,7 +780,7 @@ export function NewTaskRoute() {
   // Shown when there is a choice to make: more than one runner, or more than one login for one
   // of them. A host with neither sees no runner pill, exactly as before.
   const runnerChoice = runners.length > 1 || runners.some((id) => hasAccountChoice(accountChoices, id))
-  const modelLabel = selected?.label ?? (model || 'auto')
+  const modelLabel = missingModel ? 'Choose a model' : selected?.label ?? (model || 'auto')
   /** ONE `agent · model` chip: the runner pill and the model pill joined at the hip. */
   const enginePill = (
     <span data-slot="engine-pill" className="inline-flex min-w-0 max-w-full items-center">
@@ -794,7 +811,7 @@ export function NewTaskRoute() {
         ariaLabel="Model"
         // Without a runner pill the agent's name rides the model's label — still one value.
         label={runnerChoice ? modelLabel : `${displayRunner} · ${modelLabel}`}
-        value={selected?.value ?? model}
+        value={selected?.value ?? JSON.stringify([pinnedMethod, draft.model])}
         disabled={!providersReady}
         readOnly={modelsLocked}
         className={runnerChoice ? engineRightClass : modelPillClass}
@@ -807,13 +824,14 @@ export function NewTaskRoute() {
         }
         onPick={value => {
           const choice = modelOptions.find(m => m.value === value)
-          if (choice) update({ model: choice.model, agentMethod: choice.method, reasoningEffort: null })
+          if (!choice) return
+          const method = entry?.configured ? choice.method : undefined
+          update({ model: choice.model, agentMethod: method, ...(method && { runner: displayRunner }), reasoningEffort: null })
         }}
         options={modelOptions}
-        footerLink={entry ? { label: 'Manage providers', to: agentProvidersPath(displayRunner) } : undefined}
         searchPlaceholder="Search models…"
         status={modelCatalogStatus(displayRunner, catalog.data, catalog.isError)}
-        action={refreshModels}
+        {...modelActions}
       />}
     </span>
   )
@@ -830,7 +848,6 @@ export function NewTaskRoute() {
   // The agent's logins as a row of their own (spec 2026-07-29-agent-profiles): the same choice
   // the runner pill's `claude · Klaudiusz` rows make, offered where "Account" is the question.
   const logins = accountChoices.filter((choice) => choice.provider === displayRunner)
-  const selectedAccount = agentProfile ?? repoAccount?.[displayRunner] ?? DEFAULT_AGENT_ACCOUNT_ID
   const effortOffered = runner !== null && reasoningEffortOffered(displayRunner, model, reasoningEfforts)
   const isolationShown = worktreeToggleShown && (!askOn || dispatchAvailable)
   const optionsSummary = composerOptionsSummary({
@@ -1071,7 +1088,7 @@ export function NewTaskRoute() {
           ariaLabel="Describe a task for the agent"
           sendAriaLabel={startChoice ? 'Schedule task' : 'Start task'}
           sendLabel={startChoice ? 'Schedule task' : 'Start'}
-          submitDisabled={missingMethod || providerModelsPending || !!scheduleRecovery || recovering || !sourcesReady || (!!startChoice && !scheduleReady)}
+          submitDisabled={missingMethod || missingModel || providerModelsPending || !!scheduleRecovery || recovering || !sourcesReady || (!!startChoice && !scheduleReady)}
           disabled={!providersReady}
           disabledReason={
             providerPending

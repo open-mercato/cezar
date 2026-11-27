@@ -53,7 +53,8 @@ function renderView(
     vi.fn((input: RequestInfo | URL) => {
       const path = String(input)
       const body =
-        path === '/api/v1/providers/status' ? providerStatus
+        path === '/api/v1/agent-providers' ? { editable: true, agents: [] }
+        : path === '/api/v1/providers/status' ? providerStatus
         : path === '/api/v1/health' ? health
         : []
       return Promise.resolve(
