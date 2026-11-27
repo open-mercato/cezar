@@ -722,6 +722,33 @@ describe('picker data flows', () => {
     expect(postedBody()).not.toHaveProperty('model')
   })
 
+  it('starts an untouched native Kimi draft on its default login without a catalog', async () => {
+    writeDraft({ ...readDraft(), runner: 'kimi', model: 'local-alias', text: 'Use my native settings' })
+    serve({ providerStatus: { providers: [{ provider: 'kimi', status: 'connected', enabled: true }] } })
+    renderNewTask()
+    await pillReady()
+    await startTask()
+    expect(postedBody()).toMatchObject({ runner: 'kimi', model: 'local-alias' })
+    expect(postedBody()).not.toHaveProperty('agentProfile')
+  })
+
+  it('checks the Kimi account switch when a deleted draft login leaves only the default row', async () => {
+    writeDraft({ ...readDraft(), runner: 'kimi', agentProfile: 'removed', model: 'old-alias', text: 'Use the remaining login' })
+    serve({ providerStatus: { providers: [{ provider: 'kimi', status: 'connected', enabled: true }] },
+      agentProfiles: { editable: true, profiles: [], profileCapableProviders: ['kimi'], selections: {}, defaults: {} } })
+    renderNewTask()
+    await screen.findByText('The saved account is unavailable. Choose an account to continue.')
+    fireEvent.keyDown(screen.getByRole('button', { name: 'Runner' }), { key: 'ArrowDown' })
+    fireEvent.click(await screen.findByRole('menuitemradio', { name: /kimi/i }))
+    await screen.findByText('Choose a model available to the selected account.')
+    expect(screen.getByRole<HTMLButtonElement>('button', { name: 'Start task' }).disabled).toBe(true)
+    fireEvent.keyDown(screen.getByRole('button', { name: 'Model' }), { key: 'ArrowDown' })
+    fireEvent.click(await screen.findByRole('menuitemradio', { name: /auto/ }))
+    await startTask()
+    expect(postedBody()).toMatchObject({ runner: 'kimi', agentProfile: 'default' })
+    expect(postedBody()).not.toHaveProperty('model')
+  })
+
   it.each([true, false])('passes an unverified selected subscription to launch only with server verification (%s)', async verified => {
     writeDraft({ ...readDraft(), runner: 'kimi', text: 'Use my subscription' })
     serve({ providerStatus: { providers: [{ provider: 'kimi', status: 'connected', enabled: true }] },

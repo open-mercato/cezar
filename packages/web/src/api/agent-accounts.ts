@@ -17,6 +17,7 @@ import { PROVIDER_LABELS } from '@/lib/provider-auth-alert'
  */
 export interface AgentAccountChoices {
   pending: boolean
+  inventoryHidden: boolean
   /** Every login for every runner, discovered accounts included. Empty = the zero-config host,
    *  which is why it renders as the single-row-per-agent list it always did. */
   accounts: readonly AgentProfile[]
@@ -40,6 +41,7 @@ export function useAgentAccounts(projectId?: string): AgentAccountChoices {
   return {
     accounts,
     pending: profiles.isPending || repo.isPending,
+    inventoryHidden: profiles.data?.editable === false && profiles.data.profiles.length === 0,
     projectAccount,
     repoAccount: resolveRepoAccounts(projectAccount, profiles.data?.defaults),
   }

@@ -3,7 +3,7 @@ import { useState, type ReactNode } from 'react'
 
 import { hasAccountChoice } from '@/api/agent-accounts'
 import { continueRun } from '@/api/client'
-import { queryKeys, useConfig, useModelPickerActions, useRunnerModels } from '@/api/queries'
+import { kimiAccountModelIds, queryKeys, useConfig, useModelPickerActions, useRunnerModels } from '@/api/queries'
 import { DEFAULT_AGENT_ACCOUNT_ID, runnerSupportsReasoningEffort } from '@open-mercato/cezar-api-client'
 import type { ApiRun, ContinueResponse, AttachmentEntry, Runner } from '@open-mercato/cezar-api-client'
 import { PickerPill, RunnerPill, engineLeftClass, engineRightClass, modelPillClass } from '@/components/picker-pill'
@@ -88,14 +88,17 @@ export function useContinueAction(run: ApiRun): ContinueAction {
       ? { ...config.data?.defaultModels, [runner]: run.model }
       : config.data?.defaultModels
   const effectivePickedModel = modelsLocked ? null : pickedModel
+  const accountModels = runner === 'kimi' && pickedAccount !== null && !modelsLocked ? kimiAccountModelIds(catalog) : undefined
   const models = modelsForRunner(runner, catalog.data, [effectivePickedModel, modelDefaults?.[runner]], entry)
+    .filter(option => !accountModels || accountModels.has(option.id))
   // An untouched replay keeps the recorded model. A changed login must offer the model it inherits.
   const accountChanged = pickedAccount !== null && pickedAccount !== continuation.recordedAccount
   const replayModel = !modelsLocked && !runnerChanged && !accountChanged && pickedModel === null ? run.model : undefined
   const model = replayModel ?? resolveModel(effectivePickedModel, runner, modelDefaults, catalog.data, entry)
-  const requestedModel = pickedModel ?? (!runnerChanged && accountChanged ? run.model : undefined)
-  const validateModel = !modelsLocked && !!entry?.configured && !!requestedModel
-  const missingModel = validateModel && requestedModel !== model
+  const requestedModel = pickedModel ?? (runnerChanged ? undefined : run.model)
+  const validateModel = !modelsLocked && !!entry?.configured && !!requestedModel && (pickedModel !== null || accountChanged)
+  const missingModel = (!!accountModels && !!requestedModel && !accountModels.has(requestedModel)) ||
+    (validateModel && requestedModel !== model)
   const canContinue = continuation.canContinue && !missingModel && !(validateModel && catalog.isPending)
   const reason = continuation.reason ?? (missingModel ? 'Choose a model available to the selected provider.' : undefined)
   const carriedReasoningEffort = !runnerChanged

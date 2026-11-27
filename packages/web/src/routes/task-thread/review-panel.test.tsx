@@ -70,7 +70,7 @@ const jsonResponse = (body: unknown, status = 200) =>
 
 /** Stubs fetch, records every request, and lets a test override specific `METHOD path` keys.
  *  Defaults: the diff answers `DIFF`, the runs list is empty, every mutation succeeds. */
-function stubFetch(overrides: Record<string, () => Response> = {}): SentRequest[] {
+function stubFetch(overrides: Record<string, () => Response | Promise<Response>> = {}): SentRequest[] {
   const sent: SentRequest[] = []
   vi.stubGlobal(
     'fetch',
@@ -636,22 +636,52 @@ it.each([
   else expect(post()?.body).not.toHaveProperty('runner')
 })
 
-it('requires a model offered by the new Kimi account after a thread account switch', async () => {
-  const catalog = (id: string) => jsonResponse({ runner: 'kimi', source: 'live', stale: false,
-    models: [{ id, label: id, description: '', via: { methodId: 'subscription', label: 'Kimi' } }] })
+it.each(['failed', 'review'] as const)('keeps the hosted recorded account when reopening a %s thread', async status => {
+  const sent = stubFetch({
+    'GET /api/v1/workspace/agent-profiles': () => jsonResponse({ editable: false, profiles: [], defaults: {}, selections: {} }),
+    'GET /api/v1/providers/status': () => jsonResponse({ providers: [
+      { provider: 'claude', status: 'disconnected', enabled: true }, { provider: 'codex', status: 'connected', enabled: true },
+    ] }),
+  })
+  const record = run(status, { runner: 'claude' })
+  record.steps = record.steps.map(step => ({ ...step, backend: 'claude', profileId: 'work' }))
+  renderWithProviders(<ThreadView run={record} thread={reduceThread([])} />)
+  await screen.findByRole('button', { name: 'Runner' })
+  if (status === 'review') fireEvent.change(screen.getByLabelText('Notes for the agent'), { target: { value: 'One more change' } })
+  const submit = status === 'review' ? screen.getByRole<HTMLButtonElement>('button', { name: /Send back/ })
+    : document.querySelector<HTMLButtonElement>('[data-slot="footer-continue"]')!
+  await waitFor(() => expect(submit.disabled).toBe(false))
+  fireEvent.click(submit)
+  const post = () => sent.find(request => request.method === 'POST' && request.path.endsWith('/continue'))
+  await waitFor(() => expect(post()).toBeDefined())
+  for (const key of ['runner', 'agentProfile', 'model']) expect(post()?.body).not.toHaveProperty(key)
+  expect(sent.some(request => request.path.includes('/agent-profiles/work/'))).toBe(false)
+})
+
+it.each([
+  { configured: true, destination: 'host-only', source: 'live' },
+  { configured: false, destination: 'host-only', source: 'live' },
+  { configured: false, destination: 'work-only', source: 'live' },
+  { configured: true, destination: '', source: 'live' },
+  { configured: true, destination: '', source: 'unavailable' },
+])('checks the Kimi account switch before Continue (configured=$configured, $source, alias="$destination")', async ({ configured, destination, source }) => {
+  const catalog = (id: string, source = 'live') => jsonResponse({ runner: 'kimi', source, stale: false,
+    models: id ? [{ id, label: id, description: '', ...(configured && { via: { methodId: 'subscription', label: 'Kimi' } }) }] : [] })
+  let release!: () => void
+  const pending = new Promise<void>(resolve => { release = resolve })
   const sent = stubFetch({
     'GET /api/v1/providers/status': () => jsonResponse({ providers: [{ provider: 'kimi', status: 'connected', enabled: true }] }),
     'GET /api/v1/agent-providers': () => jsonResponse({ editable: true, agents: [{
-      runner: 'kimi', configured: true, mode: 'one', active: 'subscription',
+      runner: 'kimi', mode: 'one', ...(configured && { configured: true }), active: configured ? 'subscription' : null,
       methods: [{ id: 'subscription', kind: 'subscription', state: 'connected', label: 'Kimi' }],
     }] }),
     'GET /api/v1/workspace/agent-profiles': () => jsonResponse({ defaults: {}, selections: {},
       profiles: ['default', 'work'].map(id => ({ id, provider: 'kimi', label: id, isDefault: id === 'default', status: { status: 'connected' } })),
     }),
     'GET /api/v1/models?runner=kimi&agentProfile=work': () => catalog('work-only'),
-    'GET /api/v1/models?runner=kimi&agentProfile=default': () => catalog('host-only'),
+    'GET /api/v1/models?runner=kimi&agentProfile=default': async () => { await pending; return catalog(destination, source) },
   })
-  const record = run('failed', { runner: 'kimi', agentProfile: 'work', agentMethod: 'subscription', model: 'work-only' })
+  const record = run('failed', { runner: 'kimi', agentProfile: 'work', ...(configured && { agentMethod: 'subscription' }), model: 'work-only' })
   renderWithProviders(<ThreadView run={record} thread={reduceThread([])} />)
   const runner = await screen.findByRole('button', { name: 'Runner' })
   fireEvent.keyDown(runner, { key: 'ArrowDown' })
@@ -660,11 +690,20 @@ it('requires a model offered by the new Kimi account after a thread account swit
   await waitFor(() => expect(submit.disabled).toBe(true))
   fireEvent.click(submit)
   expect(sent.some(r => r.path.endsWith('/continue') && r.method === 'POST')).toBe(false)
-  fireEvent.keyDown(screen.getByRole('button', { name: 'Model' }), { key: 'ArrowDown' })
-  fireEvent.click(await screen.findByRole('menuitemradio', { name: /host-only/ }))
+  release()
+  if (destination !== 'work-only') {
+    fireEvent.keyDown(screen.getByRole('button', { name: 'Model' }), { key: 'ArrowDown' })
+    const replacement = await screen.findByRole('menuitemradio', { name: destination ? /host-only/ : /auto/ })
+    expect(screen.queryByRole('menuitemradio', { name: /work-only/ })).toBeNull()
+    expect(submit.disabled).toBe(true)
+    fireEvent.click(replacement)
+  }
+  await waitFor(() => expect(submit.disabled).toBe(false))
   fireEvent.click(submit)
-  await waitFor(() => expect(sent.find(r => r.path.endsWith('/continue') && r.method === 'POST')?.body)
-    .toMatchObject({ model: 'host-only', agentProfile: 'default' }))
+  const post = () => sent.find(r => r.path.endsWith('/continue') && r.method === 'POST')?.body
+  await waitFor(() => expect(post()).toMatchObject({ agentProfile: 'default' }))
+  if (destination === 'work-only') expect(post()).not.toHaveProperty('model')
+  else expect(post()).toHaveProperty('model', destination)
 })
 
 it.each(['ready', 'disabled'] as const)('untouched thread Continue with recorded Codex gateway and Claude available (%s)', async state => {

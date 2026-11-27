@@ -22,6 +22,7 @@ import { createRun, getLaunchKey, putConfig, putUiState } from '@/api/client'
 import { useProjectScope } from '@/api/project-scope-context'
 import { hasAccountChoice, useAgentAccounts, useSelectedAccountCheck } from '@/api/agent-accounts'
 import {
+  kimiAccountModelIds,
   queryKeys,
   useConfig,
   useHealth,
@@ -338,6 +339,8 @@ export function NewTaskRoute() {
   const catalog = useRunnerModels(displayRunner, displayRunner !== 'kimi' || !accountsPending, catalogAccount)
   const modelActions = useModelPickerActions(displayRunner, catalogAccount)
   const modelsLocked = nativeAuth || config.data?.modelsLocked === true
+  const accountModels = displayRunner === 'kimi' && draft.agentProfile !== null && !modelsLocked
+    ? kimiAccountModelIds(catalog) : undefined
   const models = useMemo(() => runner === null
     ? []
     : modelsForRunner(runner, catalog.data, [draft.model, config.data?.defaultModels?.[runner]], entry),
@@ -368,12 +371,14 @@ export function NewTaskRoute() {
     : modelOptions.find(m => m.model === model)
   const lockedMethodAvailable = entry && servingMethods(entry, { namedAccount: selectedAccount !== DEFAULT_AGENT_ACCOUNT_ID })
     .some(method => method.id === pinnedMethod)
-  const missingModel = pinnedMethod
+  const requestedModel = draft.model ?? config.data?.defaultModels?.[displayRunner]
+  const missingAccountModel = !!accountModels && !!requestedModel && !accountModels.has(requestedModel)
+  const missingModel = missingAccountModel || (pinnedMethod
     ? draft.runner === null || (modelsLocked ? !lockedMethodAvailable : !selected)
-    : !!entry?.configured && !modelsLocked && draft.model !== null && draft.model !== model
+    : !!entry?.configured && !modelsLocked && draft.model !== null && draft.model !== model)
   const selectedMethod = pinnedMethod ?? (entry?.mode === 'one' ? entry.active ?? undefined : modelsLocked ? undefined : selected?.method)
   const agentMethod = entry?.configured ? selectedMethod : undefined
-  const providerModelsPending = !!entry?.configured && catalog.isPending && !!(draft.model || config.data?.defaultModels?.[displayRunner])
+  const providerModelsPending = !!entry?.configured && catalog.isPending && !!requestedModel
   const reasoningEffort = runner === null
     ? ''
     : resolveReasoningEffort(draft.reasoningEffort, runner, model, catalog.data)
@@ -386,6 +391,7 @@ export function NewTaskRoute() {
   const missingMethod = methods.isSuccess && runner !== null && !canUseAgent(entry, login, { namedAccount: accountCheck.named, pinned: agentMethod })
   const selectionIssue = missingRunner ? 'The saved runner is unavailable. Choose a runner to continue.'
     : missingAccount ? 'The saved account is unavailable. Choose an account to continue.'
+    : missingAccountModel ? 'Choose a model available to the selected account.'
     : missingModel ? 'Choose a provider for this draft before starting it.'
     : undefined
 
@@ -801,7 +807,10 @@ export function NewTaskRoute() {
           onPick={(next, picked) =>
             update({
               runner: next,
-              agentProfile: picked,
+              // A single remaining login is a plain runner row. Recovering a deleted Kimi
+              // login still switches accounts, so its saved alias needs the destination catalog.
+              agentProfile: picked ?? (next === 'kimi' && next === displayRunner && missingAccount
+                ? repoAccount?.kimi ?? DEFAULT_AGENT_ACCOUNT_ID : null),
               ...(next === displayRunner ? {} : { model: null, agentMethod: undefined, reasoningEffort: null }),
             })
           }
@@ -833,7 +842,7 @@ export function NewTaskRoute() {
           if (!choice) return
           update({ model: choice.model, agentMethod: choice.method, ...(choice.method && { runner: displayRunner }), reasoningEffort: null })
         }}
-        options={modelOptions}
+        options={accountModels ? modelOptions.filter(option => accountModels.has(option.model)) : modelOptions}
         searchPlaceholder="Search models…"
         status={modelCatalogStatus(displayRunner, catalog.data, catalog.isError)}
         {...modelActions}

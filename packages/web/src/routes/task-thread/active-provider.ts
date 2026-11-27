@@ -56,7 +56,7 @@ export function useRunProviderStatus(
 ) {
   const status = useProviderStatus()
   const methods = useAgentProviders()
-  const { accounts, repoAccount, projectAccount, pending: accountsPending } = useAgentAccounts(options.projectId)
+  const { accounts, repoAccount, projectAccount, pending: accountsPending, inventoryHidden } = useAgentAccounts(options.projectId)
   const binding = options.replay !== false ? recordedBinding(run, provider) : undefined
   const entries = managedEntries(methods.data)
   const entry = entries?.find(agent => agent.runner === provider)
@@ -69,12 +69,15 @@ export function useRunProviderStatus(
   const account = useSelectedAccountCheck(provider, usesLogin ? accountId : undefined)
   const namedAccount = !!accountId && accountId !== DEFAULT_AGENT_ACCOUNT_ID
   const bound = !!(binding?.method || binding?.profile || options.account || namedAccount)
-  const removedAccount = usesLogin && namedAccount && !accountsPending && !account.named
+  // Hosted inventory omits even healthy logins. The server checks the recorded account on replay.
+  const recordedLoginHidden = inventoryHidden && namedAccount && !!binding?.profile && !options.account
+  const namedLogin = usesLogin && (account.named || recordedLoginHidden)
+  const removedAccount = usesLogin && namedAccount && !accountsPending && !namedLogin
   const runners = (status.data?.providers ?? []).filter(row => {
     if (!row.enabled || row.status === 'not-installed') return false
     if (row.provider === provider) {
       const pinned = methods.data?.nativeAuth ? undefined : binding?.method
-      return replayKey || (!removedAccount && !account.blocked && canUseAgent(entry, row, { namedAccount: usesLogin && account.named, pinned }))
+      return replayKey || (!removedAccount && !account.blocked && canUseAgent(entry, row, { namedAccount: namedLogin, pinned }))
     }
     const other = entries?.find(agent => agent.runner === row.provider)
     const named = accounts.find(a => a.provider === row.provider && a.id === repoAccount?.[row.provider] && !a.isDefault)

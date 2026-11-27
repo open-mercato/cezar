@@ -546,6 +546,13 @@ export function useRunnerModels(runner: Runner, enabled = true, agentProfile?: s
   })
 }
 
+/** A concrete alias carried to another Kimi login needs confirmation from that login's catalog. */
+export function kimiAccountModelIds(catalog: ReturnType<typeof useRunnerModels>): Set<string> {
+  const listed = catalog.isSuccess && !catalog.isFetching && !catalog.data.stale && catalog.data.source !== 'unavailable'
+    ? catalog.data.models.map(model => model.id) : []
+  return new Set(['', ...listed]) // auto leaves the model up to the destination login
+}
+
 /**
  * Force an on-demand refresh of a runner's discovered host models, bypassing the in-memory cache.
  */
