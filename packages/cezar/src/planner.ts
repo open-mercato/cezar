@@ -1,3 +1,4 @@
+import { oneShotProvider } from './core/agent-provider-env.ts';
 import { access, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { z } from 'zod';
@@ -90,10 +91,12 @@ export async function planChain(repoRoot: string, task: string): Promise<PlanRes
   for (let attempt = 0; attempt < 2; attempt++) {
     let text: string;
     try {
-      const tracked = trackOneShot(config.defaultRunner, planAccount, INTERNAL_CONSUMERS.planner);
+      const provider = await oneShotProvider(config.defaultRunner, repoRoot, { model: plannerModel });
+      const tracked = trackOneShot(config.defaultRunner, provider?.secret ? undefined : planAccount, INTERNAL_CONSUMERS.planner);
       let result: Awaited<ReturnType<typeof runner.run>> | undefined;
       try {
         result = await runner.run({
+          provider,
           systemPrompt,
           userPrompt,
           cwd: repoRoot,

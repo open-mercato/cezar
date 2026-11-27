@@ -1,5 +1,9 @@
 import { runnerSupportsReasoningEffort, REASONING_EFFORT_RUNNERS } from '@open-mercato/cezar-contract';
-import type { RunnerId } from '../core/agent-runner.ts';
+import { AgentProviderUnavailable, type RunnerId } from '../core/agent-runner.ts';
+import { authMethods } from '../core/agent-auth-methods.ts';
+import { implicitProviderMethod } from '../core/agent-provider-env.ts';
+import { providerAuthChecksDisabled } from '../core/provider-auth.ts';
+import type { StoredAgentProviders } from '../workspace/agent-providers.ts';
 import { KNOWN_PRESETS_BY_RUNNER, modelConflictsWithRunner } from '../core/model-presets.ts';
 
 /**
@@ -10,7 +14,27 @@ import { KNOWN_PRESETS_BY_RUNNER, modelConflictsWithRunner } from '../core/model
 
 /** The slice of `GET /models` this reads. */
 export interface TaskModelCatalog {
-  models: Array<{ id: string; reasoningEfforts?: Array<{ id: string }> }>;
+  models: Array<{ id: string; via?: { methodId: string }; reasoningEfforts?: Array<{ id: string }> }>;
+}
+
+/** Managers have no method picker. Resolve the same implicit billing method as the launch before ranking a row. */
+export function managerProviderChoice(runner: RunnerId, entry: StoredAgentProviders['agents'][RunnerId], model?: string): { error?: string; gateway?: string } {
+  if (!entry || authMethods(runner).mode !== 'any' || providerAuthChecksDisabled()) return {};
+  const selected = model === 'auto' ? undefined : model;
+  try {
+    const id = implicitProviderMethod(runner, entry, selected);
+    if (!id) return { error: `Pick a model offered by a configured provider for ${runner}.` };
+    const method = entry.methods[id];
+    if (method?.kind !== 'openrouter' && method?.kind !== 'custom') return {};
+    const ids = method.models?.ids;
+    if (!ids?.length || (selected && !ids.some(item => item.id === selected))) {
+      return { error: `Pick a model offered by ${runner}/${id}.` };
+    }
+    return { gateway: id };
+  } catch (error) {
+    if (error instanceof AgentProviderUnavailable) return { error: error.message };
+    throw error;
+  }
 }
 
 /** Native levels when the catalog names none: Claude's `--effort`, Codex's `turn/start.effort`. */
@@ -27,9 +51,13 @@ const listed = (values: readonly string[]): string =>
 export function taskModelIssue(input: { runner: RunnerId; model?: string | undefined; effort?: string | undefined; catalog?: TaskModelCatalog | undefined }): string | undefined {
   const { runner, model, effort } = input;
   const catalog = input.catalog && input.catalog.models.length > 0 ? input.catalog : undefined;
-  const valid = [...new Set([...(KNOWN_PRESETS_BY_RUNNER[runner] ?? []), ...(catalog?.models.map((entry) => entry.id) ?? [])])];
+  const isGateway = (entry: TaskModelCatalog['models'][number]) => entry.via?.methodId === 'custom' || entry.via?.methodId === 'openrouter';
+  // A configured gateway serves the IDs in its catalog, including on runners with native presets.
+  const presets = catalog?.models.some(isGateway) ? [] : KNOWN_PRESETS_BY_RUNNER[runner] ?? [];
+  const valid = [...new Set([...presets, ...(catalog?.models.map(entry => entry.id) ?? [])])];
   if (model) {
-    if (modelConflictsWithRunner(model, runner)) {
+    const gateway = catalog?.models.some(option => option.id === model && isGateway(option));
+    if (!gateway && modelConflictsWithRunner(model, runner)) {
       return `model '${model}' is not a ${runner} model${valid.length > 0 ? `. Valid for ${runner}: ${listed(valid)}` : ''}. Pick another, or pass --runner`;
     }
     if (catalog && !valid.includes(model)) return `unknown model '${model}' for ${runner}. Valid: ${listed(valid)}`;

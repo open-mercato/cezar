@@ -61,7 +61,7 @@ export class PiRunner implements AgentRunner {
     opts: SessionOptions = {},
   ): AgentSession {
     assertReasoningEffortSupported('pi', spec.reasoningEffort);
-    const env = buildChildEnv({ backend: this.backend, extraEnv: spec.env });
+    const env = buildChildEnv({ backend: this.backend, extraEnv: spec.env, provider: spec.provider });
     const [file, argv] = disclaimedCommand(this.bin, buildPiArgs(spec), env);
     const child = nodeSpawn(file, argv, { cwd: spec.cwd, env });
     // EPIPE from a write racing the child's exit arrives as an async 'error' (acfb01e4).
@@ -285,7 +285,7 @@ export class PiRunner implements AgentRunner {
 }
 
 export function buildPiArgs(spec: AgentRunSpec): string[] {
-  const args = ['--mode', 'rpc'];
+  const args = ['--mode', 'rpc', ...(spec.provider?.argv ?? [])];
   if (spec.sessionId) args.push(spec.resume ? '--session' : '--session-id', spec.sessionId);
   if (spec.systemPrompt) args.push('--append-system-prompt', spec.systemPrompt);
   if (spec.model) args.push('--model', spec.model);

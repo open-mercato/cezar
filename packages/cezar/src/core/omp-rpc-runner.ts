@@ -1,3 +1,5 @@
+import { createInterface } from 'node:readline';
+import { AgentProviderUnavailable } from './agent-runner.ts';
 import { spawn as nodeSpawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { dirname, resolve as resolvePath } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -78,9 +80,12 @@ export class OmpRpcRunner implements AgentRunner {
     opts: SessionOptions = {},
   ): AgentSession {
     assertReasoningEffortSupported('omp', spec.reasoningEffort);
+    if (spec.provider?.kind === 'subscription' && process.env.CEZ_DRY_RUN !== '1' && !spec.provider.env.OMP_CEZAR_OAUTH_CHECK) {
+      throw new AgentProviderUnavailable('OMP requires its OAuth verification extension for this subscription.', spec.provider.methodId);
+    }
     const child = nodeSpawn(this.bin, buildOmpArgs(spec), {
       cwd: spec.cwd,
-      env: buildChildEnv({ backend: this.backend, extraEnv: spec.env }),
+      env: buildChildEnv({ backend: this.backend, extraEnv: spec.env, provider: spec.provider }),
     });
     let open = true;
     let settled = true;
@@ -131,7 +136,16 @@ export class OmpRpcRunner implements AgentRunner {
         return false;
       }
     };
+    const nonce = spec.provider?.kind === 'subscription' && process.env.CEZ_DRY_RUN !== '1'
+      ? spec.provider.env.OMP_CEZAR_OAUTH_CHECK : undefined;
+    let oauthReady = !nonce;
+    const pendingPrompts: ContentBlock[][] = [];
     const sendMessage = (content: ContentBlock[]): boolean => {
+      if (!open) return false;
+      if (!oauthReady) {
+        pendingPrompts.push(content);
+        return true;
+      }
       const { message, images } = toOmpPrompt(content);
       if (autoEndTimer) {
         clearTimeout(autoEndTimer);
@@ -212,6 +226,20 @@ export class OmpRpcRunner implements AgentRunner {
       settleGraceTimer.unref?.();
     };
 
+    // The extension pins a matching OAuth identity within THIS process before acknowledging.
+    // Startup RPC is free. Every prompt, including a message sent while opening, waits here.
+    const oauthDeadline = nonce ? setTimeout(interrupt, 15_000) : undefined;
+    oauthDeadline?.unref();
+    if (nonce) {
+      const lines = createInterface({ input: child.stderr });
+      lines.on('line', line => {
+        if (line !== 'cezar-omp-oauth:' + nonce) return;
+        lines.close();
+        clearTimeout(oauthDeadline);
+        oauthReady = true;
+        for (const content of pendingPrompts.splice(0)) sendMessage(content);
+      });
+    }
     write({ id: 'cezar-state', type: 'get_state' });
     sendMessage([
       ...(spec.images ?? []),
@@ -308,6 +336,7 @@ export class OmpRpcRunner implements AgentRunner {
         }
       } finally {
         clearTimeout(deadline);
+        clearTimeout(oauthDeadline);
         if (autoEndTimer) {
           clearTimeout(autoEndTimer);
           autoEndTimer = undefined;
@@ -321,6 +350,7 @@ export class OmpRpcRunner implements AgentRunner {
 
       const exitCode = await waitForExit(child);
       if (spawnError) throw spawnError;
+      if (!oauthReady) throw new AgentProviderUnavailable('OMP could not confirm the selected subscription. Check its login in Settings → Agents.', spec.provider?.methodId);
       if (timedOut) {
         const message = `omp CLI timed out after ${Math.round((limitMs / 60_000) * 10) / 10}m and was killed`;
         onEvent?.({ type: 'error', message });
@@ -358,7 +388,7 @@ export class OmpRpcRunner implements AgentRunner {
 }
 
 export function buildOmpArgs(spec: AgentRunSpec): string[] {
-  const args = ['--mode', 'rpc', '--no-ui'];
+  const args = ['--mode', 'rpc', '--no-ui', ...(spec.provider?.argv ?? [])];
   // omp resolves a session by its own session id prefix (`--resume <id>`), the
   // RPC-mode equivalent of cezar's other backends' resume flags.
   if (spec.sessionId && spec.resume) args.push('--resume', spec.sessionId);

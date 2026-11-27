@@ -183,6 +183,38 @@ describe('ManagerEngine', () => {
   });
 
   describe('turns', () => {
+    it.each([undefined, 'auto'])('keeps the chosen catalog model with %s and starts fresh on billing changes', async (model) => {
+      vi.stubEnv('CEZ_DRY_RUN', '1');
+      vi.stubEnv('HOME', home);
+      try {
+        const save = (active: string, models = ['gateway-model']) => writeFileSync(join(home, 'agent-providers.json'), JSON.stringify({
+          version: 1, agents: { claude: { active, methods: { custom: {
+            kind: 'custom', baseUrl: 'https://example.test', keyHint: '…1234', addedAt: '',
+            models: { fetchedAt: '', ids: models.map(id => ({ id })) },
+          } } } },
+        }), { mode: 0o600 });
+        const engine = makeEngine();
+        const id = await create(engine, 0);
+        if (model) await engine.update(id, { model });
+        backend.scripts.push(say('One'), say('Two'), say('Three'));
+        save('custom');
+        engine.send(id, 'first');
+        await settled(engine);
+        save('custom', ['another-model', 'gateway-model']);
+        engine.send(id, 'second');
+        await settled(engine);
+        save('subscription');
+        engine.send(id, 'third');
+        await settled(engine);
+        expect(backend.specs.map(spec => spec.provider?.methodId)).toEqual(['custom', 'custom', 'subscription']);
+        expect(backend.specs[1]).toMatchObject({ model: 'gateway-model', resume: true, sessionId: backend.specs[0]?.sessionId });
+        expect(backend.specs[2]?.resume).toBeUndefined();
+        expect(JSON.stringify([store.state(id), store.messages(id)])).not.toContain('cezar-dry-run-provider-key');
+      } finally {
+        vi.unstubAllEnvs();
+      }
+    });
+
     it('answers a message and resumes the same session next time', async () => {
       const engine = makeEngine();
       const id = await create(engine);
@@ -3737,6 +3769,99 @@ describe('ManagerEngine', () => {
         });
       });
 
+      it('checks each backup against the model it can carry after dropping a foreign pin', async () => {
+        const engine = makeEngine({
+          accountLimit: async (runner, profile, _root, model) => ({
+            account: profile ?? 'default', label: runner,
+            ...(runner === 'claude' || (runner === 'codex' && model === 'gpt-5.4') ? { until: RESET } : {}),
+          }),
+        });
+        const id = await managerWith(engine, [{ runner: 'claude' }, { runner: 'codex', model: 'gpt-5.4' }, { runner: 'cursor' }]);
+        const decision = await engine.createTask(id, { projectId: 'alpha', task: 'Fix it', model: 'opus' });
+        expect(decision).toMatchObject({ agent: { runner: 'cursor' } });
+        expect(requests.at(-1)?.body).toMatchObject({ runner: 'cursor' });
+      });
+
+      it.each([
+        { requested: 'org/codex-only', rowModel: 'team/small' },
+        { requested: 'org/shared', rowModel: 'team/small' },
+        { requested: 'org/shared', rowModel: undefined },
+      ])('routes past an unusable Pi gateway for $requested with row default $rowModel', async ({ requested, rowModel }) => {
+        const method = (kind: string, ids: string[]) => ({
+          kind, addedAt: '', keyHint: '…1234', models: { fetchedAt: '', ids: ids.map(id => ({ id })) },
+        });
+        writeFileSync(join(home, 'agent-providers.json'), JSON.stringify({ version: 1, agents: {
+          pi: { methods: { custom: method('custom', ['org/shared', 'team/small']), openrouter: method('openrouter', ['org/shared']) } },
+        } }), { mode: 0o600 });
+        const engine = makeEngine({
+          accountLimit: async (runner, _profile, _root, model) => ({
+            account: 'default', label: runner,
+            ...(runner === 'codex' || runner === 'pi' && model === 'team/small' ? { until: RESET } : {}),
+          }),
+          request: async (path, init) => {
+            if (path.startsWith('/api/v1/models?')) {
+              const runner = new URL(path, 'http://localhost').searchParams.get('runner');
+              const ids = runner === 'codex' ? [requested] : runner === 'pi' ? ['team/small', 'org/shared'] : ['team/claude'];
+              return Response.json({ models: ids.map(id => ({ id, via: { methodId: 'custom' } })) });
+            }
+            requests.push({ path, method: init?.method ?? 'GET', body: typeof init?.body === 'string' ? JSON.parse(init.body) : undefined });
+            return Response.json({ id: 'new-run' });
+          },
+        });
+        const manager = await engine.create({ instructions: '', projects: 'all', runner: 'codex', cronMinutes: 0,
+          taskAgents: [{ runner: 'codex' }, { runner: 'pi', ...(rowModel ? { model: rowModel } : {}) }, { runner: 'claude' }] });
+        if ('error' in manager) throw manager;
+        const result = await engine.createTask(manager.id, { projectId: 'alpha', task: 'Fix it', model: requested });
+        expect(result).toMatchObject({ agent: { runner: 'claude' } });
+        expect(requests.at(-1)?.body).toMatchObject({ runner: 'claude' });
+      });
+
+      it('uses the host OMP catalog when falling back from a held gateway', async () => {
+        const engine = makeEngine({
+          accountLimit: async runner => ({ account: 'default', label: runner, ...(runner === 'codex' ? { until: RESET } : {}) }),
+          request: async (path, init) => {
+            if (path.startsWith('/api/v1/models?')) {
+              const omp = new URL(path, 'http://localhost').searchParams.get('runner') === 'omp';
+              return Response.json({ models: omp ? [{ id: 'team/personal-only' }] : [{ id: 'org/codex-only', via: { methodId: 'custom' } }] });
+            }
+            requests.push({ path, body: JSON.parse(String(init?.body)), method: 'POST' });
+            return Response.json({ id: 'new-run' });
+          },
+        });
+        const manager = await engine.create({ instructions: '', projects: 'all', runner: 'codex', cronMinutes: 0,
+          taskAgents: [{ runner: 'codex' }, { runner: 'omp', model: 'team/personal-only' }] });
+        if ('error' in manager) throw manager;
+        const result = await engine.createTask(manager.id, { projectId: 'alpha', task: 'Fix it', model: 'org/codex-only' });
+        expect(result).toMatchObject({ agent: { runner: 'omp' } });
+        expect(requests.at(-1)?.body).toMatchObject({
+          runner: 'omp', model: 'team/personal-only',
+          managerAgent: { fallback: [
+            { provider: 'codex', model: 'org/codex-only' }, { provider: 'omp', model: 'team/personal-only' },
+          ] },
+        });
+      });
+
+      it.each(['explicit', 'project'])('preserves native OMP models on the %s named account', async selection => {
+        await mergeWriteAgentAccounts(accounts => ({
+          ...accounts, accounts: [{ id: 'work', provider: 'omp', label: 'Work', configDir: join(home, 'omp-work'), addedAt: '' }],
+          selections: { [connected.root]: { omp: 'work' } },
+        }));
+        const account = selection === 'explicit' ? { agentProfile: 'work' } : {};
+        const engine = makeEngine({
+          request: async (path, init) => {
+            if (path.startsWith('/api/v1/models?')) return Response.json({ models: [{ id: 'team/personal-only' }] });
+            requests.push({ path, method: init?.method ?? 'GET', body: typeof init?.body === 'string' ? JSON.parse(init.body) : undefined });
+            return Response.json({ id: 'new-run' });
+          },
+        });
+        const manager = await engine.create({ instructions: '', projects: 'all', runner: 'omp', cronMinutes: 0,
+          taskAgents: [{ runner: 'omp', ...account }] });
+        if ('error' in manager) throw manager;
+        const result = await engine.createTask(manager.id, { projectId: 'alpha', task: 'Fix it', model: 'team/work-only', ...account });
+        expect(result).toMatchObject({ agent: { runner: 'omp' } });
+        expect(requests.at(-1)?.body).toMatchObject({ runner: 'omp', model: 'team/work-only', ...account });
+      });
+
       it('after a limit skip to another runner, fallbacks on the runner --model was meant for keep it', async () => {
         const engine = limited({ 'claude:first': RESET, 'claude:second': RESET });
         const id = await managerWith(engine, [...twoClaudes, { runner: 'codex' as const, agentProfile: 'work' }]);
@@ -4063,6 +4188,30 @@ describe('ManagerEngine', () => {
       expect(requests.at(-1)).toMatchObject({ path: '/api/v1/p/alpha/runs/done/continue', body: { text: 'again', model: 'opus', reasoningEffort: 'high' } });
       expect(requests.some((request) => request.path.endsWith('/messages'))).toBe(false);
       expect(await engine.taskMessage(id, { projectId: 'alpha', runId: 'live', text: 'x', model: 'opus' })).toMatchObject({ status: 409 });
+    });
+
+    it.each([
+      { freshContext: false, expected: 'continue' },
+      { freshContext: true, expected: 'refusal' },
+    ])('validates the OMP catalog for the session that will run (fresh=$freshContext)', async ({ freshContext, expected }) => {
+      const record = run('finished', { status: 'done', runner: 'omp', steps: [
+        { id: 'task', backend: 'omp', sessionId: 'work-session', profileId: 'work' },
+        { id: 'check', kind: 'check', status: 'done' },
+      ] });
+      const engine = makeEngine({
+        projects: async () => [{ ...connected, runs: () => [record] }],
+        request: async (path, init) => {
+          requests.push({ path, method: init?.method ?? 'GET' });
+          return path.startsWith('/api/v1/models?')
+            ? Response.json({ models: [{ id: 'team/personal-only' }] })
+            : Response.json({ continued: true });
+        },
+      });
+      const id = await create(engine);
+      const result = await engine.taskMessage(id, { projectId: 'alpha', runId: record.id, text: 'again', model: 'team/work-only', freshContext });
+      if (expected === 'continue') expect(result).toEqual({ ok: true });
+      else expect(result).toMatchObject({ status: 400, error: expect.stringContaining('team/personal-only') });
+      expect(requests.some(r => r.path.endsWith('/continue'))).toBe(!freshContext);
     });
 
     it('continues a finished task in a fresh session, and refuses that for a live task', async () => {

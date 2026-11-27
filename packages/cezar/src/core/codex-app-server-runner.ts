@@ -1,3 +1,4 @@
+import { AgentProviderUnavailable } from './agent-runner.ts';
 import { unwrapJsonErrorEnvelope } from './agent-errors.ts';
 import { CodexToolPolicyError } from './codex-tool-policy.ts';
 import { compileCodexRestrictedPolicy, type CodexRestrictedPolicy } from './codex-restricted-policy.ts';
@@ -85,7 +86,7 @@ const EXITED_STDOUT_GRACE_MS = 1_000;
  * publish (spec 2026-10-22-html-artifacts-and-impact).
  */
 export function codexThreadOverrides(
-  spec: Pick<AgentRunSpec, 'model' | 'cwd' | 'env' | 'enforceReadOnly'>,
+  spec: Pick<AgentRunSpec, 'model' | 'cwd' | 'env' | 'provider' | 'enforceReadOnly'>,
   mcpConfig: Record<string, unknown> | undefined,
   env: NodeJS.ProcessEnv = process.env,
 ): Record<string, unknown> {
@@ -101,7 +102,7 @@ export function codexThreadOverrides(
     cwd: spec.cwd,
     sandbox: spec.enforceReadOnly ? 'read-only' : sandboxed ? 'workspace-write' : 'danger-full-access',
     approvalPolicy: 'never',
-    config,
+    config: spec.provider?.codexConfig ? { ...config, ...spec.provider.codexConfig } : config,
   };
 }
 
@@ -228,7 +229,7 @@ class CodexSession implements AgentSession {
     }
     watchOwnSignals();
     try {
-      this.child = spawnCodexAppServer(bin, spec.cwd, spec.env, this.restrictedHome?.env);
+      this.child = spawnCodexAppServer(bin, spec.cwd, spec.env, this.restrictedHome?.env, spec.provider);
       this.rpc = new CodexAppServerRpc(this.child);
     } catch (err) {
       throw codexSpawnError(err, bin);
@@ -517,7 +518,20 @@ class CodexSession implements AgentSession {
   // ---- protocol -----------------------------------------------------------
 
   private async bootstrap(): Promise<void> {
-    const identity = this.rpc.initialize();
+    const identity = this.rpc.initialize().then(async result => {
+      if (this.spec.provider?.kind === 'subscription' && process.env.CEZ_DRY_RUN !== '1') {
+        let timer: NodeJS.Timeout | undefined;
+        const deadline = new Promise<undefined>(resolve => { timer = setTimeout(() => resolve(undefined), 5000); });
+        const account = await Promise.race([
+          this.rpc.request('account/read', { refreshToken: false }).then(reply => reply.account).catch(() => undefined),
+          deadline,
+        ]).finally(() => clearTimeout(timer));
+        if (!account || typeof account !== 'object' || !('type' in account) || account.type !== 'chatgpt') {
+          throw new AgentProviderUnavailable('Codex subscription requires a signed-in ChatGPT account. Check Settings → Agents.', this.spec.provider.methodId);
+        }
+      }
+      return result;
+    });
 
     // The thread/* results name the model the thread actually runs on — what "auto" resolved to.
     let model: string | undefined;
@@ -527,7 +541,7 @@ class CodexSession implements AgentSession {
       const startupMs = 15_000 + (this.spec.resume ? this.resumeLockRetryMs.reduce((sum, delay) => sum + delay, 0) : 0);
       try {
         model = await Promise.race([identity.then(value => this.bootstrapRestricted(value)).catch(err => {
-          if (err instanceof CodexToolPolicyError) throw err;
+          if (err instanceof CodexToolPolicyError || err instanceof AgentProviderUnavailable) throw err;
           if (err instanceof Error && /no rollout found/i.test(err.message)) throw new Error(`no rollout found for thread id ${this.spec.sessionId ?? ''}`);
           throw new CodexToolPolicyError('isolated startup could not be verified; check the selected account and model provider');
         }), new Promise<never>((_, reject) => {
@@ -573,6 +587,7 @@ class CodexSession implements AgentSession {
     const unknownOn = baseline ? [] : codexFeaturesToDisable(await this.codexFeatures());
     if (!this.stdinOpen) throw new Error('codex: isolated startup was interrupted');
     const overrides = clean({ model: this.spec.model, cwd: this.spec.cwd, sandbox: 'read-only', approvalPolicy: 'never', config: {
+      ...this.spec.provider?.codexConfig,
       ...Object.fromEntries(unknownOn.map(key => [`features.${key}`, false])),
       ...Object.fromEntries(Object.entries(this.restrictedHome!.config.features as Record<string, boolean>).map(([key, value]) => [`features.${key}`, value])),
       web_search: 'disabled',

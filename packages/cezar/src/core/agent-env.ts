@@ -16,7 +16,8 @@
  *   - `CEZ_AGENT_ENV_FULL=1` restores full host inheritance except inherited tracker task capabilities.
  */
 
-import type { AgentBackend } from './agent-runner.ts';
+import type { AgentProviderLaunch } from './agent-provider-env.ts';
+import { AgentProviderUnavailable, type AgentBackend } from './agent-runner.ts';
 import { SECRET_NAME_RE } from './secret-redaction.ts';
 
 /**
@@ -350,8 +351,16 @@ export function isClaudeBackend(backend: AgentBackend): boolean {
   return backend === 'claude' || backend === 'claude-cli';
 }
 
+/** Strip even case aliases before checking cloud selectors, passthrough or full inheritance. */
+export function withoutEnv(env: NodeJS.ProcessEnv, names?: readonly string[]): NodeJS.ProcessEnv {
+  if (!names?.length) return env;
+  const unset = upperSet(names);
+  return Object.fromEntries(Object.entries(env).filter(([name]) => !unset.has(name.toUpperCase())));
+}
+
 export interface BuildChildEnvOptions {
   backend: AgentBackend;
+  provider?: Pick<AgentProviderLaunch, 'env' | 'unsetEnv'>;
   /** Per-run env (CEZ_HANDOFF_FILE etc.) — always applied, wins over host. */
   extraEnv?: Record<string, string>;
   /** Source env; defaults to `process.env`. */
@@ -363,8 +372,26 @@ export interface BuildChildEnvOptions {
  * (the runner's `spec.env`) is applied last so per-run vars always win.
  */
 export function buildChildEnv(opts: BuildChildEnvOptions): NodeJS.ProcessEnv {
-  const source = opts.source ?? process.env;
-  const extra = opts.extraEnv ?? {};
+  if (opts.backend === 'opencode' && opts.provider?.env.OPENCODE_CONFIG_CONTENT) {
+    const { OPENCODE_CONFIG_CONTENT: selected, ...env } = opts.provider.env;
+    const child = buildChildEnv({ ...opts, provider: { ...opts.provider, env } });
+    const existing = readVar(child, 'OPENCODE_CONFIG_CONTENT');
+    if (!existing) return { ...child, OPENCODE_CONFIG_CONTENT: selected };
+    // Only extend inline settings the ordinary allowlist admitted. Permissions, agent
+    // settings and MCP servers survive; cezar owns its per-launch provider namespace.
+    try {
+      const previous = JSON.parse(existing);
+      const override = JSON.parse(selected);
+      if (!previous || typeof previous !== 'object' || Array.isArray(previous)) throw new Error();
+      const config = { ...previous, ...override };
+      if (override.provider) config.provider = { ...previous.provider, ...override.provider };
+      return { ...withoutEnv(child, ['OPENCODE_CONFIG_CONTENT']), OPENCODE_CONFIG_CONTENT: JSON.stringify(config) };
+    } catch {
+      throw new AgentProviderUnavailable('The existing OpenCode inline settings could not be merged. Check the host configuration.');
+    }
+  }
+  const source = withoutEnv(opts.source ?? process.env, opts.provider?.unsetEnv);
+  const extra = { ...withoutEnv(opts.extraEnv ?? {}, opts.provider?.unsetEnv), ...opts.provider?.env };
 
   // Names `extra` is about to define, normalized. The host copy of a var the
   // per-run env overrides must be DROPPED, not merely shadowed: env names are

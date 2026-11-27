@@ -1,3 +1,7 @@
+import { continuationSelection } from '../runs/agent-selection.ts';
+import { readAgentProviders, type StoredAgentProviders } from '../workspace/agent-providers.ts';
+import { providerQuotaKey, agentProviderEnv, verifyProviderLogin, type AgentProviderLaunch } from '../core/agent-provider-env.ts';
+import { withoutEnv } from '../core/agent-env.ts';
 import { randomUUID } from 'node:crypto';
 import { chmodSync, closeSync, existsSync, fstatSync, mkdirSync, openSync, readFileSync, readSync, realpathSync, writeFileSync } from 'node:fs';
 import { delimiter, join, resolve } from 'node:path';
@@ -130,7 +134,7 @@ import {
   observeConnectors,
   type ObservedConnectors,
 } from './connectors.ts';
-import { taskModelIssue, type TaskModelCatalog } from './task-model.ts';
+import { managerProviderChoice, taskModelIssue, type TaskModelCatalog } from './task-model.ts';
 import { closestAntigravityEffort, isAntigravityModel, resolveAntigravityEffort } from '../core/antigravity-effort.ts';
 import { readAgentModelSettings } from '../agent-config/models.ts';
 import { TurnStatsCollector } from './turn-stats.ts';
@@ -187,7 +191,7 @@ export interface ManagerEngineDeps {
   accountError: (runner: RunnerId, agentProfile: string) => Promise<string | null>;
   /** An account's resolved id, label and usage-limit reset (epoch ms) from the workspace holds.
    *  Absent: every account has capacity. */
-  accountLimit?: (runner: RunnerId, agentProfile: string | undefined, repoRoot?: string) => Promise<{ account: string; label: string; until?: number }>;
+  accountLimit?: (runner: RunnerId, agentProfile: string | undefined, repoRoot?: string, model?: string) => Promise<{ account: string; label: string; quotaKey?: string; until?: number }>;
   /** Running tasks per `runner:account` across the workspace (spec 2026-11-25-manager-task-routing). Absent: none. */
   accountLoad?: () => ReadonlyMap<string, number>;
   /** The cockpit's own routes, in process: POST /runs, merge, enable have exactly one implementation. */
@@ -398,6 +402,7 @@ interface Runtime {
 type Progress = () => { text: string; commands: ManagerCommand[] };
 
 interface DriveResult {
+  agentMethod?: string;
   text: string;
   commands: ManagerCommand[];
   costUsd: number;
@@ -2456,18 +2461,34 @@ export class ManagerEngine {
   ): Promise<DriveResult> {
     const { store } = this.deps;
     const runner = await this.runnerOf(manager);
-    const sessionKey = `${runner}|${manager.agentProfile ?? ''}`;
+    const locked = agentModelsLocked();
+    let provider: AgentProviderLaunch | undefined;
+    try {
+      provider = await agentProviderEnv(runner, { model: locked ? undefined : manager.model, modelsLocked: locked });
+    } catch (error) {
+      return { text: '', commands: [], costUsd: 0, runner, error: error instanceof Error ? error.message : String(error) };
+    }
+    const sessionKey = `${runner}|${manager.agentProfile ?? ''}${provider ? `|${provider.methodId}` : ''}`;
     // A chain keeps each row's transcript, so going back to #1 resumes it while it is still young.
     if (hasChain(manager)) this.swapSessions(id, sessionKey);
     const state = store.state(id);
     const field = SESSION_FIELD[turn.kind];
     const resumeId = state.sessionKey === sessionKey && this.resumes(turn.kind, state.sessions[turn.kind]) ? state[field] : undefined;
+    const autoModel = !manager.model || manager.model.trim() === 'auto';
+    const pinnedModel = resumeId && !locked && autoModel ? state.sessions[turn.kind]?.catalogModel : undefined;
+    if (provider && pinnedModel && provider.catalogModel !== pinnedModel) {
+      try {
+        provider = await agentProviderEnv(runner, { saved: provider.methodId, savedHost: provider.hostKey, model: pinnedModel });
+      } catch (error) {
+        return { text: '', commands: [], costUsd: 0, runner, error: error instanceof Error ? error.message : String(error) };
+      }
+    }
     const resumable = resumeId !== undefined;
     const sources = await this.sources(manager);
     const profile = supportsProfiles(runner) ? await resolveProfileEnvForRoot(undefined, runner, manager.agentProfile) : { env: {} };
     const planProvider = runner === 'claude' || runner === 'codex' ? runner : undefined;
     const planProfile = 'profile' in profile ? profile.profile : undefined;
-    turn.planAccount = planProvider && planProfile
+    turn.planAccount = !provider?.secret && planProvider && planProfile
       ? await ledgerAccountRef(planProvider, planProfile).catch(() => undefined)
       : undefined;
     const planAccount = turn.planAccount;
@@ -2480,7 +2501,6 @@ export class ManagerEngine {
     } catch (error) {
       console.warn(`[cezar] manager shim: ${error instanceof Error ? error.message : String(error)}`);
     }
-    const locked = agentModelsLocked();
     let writable: string | undefined;
     if (runner === 'claude' && turn.kind !== 'watch') {
       try {
@@ -2506,6 +2526,7 @@ export class ManagerEngine {
     // Read per turn, so an edit in Settings reaches a resumed session too.
     const globalInstructions = (await loadWorkspaceConfig().catch(() => null))?.systemPrompt;
     const base: AgentRunSpec = {
+      provider,
       systemPrompt: managerSystemPrompt(
         manager,
         sources.map((source) => ({ id: source.id, name: source.name, access: managerAccessOf(manager, source.id) })),
@@ -2548,10 +2569,10 @@ export class ManagerEngine {
       ...(planAccount ? { onUsageWindows: (observation) => recordUsageObservation(planAccount, observation) } : {}),
       ...(manager.model && !locked ? { model: manager.model } : {}),
       // Another backend refuses an explicit effort, so a manager moved off one drops it.
-      ...(manager.effort && runnerSupportsReasoningEffort(runner) ? { reasoningEffort: manager.effort } : {}),
+      ...(!locked && manager.effort && runnerSupportsReasoningEffort(runner) ? { reasoningEffort: manager.effort } : {}),
     };
     // Claude's Bash inherits the cockpit's env plus the turn's; the broker runs Codex's commands in the same.
-    if (runner === 'codex') base.brokeredShell = codexManagerShell(manager.bashAllow, { ...process.env, ...base.env });
+    if (runner === 'codex') base.brokeredShell = codexManagerShell(manager.bashAllow, withoutEnv({ ...process.env, ...base.env }, provider?.unsetEnv));
     // A retry is the same user turn: it counts once, measured from the session as it stood before.
     const origin: TurnOrigin = { startedAt: this.now(), ...(resumeId && state.sessions[turn.kind] ? { prior: state.sessions[turn.kind]! } : {}) };
     const first = await this.session(id, base, sessionKey, runner, resumeId, turn, onProgress, origin);
@@ -2562,10 +2583,10 @@ export class ManagerEngine {
     if (plan === 'again') {
       await new Promise((resolve) => setTimeout(resolve, this.deps.retryDelayMs ?? RETRY_BACKOFF_MS).unref?.());
       if (turn.stopped || !store.get(id)) return { ...first, runner };
-      const again = await this.session(id, base, sessionKey, runner, resumeId, turn, onProgress, origin);
+      const again = await this.session(id, base, sessionKey, runner, resumeId, turn, onProgress, origin, true);
       return { ...again, costUsd: again.costUsd + first.costUsd, runner };
     }
-    const fresh = await this.session(id, { ...base, userPrompt: freshPrompt }, sessionKey, runner, undefined, turn, onProgress, { startedAt: origin.startedAt });
+    const fresh = await this.session(id, { ...base, userPrompt: freshPrompt }, sessionKey, runner, undefined, turn, onProgress, { startedAt: origin.startedAt }, true);
     return { ...fresh, costUsd: fresh.costUsd + first.costUsd, runner };
   }
 
@@ -2578,6 +2599,7 @@ export class ManagerEngine {
     turn: ActiveTurn,
     onProgress: (progress: Progress) => void,
     origin: TurnOrigin = { startedAt: this.now() },
+    retry = false,
   ): Promise<DriveResult> {
     const { store } = this.deps;
     // Claude takes an id we mint; every other backend mints its own and reports it (`session`).
@@ -2670,6 +2692,16 @@ export class ManagerEngine {
       id: managerConsumerId(id), kind: 'manager', title: store.get(id)?.name ?? id, managerId: id,
     }, { part: turn.kind, ...(turn.ledgerMessageId ? { messageId: turn.ledgerMessageId } : {}), endOnClose: true }) : undefined;
     try {
+      if (retry && base.provider) {
+        // A retry can outlive a key rotation or removal. Read the same method again.
+        spec.provider = await agentProviderEnv(runnerId, { saved: base.provider.methodId, savedHost: base.provider.hostKey, model: base.provider.catalogModel ?? base.model, modelsLocked: agentModelsLocked() });
+      }
+      if (spec.provider?.model) spec.model = spec.provider.model;
+      await verifyProviderLogin(runnerId, spec.provider, spec.cwd, spec.env);
+      if (turn.stopped) {
+        planUsage?.close();
+        return { text: '', commands, costUsd };
+      }
       const runner = (this.deps.runnerFor ?? createRunner)(runnerId);
       const session = runner.startSession(spec, (event) => { planUsage?.event(event); onEvent(event); }, {
         autoEndAfterFirstTurn: true,
@@ -2701,6 +2733,7 @@ export class ManagerEngine {
             [turn.kind]: {
               // Seen only once the turn ran; a failed one keeps what the resumed transcript had.
               ...(cardsDigest !== undefined ? { cardsDigest } : {}),
+              ...(spec.provider?.catalogModel ? { catalogModel: spec.provider.catalogModel } : {}),
               startedAt: priorSession?.startedAt ?? new Date(turnStartedAt).toISOString(),
               lastAt: at,
               turns: sessionTurn,
@@ -2710,7 +2743,7 @@ export class ManagerEngine {
         };
       });
     }
-    return { text: committed || draft, commands, costUsd, ...(error ? { error } : {}) };
+    return { text: committed || draft, commands, costUsd, agentMethod: spec.provider?.methodId, ...(error ? { error } : {}) };
   }
 
   // ---- the timer ---------------------------------------------------------------------------
@@ -2816,22 +2849,23 @@ export class ManagerEngine {
 
   private async rowInfo(row: ChainRow): Promise<RowInfo> {
     const runner = row.runner !== undefined && isRunnerId(row.runner) ? row.runner : await this.deps.defaultRunner();
-    const limit = await this.deps.accountLimit?.(runner, row.agentProfile).catch(() => undefined);
+    const limit = await this.deps.accountLimit?.(runner, row.agentProfile, undefined, row.model).catch(() => undefined);
     const account = limit?.account ?? row.agentProfile ?? DEFAULT_AGENT_ACCOUNT_ID;
     const label = limit?.label ?? (row.agentProfile ?? 'default account');
     return {
       row,
       ref: { slot: row.slot, runner, profileId: account, label, ...(row.model ? { model: row.model } : {}) },
       key: rowKey(runner, account),
-      accountKey: `${runner}:${account}`,
+      accountKey: limit?.quotaKey ?? `${runner}:${account}`,
       ...(limit?.until !== undefined ? { workspaceUntil: limit.until } : {}),
     };
   }
 
   /** Why this row cannot answer now: its own hold, or a workspace hold on its account. */
   private rowHold(id: string, info: RowInfo, now: number): ChainHold | undefined {
-    const own = this.deps.store.state(id).chain?.holds[info.key];
-    if (own && msOf(own.until) > now) return own;
+    const holds = this.deps.store.state(id).chain?.holds;
+    const own = holds?.[info.accountKey] ?? holds?.[info.key];
+    if (own && msOf(own.until) > now && (!own.accountKey || own.accountKey === info.accountKey)) return own;
     if (info.workspaceUntil !== undefined && info.workspaceUntil > now) return { until: new Date(info.workspaceUntil).toISOString(), reason: 'held' };
     return undefined;
   }
@@ -2952,10 +2986,15 @@ export class ManagerEngine {
       const resetAt = this.usageLimit(result, turn);
       const cause = result.error ? failureCause(result.error, result.text) : undefined;
       const reason = cause && !turn.stopped && !turn.timedOut ? failoverReason(classifyManagerFailure(cause), resetAt !== undefined) : undefined;
+      const account = info.ref.runner + ':' + info.ref.profileId;
+      const actualQuota = providerQuotaKey(info.ref.runner as RunnerId, account, result.agentMethod);
+      const holdKey = actualQuota === account ? info.key : actualQuota;
       if (!reason) {
-        // A turn that got through proves the row works again.
-        if (!result.error && !turn.stopped && this.deps.store.state(id).chain?.holds[info.key]) {
-          this.updateChain(id, (chain) => ({ ...chain, holds: Object.fromEntries(Object.entries(chain.holds).filter(([key]) => key !== info.key)) }));
+        // Only the budget that served this turn has proved capacity.
+        const existing = this.deps.store.state(id).chain?.holds;
+        if (!result.error && !turn.stopped && (existing?.[holdKey] || existing?.[info.key])) {
+          this.updateChain(id, (chain) => ({ ...chain, holds: Object.fromEntries(Object.entries(chain.holds).filter(([key, previous]) =>
+            !(key === holdKey || key === info.key) || Boolean(previous.accountKey && previous.accountKey !== actualQuota))) }));
         }
         // Every row was held and the preferred one got through anyway: it is the one answering now.
         if (!result.error && !turn.stopped && (this.deps.store.state(id).chain?.active?.slot ?? 0) !== row.slot) {
@@ -2964,8 +3003,9 @@ export class ManagerEngine {
         return { result, ran, ref: info.ref };
       }
       const reset = resetAt?.getTime() ?? (reason === 'usage-limit' ? parseUsageLimit(cause!, now)?.resetAt.getTime() : undefined);
-      const hold = holdFor(reason, this.deps.store.state(id).chain?.holds[info.key], now, reset);
-      this.updateChain(id, (chain) => ({ ...chain, holds: { ...chain.holds, [info.key]: { ...hold, ...(reason === 'usage-limit' ? { accountKey: info.accountKey } : {}) } } }));
+      const key = reason === 'usage-limit' ? holdKey : info.key;
+      const hold = holdFor(reason, this.deps.store.state(id).chain?.holds[key], now, reset);
+      this.updateChain(id, (chain) => ({ ...chain, holds: { ...chain.holds, [key]: { ...hold, ...(reason === 'usage-limit' ? { accountKey: actualQuota } : {}) } } }));
       const next = nextRow(rows, row.slot, attempted, (candidate) => this.rowHold(id, infos[candidate.slot]!, now));
       if (!next) {
         // Every row is out: wait for the first reset, as a manager without backups waits for its own.
@@ -3131,7 +3171,10 @@ export class ManagerEngine {
       else session.interrupt();
     };
     try {
+      const provider = await agentProviderEnv(runner, { modelsLocked: agentModelsLocked() });
+      await verifyProviderLogin(runner, provider, this.deps.store.workdir(id), profile.env);
       session = (this.deps.runnerFor ?? createRunner)(runner).startSession({
+        provider,
         userPrompt: 'Reply with OK.',
         // A connector probe: it answers nothing the user reads, so nothing can steer it.
         globalInstructions: false,
@@ -3185,7 +3228,10 @@ export class ManagerEngine {
       else session.interrupt();
     };
     try {
+      const provider = await agentProviderEnv(runner, { model: agentModelsLocked() ? undefined : manager.model, modelsLocked: agentModelsLocked() });
+      await verifyProviderLogin(runner, provider, this.deps.store.workdir(id), profile.env);
       session = (this.deps.runnerFor ?? createRunner)(runner).startSession({
+        provider,
         systemPrompt: 'You run one tool call the user approved in cezar, exactly as approved, and nothing else.',
         userPrompt: connectorCallPrompt(tool, action.args),
         // The user approved this exact call; instructions must not rewrite it after the fact.
@@ -3387,22 +3433,59 @@ export class ManagerEngine {
     let choice: TaskAgentChoice | undefined;
     let fallbackOptions: AccountOption[] | undefined;
     /** The runner picked when every listed account has capacity: --model/--effort are refused, not dropped, there. */
-    let firstRunner: string | undefined;
+    let firstAgent: ManagerTaskAgent | undefined;
     // Roles on the list switch on routing (spec 2026-11-25-manager-task-routing); none keeps the original order.
     const roles = agents && routedByRoles(scope.manager) ? roleRouting(scope.manager) : undefined;
+    // Default models from Settings → Agents (when not locked) and per-row pins on `taskAgents`.
+    const modelsLocked = agentModelsLocked(root);
+    const projectConfig = !modelsLocked && root ? await loadConfig(root).catch(() => undefined) : undefined;
+    const defaultModelFor = (candidateRunner: RunnerId, candidateProfile?: string): string | undefined => {
+      if (modelsLocked) return undefined;
+      const row = agents?.find((agent) => agent.runner === candidateRunner && agent.agentProfile === candidateProfile);
+      if (row?.model) return row.model;
+      if (projectConfig?.defaultModelsAuto?.[candidateRunner]) return undefined;
+      return projectConfig?.defaultModels?.[candidateRunner];
+    };
+    const providers = await readAgentProviders();
+    const requestedModel = input.model;
+    const modelChecks = new Map<string, Promise<ManagerRefusal | undefined>>();
+    const checkModel = (runner: RunnerId, model?: string, effort?: string, agentProfile?: string) => {
+      const key = JSON.stringify([runner, agentProfile, model, effort]);
+      let check = modelChecks.get(key);
+      if (!check) {
+        check = this.modelIssue(runner, model, effort, { root, agentProfile, providers });
+        modelChecks.set(key, check);
+      }
+      return check;
+    };
+    const candidateModel = async (runner: RunnerId, profile?: string) => {
+      if (modelsLocked) return undefined;
+      if (requestedModel && !await checkModel(runner, requestedModel, undefined, profile)) return requestedModel;
+      return defaultModelFor(runner, profile);
+    };
     if (compatibleAgents && candidates) {
       // The manager's settings are the default: a retried task's own account, then its own runner, then list order.
       // With roles, list order is the order (Backup rows are used top to bottom).
       const rank = (agent: ManagerTaskAgent) => (roles ? 0 : retry?.allowed && agent.runner === retry.runner && agent.agentProfile === retry.agentProfile ? 0 : agent.runner === preferred ? 1 : 2);
       const ordered = [...candidates].sort((a, b) => rank(a) - rank(b));
       const load = roles ? this.deps.accountLoad?.() : undefined;
-      const allowed = await Promise.all([...compatibleAgents].sort((a, b) => rank(a) - rank(b)).map(async (agent) => {
-        const option = await this.accountOption(agent.runner, agent.agentProfile, root);
+      const evaluated = await Promise.all([...compatibleAgents].sort((a, b) => rank(a) - rank(b)).map(async (agent) => {
+        const model = await candidateModel(agent.runner, agent.agentProfile);
+        const { error: issue } = managerProviderChoice(agent.runner, providers.agents[agent.runner], model);
+        if (issue) return { error: issue, runner: agent.runner, agentProfile: agent.agentProfile };
+        const option = await this.accountOption(agent.runner, agent.agentProfile, root, model);
         if (!roles) return option;
         const usage = fiveHourUsedPercent(option.runner, option.account, now);
         return { ...option, role: agent.role ?? 'main', load: load?.get(`${option.runner}:${option.account}`) ?? 0, ...(usage !== undefined ? { usage } : {}) };
       }));
-      const options = ordered.map((agent) => allowed.find((option) => option.runner === agent.runner && option.agentProfile === agent.agentProfile)!);
+      const allowed = evaluated.filter((option): option is AccountOption => 'account' in option);
+      const options = allowed.filter(option => candidates.some(agent =>
+        option.runner === agent.runner && option.agentProfile === agent.agentProfile));
+      if (!options.length) {
+        const rejected = evaluated.find(option => 'error' in option && candidates.some(agent =>
+          agent.runner === option.runner && agent.agentProfile === option.agentProfile));
+        return { error: rejected && 'error' in rejected ? rejected.error : 'No selected agent can serve this model.', status: 400 };
+      }
       const own = roles && retry?.allowed && input.agentProfile === undefined
         ? options.find((option) => option.runner === retry.runner && option.agentProfile === retry.agentProfile && option.role === 'main')
         : undefined;
@@ -3413,7 +3496,7 @@ export class ManagerEngine {
         ...(roles ? { roles } : {}),
         ...(input.runner && candidates.length < compatibleAgents.length ? { narrowedBy: `--runner ${input.runner}` } : {}),
       });
-      firstRunner = options[0]?.runner;
+      firstAgent = ordered[0];
       const picked = choice.chosen;
       // An explicit --runner or --account keeps a usage-limit fallback on that runner, as does "same agent only".
       const sameRunner = input.runner !== undefined || input.agentProfile !== undefined || scope.manager.taskLimitSwitch === 'same-agent';
@@ -3432,28 +3515,16 @@ export class ManagerEngine {
     }
     const accountIssue = await this.accountIssue(runner, agentProfile);
     if (accountIssue) return accountIssue;
-    choice ??= chooseTaskAgent([await this.accountOption(runner, agentProfile, root)], { explicitAccount: agentProfile !== undefined, fromSettings: false, now });
+    choice ??= chooseTaskAgent([await this.accountOption(runner, agentProfile, root, modelsLocked ? undefined : input.model ?? defaultModelFor(runner, agentProfile))], { explicitAccount: agentProfile !== undefined, fromSettings: false, now });
     // --model/--effort are checked on the runner the task really landed on. A runner the flags did not
     // pin (a limit skip off the first listed runner, a retry on another runner) drops only what fails
     // there; anywhere else a bad flag is refused with the valid choices, as before.
-    const unpinned = (firstRunner !== undefined && !input.runner && firstRunner !== runner)
+    const unpinned = (firstAgent !== undefined && !input.runner && firstAgent.runner !== runner)
       || (retry?.runner !== undefined && retry.runner !== runner);
-    // Default models from Settings → Agents (when not locked) and per-row pins on `taskAgents`.
-    const modelsLocked = agentModelsLocked(root);
-    const projectConfig = !modelsLocked && root ? await loadConfig(root).catch(() => undefined) : undefined;
-    const defaultModelFor = (candidateRunner: RunnerId, candidateProfile?: string): string | undefined => {
-      if (modelsLocked) return undefined;
-      const row = agents?.find((agent) => agent.runner === candidateRunner && agent.agentProfile === candidateProfile);
-      if (row?.model) return row.model;
-      if (projectConfig?.defaultModelsAuto?.[candidateRunner]) return undefined;
-      return projectConfig?.defaultModels?.[candidateRunner];
-    };
     // Antigravity's effort is a model variant: --effort becomes the matching model id. Asked for
     // explicitly (--runner antigravity, an antigravity --model, the first listed agent) a missing
     // variant is refused; reached by a limit fallback it takes the closest variant, or is dropped.
     let effortNote: string | undefined;
-    // The flags as typed: fallback entries on other runners carry these, not antigravity's variant.
-    const requested = input;
     if (runner === 'antigravity' && input.effort) {
       const models = await this.antigravityModels();
       const viaFallback = unpinned && input.runner !== 'antigravity' && !(input.model && isAntigravityModel(input.model, models ?? []));
@@ -3472,28 +3543,26 @@ export class ManagerEngine {
     }
     let carried = input;
     if (input.model || input.effort) {
-      const issue = await this.modelIssue(runner, input.model, input.effort);
+      const checkSelected = (model?: string, effort?: string) => checkModel(runner, model, effort, agentProfile);
+      const issue = await checkSelected(input.model, input.effort);
       if (issue && !unpinned) return issue;
       if (issue) {
-        // Dropped only when another allowed runner can use it: a flag the manager typed that no listed
-        // runner accepts (a typo) is refused with the valid choices, as when nothing moved. A retry's
-        // flags are the old run's, so they are only ever dropped.
-        const runners = retry ? [] as RunnerId[] : [...new Set((compatibleAgents ?? []).map((agent) => agent.runner))].filter((other) => other !== runner);
-        const usable = async (check: (other: RunnerId) => Promise<ManagerRefusal | undefined>) => {
-          for (const other of runners) if (!(await check(other))) return true;
+        // Drop an incompatible flag only if another allowed agent can serve it. A retry's old flags can always drop.
+        const usableElsewhere = async (model?: string, effort?: string) => {
+          for (const agent of compatibleAgents ?? []) {
+            if (agent.runner !== runner && !await checkModel(agent.runner, model, effort, agent.agentProfile)) return true;
+          }
           return false;
         };
-        const refusedHere = (model?: string, effort?: string) => this.modelIssue(runner, model, effort);
-        // Refused as if nothing had moved: the valid choices of the first listed runner, not the landed one.
-        const asFirst = (firstRunner ?? runner) as RunnerId;
-        if (!retry && input.model && (await refusedHere(input.model)) && !(await usable((other) => this.modelIssue(other, input.model, undefined)))) {
-          return (await this.modelIssue(asFirst, input.model, undefined)) ?? issue;
+        const first = firstAgent ?? { runner, agentProfile };
+        if (!retry && input.model && await checkSelected(input.model) && !await usableElsewhere(input.model)) {
+          return await checkModel(first.runner, input.model, undefined, first.agentProfile) ?? issue;
         }
-        if (!retry && input.effort && (await refusedHere(undefined, input.effort)) && !(await usable((other) => this.modelIssue(other, undefined, input.effort)))) {
-          return (await this.modelIssue(asFirst, undefined, input.effort)) ?? issue;
+        if (!retry && input.effort && await checkSelected(undefined, input.effort) && !await usableElsewhere(undefined, input.effort)) {
+          return await checkModel(first.runner, undefined, input.effort, first.agentProfile) ?? issue;
         }
-        const model = input.model && !(await this.modelIssue(runner, input.model, undefined)) ? input.model : undefined;
-        const effort = input.effort && !(await this.modelIssue(runner, model, input.effort)) ? input.effort : undefined;
+        const model = input.model && !await checkSelected(input.model) ? input.model : undefined;
+        const effort = input.effort && !await checkSelected(model, input.effort) ? input.effort : undefined;
         carried = { ...input, model, effort };
         const dropped = [input.model && !model && `--model ${input.model}`, input.effort && !effort && `--effort ${input.effort}`].filter(Boolean).join(' and ');
         choice = { ...choice, reason: `${choice.reason}; ${dropped} dropped: not valid on ${runner}` };
@@ -3501,13 +3570,9 @@ export class ManagerEngine {
     }
     const effectiveModel = carried.model ?? defaultModelFor(runner, agentProfile);
     // A fallback entry carries the requested model only where that runner accepts it, else its row/settings default.
-    const modelValidOn = new Map<string, boolean>();
     const fallback: Array<{ provider: RunnerId; profileId: string; model?: string }> | undefined = fallbackOptions && [];
     for (const option of fallbackOptions ?? []) {
-      if (requested.model && !modelValidOn.has(option.runner)) modelValidOn.set(option.runner, !(await this.modelIssue(option.runner, requested.model, undefined)));
-      const entryModel = requested.model
-        ? (modelValidOn.get(option.runner) ? requested.model : undefined)
-        : defaultModelFor(option.runner, option.agentProfile);
+      const entryModel = await candidateModel(option.runner, option.agentProfile);
       fallback!.push({ provider: option.runner, profileId: option.account, ...(entryModel ? { model: entryModel } : {}) });
     }
     const agentNote = `Agent chosen by manager ${scope.manager.name}: ${choice.chosen.runner} · ${choice.chosen.label} — ${choice.reason}`;
@@ -3568,8 +3633,8 @@ export class ManagerEngine {
   }
 
   /** One account's usage-limit state, from the workspace holds; unknown = capacity. */
-  private async accountOption(runner: RunnerId, agentProfile: string | undefined, repoRoot?: string): Promise<AccountOption> {
-    const state = await this.deps.accountLimit?.(runner, agentProfile, repoRoot).catch(() => undefined);
+  private async accountOption(runner: RunnerId, agentProfile: string | undefined, repoRoot?: string, model?: string): Promise<AccountOption> {
+    const state = await this.deps.accountLimit?.(runner, agentProfile, repoRoot, model).catch(() => undefined);
     return {
       runner,
       ...(agentProfile !== undefined ? { agentProfile } : {}),
@@ -3586,7 +3651,7 @@ export class ManagerEngine {
       ?? [{ runner: manager.taskRunner && isRunnerId(manager.taskRunner) ? manager.taskRunner : await this.runnerOf(manager) }];
     const now = this.now();
     return Promise.all(agents.map(async (agent) => {
-      const option = await this.accountOption(agent.runner, agent.agentProfile, root);
+      const option = await this.accountOption(agent.runner, agent.agentProfile, root, agent.model);
       return {
         runner: option.runner,
         ...(option.agentProfile !== undefined ? { agentProfile: option.agentProfile } : {}),
@@ -3634,7 +3699,8 @@ export class ManagerEngine {
         ({ model, note: notice } = mapped);
         effort = undefined;
       }
-      const issue = model || effort ? await this.modelIssue(run.runner ?? 'claude', model, effort) : undefined;
+      const { targetRunner, agentProfile } = continuationSelection(run, { model, freshContext: input.freshContext });
+      const issue = model || effort ? await this.modelIssue(targetRunner, model, effort, { root: scope.source?.root, agentProfile }) : undefined;
       if (issue) return issue;
       const continued = await this.forward(`${path}/continue`, {
         method: 'POST',
@@ -3672,13 +3738,30 @@ export class ManagerEngine {
     return defaultModel ?? (root ? (await readAgentModelSettings('antigravity', root).catch(() => undefined))?.model : undefined);
   }
 
-  /** `--model`/`--effort` against the runner and the host's model catalog; a 400 naming the valid ones. */
-  private async modelIssue(runner: string, model: string | undefined, effort: string | undefined): Promise<ManagerRefusal | undefined> {
+  /** Validate against the catalog belonging to the task's effective account. */
+  private async modelIssue(runner: string, model: string | undefined, effort: string | undefined, context: {
+    root?: string; agentProfile?: string; providers?: StoredAgentProviders;
+  }): Promise<ManagerRefusal | undefined> {
     if (!isRunnerId(runner)) return undefined;
+    const choice = model ? managerProviderChoice(runner, (context.providers ?? await readAgentProviders()).agents[runner], model) : {};
+    if (choice.error) return { error: choice.error, status: 400 };
     let catalog: TaskModelCatalog | undefined;
-    if ((MODEL_DISCOVERY_RUNNERS as readonly string[]).includes(runner)) {
-      const response = await this.forward(`/models?${new URLSearchParams({ runner })}`).catch(() => undefined);
-      if (response?.ok) catalog = (await response.json().catch(() => undefined)) as TaskModelCatalog | undefined;
+    if (choice.gateway && model) {
+      catalog = { models: [{ id: model, via: { methodId: choice.gateway } }] };
+    } else {
+      const additive = runner === 'pi' || runner === 'omp';
+      const profile = additive || runner === 'kimi'
+        ? context.agentProfile ?? (await resolveProfileEnvForRoot(context.root, runner)).profile.id
+        : undefined;
+      // The public Pi and OMP native catalogs describe only the host login. Named logins
+      // retain native validation, just like a runner without a catalog.
+      const discover = additive ? profile === DEFAULT_AGENT_ACCOUNT_ID : (MODEL_DISCOVERY_RUNNERS as readonly string[]).includes(runner);
+      if (discover) {
+        const query = new URLSearchParams({ runner });
+        if (runner === 'kimi' && profile) query.set('agentProfile', profile);
+        const response = await this.forward(`/models?${query}`).catch(() => undefined);
+        if (response?.ok) catalog = (await response.json().catch(() => undefined)) as TaskModelCatalog | undefined;
+      }
     }
     const issue = taskModelIssue({ runner, model, effort, catalog });
     return issue ? { error: issue, status: 400 } : undefined;
@@ -3767,7 +3850,7 @@ export class ManagerEngine {
       ({ model, note: effortNote } = mapped);
       effort = undefined;
     }
-    const issue = model || effort ? await this.modelIssue(runner, model, effort) : undefined;
+    const issue = model || effort ? await this.modelIssue(runner, model, effort, { root: repoRoot, agentProfile }) : undefined;
     if (issue) return issue;
     const response = await this.forward(`/p/${encodeURIComponent(projectId)}/runs/${encodeURIComponent(run.id)}/switch-agent`, {
       method: 'POST',

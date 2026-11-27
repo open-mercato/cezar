@@ -1,4 +1,4 @@
-import { RUN_PR_REF_RANK, stepToolPolicySchema, deferredBindingSchema, modelUsageSchema, queueWaitReasonSchema, runAgentSwitchSchema, taskAskRecordSchema, trackerAccessSchema, type QuestionClosed, type QuestionStale, type TaskAskRecord } from '@open-mercato/cezar-contract';
+import { RUN_PR_REF_RANK, providerMethodIdSchema, providerRetrySchema, stepToolPolicySchema, deferredBindingSchema, modelUsageSchema, queueWaitReasonSchema, runAgentSwitchSchema, taskAskRecordSchema, trackerAccessSchema, type QuestionClosed, type QuestionStale, type TaskAskRecord } from '@open-mercato/cezar-contract';
 import { EventEmitter } from 'node:events';
 import { runLifecycleSnapshot, type RunLifecycleObserver, type RunLifecycleSnapshot } from './lifecycle.ts';
 import { createHash, randomUUID } from 'node:crypto';
@@ -131,6 +131,9 @@ const stepStateSchema = z.object({
    *  a PAIR. Without it, changing the project's account would silently make Continue resume
    *  against the wrong account's session store. Absent = the discovered default. */
   profileId: z.string().optional(),
+  agentMethod: providerMethodIdSchema.optional(),
+  agentMethodHost: z.literal(true).optional(),
+  providerRetry: providerRetrySchema.optional().catch(undefined),
   /** A Continue opened with `freshContext` (#2513): a restart while it is queued must not resume. */
   freshContext: z.literal(true).optional().catch(undefined),
   /** A queued fresh Continue's instruction, so a restart opens it with that text; cleared on open
@@ -243,6 +246,7 @@ export const runRecordSchema = z.object({
    *  own selection — an override for Claude says nothing about which Codex account a mixed
    *  workflow's codex step should use. Absent = follow the project. */
   agentProfile: z.string().optional(),
+  agentMethod: providerMethodIdSchema.optional(),
   fallbackPolicy: z.object({
     enabled: z.boolean(),
     candidates: z.array(z.object({ provider: z.string(), profileId: z.string(), model: z.string().optional() })).max(10),
@@ -1547,6 +1551,7 @@ export class RunStore extends EventEmitter {
     runner?: RunnerId;
     /** Composer's per-task agent account (spec 2026-07-29-agent-profiles). */
     agentProfile?: string;
+    agentMethod?: string;
     fallbackPolicy?: RunRecord['fallbackPolicy'];
     generateFollowups?: boolean;
     autonomous?: boolean;
@@ -1570,6 +1575,7 @@ export class RunStore extends EventEmitter {
       reasoningEffort: input.reasoningEffort,
       runner: input.runner,
       agentProfile: input.agentProfile,
+      agentMethod: input.agentMethod,
       fallbackPolicy: input.fallbackPolicy,
       generateFollowups: input.generateFollowups,
       autonomous: input.autonomous,
@@ -1639,7 +1645,7 @@ export class RunStore extends EventEmitter {
       normalized.awaitingAnswerSince = undefined;
       // An idle park keeps its marker through its own `waiting` writes; a reopen retires it. An auth
       // park closes its session as it parks, so it stamps the marker in its own transition.
-      if ((normalized.status !== 'waiting' || run.status !== 'waiting') && !(normalized.status === 'waiting' && normalized.parked)) {
+      if ((normalized.status !== 'waiting' || run.status !== 'waiting') && !(normalized.status === 'waiting' && (normalized.parked || normalized.idleClosedAt))) {
         normalized.idleClosedAt = undefined;
       }
     }

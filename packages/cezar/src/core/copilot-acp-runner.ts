@@ -131,8 +131,8 @@ function isDirectory(path: string): boolean {
 
 /** The per-run environment: `buildChildEnv`'s least-privilege set for this backend. Copilot's own
  *  `COPILOT_` family and the shared `gh` names are what `agent-env.ts` already allows it. */
-export function buildCopilotEnv(backend: AgentBackend, extraEnv?: Record<string, string>): NodeJS.ProcessEnv {
-  return buildChildEnv({ backend, extraEnv });
+export function buildCopilotEnv(backend: AgentBackend, extraEnv?: Record<string, string>, provider?: AgentRunSpec['provider']): NodeJS.ProcessEnv {
+  return buildChildEnv({ backend, provider, extraEnv });
 }
 
 /**
@@ -194,7 +194,7 @@ class CopilotAcpSession implements AgentSession {
     private readonly opts: SessionOptions,
   ) {
     const [file, argv] = spawnableCommand(bin, buildCopilotArgs(spec));
-    this.child = nodeSpawn(file, argv, { cwd: spec.cwd, env: buildCopilotEnv(backend, spec.env) });
+    this.child = nodeSpawn(file, argv, { cwd: spec.cwd, env: buildCopilotEnv(backend, spec.env, spec.provider) });
     this.pid = this.child.pid;
     this.hasExited = trackChildExit(this.child);
     this.child.once('exit', () => {

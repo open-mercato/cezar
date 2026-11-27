@@ -131,8 +131,7 @@ export const BACKEND_MODEL_MAP: Readonly<Record<AgentBackend, BackendModelMap>> 
   // goes to `--model` bare (#581).
   gemini: { defaultProvider: 'google' },
   // Kimi Code selects a model by the alias of a `[models."<alias>"]` table in its config.toml, and
-  // its own aliases are already `provider/model`-shaped (`kimi-code/k3`). No default provider, so
-  // a bare alias passes through unchanged.
+  // aliases may be bare or qualified. Preserve the literal alias for the ACP wire value.
   kimi: {},
 };
 
@@ -209,7 +208,7 @@ export function resolveModelIdentity(
     return explicit;
   }
   const model = trimmed;
-  const provider = map.providerByModel?.[model] ?? effectiveProvider;
+  const provider = map.providerByModel?.[model] ?? effectiveProvider ?? (backend === 'kimi' ? 'kimi-code' : undefined);
   if (!provider) {
     throw new ModelIdentityError(
       `model "${model}" is ambiguous for the ${backend} runner — name the provider as "provider/model" (e.g. anthropic/${model})`,
@@ -251,5 +250,5 @@ export function normalizeModelForBackend(
 ): { backendModel: string; identity: ModelIdentity } | undefined {
   const identity = resolveModelIdentity(backend, raw, options);
   if (!identity) return undefined;
-  return { backendModel: toBackendModel(backend, identity), identity };
+  return { backendModel: backend === 'kimi' && raw ? raw.trim() : toBackendModel(backend, identity), identity };
 }

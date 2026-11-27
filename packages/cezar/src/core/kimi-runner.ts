@@ -1,3 +1,5 @@
+import { AgentProviderUnavailable } from './agent-runner.ts';
+import { kimiSubscriptionModel } from './kimi-model-catalog.ts';
 import { spawn as nodeSpawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { closeSync, existsSync, fstatSync, openSync, readdirSync, readSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
@@ -222,8 +224,8 @@ class KimiSession implements AgentSession {
     private readonly onEvent: ((event: AgentEvent) => void) | undefined,
     private readonly opts: SessionOptions,
   ) {
-    this.env = buildChildEnv({ backend: 'kimi', extraEnv: spec.env });
-    const [file, argv] = disclaimedCommand(bin, ['acp'], this.env);
+    this.env = buildChildEnv({ backend: 'kimi', extraEnv: spec.env, provider: spec.provider });
+    const [file, argv] = disclaimedCommand(bin, [...(spec.provider?.argv ?? []), 'acp'], this.env);
     this.child = nodeSpawn(file, argv, { cwd: spec.cwd, env: this.env }) as ChildProcessWithoutNullStreams;
     this.hasExited = trackChildExit(this.child);
     this.exited = waitForExit(this.child);
@@ -324,6 +326,7 @@ class KimiSession implements AgentSession {
     this.stdinOpen = false;
 
     if (this.spawnFailed) throw this.spawnFailed;
+    if (sessionError instanceof AgentProviderUnavailable) throw sessionError;
     if (sessionError) return this.failSession(sessionError.message);
 
     const exitedBadly =
@@ -462,6 +465,13 @@ class KimiSession implements AgentSession {
       }
       const res = await this.request('session/set_config_option', { sessionId, configId: 'model', value: model }, handshake);
       configOptions = res.configOptions ?? configOptions;
+    }
+    if (this.spec.provider && process.env.CEZ_DRY_RUN !== '1') {
+      const actual = selectValue(configOptions, 'model');
+      const matches = this.spec.provider.kind === 'subscription'
+        ? actual && await kimiSubscriptionModel(this.env, actual)
+        : actual === this.spec.provider.model;
+      if (!matches) throw new AgentProviderUnavailable('Kimi could not confirm this provider for the selected model. Check Settings → Agents.', this.spec.provider.methodId);
     }
     this.emitUi((state) => kimiSessionStarted(state, sessionId, configOptions));
 

@@ -1,3 +1,6 @@
+import { authMethods } from '../core/agent-auth-methods.ts';
+import { readAgentProviders, type StoredAgentProviders } from '../workspace/agent-providers.ts';
+import { providerQuotaKey, agentProviderEnv, AgentProviderUnavailable, verifyProviderLogin, type AgentProviderLaunch, type MethodSelection } from '../core/agent-provider-env.ts';
 import type { StepToolPolicy, SwitchRunAgentInput } from '@open-mercato/cezar-contract';
 import { readOnlyEnv } from '../core/read-only-env.ts';
 import { AgentUsageHolds } from '../workspace/agent-usage-holds.ts';
@@ -110,7 +113,7 @@ import { grantsFileWrites, isReadOnlyWorkflow, readOnlyWorkflowRefusal, workflow
 import { getHeadCommit, getRepoInfo } from '../server/git.ts';
 import { loadWorkflows, newerCatalogWorkflow } from './load.ts';
 import type { QueuedMessage, RunRecord, RunStore, StepState } from '../runs/store.ts';
-import { switchedWorkflowAgent, taskAgentSelection, workflowAgentSwitch } from '../runs/agent-selection.ts';
+import { continuationSelection, switchedWorkflowAgent, taskAgentSelection, workflowAgentSwitch } from '../runs/agent-selection.ts';
 import { GLOBAL_INSTRUCTIONS_HEADING, LEGACY_GLOBAL_HEADINGS, readGlobalInstructions } from '../core/global-instructions.ts';
 import { instructionsConcernChecks, packageScriptReader, resolveCheckCommand, rewritableCheck, type CheckCommandResolution } from './check-instructions.ts';
 import { artifactsDir, authParkForAccount, FRESH_PROMPT_MAX, isIdleParked, prCheckoutDir, testCommandFile } from '../runs/store.ts';
@@ -176,6 +179,7 @@ import {
   getAgentFallbackPolicySync,
   loadFallbackAccounts,
   type AgentFallbackPolicy,
+  type AgentFallbackCandidate,
 } from '../workspace/agent-fallback.ts';
 import { DEFAULT_IDLE_TIMEOUT_MINUTES } from '../workspace/config.ts';
 import { WorkspaceSemaphore, type AccountHolds } from '../workspace/semaphore.ts';
@@ -288,6 +292,16 @@ async function configuredModelProvider(
   repoRoot: string,
 ): Promise<string | undefined> {
   return readAgentModelProvider(backend, repoRoot).catch(() => undefined);
+}
+
+/** Gateway model IDs are opaque, including IDs with slashes. The vendor mapping supplies their wire form. */
+async function launchModel(backend: RunnerId, model: string | undefined, cwd: string, provider?: AgentProviderLaunch) {
+  if (provider?.kind === 'custom' || provider?.kind === 'openrouter') {
+    const wire = provider.model ?? model;
+    return wire ? { backendModel: wire, identity: { provider: provider.methodId, model: provider.catalogModel ?? model ?? wire } } : undefined;
+  }
+  if (backend === 'kimi' && provider?.kind === 'subscription' && model === 'auto') return undefined;
+  return normalizeModelForBackend(backend, provider?.model ?? model, { configuredProvider: await configuredModelProvider(backend, cwd) });
 }
 
 /**
@@ -592,6 +606,8 @@ interface SendMessageOptions {
 }
 
 interface ContinueRunOptions {
+  /** Exact endpoint model verified by the caller against its catalog. Internal only. */
+  providerModel?: string;
   /** The user's own Continue (the route): it answers `askRequestId`, or flags open cards as replied-in-chat. */
   reply?: { askRequestId?: string };
   text?: string;
@@ -612,6 +628,7 @@ class AgentAccountUnavailableError extends Error {}
 interface ActiveRun {
   /** `instructedCheckCommand`'s answers this session; lazily created, so neither construction site has to know. */
   checkResolutions?: Map<string, CheckCommandResolution>;
+  providerBlockedStep?: string;
   /** The actual definition this owner is walking, including the dequeue-time refresh. */
   workflow?: WorkflowDef;
   /** A successor already recorded and waiting for this owner to release its session and lease. */
@@ -1012,15 +1029,16 @@ const NO_HOLDS: AccountHolds = { deadline: new Set(), inFlight: new Set() };
  *    it blocks fresh work but not other resumes. Blocking those deadlocked a live workspace.
  */
 function accountHeldFor(
-  run: Pick<RunRecord, 'runner' | 'agentProfile' | 'status' | 'autoResumeAttempts' | 'autoResumeWindowOpen'>,
+  run: RunRecord,
   holds: AccountHolds,
   fallbackRunner: RunnerId,
   accounts?: AccountResolution,
   workflow?: WorkflowDef,
+  providers?: StoredAgentProviders,
 ): boolean {
   // A workflow with no agent step spends no account budget, so a closed window cannot concern it (#2094).
   if (workflow && !workflow.steps.some((s) => stepKind(s) === 'agent')) return false;
-  const key = runAccountKey(run, fallbackRunner, accounts);
+  const key = runQuotaKey(run, fallbackRunner, accounts, providers);
   if (holds.deadline.has(key)) return true;
   return holds.inFlight.has(key) && !resumeInFlight(run);
 }
@@ -1051,6 +1069,21 @@ export function runAccountKey(
   // A named account keeps its own key (a stale id is still its own budget to the user).
   if (explicit !== undefined) return `${runner}:${explicit}`;
   return `${runner}:${resolveAccountId(accounts.store, { provider: runner, repoRoot: accounts.repoRoot })}`;
+}
+
+function runQuotaKey(run: RunRecord, fallbackRunner: RunnerId, accounts?: AccountResolution, providers?: StoredAgentProviders) {
+  const runner = run.runner ?? fallbackRunner;
+  // A mixed workflow can exhaust a different runner or account than the task default.
+  const step = run.status === 'failed' || resumeInFlight(run)
+    ? [...run.steps].reverse().find(s => s.backend && s.status === 'failed') : undefined;
+  const planned = run.status === 'queued' && !step ? taskAgentSelection(run, fallbackRunner) : undefined;
+  const backend = step?.backend ?? planned?.runner ?? runner;
+  const model = step?.model ?? planned?.model ?? (runner === backend ? run.model : undefined);
+  const taskMethodApplies = runner === backend && (authMethods(backend).mode === 'one' || model === run.model);
+  const method = step ? step.agentMethod : (taskMethodApplies ? run.agentMethod : undefined);
+  const profile = step?.profileId ?? planned?.agentProfile ?? (backend === runner ? run.agentProfile : undefined);
+  const account = runAccountKey({ runner: backend, agentProfile: profile, steps: run.steps }, backend, accounts);
+  return providerQuotaKey(backend, account, method, providers, model);
 }
 
 /** What `runAccountKey` needs to resolve an absent `agentProfile` to the account that really runs (#1722). */
@@ -1091,7 +1124,8 @@ export function setFallbackProviderCheck(check: typeof fallbackProviderCheck): v
 
 /** `codex · Work` — the same name Settings → Agents → Automatic fallback shows for the row. */
 function fallbackLabel(key: string, accounts?: AgentAccountStore | null): string {
-  const [provider = 'claude', profileId = DEFAULT_AGENT_ACCOUNT_ID] = key.split(':');
+  const [provider = 'claude', profileId = DEFAULT_AGENT_ACCOUNT_ID, method] = key.split(':');
+  if (method && profileId === 'provider') return provider + ' · ' + method;
   if (profileId === DEFAULT_AGENT_ACCOUNT_ID) return `${provider} · Default`;
   const account = accounts?.accounts.find((a) => a.id === profileId && a.provider === provider);
   return `${provider} · ${account?.label || profileId}`;
@@ -1164,6 +1198,7 @@ function formatWakeInstant(at: Date): string {
 }
 
 export interface StartRunInput {
+  agentMethod?: string;
   /** Internal scheduled launch identity, persisted before any naming or execution side effect. */
   scheduledLaunch?: { id: string; provenance: NonNullable<RunRecord['automationTrigger']>; binding: NonNullable<RunRecord['deferredBinding']> };
   /** Internal child admission: inherit the launch guard without the scheduler's run identity. */
@@ -2282,6 +2317,48 @@ export class RunManager {
     };
   }
 
+  /** A step owns its session's method. The task selection belongs only to the task runner. */
+  private async stepProvider(
+    runId: string, stepId: string, backend: RunnerId, model: string | undefined,
+    owner: StepState | undefined, useTaskSelection: boolean,
+  ): Promise<AgentProviderLaunch | undefined> {
+    const state = this.active.get(runId);
+    const run = this.store.getRun(runId);
+    const taskMethod = useTaskSelection && run?.runner === backend ? run.agentMethod : undefined;
+    const saved = owner?.backend === backend && owner.agentMethod ? owner
+      : taskMethod && run?.steps.slice().reverse().find(step => step.backend === backend && step.agentMethod === taskMethod);
+    const selection: MethodSelection = saved
+      ? { saved: saved.agentMethod, savedHost: saved.agentMethodHost, model }
+      : { requested: taskMethod, model };
+    let provider: AgentProviderLaunch | undefined;
+    try {
+      provider = await agentProviderEnv(backend, { ...selection, modelsLocked: agentModelsLocked(this.repoRoot) });
+    } catch (error) {
+      // A locked store has already chosen a method. A later Continue must not switch billing
+      // simply because the workspace active choice changed while the user unlocked the key.
+      if (error instanceof AgentProviderUnavailable && !state?.cancelled && this.active.get(runId) === state) {
+        this.store.updateStep(runId, stepId, { backend, agentMethod: error.methodId, agentMethodHost: selection.savedHost });
+        if (error.methodId && useTaskSelection && run?.runner === backend) this.store.updateRun(runId, { agentMethod: error.methodId });
+      }
+      throw error;
+    }
+    if (state?.cancelled || this.active.get(runId) !== state) return undefined;
+    if (provider?.secret) this.store.registerRunSecrets(runId, [provider.secret]);
+    this.store.updateStep(runId, stepId, { agentMethod: provider?.methodId, agentMethodHost: provider?.hostKey });
+    if (useTaskSelection && run?.runner === backend && provider) this.store.updateRun(runId, { agentMethod: provider.methodId });
+    return provider;
+  }
+
+  private parkProvider(runId: string, stepId: string, error: AgentProviderUnavailable): void {
+    const at = new Date().toISOString();
+    this.store.updateStep(runId, stepId, { status: 'waiting', error: error.message });
+    this.store.updateRun(runId, {
+      status: 'waiting', idleClosedAt: at, currentStepId: stepId, error: error.message,
+      finishedAt: undefined, activity: undefined,
+    });
+    this.store.appendEvent(runId, { type: 'lifecycle', stepId, tone: 'danger', message: error.message });
+  }
+
   /** A resumed run that observes an open window (some `allowed`, none `blocked`) has proven it, so its
    *  in-flight account hold ends now instead of at turn end (#2525). Deadline holds are untouched. */
   private markResumeWindowOpen(runId: string, observation: UsageWindowsObservation): void {
@@ -2324,6 +2401,7 @@ export class RunManager {
       // The composer's per-task account (spec 2026-07-29-agent-profiles). Persisted at creation
       // so a queued run picks it up at dequeue and every later resume reads the same answer.
       agentProfile: input.agentProfile,
+      agentMethod: input.agentMethod,
       // Snapshotted only when on: an absent snapshot already means "this task never uses fallback".
       // A manager's task falls back within the manager's own allowed accounts (spec 2026-10-31-managers).
       // An allowed-accounts list never falls back outside itself, so `[]` means no fallback at all.
@@ -2708,7 +2786,7 @@ export class RunManager {
           if (queued && this.heldForRestart(queued)) return false;
           // Busy is a soft limit: "Start now" overrides it as it overrides `maxParallel`.
           if (routedBusy.has(id) && !this.startNowRequested.has(id)) return false;
-          if (queued && anyHold && accountHeldFor(queued, holds, defaultRunner ?? 'claude', this.askingAccounts(), this.pendingJobs.get(id)?.workflow)) return false;
+          if (queued && anyHold && accountHeldFor(queued, holds, defaultRunner ?? 'claude', this.askingAccounts(), this.pendingJobs.get(id)?.workflow, this.providerStore)) return false;
           // "Start now" goes over `maxParallel` on purpose, but a non-git root still runs one at a time.
           if (this.startNowRequested.has(id)) return repo !== null || this.busySlots() < 1;
           return capacity();
@@ -3779,6 +3857,7 @@ export class RunManager {
       /** Live read of the automation store (#1980): an agent's own dispatch under a tree its
        *  automation launched is refused while that automation is paused. Graph nodes are exempt. */
       automationPaused?: (automationId: string) => boolean;
+      providerModel?: string;
     } = {},
   ): { id: string; branch?: string } | { refused: string } {
     if (!this.dispatchEnabled()) return { refused: 'dispatch is disabled on this cockpit (CEZ_DISPATCH=0) — the operator turned it off. Do not substitute sub-agents or do the delegated work yourself: stop and report that dispatch is disabled.' };
@@ -3799,7 +3878,7 @@ export class RunManager {
     const intent = runs.find((r) => r.id === (parent.dispatch?.rootRunId ?? parent.id))?.dispatch?.intent;
     // An explicit --model the child's runner cannot run would fail at its first turn (#1578).
     const orderedRunner = input.runner ?? intent?.runner ?? parent.runner ?? 'claude';
-    if (input.model && modelConflictsWithRunner(input.model, orderedRunner)) {
+    if (input.model && input.model !== opts.providerModel && modelConflictsWithRunner(input.model, orderedRunner)) {
       const refused = `model "${input.model}" does not belong to runner "${orderedRunner}" — pick a model of that runner or drop --model.`;
       note(`dispatch refused — ${refused}`, 'danger');
       return { refused };
@@ -3869,6 +3948,8 @@ export class RunManager {
       ...(deferredBindingActive(parent, runs) ? { deferredBinding: parent.deferredBinding } : {}),
       runner: childRunner,
       ...(childModel ? { model: childModel } : {}),
+      ...(sameRunner(parent.runner) && childModel === parent.model && authMethods(childRunner ?? 'claude').mode === 'any'
+        ? { agentMethod: parent.agentMethod } : {}),
       ...(childAccount ? { agentProfile: childAccount } : {}),
       autonomous: true,
       dispatch: {
@@ -4292,7 +4373,7 @@ export class RunManager {
     });
     // The account that actually ran the failed step — a run following the project's selection
     // records no `agentProfile`, so the run-level key would name the wrong login.
-    const originKey = `${failed.backend ?? run.runner ?? 'claude'}:${failed.profileId ?? run.agentProfile ?? DEFAULT_AGENT_ACCOUNT_ID}`;
+    const originKey = this.failedQuotaKey(run, failed);
     const attempted = new Set(episode?.attempted ?? []);
     attempted.add(originKey);
     if (!successorFailedToStart) {
@@ -4327,9 +4408,9 @@ export class RunManager {
    * a limit it keeps the reset-time auto-resume instead of failing (manager task agents, #5).
    */
   private managerFallbackHasCapacity(run: RunRecord, failed: RunRecord['steps'][number]): boolean {
-    const origin = `${failed.backend ?? run.runner ?? 'claude'}:${failed.profileId ?? run.agentProfile ?? DEFAULT_AGENT_ACCOUNT_ID}`;
+    const origin = this.failedQuotaKey(run, failed);
     const attempted = new Set([...(run.fallbackEpisode?.attempted ?? []), origin]);
-    const held = this.semaphore.accountHolds().deadline;
+
     const policy = run.fallbackPolicy as AgentFallbackPolicy | undefined;
     if (!policy) return false;
     // Admission's own filter (held, removed, out of the manager's list). An unread accounts file
@@ -4340,8 +4421,17 @@ export class RunManager {
       accounts: policy.candidates.map((c) => ({ id: c.profileId, provider: c.provider, configDir: '', label: '', addedAt: '' })),
     } as AgentAccountStore;
     const workflowDef = run.enforceReadOnly ? undefined : run.workflowDef;
-    return eligibleFallbackCandidates(policy, attempted, held, accounts, this.repoRoot, failed.backend ?? run.runner ?? 'claude', undefined, workflowDef).eligible.length > 0;
+    return eligibleFallbackCandidates(policy, attempted, this.semaphore.accountHolds().deadline, accounts, this.repoRoot, failed.backend ?? run.runner ?? 'claude', undefined, workflowDef, this.candidateQuotaKey).eligible.length > 0;
   }
+
+  private failedQuotaKey(run: RunRecord, failed: StepState): string {
+    const runner = failed.backend ?? run.runner ?? 'claude';
+    const account = failed.profileId ?? run.agentProfile ?? DEFAULT_AGENT_ACCOUNT_ID;
+    return providerQuotaKey(runner, runner + ':' + account, failed.agentMethod);
+  }
+
+  private readonly candidateQuotaKey = (candidate: AgentFallbackCandidate) =>
+    providerQuotaKey(candidate.provider, candidateKey(candidate), undefined, this.providerStore, candidate.model);
 
   private finishFallbackAdmission(runId: string, message: string): void {
     const run = this.store.getRun(runId);
@@ -4393,17 +4483,17 @@ export class RunManager {
     }
     // Say why a listed agent is not used when it is the one that just ran out.
     // A manager list always holds the task's own account; skipping it there is expected, not news.
-    if (startFailure === undefined && snapshot.source !== 'manager' && snapshot.candidates.some((candidate) => candidateKey(candidate) === fromKey)) {
+    if (startFailure === undefined && snapshot.source !== 'manager' && snapshot.candidates.some((candidate) => this.candidateQuotaKey(candidate) === fromKey)) {
       this.store.appendEvent(runId, { type: 'note', message: `fallback skipped ${label(fromKey)} — it is the agent that just reached its limit` });
     }
     const workflowDef = run.enforceReadOnly ? undefined : run.workflowDef;
-    const { eligible, skipped } = eligibleFallbackCandidates(snapshot, attempted, this.semaphore.accountHolds().deadline, accounts, this.repoRoot, fromKey.split(':')[0], this.semaphore.accountLoad(), workflowDef);
+    const { eligible, skipped } = eligibleFallbackCandidates(snapshot, attempted, this.semaphore.accountHolds().deadline, accounts, this.repoRoot, fromKey.split(':')[0], this.semaphore.accountLoad(), workflowDef, this.candidateQuotaKey);
     for (const skip of skipped) {
-      attempted.add(candidateKey(skip.candidate));
+      attempted.add(this.candidateQuotaKey(skip.candidate));
       this.store.appendEvent(runId, { type: 'note', message: `fallback skipped ${label(candidateKey(skip.candidate))} — ${skip.reason}` });
     }
     for (const candidate of eligible) {
-      const key = candidateKey(candidate);
+      const key = this.candidateQuotaKey(candidate);
       attempted.add(key);
       const refusal = await this.fallbackProviderRefusal(candidate.provider as RunnerId, candidate.profileId);
       if (this.disposed) return;
@@ -4435,11 +4525,21 @@ export class RunManager {
         model = mapped.model ?? model;
         effortNote = mapped.note;
       }
+      // An endpoint can serve a model whose native preset belongs to another runner.
+      const candidateRunner = candidate.provider as RunnerId;
+      const admitted = model && modelConflictsWithRunner(model, candidateRunner)
+        ? await (await import('../agent-providers/service.ts')).providerModelAdmission(candidateRunner, model)
+        : {};
+      if (this.disposed || !this.stillAwaitingFallback(runId, failedStepId)) return;
+      if (!fallbackConsentCurrent(snapshot, getAgentFallbackPolicySync(this.repoRoot))) {
+        this.finishFallbackAdmission(runId, 'automatic fallback was switched off before the next agent started');
+        return;
+      }
       // The reservation: written before the continuation exists, so no restart can pick it twice.
       this.store.updateRun(runId, { fallbackEpisode: { pending: true, attempted: [...attempted], ...(run.fallbackEpisode?.current ? { current: run.fallbackEpisode.current } : {}) } });
       const switched = this.queueAgentHandoff(runId, {
         runner: candidate.provider as RunnerId,
-        model,
+        model, ...admitted,
         agentProfile: candidate.profileId,
       }, AGENT_FALLBACK_PROMPT);
       if (!switched.ok) {
@@ -4650,6 +4750,7 @@ export class RunManager {
       reasoningEffort: run.reasoningEffort,
       runner: run.runner,
       agentProfile: run.agentProfile,
+      agentMethod: run.agentMethod,
       // No `systemPrompt`: the record keeps only the COMPOSED prompt, never the bare override, so
       // feeding it back would re-compose it; a usage-limit resume reuses it verbatim in `execute`.
       generateFollowups: followupsEnabled() ? run.generateFollowups : false,
@@ -4758,7 +4859,7 @@ export class RunManager {
     // hand an in-place run straight back, re-wedging the queue the rescue had just freed.
     // `dropActive` retires the entry on every terminal path, so the set still cleans itself up.
     if (this.forceStarted.has(runId)) return false;
-    if (!accountHeldFor({ ...run, runner }, this.semaphore.accountHolds(), runner, this.askingAccounts(), workflow)) return false;
+    if (!accountHeldFor({ ...run, runner, status: 'queued' }, this.semaphore.accountHolds(), runner, this.askingAccounts(), workflow, this.providerStore)) return false;
     state?.releaseRepoRoot?.();
     if (state) state.releaseRepoRoot = undefined;
     this.pendingJobs.set(runId, { workflow, input });
@@ -4855,7 +4956,7 @@ export class RunManager {
    *  notification re-derives every participant's queue reasons, so only hold inputs notify (#1340). */
   private readonly holdInputs = new Map<string, string>();
   private readonly onRunHoldInputs = (run: RunRecord) => {
-    const inputs = JSON.stringify([run.status, run.autoResumeAt, run.autoResumeAttempts, run.autoResumeReason, run.autoResumeWindowOpen, run.runner, run.agentProfile]);
+    const inputs = JSON.stringify([run.status, run.autoResumeAt, run.autoResumeAttempts, run.autoResumeReason, run.autoResumeWindowOpen, run.runner, run.agentProfile, run.agentMethod]);
     if (this.holdInputs.get(run.id) === inputs) return;
     this.holdInputs.set(run.id, inputs);
     this.onQueueHoldChange();
@@ -4884,8 +4985,9 @@ export class RunManager {
   /** Snapshot of agent-accounts.json for resolving absent `agentProfile`s (#1722). Re-read per
    *  sweep, never trusted across them; unreadable degrades to the literal-`default` key. */
   private accountStore: AgentAccountStore | undefined;
+  private providerStore?: StoredAgentProviders;
   private async refreshAccounts(): Promise<void> {
-    try { this.accountStore = await loadAgentAccounts(); } catch { this.accountStore = undefined; }
+    [this.accountStore, this.providerStore] = await Promise.all([loadAgentAccounts().catch(() => undefined), readAgentProviders()]);
   }
   private askingAccounts(): AccountResolution | undefined {
     return this.accountStore ? { store: this.accountStore, repoRoot: this.repoRoot } : undefined;
@@ -4894,7 +4996,7 @@ export class RunManager {
   private applyQueueReasons(defaultRunner: RunnerId): void {
     const holds = this.semaphore.accountHolds();
     for (const run of this.store.listRuns()) {
-      const key = runAccountKey(run, defaultRunner, this.askingAccounts());
+      const key = runQuotaKey(run, defaultRunner, this.askingAccounts(), this.providerStore);
       const until = holds.deadlines?.get(key);
       const reason: RunRecord['queueWaitReason'] = run.status !== 'queued' ? undefined
         : until !== undefined ? { kind: 'usage-reset', until: new Date(until).toISOString(), timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone }
@@ -4920,10 +5022,11 @@ export class RunManager {
     const accounts = this.askingAccounts();
     const keyOf = (runner: RunnerId, agentProfile: string | undefined) => runAccountKey({ runner, agentProfile }, runner, accounts);
     const busy = (key: string) => routing.maxRunning !== undefined && (load.get(key) ?? 0) >= routing.maxRunning;
-    const open = (key: string) => !holds.deadline.has(key) && !busy(key);
+    const billingKey = (runner: RunnerId, key: string, method?: string) => providerQuotaKey(runner, key, method, this.providerStore, run.model);
+    const open = (runner: RunnerId, key: string, method?: string) => !holds.deadline.has(billingKey(runner, key, method)) && !busy(key);
     const ownRunner = run.runner ?? 'claude';
     const own = keyOf(ownRunner, run.agentProfile);
-    if (open(own)) return { kind: 'stay', key: own };
+    if (open(ownRunner, own, run.agentMethod)) return { kind: 'stay', key: own };
     // A pinned model or effort belongs to its runner: such a task moves only between its accounts.
     const pinned = run.model !== undefined || run.reasoningEffort !== undefined;
     const compatible = (runner: RunnerId) => run.enforceReadOnly || workflowSupportsBackend(run.workflowDef, runner);
@@ -4931,11 +5034,11 @@ export class RunManager {
       .filter((agent): agent is typeof agent & { runner: RunnerId } =>
         isRunnerId(agent.runner) && (!pinned || agent.runner === ownRunner) && compatible(agent.runner))
       .map((agent, index) => ({ ...agent, index, key: keyOf(agent.runner, agent.agentProfile) }));
-    const main = entries.filter((entry) => entry.role !== 'backup' && open(entry.key))
+    const main = entries.filter((entry) => entry.role !== 'backup' && open(entry.runner, entry.key))
       .sort((a, b) => (load.get(a.key) ?? 0) - (load.get(b.key) ?? 0) || a.index - b.index)[0];
-    const target = main ?? entries.find((entry) => entry.role === 'backup' && open(entry.key));
+    const target = main ?? entries.find((entry) => entry.role === 'backup' && open(entry.runner, entry.key));
     if (target && target.key !== own) return { kind: 'move', runner: target.runner, agentProfile: target.key.slice(target.runner.length + 1), key: target.key };
-    return holds.deadline.has(own) ? { kind: 'stay' } : { kind: 'busy' };
+    return holds.deadline.has(billingKey(ownRunner, own, run.agentMethod)) ? { kind: 'stay' } : { kind: 'busy' };
   }
 
   /** Moves routed queued tasks that can start elsewhere; answers the ones that must wait for a free account. */
@@ -5002,7 +5105,7 @@ export class RunManager {
     for (const run of this.store.listRuns()) {
       // A holding run always carries the runner it actually ran on, so the fallback is unused
       // here — it is spelled out rather than `!` so a future record shape degrades, not throws.
-      const key = () => runAccountKey(run, run.runner ?? 'claude', this.accountStore && { store: this.accountStore, repoRoot: this.repoRoot, holding: true });
+      const key = () => runQuotaKey(run, run.runner ?? 'claude', this.accountStore && { store: this.accountStore, repoRoot: this.repoRoot, holding: true });
       // A fallback's exhausted account stays held until ITS reset, whatever the task did since.
       for (const hold of run.usageLimitHolds ?? []) {
         const until = Date.parse(hold.until);
@@ -5334,7 +5437,7 @@ export class RunManager {
     if (run && (holds.deadline.size > 0 || holds.inFlight.size > 0)) {
       const { defaultRunner } = await loadConfig(this.repoRoot);
       await this.refreshAccounts();
-      if (accountHeldFor(run, this.semaphore.accountHolds(), defaultRunner ?? 'claude', this.askingAccounts(), this.pendingJobs.get(runId)?.workflow)) return 'held';
+      if (accountHeldFor(run, this.semaphore.accountHolds(), defaultRunner ?? 'claude', this.askingAccounts(), this.pendingJobs.get(runId)?.workflow, this.providerStore)) return 'held';
     }
     // The config read above awaited — the run may have started or been cancelled meanwhile.
     if (!this.queue.includes(runId)) return 'not-queued';
@@ -6141,7 +6244,7 @@ export class RunManager {
   }
 
   /** Switch the queued job or hand the live run over after its current owner releases the tree. */
-  switchAgent(runId: string, input: SwitchRunAgentInput & { agentProfile: string }, defaultRunner?: RunnerId): { summary: string } | { error: string } {
+  switchAgent(runId: string, input: SwitchRunAgentInput & { agentProfile: string; providerModel?: string }, defaultRunner?: RunnerId): { summary: string } | { error: string } {
     const run = this.store.getRun(runId);
     if (!run) return { error: 'task not found' };
     const state = this.active.get(runId);
@@ -6150,7 +6253,7 @@ export class RunManager {
     if (!preparingContinue && this.lifecycle.isBlocked(runId)) return { error: 'Resolve the worktree lifecycle operation first' };
     const modelsLocked = agentModelsLocked(this.repoRoot);
     if (modelsLocked && (input.model || input.reasoningEffort)) return { error: AGENT_MODELS_LOCKED_ERROR };
-    if (input.model && modelConflictsWithRunner(input.model, input.runner)) return { error: `model '${input.model}' is not a ${input.runner} model` };
+    if (input.model && input.model !== input.providerModel && modelConflictsWithRunner(input.model, input.runner)) return { error: `model '${input.model}' is not a ${input.runner} model` };
     if (input.reasoningEffort && !runnerSupportsReasoningEffort(input.runner)) return { error: REASONING_EFFORT_UNSUPPORTED_ERROR };
     const refusal = run.enforceReadOnly ? undefined : readOnlyWorkflowRefusal(run.workflowDef, input.runner);
     if (refusal) return { error: refusal };
@@ -6209,7 +6312,7 @@ export class RunManager {
       const workflowSelection = workflowAgentSwitch(run, current.runner, input, defaultRunner ?? 'claude', !modelsLocked);
       this.clearAutoResume(runId);
       this.store.updateRun(runId, {
-        ...selection, modelIdentity: undefined, actualModel: undefined, fallbackEpisode: undefined,
+        ...selection, agentMethod: undefined, modelIdentity: undefined, actualModel: undefined, fallbackEpisode: undefined,
         agentSwitch: { summary, workflow: true, workflowSelection, checkRepair },
         ...(checkpoint && walk && { graphState: {
           ...walk, cursor: checkpoint.id,
@@ -6217,8 +6320,9 @@ export class RunManager {
         } }),
         ...(requeue ? { status: 'queued', currentStepId: undefined, activity: undefined, finishedAt: undefined, error: undefined } : {}),
       });
-      if (job) this.pendingJobs.set(runId, { workflow, input: { ...job.input, ...selection, usageLimitResume: undefined } });
+      if (job) this.pendingJobs.set(runId, { workflow, input: { ...job.input, ...selection, agentMethod: undefined, usageLimitResume: undefined } });
       if (requeue) {
+        if (checkpointRecord?.providerRetry) this.store.updateStep(runId, checkpointRecord.id, { providerRetry: undefined });
         if (checkpoint) this.store.updateStep(runId, checkpoint.id, {
           status: 'pending',
           finishedAt: undefined,
@@ -6236,7 +6340,7 @@ export class RunManager {
       }
       const stoppedSteps = state || this.starting.has(runId) ? run.steps.filter((step) =>
         step.status === 'running' || step.status === 'waiting' || (step.status === 'pending' && step.id.startsWith('continue-'))) : [];
-      const result = this.queueAgentHandoff(runId, selection, SWITCH_AGENT_PROMPT, { summary, previousContinuation });
+      const result = this.queueAgentHandoff(runId, { ...selection, providerModel: input.providerModel }, SWITCH_AGENT_PROMPT, { summary, previousContinuation });
       if (!result.ok) return { error: result.error ?? 'could not switch agent' };
       for (const step of stoppedSteps) {
         if (step.id === previousContinuation?.stepId) continue;
@@ -6263,7 +6367,7 @@ export class RunManager {
   /** Manual switches and admitted fallback candidates use the same continuation and queue. */
   private queueAgentHandoff(
     runId: string,
-    selection: Pick<SwitchRunAgentInput, 'runner' | 'model' | 'reasoningEffort'> & { agentProfile: string },
+    selection: Pick<SwitchRunAgentInput, 'runner' | 'model' | 'reasoningEffort'> & { agentProfile: string; providerModel?: string },
     prompt: string,
     manual?: ManualAgentHandoff,
   ): { ok: boolean; error?: string } {
@@ -6329,7 +6433,7 @@ export class RunManager {
         && (unwinding.cancelled ? run.status === 'cancelled' : unwinding.turnSettled === true);
       if (!settledTurn) return { ok: false, error: 'run is still active' };
       const runner = opts.runner ?? run.runner ?? 'claude';
-      if (opts.model && modelConflictsWithRunner(opts.model, runner)) {
+      if (opts.model && opts.model !== opts.providerModel && modelConflictsWithRunner(opts.model, runner)) {
         return { ok: false, error: `model '${opts.model}' is not a ${runner} model` };
       }
       unwinding.continueOnDrop = { opts, deferForCapacity, ...(unwinding.cancelled ? { afterCancel: true } : {}) };
@@ -6341,36 +6445,58 @@ export class RunManager {
       && !(internal.freshSessionAllowed && run.status === 'queued' && run.fallbackEpisode?.pending)) {
       return { ok: false, error: `cannot continue a ${run.status} run` };
     }
-    const sessionStep = [...run.steps].reverse().find((s) => s.sessionId);
+    const blocked = isIdleParked(run) && run.error ? run.steps.find(step =>
+      step.id === run.currentStepId && step.status === 'waiting' && step.error === run.error) : undefined;
+    const repair = run.agentSwitch?.checkRepair;
+    const checkpoint = repair && repair.stepId === blocked?.id ? repair.checkId : blocked?.id;
+    if (blocked && run.graphState?.cursor === checkpoint && run.workflowDef && !agentSwitch) {
+      // No process opened at this checkpoint. Apply Continue's choice to this node only;
+      // subsequent checks, review decisions and differently pinned nodes stay in the graph.
+      const override = opts.runner !== undefined || opts.model !== undefined || opts.agentProfile !== undefined ||
+        opts.reasoningEffort !== undefined || opts.freshContext;
+      let retry = blocked.providerRetry;
+      let changeMethod = false;
+      if (override) {
+        const current = taskAgentSelection(run);
+        const runner = opts.runner ?? blocked.backend ?? current.runner;
+        const sameRunner = runner === (blocked.backend ?? current.runner);
+        if (opts.model && opts.model !== opts.providerModel && modelConflictsWithRunner(opts.model, runner)) {
+          return { ok: false, error: `model '${opts.model}' is not a ${runner} model` };
+        }
+        if (opts.reasoningEffort && !runnerSupportsReasoningEffort(runner)) return { ok: false, error: REASONING_EFFORT_UNSUPPORTED_ERROR };
+        const refusal = readOnlyWorkflowRefusal(run.workflowDef, runner);
+        if (refusal) return { ok: false, error: refusal };
+        retry = {
+          runner,
+          model: opts.model !== undefined ? opts.model || undefined : sameRunner ? retry?.model ?? current.model : undefined,
+          reasoningEffort: opts.reasoningEffort !== undefined ? opts.reasoningEffort || undefined :
+            sameRunner && opts.model === undefined ? retry?.reasoningEffort ?? current.reasoningEffort : undefined,
+          agentProfile: opts.agentProfile ?? (sameRunner ? retry?.agentProfile ?? current.agentProfile : undefined),
+        };
+        changeMethod = !sameRunner || (authMethods(runner).mode === 'any' && opts.model !== undefined && opts.model !== current.model);
+      }
+      this.store.updateStep(runId, blocked.id, { status: 'pending', error: undefined, providerRetry: retry,
+        ...(changeMethod ? { agentMethod: undefined, agentMethodHost: undefined } : {}),
+      });
+      this.store.updateRun(runId, { status: 'queued', currentStepId: undefined, error: undefined });
+      this.pendingJobs.set(runId, { workflow: run.workflowDef, input: this.workflowInput(run) });
+      this.enqueue(runId);
+      const content: PastedContent[] = [...(opts.images ?? []), ...(opts.text ? [{ type: 'text' as const, text: opts.text }] : [])];
+      if (content.length) this.enqueueMessage(runId, content);
+      void this.pump();
+      return { ok: true };
+    }
+    const { targetRunner, sessionStep, resume, newModelProvider } = continuationSelection(run, opts, !!agentSwitch);
     if (!sessionStep?.sessionId) {
       if (!agentSwitch && run.worktreeLifecycle?.phase === 'setup' && run.worktreeLifecycle.state === 'cancelled') {
         void this.lifecycle.reopenSetup(runId).catch(error => this.store.updateRun(runId, {error: String(error)}));
         return {ok: true};
       }
-      if (!internal.freshSessionAllowed) return { ok: false, error: 'no agent session to resume' };
+      if (!internal.freshSessionAllowed && !blocked) return { ok: false, error: 'no agent session to resume' };
     }
-    const targetRunner = opts.runner ?? run.runner ?? 'claude';
-    // Session ids are provider-owned opaque values. New records carry explicit
-    // affinity; for legacy records, the run's current runner is the conservative
-    // owner until a continuation emits a new, attributed session id (#562).
-    const sessionBackend = sessionStep?.backend ?? run.runner ?? 'claude';
     if (opts.reasoningEffort && !runnerSupportsReasoningEffort(targetRunner)) {
       return { ok: false, error: REASONING_EFFORT_UNSUPPORTED_ERROR };
     }
-    // A session id only resolves inside the config dir that created it (spec
-    // 2026-07-29-agent-profiles), so switching ACCOUNT ends the session exactly like switching
-    // backend does: `claude --resume <id>` under another login finds nothing and would silently
-    // open a fresh conversation while the thread claimed it had resumed. A step that recorded no
-    // account predates the feature and therefore ran under the discovered one.
-    const sessionAccount = sessionStep?.profileId ?? DEFAULT_AGENT_ACCOUNT_ID;
-    // The account this turn must run on: the composer's pick, else the one the run already
-    // chose. The run's own choice counts too — a record whose newest session predates an
-    // account switch (a fresh continuation that recorded no session id) must not be resumed
-    // under the account the user switched away from.
-    const targetAccount = opts.agentProfile
-      ?? (targetRunner === (run.runner ?? 'claude') ? run.agentProfile : undefined);
-    const accountSwitched = targetAccount !== undefined && targetAccount !== sessionAccount;
-    const resume = !agentSwitch && !opts.freshContext && Boolean(sessionStep?.sessionId) && sessionBackend === targetRunner && !accountSwitched;
     // An agent switch replays the queued Continue it replaces, its fresh intent included. Once a
     // fresh session has run, a manual switch, a backup-agent fallback or a lost session seeds the
     // whole run's transcript (spec 2026-10-31-managers, `--fresh`), so earlier turns can come back.
@@ -6391,7 +6517,7 @@ export class RunManager {
       // this continuation will actually use (`opts.runner ?? record.runner ?? 'claude'` — the
       // same resolution `runContinuation` reads off the record). A model that is recognizably
       // another runner's preset would corrupt the run; free-form/custom ids pass untouched.
-      if (opts.model && modelConflictsWithRunner(opts.model, targetRunner)) {
+      if (opts.model && opts.model !== opts.providerModel && modelConflictsWithRunner(opts.model, targetRunner)) {
         return { ok: false, error: `model '${opts.model}' is not a ${targetRunner} model` };
       }
       // A runner switch that carries NO explicit model must not leave the previous backend's pin
@@ -6416,6 +6542,7 @@ export class RunManager {
         targetRunner !== (run.runner ?? 'claude');
       this.store.updateRun(runId, {
         ...(opts.runner !== undefined ? { runner: opts.runner } : {}),
+        ...(runnerChanged || newModelProvider || agentSwitch || internal.freshSessionAllowed ? { agentMethod: undefined } : {}),
         ...(opts.model !== undefined
           ? { model: opts.model === '' ? undefined : opts.model }
           : inheritedPinIsForeign
@@ -7078,22 +7205,22 @@ export class RunManager {
     // the exact defect that PR existed to remove — and the raw record string reaches the CLI
     // in the un-normalised wire form the first step already converted away (`anthropic/opus`
     // instead of `opus`). Fail loud here too rather than let the backend pick a default.
+    const owningStep = sessionId === undefined ? undefined : recordBeforeTurn?.steps.slice().reverse().find(s => s.sessionId === sessionId && (!s.backend || s.backend === continueBackend));
+    let provider: AgentProviderLaunch | undefined;
+    let turnModel: string | undefined;
     let continueModel: string | undefined;
     try {
       // The step that owns the session keeps its own model across Continue, auto-resume and
       // restart recovery (#1488); every path lands here, so this is the one place to resolve it.
       const modelsLocked = agentModelsLocked(this.repoRoot);
-      const turnModel = modelsLocked
+      turnModel = modelsLocked
         ? undefined
         : resolveContinuationModel(record, stepId, sessionId, continueBackend);
-      const normalized = normalizeModelForBackend(
-        continueBackend,
-        turnModel,
-        { configuredProvider: await configuredModelProvider(continueBackend, state.cwd) },
-      );
+      provider = await this.stepProvider(runId, stepId, continueBackend, turnModel, owningStep, true);
+      const normalized = await launchModel(continueBackend, turnModel, state.cwd, provider);
       continueModel = normalized?.backendModel;
       // A locked turn records nothing, so unlocking later falls back to the step/run pin.
-      if (!modelsLocked) this.store.updateStep(runId, stepId, { model: turnModel ?? '' });
+      if (!modelsLocked) this.store.updateStep(runId, stepId, { model: provider?.catalogModel ?? turnModel ?? '' });
       this.store.updateRun(runId, {
         modelIdentity: normalized ? formatModelIdentity(normalized.identity) : undefined,
       });
@@ -7101,6 +7228,14 @@ export class RunManager {
         this.store.updateStep(runId, stepId, { modelIdentity: formatModelIdentity(normalized.identity) });
       }
     } catch (err) {
+      if (err instanceof AgentProviderUnavailable) {
+        if (!state.cancelled && this.active.get(runId) === state) {
+          this.store.updateStep(runId, stepId, { sessionId });
+          this.parkProvider(runId, stepId, err);
+        }
+        this.dropActive(runId, state);
+        return;
+      }
       if (!(err instanceof ModelIdentityError)) throw err;
       failBeforeSpawn(err.message);
       return;
@@ -7108,9 +7243,6 @@ export class RunManager {
     // Resuming reattaches to a session that lives inside ONE account's config dir, so the
     // continuation must run under the account that created it — not whatever the project has
     // been switched to since. The owning step is the one carrying this session id.
-    const owningStep = sessionId === undefined
-      ? undefined
-      : record?.steps.find((s) => s.sessionId === sessionId);
     const resumedProfileId = owningStep?.profileId;
     // The owning step also names the session's tools: resolve `allowedTools`/`bashAllowlist`
     // from the persisted `workflowDef` exactly as the first spawn did (`runAgentStep`).
@@ -7221,7 +7353,7 @@ export class RunManager {
     state.grantedAttachmentLibrary = this.prepareAttachmentLibrary();
     const recordedPrompt = await this.refreshedExtraPrompt(runId, record?.systemPrompt);
     this.clearTestCommandRecord(runId);
-    const planUsage = this.planUsageTracker(runId, continueProfile.planUsageAccount);
+    const planUsage = this.planUsageTracker(runId, provider?.secret ? undefined : continueProfile.planUsageAccount);
     const launch = (launchSessionId: string, resume: boolean, context: string | undefined): AgentSession => {
       const contextualOpeningPrompt = withContext(context);
       const started = runner.startSession(
@@ -7256,10 +7388,11 @@ export class RunManager {
             ...continueLaunch.prDirs,
           ],
           env: continuationTools.enforceReadOnly ? { ...continueProfile.env, ...readOnlyEnv() } : continueProfile.env,
-          onUsageWindows: continueProfile.onUsageWindows,
+          onUsageWindows: provider?.secret ? undefined : continueProfile.onUsageWindows,
           // A private server's tools are writes nothing here can vouch for.
           mcpServers: continuationTools.enforceReadOnly ? [] : continueMcp,
           model: continueModel,
+          provider,
           reasoningEffort: continuationReasoningEffort,
           sessionId: launchSessionId,
           resume,
@@ -7283,7 +7416,23 @@ export class RunManager {
       if (started.pid !== undefined) registerRunProcess(runId, started.pid);
       return started;
     };
-    let session = launch(spawnSessionId, sessionId !== undefined, portableContext);
+    let session: AgentSession;
+    try {
+      await verifyProviderLogin(continueBackend, provider, state.cwd, continueProfile.env);
+      if (state.cancelled || this.active.get(runId) !== state) {
+        planUsage?.close();
+        this.dropActive(runId, state);
+        return;
+      }
+      session = launch(spawnSessionId, sessionId !== undefined, portableContext);
+    } catch (error) {
+      if (!(error instanceof AgentProviderUnavailable)) throw error;
+      this.store.updateStep(runId, stepId, { sessionId });
+      this.parkProvider(runId, stepId, error);
+      planUsage?.close();
+      this.dropActive(runId, state);
+      return;
+    }
 
     const finishedAt = () => new Date().toISOString();
     try {
@@ -7306,7 +7455,10 @@ export class RunManager {
           this.store.readEvents(runId).filter((event) => event.stepId !== stepId),
           this.attachmentsDir(runId),
         );
-        await trackFallbackOutcome(() => {
+        await trackFallbackOutcome(async () => {
+          provider = await this.stepProvider(runId, stepId, continueBackend, turnModel, this.store.getRun(runId)?.steps.find(s => s.id === stepId), true);
+          await verifyProviderLogin(continueBackend, provider, state.cwd, continueProfile.env);
+          if (state.cancelled || this.active.get(runId) !== state) throw new Error('cancelled');
           session = launch(freshId, false, context);
           for (const content of replay) session.sendMessage(content);
           return session.result;
@@ -7359,6 +7511,11 @@ export class RunManager {
       state.turnSettled = true;
       sink.sessionEnded('error', message);
       if (!state.cancelled && this.active.get(runId) === state) {
+        if (err instanceof AgentProviderUnavailable) {
+          this.store.updateStep(runId, stepId, { sessionId: undefined });
+          this.parkProvider(runId, stepId, err);
+          return;
+        }
         this.store.updateStep(runId, stepId, { status: 'failed', error: message, finishedAt: finishedAt() });
         appendHandoffHeartbeat(this.dataDir, runId, `step "${stepId}" complete — status=failed`);
         const failedAt = finishedAt();
@@ -7757,8 +7914,12 @@ export class RunManager {
         ? { loops: {}, taken: [], ...this.store.getRun(runId)?.graphState, cursor: resumeCursor }
         : this.store.getRun(runId)?.graphState,
       usageLimitResume: resumeStep,
+    }).catch((error: unknown) => {
+      if (!(error instanceof AgentProviderUnavailable) || !state.providerBlockedStep) throw error;
+      if (!state.cancelled && this.active.get(runId) === state) this.parkProvider(runId, state.providerBlockedStep, error);
+      return null;
     });
-    if (state.switchingAgent) {
+    if (state.providerBlockedStep || state.switchingAgent) {
       this.clearAutosaveTimer(state);
       this.dropActive(runId, state);
       return;
@@ -7962,8 +8123,13 @@ export class RunManager {
     const repairRun = this.store.getRun(runId);
     const repair = repairRun?.agentSwitch?.checkRepair;
     if (repairRun && repair && resumeNode?.id === repair.checkId && !state.cancelled) {
-      const step = { id: repair.stepId, name: 'Repair failed check', model: repairRun.model };
-      const repairStep = repairRun.steps.find((candidate) => candidate.id === step.id);
+      const repairStep = repairRun.steps.find((candidate) => candidate.id === repair.stepId);
+      const retry = repairStep?.providerRetry;
+      const step = {
+        id: repair.stepId, name: 'Repair failed check', runner: retry?.runner ?? taskBackend,
+        model: retry ? retry.model : repairRun.model,
+        reasoningEffort: retry ? retry.reasoningEffort : repairRun.reasoningEffort,
+      };
       const failureTarget = graph.nodes.find((node) => node.id === edgeFrom(graph, repair.checkId, 'fail')?.to);
       const retryId = failureTarget?.type === 'loop' ? edgeFrom(graph, failureTarget.id, 'repeat')?.to : failureTarget?.id;
       const retryNode = graph.nodes.find((node) => node.id === retryId);
@@ -7996,7 +8162,7 @@ export class RunManager {
       const checkOutput = [...events].reverse().find((event) => event.type === 'check-output' && event.stepId === repair.checkId)?.text;
       const output = typeof checkOutput === 'string' ? checkOutput : String(outputs.get(repair.checkId)?.output ?? '');
       const interrupted = ctx.usageLimitResume?.id === step.id ? ctx.usageLimitResume : undefined;
-      const resumeSessionId = RESUMABLE_BACKENDS.has(taskBackend) ? interrupted?.sessionId : undefined;
+      const resumeSessionId = RESUMABLE_BACKENDS.has(step.runner) ? interrupted?.sessionId : undefined;
       const failure = await this.runAgentStep(runId, state, {
         ...step,
         allowedTools: toolsStep?.allowedTools,
@@ -8007,7 +8173,7 @@ export class RunManager {
         usageLimitResume: interrupted,
         savedTools,
         portableContext: resumeSessionId ? undefined : freshContinuationContext(repairRun, events, this.attachmentsDir(runId)),
-        workflowAgent: { agentProfile: repairRun.agentProfile, replaced: true },
+        workflowAgent: { agentProfile: retry ? retry.agentProfile : repairRun.agentProfile, replaced: true },
       });
       if (state.cancelled || state.askPark === 'waiting' || this.idleParks(runId, state)) return null;
       const idleFailed = await this.idleClosedFails(runId, state);
@@ -8150,7 +8316,8 @@ export class RunManager {
         const verdicts = node.verdicts ?? [];
         if (verdicts.length) rendered.prompt = `${rendered.prompt ?? '{{task}}'}\n\n${verdictInstruction(verdicts)}`;
         const run = this.store.getRun(runId);
-        const agent = run && switchedWorkflowAgent(run, node);
+        const retry = run?.steps.find(step => step.id === node.id)?.providerRetry;
+        const agent = retry ? { ...retry, replaced: true } : run && switchedWorkflowAgent(run, node);
         const backend = agent?.runner ?? node.runner ?? taskBackend;
         const agentInput = agent ? { ...input, model: undefined, reasoningEffort: undefined } : input;
         if (agent) {
@@ -9390,6 +9557,58 @@ export class RunManager {
     },
   ): Promise<string | null> {
     const resumeStep = graphHooks?.usageLimitResume;
+    const stepBackend = step.runner ?? taskBackend;
+    // Normalise the selected model to canonical `provider/model` and back to the
+    // backend's own wire form via the ONE shared mapper (#405). Fail-loud: an
+    // unresolvable model (e.g. a bare id on opencode) returns the step error
+    // instead of letting the backend silently substitute its default.
+    let backendModel: string | undefined;
+    // The task's model was picked for the task's runner; a step on another runner gets its own default.
+    let stepModel = agentModelsLocked(this.repoRoot) ? undefined : step.model ?? (stepBackend === taskBackend ? input.model : undefined);
+    if (stepBackend === 'antigravity' && step.reasoningEffort && !agentModelsLocked(this.repoRoot)) {
+      const models = await antigravityModelIds();
+      if (state.cancelled) return 'cancelled';
+      const mapped = resolveAntigravityEffort({
+        effort: step.reasoningEffort,
+        model: stepModel,
+        defaultModel: stepModel ? undefined : (await readAgentModelSettings('antigravity', state.cwd).catch(() => undefined))?.model,
+        models,
+      });
+      if ('error' in mapped) return `step "${step.id}": ${mapped.error}`;
+      stepModel = mapped.model;
+      emit({ type: 'note', stepId: step.id, message: mapped.note });
+    }
+    const run = this.store.getRun(runId);
+    const resumedOwner = resumeStep ?? (graphHooks?.resumeSessionId
+      ? run?.steps.slice().reverse().find(s => s.sessionId === graphHooks.resumeSessionId && (!s.backend || s.backend === stepBackend))
+      : undefined);
+    const owner = resumedOwner ?? run?.steps.find(s => s.id === step.id && (s.providerRetry || !graphHooks?.workflowAgent?.replaced));
+    if (resumedOwner?.backend === stepBackend && resumedOwner.agentMethod && !agentModelsLocked(this.repoRoot)) {
+      stepModel = resumedOwner.model || stepModel;
+    }
+    const useTaskSelection = !owner?.providerRetry && stepBackend === run?.runner && (authMethods(stepBackend).mode === 'one' || !step.model || step.model === run.model);
+    let provider: AgentProviderLaunch | undefined;
+    try {
+      provider = await this.stepProvider(runId, step.id, stepBackend, stepModel, owner, useTaskSelection);
+      const normalized = await launchModel(stepBackend, stepModel, state.cwd, provider);
+      if (state.cancelled) return 'cancelled';
+      backendModel = normalized?.backendModel;
+      // Persist the identity of what ACTUALLY runs (#405, review M1). The run-start echo
+      // (line ~993) is best-effort from `taskBackend`/`input.model`; a per-step `runner`/`model`
+      // override makes it assert a model that never ran. Re-write it here, from the resolved
+      // step identity, so the record — the product of this PR — is always one that ran.
+      this.store.updateRun(runId, {
+        modelIdentity: normalized ? formatModelIdentity(normalized.identity) : undefined,
+      });
+      if (normalized) {
+        this.store.updateStep(runId, step.id, { modelIdentity: formatModelIdentity(normalized.identity) });
+      }
+    } catch (err) {
+      if (err instanceof AgentProviderUnavailable) state.providerBlockedStep = step.id;
+      if (err instanceof ModelIdentityError) return err.message;
+      throw err;
+    }
+
     let systemPrompt: string | undefined;
     // An attachment-only task (telemetry 18c930de) — the note stands in for the missing text, so a
     // step template (`Review: {{task}}`) still reads as a sentence.
@@ -9483,7 +9702,8 @@ export class RunManager {
       sessionId,
       backend,
       ...(reasoningEffort ? { reasoningEffort } : {}),
-      ...(graphHooks?.workflowAgent ? { reasoningEffort, model: step.model, actualModel: undefined, modelIdentity: undefined } : {}),
+      ...(graphHooks?.workflowAgent ? { reasoningEffort, model: step.model, actualModel: undefined } : {}),
+      ...(provider?.catalogModel ? { model: provider.catalogModel } : {}),
     });
 
     const stepRecord = this.store.getRun(runId)?.steps.find((s) => s.id === step.id);
@@ -9781,49 +10001,6 @@ export class RunManager {
       }
     };
 
-    const stepBackend = step.runner ?? taskBackend;
-    // Normalise the selected model to canonical `provider/model` and back to the
-    // backend's own wire form via the ONE shared mapper (#405). Fail-loud: an
-    // unresolvable model (e.g. a bare id on opencode) returns the step error
-    // instead of letting the backend silently substitute its default.
-    let backendModel: string | undefined;
-    // The task's model was picked for the task's runner; a step on another runner gets its own default.
-    let stepModel = agentModelsLocked(this.repoRoot) ? undefined : step.model ?? (stepBackend === taskBackend ? input.model : undefined);
-    if (stepBackend === 'antigravity' && step.reasoningEffort && !agentModelsLocked(this.repoRoot)) {
-      const models = await antigravityModelIds();
-      if (state.cancelled) return 'cancelled';
-      const mapped = resolveAntigravityEffort({
-        effort: step.reasoningEffort,
-        model: stepModel,
-        defaultModel: stepModel ? undefined : (await readAgentModelSettings('antigravity', state.cwd).catch(() => undefined))?.model,
-        models,
-      });
-      if ('error' in mapped) return `step "${step.id}": ${mapped.error}`;
-      stepModel = mapped.model;
-      emit({ type: 'note', stepId: step.id, message: mapped.note });
-    }
-    try {
-      const normalized = normalizeModelForBackend(
-        stepBackend,
-        stepModel,
-        { configuredProvider: await configuredModelProvider(stepBackend, state.cwd) },
-      );
-      if (state.cancelled) return 'cancelled';
-      backendModel = normalized?.backendModel;
-      // Persist the identity of what ACTUALLY runs (#405, review M1). The run-start echo
-      // (line ~993) is best-effort from `taskBackend`/`input.model`; a per-step `runner`/`model`
-      // override makes it assert a model that never ran. Re-write it here, from the resolved
-      // step identity, so the record — the product of this PR — is always one that ran.
-      this.store.updateRun(runId, {
-        modelIdentity: normalized ? formatModelIdentity(normalized.identity) : undefined,
-      });
-      if (normalized) {
-        this.store.updateStep(runId, step.id, { modelIdentity: formatModelIdentity(normalized.identity) });
-      }
-    } catch (err) {
-      if (err instanceof ModelIdentityError) return err.message;
-      throw err;
-    }
     // Which agent account this step spawns under, and — recorded on the step before the spawn —
     // which one its session belongs to. `sessionId` and `profileId` are a pair: a resume that
     // reads the wrong account's config dir finds no session and silently starts a fresh one.
@@ -9861,7 +10038,7 @@ export class RunManager {
     state.currentStepId = step.id;
     this.beginUsageInvocation(runId, state, step.id);
     if (state.cancelled) return 'cancelled';
-    const planUsage = this.planUsageTracker(runId, stepProfile.planUsageAccount);
+    const planUsage = this.planUsageTracker(runId, provider?.secret ? undefined : stepProfile.planUsageAccount);
     const launch = (launchSessionId: string, resume: boolean, prompt: string): AgentSession =>
       runner.startSession(
         {
@@ -9898,9 +10075,10 @@ export class RunManager {
             ...stepLaunch.prDirs,
           ],
           env: stepTools.enforceReadOnly ? { ...stepProfile.env, ...readOnlyEnv() } : stepProfile.env,
-          onUsageWindows: stepProfile.onUsageWindows,
+          onUsageWindows: provider?.secret ? undefined : stepProfile.onUsageWindows,
           mcpServers: stepTools.enforceReadOnly ? [] : stepMcp,
           model: backendModel,
+          provider,
           reasoningEffort,
           sessionId: launchSessionId,
           resume,
@@ -9947,9 +10125,20 @@ export class RunManager {
       return started;
     };
     try {
+      await verifyProviderLogin(stepBackend, provider, state.cwd, stepProfile.env);
+      if (state.cancelled || this.active.get(runId) !== state) {
+        planUsage?.close();
+        return 'cancelled';
+      }
       session = attach(launch(sessionId, graphHooks?.resumeSessionId !== undefined, userPrompt), graphHooks?.resumeSessionId !== undefined);
     } catch (err) {
       state.currentStepId = undefined;
+      if (err instanceof AgentProviderUnavailable) {
+        state.providerBlockedStep = step.id;
+        this.store.updateStep(runId, step.id, { sessionId: graphHooks?.resumeSessionId });
+        planUsage?.close();
+        throw err;
+      }
       return err instanceof Error ? err.message : String(err);
     }
 
@@ -9971,7 +10160,10 @@ export class RunManager {
         this.store.updateStep(runId, step.id, { sessionId: freshId, backend });
         emit({ type: 'note', stepId: step.id, message: MISSING_SESSION_NOTE });
         const context = freshContinuationContext(record, this.store.readEvents(runId), this.attachmentsDir(runId));
-        result = await trackFallbackOutcome(() => {
+        result = await trackFallbackOutcome(async () => {
+          provider = await this.stepProvider(runId, step.id, stepBackend, stepModel, this.store.getRun(runId)?.steps.find(s => s.id === step.id), useTaskSelection);
+          await verifyProviderLogin(stepBackend, provider, state.cwd, stepProfile.env);
+          if (state.cancelled || this.active.get(runId) !== state) throw new Error('cancelled');
           session = attach(launch(freshId, false, `${context}\n\n---\n\n## New user instruction\n${userPrompt}`), false);
           for (const content of replay) session.sendMessage(content);
           return session.result;
@@ -9990,6 +10182,11 @@ export class RunManager {
       return null;
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
+      if (err instanceof AgentProviderUnavailable) {
+        state.providerBlockedStep = step.id;
+        this.store.updateStep(runId, step.id, { sessionId: undefined });
+        throw err;
+      }
       sink.sessionEnded('error', message); // alongside v1's fatal `error`
       return message;
     } finally {
@@ -10175,7 +10372,12 @@ export class RunManager {
         const profile = await this.agentEnvForStep(runId, runner, { namingOnly: true });
         execution = { runner, env: profile.env, onUsageWindows: profile.onUsageWindows, ...(profile.planUsageAccount ? { planUsageAccount: profile.planUsageAccount } : {}) };
       }
-      const result = await generateRunName(this.repoRoot, { task, skillName, skillDescription, ...live, nameBranch: !live }, execution,
+      const methodOwner = scheduled?.steps.slice().reverse().find(step => step.backend === scheduled.runner && step.agentMethod === scheduled.agentMethod);
+      const providerSelection = scheduled?.runner && scheduled.agentMethod ? {
+        runner: scheduled.runner,
+        method: methodOwner?.agentMethod ? { saved: methodOwner.agentMethod, savedHost: methodOwner.agentMethodHost } : { requested: scheduled.agentMethod },
+      } : undefined;
+      const result = await generateRunName(this.repoRoot, { task, skillName, skillDescription, providerSelection, ...live, nameBranch: !live }, execution,
         (reason) => this.store.appendEvent(runId, { type: 'note', message: `model naming unavailable — ${reason}` }));
       if (!result) return undefined;
       const run = this.store.getRun(runId);

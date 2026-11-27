@@ -143,7 +143,7 @@ export class ClaudeCliRunner implements AgentRunner {
     let child: ChildProcessWithoutNullStreams;
     let sessionCost: ClaudeSessionCost;
     try {
-      const env = buildChildEnv({ backend: this.backend, extraEnv: spec.env });
+      const env = buildChildEnv({ backend: this.backend, extraEnv: spec.env, provider: spec.provider });
       // `--strict-mcp-config` drops configured servers; claude.ai connectors need their own switch.
       if (spec.noMcpServers) env.ENABLE_CLAUDEAI_MCP_SERVERS = 'false';
       sessionCost = new ClaudeSessionCost(spec.sessionId, spec.resume === true, spec.cwd, env.CLAUDE_CONFIG_DIR);

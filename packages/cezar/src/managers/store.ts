@@ -45,6 +45,7 @@ const sessionMetaSchema = z
     contextTokens: z.number().int().min(0).optional(),
     /** The open cards this transcript was last shown in full (`openCardsDigest`). */
     cardsDigest: z.string().optional(),
+    catalogModel: z.string().optional(),
   })
   .optional()
   .catch(undefined);
