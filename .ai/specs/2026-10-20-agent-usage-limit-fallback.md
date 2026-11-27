@@ -47,7 +47,7 @@ marked for replacement and cannot be admitted with its explicit model while the 
 | State | Behavior |
 |---|---|
 | Loading | Loading message; no policy controls until the GET succeeds. |
-| Hosted cockpit | Local-only explanation; no editing controls. |
+| Hosted cockpit | Local-only explanation; no editing controls — unless the operator opted in with `CEZ_REMOTE_AGENT_ACCOUNTS=1` (#2332), the same gate as agent accounts. |
 | Load error, missing project folder or older server without the endpoint | Error message and Retry; other agent settings remain available. |
 | Empty list | Switch disabled and off; prompt to add the first successor. |
 | Saved list, off | Explicitly says the list is saved but not used. |
@@ -169,7 +169,7 @@ through `projectId` rather than a project-prefixed route:
 | PUT | `{projectId, expectedRevision, expectedIncarnation, enabled, candidates}` | The saved policy in the same shape. |
 
 Each candidate is `{provider, profileId, model?}`. Invalid input or a newly added missing named
-account returns 400. Unknown project returns 404. Hosted mode, missing/non-directory project
+account returns 400. Unknown project returns 404. Hosted mode without `CEZ_REMOTE_AGENT_ACCOUNTS=1`, missing/non-directory project
 root, stale revision/incarnation or lock contention returns 409. Unexpected write failure returns
 500 with a fixed error message. Existing removed-account rows do not prevent disabling or removal.
 Request and response schemas live in `packages/contract/src/agent-profiles.ts`.
