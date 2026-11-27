@@ -43,6 +43,28 @@ export function authMethods(runner: RunnerId): Capabilities {
   return capabilities[runner];
 }
 
+function hostKeyNames(runner: RunnerId, method: AuthMethod): string[] {
+  if (!method.hostKeyEnv) return [];
+  return runner === 'gemini' && method.id === 'apiKey' ? [method.hostKeyEnv, 'GOOGLE_API_KEY'] : [method.hostKeyEnv];
+}
+
+// A startup import may consume a selected method's host credential before the first subprocess.
+const startupHostKeys = new Map<string, string>();
+
+export function retainStartupHostKey(runner: RunnerId, method: AuthMethod, inputs: ReadonlyMap<string, string | undefined>) {
+  for (const name of hostKeyNames(runner, method)) {
+    const value = inputs.get(name);
+    if (value?.trim()) startupHostKeys.set(`${runner}/${method.id}/${name}`, value);
+  }
+}
+
+export function providerHostKey(runner: RunnerId, method: AuthMethod, env?: NodeJS.ProcessEnv): string | undefined {
+  for (const name of hostKeyNames(runner, method)) {
+    const value = env ? env[name] : process.env[name] ?? startupHostKeys.get(`${runner}/${method.id}/${name}`);
+    if (value?.trim()) return value;
+  }
+}
+
 // A caller removes these from its inherited environment before applying env.
 // Only an explicit selection comes through here. A legacy launch keeps its existing environment.
 const anthropic = ['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_BASE_URL', 'ANTHROPIC_CUSTOM_HEADERS',

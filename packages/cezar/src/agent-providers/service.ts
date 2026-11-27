@@ -9,7 +9,7 @@ import { modelConflictsWithRunner } from '../core/model-presets.ts';
 import { providerAuthChecksDisabled, type ProviderAuthService } from '../core/provider-auth.ts';
 import type { ProviderMethodStatuses } from '../core/provider-method-status.ts';
 import { resolveProfileEnvForRoot } from '../workspace/agent-profiles.ts';
-import { authMethods } from '../core/agent-auth-methods.ts';
+import { authMethods, providerHostKey } from '../core/agent-auth-methods.ts';
 import { readAgentProviders, readAgentProviderKey, updateAgentProviders, type StoredProviderMethod } from '../workspace/agent-providers.ts';
 import { fetchProviderModels } from './models.ts';
 import { cachedPiSubscriptions } from './pi-subscriptions.ts';
@@ -51,9 +51,9 @@ function definition(runner: Runner, id: string) {
 
 function remote(kind: ProviderMethodKind) { return kind === 'openrouter' || kind === 'custom'; }
 
-function methodView(def: Definition, saved: StoredProviderMethod | undefined, login: ProviderLogin | undefined): AgentProviderMethod {
+function methodView(runner: Runner, def: Definition, saved: StoredProviderMethod | undefined, login: ProviderLogin | undefined): AgentProviderMethod {
   const fromHost = !saved && def.kind !== 'subscription' && (
-    login?.methods?.[def.id] === 'connected' || !!(def.hostKeyEnv && process.env[def.hostKeyEnv]?.trim())
+    login?.methods?.[def.id] === 'connected' || !!providerHostKey(runner, def)
   );
   const info = saved?.models;
   let state: AgentProviderMethod['state'] = 'disconnected';
@@ -94,7 +94,7 @@ function canVerifyAtLaunch(login?: ProviderLogin) {
 export function providerEntry(runner: Runner, store: Store, login?: ProviderLogin): AgentProviderEntry {
   const def = authMethods(runner);
   const saved = store.agents[runner];
-  const methods = def.methods.map(m => methodView(m, saved?.methods[m.id], login));
+  const methods = def.methods.map(m => methodView(runner, m, saved?.methods[m.id], login));
   const active = saved ? saved.active ?? null : methods.find(m => m.state === 'connected')?.id ?? null;
   return { runner, mode: def.mode, methods, ...(saved ? { configured: true as const } : {}), ...(def.mode === 'one' ? { active } : {}) };
 }
@@ -144,7 +144,7 @@ export async function applyProviderChanges(changes: ProviderChange[], origin: Or
         if (active !== null) {
           const def = definition(runner, active);
           const saved = entry.methods[active];
-          const method = methodView(def, saved, login);
+          const method = methodView(runner, def, saved, login);
           const pendingFetch = methods.some(m => m.id === active) && remote(def.kind) && saved?.keyHint;
           if (!pendingFetch && method.state !== 'connected' && !method.verifyAtLaunch) throw new Error('Connect the method before selecting it.');
         }

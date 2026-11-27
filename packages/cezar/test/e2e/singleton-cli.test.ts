@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
+import { agentProvidersResponseSchema } from '@open-mercato/cezar-contract';
 import { execFile as execFileCallback, spawn, type ChildProcess } from 'node:child_process';
 import { once } from 'node:events';
-import { mkdtemp, mkdir, realpath, rm } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, realpath, rm } from 'node:fs/promises';
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
@@ -75,19 +76,43 @@ test('the packaged CLI reuses one cockpit, registers a second CWD, and recovers 
   } = process.env;
   const env = {
     ...inherited,
+    HOME: home,
+    USERPROFILE: home,
     CEZ_HOME: home,
     CEZ_REMOTE: '0',
     CEZ_DRY_RUN: '1',
     CEZ_SECRETS_KEYCHAIN: '0',
     PROVIDER_TEST_VALUE: 'fixture-only-9876',
+    GEMINI_API_KEY: 'second-fixture-1234',
+    GOOGLE_API_KEY: '',
     CEZ_NO_BANNER: '1',
+  };
+  // Git is the first child on startup and runs again after the cockpit takes its lease.
+  const trace = join(root, 'git-trace.jsonl');
+  const importEnv = {
+    ...env,
+    GIT_TRACE2_EVENT: trace,
+    GIT_TRACE2_ENV_VARS: 'PROVIDER_TEST_VALUE,GEMINI_API_KEY,PROVIDER_TEST_SENTINEL',
+    PROVIDER_TEST_SENTINEL: 'ordinary-inherited-value',
   };
   let primary: ChildProcess | undefined;
   let recovery: ChildProcess | undefined;
+  const agents = {
+    claude: { active: 'openrouter', methods: { openrouter: { apiKeyEnv: 'PROVIDER_TEST_VALUE' } } },
+    codex: { active: 'custom', methods: { custom: { baseUrl: 'https://gateway.invalid', apiKeyEnv: 'GEMINI_API_KEY' } } },
+  };
+  const document = JSON.stringify({ version: 1, agents });
+  const assertGitEnv = async () => {
+    const inheritedByGit = await readFile(trace, 'utf8');
+    assert.ok(inheritedByGit.includes('ordinary-inherited-value'), 'Git must see the unrelated sentinel');
+    assert.ok(!inheritedByGit.includes('fixture-only-9876') && !inheritedByGit.includes('second-fixture-1234'),
+      'Git must never inherit either declared key source');
+  };
   try {
-    primary = spawn(process.execPath, [cliPath, '--providers', '{invalid-json', '--repo', repoA, '--port', String(firstPort), '--no-open'], {
+    const malformed = document.slice(0, -1) + ',}';
+    primary = spawn(process.execPath, [cliPath, '--providers', malformed, '--repo', repoA, '--port', String(firstPort), '--no-open'], {
       cwd: root,
-      env,
+      env: importEnv,
       stdio: ['ignore', 'pipe', 'pipe'],
     });
     let errors = '';
@@ -99,13 +124,12 @@ test('the packaged CLI reuses one cockpit, registers a second CWD, and recovers 
     assert.equal(errors.split('[cez] providers:').length - 1, 1);
     const initial = await (await fetch(firstOrigin + '/api/v1/agent-providers')).json() as { agents: { configured?: boolean }[] };
     assert.ok(initial.agents.every(agent => !agent.configured));
+    await assertGitEnv();
 
-    const document = JSON.stringify({ version: 1, agents: { claude: { active: 'openrouter',
-      methods: { openrouter: { apiKeyEnv: 'PROVIDER_TEST_VALUE' } } } } });
     const secondary = await execFile(
       process.execPath,
       [cliPath, '--providers', document, '--repo', repoB, '--port', String(secondPort), '--no-open'],
-      { cwd: root, env, timeout: 60_000, maxBuffer: 10 * 1024 * 1024 },
+      { cwd: root, env: importEnv, timeout: 60_000, maxBuffer: 10 * 1024 * 1024 },
     );
     assert.match(secondary.stdout, /cockpit already running/);
     assert.match(secondary.stdout, new RegExp(`127\\.0\\.0\\.1:${firstPort}/p/[^/]+/`));
@@ -128,13 +152,32 @@ test('the packaged CLI reuses one cockpit, registers a second CWD, and recovers 
 
     await stop(primary, 'SIGKILL');
     primary = undefined;
-    recovery = spawn(process.execPath, [cliPath, '--repo', repoB, '--port', String(recoveryPort), '--no-open'], {
+    // Select Gemini's host method and import that same key for Codex again on the new owner.
+    const sharedKeyDocument = JSON.stringify({ version: 1, agents: { ...agents, gemini: { active: 'apiKey' } } });
+    recovery = spawn(process.execPath, [cliPath, '--providers', sharedKeyDocument, '--repo', repoB, '--port', String(recoveryPort), '--no-open'], {
       cwd: root,
-      env,
+      env: importEnv,
       stdio: ['ignore', 'pipe', 'pipe'],
     });
-    const recoveredHealth = await waitForHealth(`http://127.0.0.1:${recoveryPort}`);
+    const recoveryOrigin = `http://127.0.0.1:${recoveryPort}`;
+    const recoveredHealth = await waitForHealth(recoveryOrigin);
     assert.notEqual(recoveredHealth.runtimeId, firstHealth.runtimeId, 'a replacement process mints a new runtime identity');
+    const assertSharedMethods = async () => {
+      const response = await fetch(recoveryOrigin + '/api/v1/agent-providers');
+      const { agents } = agentProvidersResponseSchema.parse(await response.json());
+      const gemini = agents.find(agent => agent.runner === 'gemini');
+      const host = gemini?.methods.find(method => method.id === 'apiKey');
+      assert.deepEqual([gemini?.active, host?.state, host?.origin], ['apiKey', 'connected', 'host']);
+      const codex = agents.find(agent => agent.runner === 'codex');
+      const gateway = codex?.methods.find(method => method.id === 'custom');
+      assert.deepEqual([codex?.active, gateway?.state, gateway?.origin], ['custom', 'connected', 'file']);
+    };
+    await assertSharedMethods();
+    await execFile(process.execPath, [cliPath, 'providers', 'apply', sharedKeyDocument, '--no-fetch'], {
+      cwd: repoB, env: importEnv, timeout: 60_000,
+    });
+    await assertSharedMethods();
+    await assertGitEnv();
   } finally {
     if (primary) await stop(primary);
     if (recovery) await stop(recovery);
