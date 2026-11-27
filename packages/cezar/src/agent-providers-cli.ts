@@ -3,9 +3,9 @@ import { open } from 'node:fs/promises';
 import { extname } from 'node:path';
 import { parseArgs, type ParseArgsConfig } from 'node:util';
 import { parse as parseYaml } from 'yaml';
-import { providersFileSchema, runnerSchema, type ProvidersFile, type ProviderStatus } from '@open-mercato/cezar-contract';
+import { providersFileSchema, runnerSchema, type ProvidersFile } from '@open-mercato/cezar-contract';
 import { ProviderAuthService } from './core/provider-auth.ts';
-import { applyProviderChanges, providerEntries, refreshProviderModels, removeProviderMethod, type ProviderChange } from './agent-providers/service.ts';
+import { applyProviderChanges, providerEntries, refreshProviderModels, removeProviderMethod, type ProviderChange, type ProviderLogin } from './agent-providers/service.ts';
 
 const LIMIT = 1024 * 1024;
 const HELP = `cezar providers apply <file|json|-> [--no-fetch]
@@ -85,8 +85,9 @@ async function changesFrom(doc: ProvidersFile): Promise<ProviderChange[]> {
   return changes;
 }
 
-async function loginStatus(): Promise<ProviderStatus[]> {
-  return (await new ProviderAuthService({ cwd: process.cwd() }).status()).providers;
+async function loginStatus(): Promise<ProviderLogin[]> {
+  const auth = new ProviderAuthService({ cwd: process.cwd() });
+  return (await auth.status()).providers.map(row => ({ ...row, methods: auth.methodStatuses(row.provider) }));
 }
 
 export async function applyProvidersDocument(source: string, stdin = stdinText, logins = loginStatus) {

@@ -5,7 +5,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { Hono } from 'hono';
 import { agentProvidersResponseSchema } from '@open-mercato/cezar-contract';
 import { agentProvidersRoutes } from './agent-providers-routes.ts';
-import { providerCatalog } from '../agent-providers/service.ts';
+import { applyProviderChanges, providerCatalog, providerEntry, refreshProviderModels } from '../agent-providers/service.ts';
 
 let home: string;
 beforeEach(async () => {
@@ -17,7 +17,7 @@ beforeEach(async () => {
 afterEach(async () => { vi.unstubAllEnvs(); await rm(home, { recursive: true, force: true }); });
 
 const app = (local: boolean) => new Hono().route('/api/v1', agentProvidersRoutes(() => local,
-  async () => [{ provider: 'claude', status: 'connected' }]));
+  async () => [{ provider: 'claude', status: 'connected', methods: { subscription: 'connected' } }]));
 const base = '/api/v1/agent-providers';
 const put = (body: unknown) => ({ method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
 
@@ -61,4 +61,81 @@ it('requires an explicit new key before changing a custom endpoint to another or
   const input = { kind: 'custom', baseUrl: 'https://first.test', apiKey: 'provider-fixture-only-5544' };
   expect((await server.request(url, put(input))).status).toBe(200);
   expect((await server.request(url, put({ kind: 'custom', baseUrl: 'https://second.test' }))).status).toBe(400);
+});
+
+it('retains the last good catalog on a refresh error and never returns the upstream body', async () => {
+  const server = app(true);
+  const path = base + '/claude/methods/openrouter';
+  await server.request(path, put({ kind: 'openrouter', apiKey: 'provider-fixture-only-5544' }));
+  vi.stubEnv('CEZ_DRY_RUN', '0');
+  vi.stubGlobal('fetch', vi.fn(async () => new Response('upstream debug provider-fixture-only-5544', { status: 502 })));
+  try {
+    const retry = await server.request(path + '/models', { method: 'POST' });
+    expect(retry.status).toBe(400);
+    expect(await retry.text()).not.toContain('provider-fixture-only-5544');
+    const state = agentProvidersResponseSchema.parse(await (await server.request(base)).json());
+    const method = state.agents.find(a => a.runner === 'claude')?.methods.find(m => m.id === 'openrouter');
+    expect(method).toMatchObject({ state: 'connected', modelCount: 2, error: expect.stringContaining('retry') });
+  } finally { vi.unstubAllGlobals(); }
+});
+
+it('keeps an initial failed discovery unavailable and lets a local retry restore it', async () => {
+  const server = app(true);
+  const path = base + '/codex/methods/custom';
+  vi.stubEnv('CEZ_DRY_RUN', '0');
+  vi.stubGlobal('fetch', vi.fn(async () => new Response('', { status: 502 })));
+  try {
+    const response = await server.request(path, put({ kind: 'custom', baseUrl: 'https://gateway.test', apiKey: 'fixture-only-test-4433' }));
+    expect(await response.json()).toMatchObject({ state: 'error', modelCount: 0 });
+    expect((await server.request(base + '/codex/active', put({ methodId: 'custom' }))).status).toBe(400);
+    vi.stubEnv('CEZ_DRY_RUN', '1');
+    expect((await server.request(path + '/models', { method: 'POST' })).status).toBe(200);
+    expect((await server.request(base + '/codex/active', put({ methodId: 'custom' }))).status).toBe(200);
+  } finally { vi.unstubAllGlobals(); }
+});
+
+it('keeps a newer successful model list when an older refresh fails last', async () => {
+  await applyProviderChanges([{ runner: 'codex', active: 'custom', methods: [
+    { id: 'custom', baseUrl: 'https://gateway.test', apiKey: 'test-fixture-key' },
+  ] }], 'cli', []);
+  vi.stubEnv('CEZ_DRY_RUN', '0');
+  let finishSlow!: (response: Response) => void;
+  let started!: () => void;
+  const waiting = new Promise<void>(resolve => { started = resolve; });
+  vi.stubGlobal('fetch', vi.fn()
+    .mockImplementationOnce(() => new Promise<Response>(resolve => { finishSlow = resolve; started(); }))
+    .mockResolvedValueOnce(Response.json({ data: [{ id: 'newest-model' }] })));
+  try {
+    const slow = refreshProviderModels('codex', 'custom');
+    await waiting;
+    expect(await refreshProviderModels('codex', 'custom')).toEqual({ models: ['newest-model'] });
+    finishSlow(new Response(null, { status: 502 }));
+    expect(await slow).toMatchObject({ models: ['newest-model'], error: expect.any(String) });
+    const catalog = await providerCatalog('codex', vi.fn());
+    expect(catalog).toMatchObject({ stale: true, models: [{ id: 'newest-model' }] });
+  } finally { vi.unstubAllGlobals(); }
+});
+
+it('adds only connected native methods to a configured additive catalog', async () => {
+  await app(true).request(base + '/pi/methods/openrouter', put({ kind: 'openrouter', apiKey: 'fixture-provider' }));
+  const native = vi.fn(async () => ({
+    runner: 'pi' as const, source: 'cache' as const, stale: false,
+    models: ['anthropic/native', 'openai-codex/unverified'].map(id => ({ id, label: id, description: '' })),
+  }));
+  const catalog = await providerCatalog('pi', native, {
+    provider: 'pi', status: 'connected', methods: { anthropic: 'connected' },
+  });
+  expect(catalog.models.map(m => [m.id, m.via?.methodId])).toEqual([
+    ['anthropic/native', 'anthropic'], ['anthropic/test-model', 'openrouter'], ['test-model', 'openrouter'],
+  ]);
+});
+
+it('uses a detected vendor key without attributing an unverified subscription', () => {
+  vi.stubEnv('GEMINI_API_KEY', '');
+  const entry = providerEntry('gemini', { agents: {} }, {
+    provider: 'gemini', status: 'connected', methods: { apiKey: 'connected' },
+  });
+  expect(entry).toMatchObject({ active: 'apiKey', methods: expect.arrayContaining([
+    expect.objectContaining({ id: 'apiKey', origin: 'host', state: 'connected' }),
+  ]) });
 });

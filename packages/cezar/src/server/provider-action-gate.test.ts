@@ -50,7 +50,7 @@ describe('provider action gate', () => {
         { provider: 'opencode', status: 'not-installed', enabled: true },
       { provider: 'cursor', status: 'not-installed', enabled: true },
       ],
-    })).toBe('Codex is disabled. Enable it in Settings → Agents → Providers.');
+    })).toBe('Codex is disabled. Enable it in Settings → Agents.');
   });
 
   it.each(['disconnected', 'unknown'] as const)(
@@ -58,7 +58,7 @@ describe('provider action gate', () => {
     (status) => {
       expect(unavailableProviderMessage(['codex'], {
         providers: [{ provider: 'codex', status, enabled: true }],
-      })).toBe('Codex credentials are unavailable. Authorize it in Settings → Agents → Providers.');
+      })).toBe('Codex credentials are unavailable. Authorize it in Settings → Agents.');
     },
   );
 
@@ -81,12 +81,12 @@ describe('provider action gate', () => {
     })).toBeNull();
     expect(unavailableProviderMessage(['antigravity'], {
       providers: [{ provider: 'antigravity', status: 'disconnected', enabled: true }],
-    })).toBe('Antigravity credentials are unavailable. Authorize it in Settings → Agents → Providers.');
+    })).toBe('Antigravity credentials are unavailable. Authorize it in Settings → Agents.');
   });
 
   it('reports unavailable credentials when the provider status row is missing', () => {
     expect(unavailableProviderMessage(['opencode'], { providers: [] }))
-      .toBe('OpenCode credentials are unavailable. Authorize it in Settings → Agents → Providers.');
+      .toBe('OpenCode credentials are unavailable. Authorize it in Settings → Agents.');
   });
 
   it('uses an explicit override before the latest step backend', () => {
@@ -179,7 +179,7 @@ describe('withSelectedAccounts (telemetry ac53a6ef)', () => {
     // Names the account: "credentials are unavailable" sent users to a Providers card showing the
     // default login connected — a dead end they retried and restarted the server on (0.15.2).
     expect(unavailableProviderMessage(['claude'], judged)).toBe(
-      'Claude Code account "Work" is not signed in. Sign it in under Settings → Agents → Accounts, or choose another account for this task.',
+      'Claude Code account "Work" is not signed in. Sign it in under Settings → Agents, or choose another account for this task.',
     );
     expect(service.forgetProfileStatus).toHaveBeenCalledWith('claude', 'work');
   });
@@ -190,7 +190,7 @@ describe('withSelectedAccounts (telemetry ac53a6ef)', () => {
 
   it('keeps the provider message for the discovered login, which Providers does describe', () => {
     expect(unavailableProviderMessage(['claude'], defaultLoggedOut)).toBe(
-      'Claude Code credentials are unavailable. Authorize it in Settings → Agents → Providers.',
+      'Claude Code credentials are unavailable. Authorize it in Settings → Agents.',
     );
   });
 

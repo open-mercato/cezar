@@ -157,6 +157,16 @@ describe('POST /api/v1/runs/:id/open-in — agent CLI resume vs fresh launch', (
     expect(mockOpenInTerminal).toHaveBeenCalledWith(expect.any(String), expected, {});
   });
 
+  it('preserves the billing boundary when a resume needs managed launch settings', async () => {
+    const run = makeRun('claude', 'sess-1');
+    store.updateStep(run.id, 'work', { agentMethod: 'openrouter' });
+    for (const res of [await openInCli(run.id), await openIn(run.id, 'cli:claude')]) {
+      expect(res.status).toBe(409);
+      expect(await res.json()).toMatchObject({ error: expect.stringContaining('Continue this task in the cockpit') });
+    }
+    expect(mockOpenInTerminal).not.toHaveBeenCalled();
+  });
+
   it('a legacy run with no runner recorded resumes as Claude (pre-runner-choice default)', async () => {
     const run = makeRun(undefined, 'sess-1');
     const res = await openIn(run.id, 'cli:claude');
@@ -219,7 +229,7 @@ describe('POST /api/v1/runs/:id/open-in — agent CLI resume vs fresh launch', (
 
     expect(res.status).toBe(409);
     expect(await res.json()).toEqual({
-      error: 'Codex is disabled. Enable it in Settings → Agents → Providers.',
+      error: 'Codex is disabled. Enable it in Settings → Agents.',
     });
     expect(mockOpenInTerminal).not.toHaveBeenCalled();
   });
@@ -230,7 +240,7 @@ describe('POST /api/v1/runs/:id/open-in — agent CLI resume vs fresh launch', (
 
     expect(res.status).toBe(409);
     expect(await res.json()).toEqual({
-      error: 'Codex is disabled. Enable it in Settings → Agents → Providers.',
+      error: 'Codex is disabled. Enable it in Settings → Agents.',
     });
     expect(mockOpenInTerminal).not.toHaveBeenCalled();
   });
@@ -241,7 +251,7 @@ describe('POST /api/v1/runs/:id/open-in — agent CLI resume vs fresh launch', (
 
     expect(res.status).toBe(409);
     expect(await res.json()).toEqual({
-      error: 'Codex credentials are unavailable. Authorize it in Settings → Agents → Providers.',
+      error: 'Codex credentials are unavailable. Authorize it in Settings → Agents.',
     });
     expect(mockOpenInTerminal).not.toHaveBeenCalled();
   });
@@ -252,7 +262,7 @@ describe('POST /api/v1/runs/:id/open-in — agent CLI resume vs fresh launch', (
 
     expect(res.status).toBe(409);
     expect(await res.json()).toEqual({
-      error: 'Codex credentials are unavailable. Authorize it in Settings → Agents → Providers.',
+      error: 'Codex credentials are unavailable. Authorize it in Settings → Agents.',
     });
     expect(mockOpenInTerminal).not.toHaveBeenCalled();
   });

@@ -6,7 +6,7 @@ import { applyProvidersDocument, runProvidersCommand } from './agent-providers-c
 import { readAgentProviders, readAgentProviderKey } from './workspace/agent-providers.ts';
 
 let home: string;
-const logins = async () => [{ provider: 'claude' as const, status: 'connected' as const }];
+const logins = async () => [{ provider: 'claude' as const, status: 'connected' as const, methods: { subscription: 'connected' as const } }];
 const key = 'example-provider-fixture-1234';
 const io = { stdin: async () => key, log: vi.fn(), error: vi.fn(), logins };
 beforeEach(async () => {
@@ -62,4 +62,14 @@ it('refuses missing and ambiguous sources, and explicitly clears the active meth
   expect(await runProvidersCommand(['remove', 'claude', 'openrouter'], io)).toBe(0);
   expect((await readAgentProviders()).agents.claude).toMatchObject({ active: null, methods: {} });
   expect(await readAgentProviderKey('claude', 'openrouter')).toBeUndefined();
+});
+
+it('resolves a key file once and leaves an empty agent entry unconfigured', async () => {
+  const file = join(home, 'gateway-key');
+  await writeFile(file, key + '\n', { mode: 0o600 });
+  const doc = { version: 1, agents: { codex: { methods: { custom: { baseUrl: 'https://gateway.test', apiKeyFile: file } } }, claude: {} } };
+  expect(await runProvidersCommand(['apply', JSON.stringify(doc)], io)).toBe(0);
+  await rm(file);
+  expect(await readAgentProviderKey('codex', 'custom')).toBe(key);
+  expect((await readAgentProviders()).agents.claude).toBeUndefined();
 });

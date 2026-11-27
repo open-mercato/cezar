@@ -1181,6 +1181,8 @@ Each key source is resolved during application. Inline keys belong in standard i
 | `cezar providers select claude subscription` | Use the existing vendor login. Use `none` to clear the selection. |
 | `cezar providers remove codex custom` | Remove the saved method and its encrypted key. |
 
+Use **Continue** in the cockpit to resume a task that used a configured method. A native terminal resumes under its own CLI billing settings.
+
 The custom URL is the endpoint root, such as `https://gateway.example.com`. Cezar reads `/v1/models` there. An unavailable endpoint shows a retry action in Settings. Apply and set accept `--no-fetch` to postpone discovery. Hosted and paired cockpits can inspect the configuration. To change it, use the local cockpit or the CLI on the host.
 
 ### Editing the agents' own config (Settings → Agent config)

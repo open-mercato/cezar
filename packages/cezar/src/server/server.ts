@@ -1,6 +1,6 @@
 import { discoverNativeProviderModels } from '../agent-providers/native-models.ts';
 import { agentProvidersRoutes } from './agent-providers-routes.ts';
-import { configuredAuthStatus, freshMethodError, providerCatalog } from '../agent-providers/service.ts';
+import { configuredAuthStatus, freshMethodError, providerCatalog, selectedProviderLogin } from '../agent-providers/service.ts';
 import { readAgentProviders } from '../workspace/agent-providers.ts';
 import { loadGithubAsset } from './forge/github-assets.ts';
 import { createWebhookRoutes } from './webhooks.ts';
@@ -1609,8 +1609,17 @@ export function createAppParts(deps: ServerDeps) {
       const judgedRows = providerAuthChecksDisabled()
         ? rows
         : await withSelectedAccounts(rows, required, scope, providerAuth, { refresh });
-      return { ...judgedRows, providers: judgedRows.providers.map(row => required.includes(row.provider)
-        ? configuredAuthStatus(storedProviders, row, scope.methodFor?.(row.provider)) : row) };
+      const providers = await Promise.all(judgedRows.providers.map(async row => {
+        if (!required.includes(row.provider)) return row;
+        const pinned = scope.methodFor?.(row.provider);
+        if (!pinned && !storedProviders.agents[row.provider]) return row;
+        // Replay belongs to the recorded key. Let the engine park with a precise reason if it was removed.
+        if (scope.replay && pinned && ['openrouter', 'apiKey', 'custom'].includes(pinned) && row.enabled !== false && row.status !== 'not-installed') {
+          return { ...row, status: 'connected' as const };
+        }
+        return configuredAuthStatus(storedProviders, await selectedProviderLogin(row, providerAuth), pinned);
+      }));
+      return { ...judgedRows, providers };
     };
     const known = await judged(false);
     const message = unavailableProviderMessage(required, known);
@@ -2388,7 +2397,8 @@ export function createAppParts(deps: ServerDeps) {
       async (c) => {
         const query = { data: c.req.valid('query') };
         const { runner, refresh } = query.data;
-        const login = providerAuth.peekStatus()?.providers.find(p => p.provider === runner);
+        const row = providerAuth.peekStatus()?.providers.find(p => p.provider === runner);
+        const login = row && { ...row, methods: providerAuth.methodStatuses(runner) };
         return c.json(await providerCatalog(runner,
           () => refresh ? modelCatalog.reprobe(runner) : modelCatalog.get(runner), login));
       },
@@ -2403,6 +2413,9 @@ export function createAppParts(deps: ServerDeps) {
    * who just named an account — telling them "unknown account" is honest, and quietly connecting
    * or reporting on a different one is not.
    */
+  // The terminal handoff renders a command that is also shown to the browser. It cannot
+  // pass a run-scoped key or enforce the selected CLI's billing method.
+  const managedTerminalMessage = 'Continue this task in the cockpit to use its configured provider.';
   const resolveWorkspaceProfile = async (
     provider: ProviderId,
     profileId?: string,
@@ -5650,7 +5663,8 @@ export function createAppParts(deps: ServerDeps) {
           repoRoot, profileFor: () => parsed.data.agentProfile,
         }, providerAuth);
         const row = statuses.providers.find(p => p.provider === fallback);
-        const error = freshMethodError(await readAgentProviders(), fallback, parsed.data.agentMethod, parsed.data.model, row);
+        const login = row && await selectedProviderLogin(row, providerAuth);
+        const error = freshMethodError(await readAgentProviders(), fallback, parsed.data.agentMethod, parsed.data.model, login);
         if (error) return c.json({ error }, 409);
       }
       const requiredProviders = providersRequiredByWorkflow(workflow, fallback);
@@ -5886,6 +5900,7 @@ export function createAppParts(deps: ServerDeps) {
         if (run.status !== 'queued') {
           const blocked = await providerActionError([providerForActiveRun(run)], {
             repoRoot,
+            replay: true,
             methodFor: (provider) => recordedMethodFor(run, provider),
             profileFor: (provider) => recordedProfileFor(run, provider),
           });
@@ -6058,6 +6073,7 @@ export function createAppParts(deps: ServerDeps) {
         }
         const blocked = await providerActionError([providerForExistingRun(run, parsed.data.runner)], {
           repoRoot,
+          replay: true,
           methodFor: (provider) => recordedMethodFor(run, provider),
           // A runner switch drops the run's account (`continueRun`), so only the same runner inherits it.
           profileFor: (provider) => parsed.data.agentProfile
@@ -6115,6 +6131,7 @@ export function createAppParts(deps: ServerDeps) {
       const sessionStep = [...run.steps].reverse().find((s) => s.sessionId);
       const sessionId = sessionStep?.sessionId;
       if (!sessionId) return c.json({ error: 'no agent session to resume' }, 409);
+      if (sessionStep?.agentMethod ?? run.agentMethod) return c.json({ error: managedTerminalMessage }, 409);
       // Gate the account `handoffEnv` launches on below: the session's own, default when it recorded none.
       const blocked = await providerActionError([providerForExistingRun(run)], {
         repoRoot,
@@ -6233,6 +6250,7 @@ export function createAppParts(deps: ServerDeps) {
         // An id resumeCommand refuses (#431) degrades to a fresh CLI in the worktree,
         // exactly like a run that never recorded a session.
         const resume = sessionId && cliRunner === (run.runner ?? 'claude') ? resumeCommand(cliRunner, sessionId) : null;
+        if (resume && (sessionStep?.agentMethod ?? run.agentMethod)) return c.json({ error: managedTerminalMessage }, 409);
         // Gate the account the terminal opens on below: the session's for a resume, the project's otherwise.
         const blocked = await providerActionError([cliRunner], {
           repoRoot,
@@ -9407,8 +9425,9 @@ export function createAppParts(deps: ServerDeps) {
       const live = ['running', 'waiting'].includes(run.status) && run.idleClosedAt === undefined && run.awaitingAnswerSince === undefined;
       return providerActionError([live ? providerForActiveRun(run) : providerForExistingRun(run)], {
         repoRoot: ctx.root,
+        replay: true,
         methodFor: (provider) => recordedMethodFor(run, provider),
-            profileFor: (provider) => recordedProfileFor(run, provider),
+        profileFor: (provider) => recordedProfileFor(run, provider),
       });
     },
   });
@@ -9957,7 +9976,7 @@ export function createAppParts(deps: ServerDeps) {
     .route('/', healthRoutes)
     .route('/', modelsRoutes)
     .route('/', agentProvidersRoutes(() => capabilities().localHandoff && !inRelayScope(),
-      async () => (await providerStatus()).providers))
+      async () => (await providerStatus()).providers.map(row => ({ ...row, methods: providerAuth.methodStatuses(row.provider) }))))
     .route('/', providersRoutes)
     .route('/', agentSetupFamily)
     .route('/', projectsRoutes)

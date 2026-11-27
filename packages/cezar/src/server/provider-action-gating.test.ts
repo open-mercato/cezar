@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Hono } from 'hono';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { updateAgentProviders } from '../workspace/agent-providers.ts';
 import { ProviderAuthService, type ProviderId } from '../core/provider-auth.ts';
 import { RunStore, type RunRecord } from '../runs/store.ts';
 import { defaultAgentAccountStore, mergeWriteAgentAccounts } from '../workspace/agent-accounts.ts';
@@ -29,7 +30,7 @@ vi.mock('../core/junie-auth-probe.ts', () => ({
   probeJunieAuthentication: vi.fn(async () => ({ connected: false })),
 }));
 
-const DISABLED_MESSAGE = 'Codex is disabled. Enable it in Settings → Agents → Providers.';
+const DISABLED_MESSAGE = 'Codex is disabled. Enable it in Settings → Agents.';
 
 const memoryWorkspaceConfig = (disabledProviders: ProviderId[] = ['codex']) => {
   let config: WorkspaceConfig = { ...defaultWorkspaceConfig(), disabledProviders };
@@ -208,6 +209,30 @@ describe('provider action gating', () => {
     expect(sendMessage).not.toHaveBeenCalled();
   });
 
+  it('rejects a stale selection for a new run and lets Continue replay its removed method', async () => {
+    vi.stubEnv('CEZ_HOME', join(repoRoot, 'workspace'));
+    try {
+      await updateAgentProviders(state => { state.agents.claude = { active: null, methods: {} }; });
+      const stale = await apiRequest(app, '/api/v1/runs', {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ task: 'Task', runner: 'claude', agentMethod: 'openrouter',
+          steps: [{ id: 'task', prompt: '{{task}}' }] }),
+      });
+      expect(stale.status).toBe(409);
+      expect(await stale.json()).toMatchObject({ error: expect.stringContaining('selected provider changed') });
+      expect(startRun).not.toHaveBeenCalled();
+
+      const run = createExistingRun('claude');
+      store.updateStep(run.id, 'task', { agentMethod: 'openrouter' });
+      const resume = await apiRequest(app, `/api/v1/runs/${run.id}/continue`, {
+        method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}',
+      });
+      // The executor must see the recorded method to park with the provider-removal reason.
+      expect(resume.status).toBe(200);
+      expect(continueRun).toHaveBeenCalledOnce();
+    } finally { vi.unstubAllEnvs(); }
+  });
+
   it('blocks a continue override before resuming the run', async () => {
     const run = createExistingRun('claude');
     const response = await apiRequest(app, `/api/v1/runs/${run.id}/continue`, {
@@ -376,7 +401,7 @@ describe('the gate verifies before it refuses', () => {
     const response = await start(app, 'claude');
     expect(response.status).toBe(409);
     expect(await response.json()).toEqual({
-      error: 'Claude Code credentials are unavailable. Authorize it in Settings → Agents → Providers.',
+      error: 'Claude Code credentials are unavailable. Authorize it in Settings → Agents.',
     });
     expect(startRun).not.toHaveBeenCalled();
   });
@@ -422,7 +447,7 @@ describe('the gate verifies before it refuses', () => {
     const response = await start(app, 'claude');
     expect(response.status).toBe(409);
     expect(await response.json()).toEqual({
-      error: 'Claude Code account "Work" is not signed in. Sign it in under Settings → Agents → Accounts, or choose another account for this task.',
+      error: 'Claude Code account "Work" is not signed in. Sign it in under Settings → Agents, or choose another account for this task.',
     });
     expect(startRun).not.toHaveBeenCalled();
   });
@@ -466,7 +491,7 @@ describe('the gate verifies before it refuses', () => {
     });
     expect(response.status).toBe(409);
     expect(await response.json()).toEqual({
-      error: 'Claude Code credentials are unavailable. Authorize it in Settings → Agents → Providers.',
+      error: 'Claude Code credentials are unavailable. Authorize it in Settings → Agents.',
     });
     expect(openTerminal).not.toHaveBeenCalled();
   });

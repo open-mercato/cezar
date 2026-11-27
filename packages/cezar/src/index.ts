@@ -70,7 +70,7 @@ import { runUsageCommand } from './usage-ledger/cli.ts';
 import { runTrackerConnectionsCommand } from './server/tracker/connections-cli.ts';
 import { runTrackerCommand } from './server/tracker/task-cli.ts';
 import { applyProvidersDocument, fetchAppliedProviders, runProvidersCommand } from './agent-providers-cli.ts';
-import { configuredAuthStatus } from './agent-providers/service.ts';
+import { configuredAuthStatus, selectedProviderLogin } from './agent-providers/service.ts';
 import { readAgentProviders } from './workspace/agent-providers.ts';
 import { runSecretsCommand } from './workspace/secrets-cli.ts';
 import { launchPageUrl } from './cockpit-address.ts';
@@ -791,7 +791,10 @@ async function runCommand(
       requiredProviders, { repoRoot }, providerAuth);
     const providers = await readAgentProviders();
     const blocked = unavailableProviderMessage(requiredProviders, {
-      ...judged, providers: judged.providers.map(row => configuredAuthStatus(providers, row)),
+      ...judged,
+      providers: await Promise.all(judged.providers.map(async row => providers.agents[row.provider]
+        ? configuredAuthStatus(providers, await selectedProviderLogin(row, providerAuth))
+        : row)),
     });
     if (blocked) {
       console.error(blocked);

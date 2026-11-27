@@ -14,7 +14,7 @@ import { createApp } from './server.ts';
 
 vi.mock('../core/backend-detect.ts', () => ({ detectEnvironment: async () => [] }));
 
-const DISABLED_MESSAGE = 'Codex is disabled. Enable it in Settings → Agents → Providers.';
+const DISABLED_MESSAGE = 'Codex is disabled. Enable it in Settings → Agents.';
 
 const memoryWorkspaceConfig = (disabledProviders: ProviderId[]) => {
   let config: WorkspaceConfig = { ...defaultWorkspaceConfig(), disabledProviders };

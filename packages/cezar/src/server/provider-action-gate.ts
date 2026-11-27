@@ -77,6 +77,7 @@ export function providerForActiveRun(run: RunRecord): ProviderId {
  *  account), else the project's selection, else the discovered default — `selectProfile`'s order. */
 export interface ProviderAccountScope {
   repoRoot?: string;
+  replay?: boolean;
   methodFor?: (provider: ProviderId) => string | undefined;
   profileFor?: (provider: ProviderId) => string | undefined;
 }
@@ -132,7 +133,7 @@ export async function withSelectedAccounts(
 export function signedOutAccountMessage(provider: ProviderId, account: string): string {
   // Quoted, so the cockpit's toast scrubber masks the label before an error report (no quote may
   // end it early).
-  return `${LABEL[provider]} account "${account.replace(/"/g, '')}" is not signed in. Sign it in under Settings → Agents → Accounts, or choose another account for this task.`;
+  return `${LABEL[provider]} account "${account.replace(/"/g, '')}" is not signed in. Sign it in under Settings → Agents, or choose another account for this task.`;
 }
 
 export function unavailableProviderMessage(
@@ -142,7 +143,7 @@ export function unavailableProviderMessage(
   for (const provider of required) {
     const row = response.providers.find(({ provider: id }) => id === provider);
     if (row?.enabled === false) {
-      return `${LABEL[provider]} is disabled. Enable it in Settings → Agents → Providers.`;
+      return `${LABEL[provider]} is disabled. Enable it in Settings → Agents.`;
     }
     // Junie has no read-only auth-status command, Antigravity's (`agy models`) needs the
     // network, and omp's login can live only in the OS keychain, so `unknown` is inconclusive
@@ -150,7 +151,7 @@ export function unavailableProviderMessage(
     if (row?.status !== 'connected' && !(RUNNABLE_WHEN_UNVERIFIED.has(provider) && row?.status === 'unknown')) {
       const account = row?.profileId ? response.accountLabels?.[provider] : undefined;
       if (account) return signedOutAccountMessage(provider, account);
-      return `${LABEL[provider]} credentials are unavailable. Authorize it in Settings → Agents → Providers.`;
+      return `${LABEL[provider]} credentials are unavailable. Authorize it in Settings → Agents.`;
     }
   }
   return null;
