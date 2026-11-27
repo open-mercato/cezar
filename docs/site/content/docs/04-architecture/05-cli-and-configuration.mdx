@@ -103,6 +103,8 @@ The example below is part of an optional project configuration. `reviewGate` is 
 
 `bypassPermissions` is also disabled by default. Setting it to true (Settings → Agents → **Skip all permission prompts**) runs the project's Claude Code tasks with `--permission-mode bypassPermissions`: every tool call is approved without asking, including commands outside the Claude Code Bash sandbox. Read-only tasks and a manager's own turns are never affected. cezar ignores the key while `.ai/cezar/config.json` is tracked by git, so a cloned repository cannot turn approvals off, and while it runs as root, because Claude Code refuses bypass mode for root. It is local-only: a hosted cockpit refuses to turn it on and ignores it.
 
+`claudePermissionMode` (`"manual"` or `"acceptEdits"`; Settings → Agents → Permissions → **Claude permission prompts**) makes Claude ask instead of denying a tool outside the step's allow list. The prompt appears as a **Permission** card (Allow once, Always allow for the session, Reject) and the task shows Needs you. `acceptEdits` applies only to steps that already allow Edit, Write and unrestricted Bash; other steps use `manual`. Autonomous runs and `cezar run` deny at once. Read-only steps, `bypassPermissions` and managers are unaffected, and the key is not part of the config transfer bundle. Unset keeps the default (`dontAsk`; `CEZ_APPROVAL_GATE=1` selects `acceptEdits` without prompts).
+
 ## Worktree disk limits
 
 Each task worktree is a full checkout. Reclaiming one removes the directory only; the branch stays and Continue restores it. A worktree with uncommitted changes is never reclaimed.

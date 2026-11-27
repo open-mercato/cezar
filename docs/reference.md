@@ -589,8 +589,20 @@ the task's worktree — but note the zero-config default list (`Read`, `Edit`,
 `Write`, `Grep`, `Glob`, `Bash`) grants unrestricted `Bash` unless a step sets
 `bashAllowlist`, so treat a run as having full shell access in its worktree,
 not a sandboxed allowlist. Set `CEZ_APPROVAL_GATE=1` to select Claude's
-`acceptEdits` mode, but cezar has no cockpit permission response channel, so
-approval prompts are not actionable in the cockpit. A project can instead turn
+`acceptEdits` mode; that env var has no prompt channel, so unapproved tools are
+still denied. To be asked instead, set `"claudePermissionMode": "manual"` in
+`.ai/cezar/config.json` (**Settings → Agents → Permissions → Claude permission
+prompts**): Claude runs with `--permission-prompt-tool stdio`, and a tool outside
+the step's allow list (MCP tools included) shows as a **Permission** card in the
+task thread (**Allow once** / **Always allow**, session-scoped / **Reject**) while
+the task shows **Needs you**. The answer goes back to Claude out of band, never
+as a chat message. `"acceptEdits"` auto-approves edits, but only for steps that
+already allow Edit, Write and unrestricted Bash; any other step uses `manual`.
+Autonomous runs and headless `cezar run` deny at once instead of asking, and
+`AskUserQuestion` / `ExitPlanMode` prompts are always denied. Read-only and
+strict steps and `bypassPermissions` win over it, a manager never uses it, and
+it is left out of the config transfer bundle. A prompt unanswered when the
+session ends closes as `expired`. There is no `auto` option. A project can instead turn
 **Settings → Agents → Skip all permission prompts** on (`"bypassPermissions": true`
 in `.ai/cezar/config.json`): its Claude tasks then run with
 `--permission-mode bypassPermissions`, so every tool call — including commands
@@ -613,7 +625,7 @@ Useful environment variables:
 | `CEZ_TELEMETRY=0` | Block usage telemetry even after you opted in. Telemetry is opt-in — nothing is sent until you answer yes in the cockpit, Settings → Privacy or `cezar telemetry enable` ([docs/telemetry.md](telemetry.md)). `DO_NOT_TRACK=1` works too. `CEZ_TELEMETRY=1` only lifts the CI / test-runner / `CEZ_DRY_RUN=1` block; it never grants consent. |
 | `CEZ_INSTANCE_ID` | Internal server-install identity set automatically in generated systemd/launchd services; normally leave unset. It is surfaced additively by `/api/v1/health` for install verification. |
 | `CEZ_AGENT_MODELS_LOCKED=1` | Globally lock each runner to the model configured in its native Claude/Codex/OpenCode settings while keeping runner selection available. Exact `1` also delegates authentication and provider enablement to those native agents, so Cezar skips its credential probes and provider-disable preferences. Existing Cezar presets are preserved but ignored, and an environment change requires a restart. The config-file equivalent is `"modelsLocked": true` in global `~/.cezar/config.json` or one repository's `.ai/cezar/config.json`; config-file locks do not disable provider checks. |
-| `CEZ_APPROVAL_GATE=1` | Select Claude's `acceptEdits` mode. Cezar has no cockpit permission response channel; by default, unapproved tools are denied without interrupting the run. |
+| `CEZ_APPROVAL_GATE=1` | Select Claude's `acceptEdits` mode without a prompt channel: unapproved tools are still denied without interrupting the run. To get cockpit prompts, set `claudePermissionMode` in the project's `.ai/cezar/config.json`. |
 | `CEZ_RUNS_KEEP=<n>` / `CEZ_ARCHIVED_RUNS_KEEP=<n>` | How many settled runs (and archived ones) a project's index keeps before the oldest are pruned. Defaults 300 / 500, minimum 1; live runs, runs pinned by an active dispatch tree and tasks the user pinned are never pruned. |
 | `CEZ_RELAY_URL=<origin>` | Overrides the phone relay's built-in default and the address in **Settings → Connect a phone → Advanced**, which then shows read-only (spec `.ai/specs/2026-11-01-relay-qr-pairing.md`). You do not need it: Connect a phone works out of the box, and Advanced saves a custom address to `~/.cezar/config.json`. `https://` anywhere; `http://` only for `127.0.0.1`, `localhost` or `[::1]`. One trailing `/` is accepted. Set but invalid, it still wins and phones cannot connect, so nothing falls through to a relay you did not name. Nothing connects before **Test** or **Connect a phone**, and the socket lasts only while a phone is paired. |
 | `CEZ_RELAY=0` | Blocks everything relay-related: hides the section, refuses its routes, and leaves no socket for phones already paired. |
@@ -846,7 +858,7 @@ cezar is not married to one vendor. Every agent step runs through a single
 
 | Backend | CLI | How cezar drives it | Tool access |
 |---|---|---|---|
-| **Claude Code** (default) | [`claude`](https://github.com/anthropics/claude-code) | Headless `stream-json` mode. | Per-tool `--allowedTools` (`bashAllowlist` scopes `Bash`); `dontAsk` denies unapproved tools without prompting (`CEZ_APPROVAL_GATE=1` selects `acceptEdits`, but cezar cannot answer permission prompts). |
+| **Claude Code** (default) | [`claude`](https://github.com/anthropics/claude-code) | Headless `stream-json` mode. | Per-tool `--allowedTools` (`bashAllowlist` scopes `Bash`); `dontAsk` denies unapproved tools without prompting (`CEZ_APPROVAL_GATE=1` selects `acceptEdits` without a prompt channel); a project's `claudePermissionMode` makes Claude ask, and the cockpit answers the prompt. |
 | **Codex** | [`codex`](https://github.com/openai/codex) | `codex app-server` — JSON-RPC over stdio, the same transport the Codex IDE extensions use. | Explicit read-only grants use an isolated, verified runtime and cezar’s read broker. Omitted/exact-default grants retain `danger-full-access` with `approvalPolicy: never`. `CEZ_CODEX_NETWORK=0` selects network-blocked `workspace-write` for unrestricted tasks and denies brokered GitHub reads for restricted steps. |
 | **Junie** _(experimental)_ | [`junie`](https://junie.jetbrains.com/cli) | `junie --acp=true` — the real Agent Client Protocol over stdio, the same transport JetBrains IDEs use. | Ignores `allowedTools`; every permission is auto-approved. |
 | **OpenCode** _(experimental)_ | [`opencode`](https://opencode.ai) | `opencode serve` — a local HTTP server with an SSE event stream. | Ignores `allowedTools` entirely; OpenCode's own permission config applies; a prompt it raises shows up as a card to allow or reject in a non-autonomous cockpit run, and is refused in autonomous and headless (`cezar run`) runs. |
