@@ -1,24 +1,37 @@
+import { homedir } from 'node:os';
 import {
   RUNNER_IDS, providerBaseUrlSchema, providerMethodInputSchema,
   type AgentProviderEntry, type AgentProviderMethod, type ProviderMethodKind, type ProviderStatus,
   type Runner, type RunnerModelCatalogResponse, type RunnerModelOption,
 } from '@open-mercato/cezar-contract';
-import type { ProviderAuthService } from '../core/provider-auth.ts';
+import { modelConflictsWithRunner } from '../core/model-presets.ts';
+import { providerAuthChecksDisabled, type ProviderAuthService } from '../core/provider-auth.ts';
+import type { ProviderMethodStatuses } from '../core/provider-method-status.ts';
 import { resolveProfileEnvForRoot } from '../workspace/agent-profiles.ts';
 import { authMethods } from '../core/agent-auth-methods.ts';
 import { readAgentProviders, readAgentProviderKey, updateAgentProviders, type StoredProviderMethod } from '../workspace/agent-providers.ts';
 import { fetchProviderModels } from './models.ts';
+import { cachedPiSubscriptions } from './pi-subscriptions.ts';
 
 const OPENROUTER = 'https://openrouter.ai/api';
 type Store = Awaited<ReturnType<typeof readAgentProviders>>;
 type Origin = 'cli' | 'file' | 'cockpit';
-export type ProviderLogin = ProviderStatus & { methods?: Readonly<Partial<Record<string, 'connected' | 'disconnected' | 'unknown'>>> };
+export type ProviderLogin = ProviderStatus & { methods?: ProviderMethodStatuses };
 // A named account's login can differ from the default account on the same machine.
 export async function selectedProviderLogin(row: ProviderStatus, auth: Pick<ProviderAuthService, 'methodStatuses'>): Promise<ProviderLogin> {
   if (!row.profileId) return { ...row, methods: auth.methodStatuses(row.provider) };
   const { profile } = await resolveProfileEnvForRoot(undefined, row.provider, row.profileId);
   if (profile.id !== row.profileId) return row;
   return { ...row, methods: auth.methodStatuses(row.provider, profile.isDefault ? undefined : profile.path) };
+}
+
+const readPiSubscriptions = cachedPiSubscriptions();
+
+async function configuredLogin(row: ProviderLogin | undefined, store: Store): Promise<ProviderLogin | undefined> {
+  if (row?.provider !== 'pi' || !store.agents.pi || row.enabled === false || row.authFailureId ||
+      row.status === 'not-installed' || row.status === 'disconnected' || process.env.CEZ_DRY_RUN === '1' || providerAuthChecksDisabled()) return row;
+  const native = await readPiSubscriptions(homedir());
+  return { ...row, methods: { ...row.methods, ...native } };
 }
 
 type Definition = ReturnType<typeof authMethods>['methods'][number];
@@ -69,7 +82,8 @@ export function providerEntry(runner: Runner, store: Store, login?: ProviderLogi
 
 export async function providerEntries(logins: readonly ProviderLogin[]) {
   const store = await readAgentProviders();
-  return RUNNER_IDS.map(runner => providerEntry(runner, store, logins.find(p => p.provider === runner)));
+  return Promise.all(RUNNER_IDS.map(async runner =>
+    providerEntry(runner, store, await configuredLogin(logins.find(p => p.provider === runner), store))));
 }
 
 /** Validate against the latest snapshot under the writer lock. Throwing discards the whole edit. */
@@ -152,10 +166,14 @@ export async function refreshProviderModels(runner: Runner, id: string) {
   return { models: ids.map(m => m.id), ...(error ? { error } : {}) };
 }
 
-export async function providerCatalog(runner: Runner, native: () => Promise<RunnerModelCatalogResponse>, login?: ProviderLogin): Promise<RunnerModelCatalogResponse> {
+export async function providerCatalog(
+  runner: Runner, native: () => Promise<RunnerModelCatalogResponse>,
+  loginFor?: (configured: boolean) => ProviderLogin | undefined | Promise<ProviderLogin | undefined>,
+): Promise<RunnerModelCatalogResponse> {
   const store = await readAgentProviders();
   const saved = store.agents[runner];
-  const entry = providerEntry(runner, store, login);
+  const login = await loginFor?.(!!saved);
+  const entry = providerEntry(runner, store, await configuredLogin(login, store));
   const selected = entry.methods.filter(m => entry.mode === 'any' || m.id === entry.active);
   const local = selected.filter(m => (!remote(m.kind) || m.origin === 'host') && m.state === 'connected');
   const needsNative = !saved || local.length > 0;
@@ -184,15 +202,28 @@ export async function providerCatalog(runner: Runner, native: () => Promise<Runn
 }
 
 /** Apply configured auth to the action gate only. Vendor login status remains available to Settings. */
-export function configuredAuthStatus(store: Store, row: ProviderLogin, pinned?: string): ProviderStatus {
+export async function configuredAuthStatus(store: Store, row: ProviderLogin, pinned?: string): Promise<ProviderStatus> {
   if ((!store.agents[row.provider] && !pinned) || row.enabled === false || row.status === 'not-installed') return row;
-  const entry = providerEntry(row.provider, store, row);
+  const entry = providerEntry(row.provider, store, await configuredLogin(row, store));
   const chosen = pinned ?? entry.active;
   const available = entry.methods.filter(m => chosen ? m.id === chosen : entry.mode === 'any');
   if (available.some(m => m.kind !== 'subscription' && m.state === 'connected')) return { ...row, status: 'connected' };
   const login = available.find(m => m.kind === 'subscription' && m.state === 'connected') ??
     available.find(m => m.kind === 'subscription' && m.state === 'unknown');
   return { ...row, status: login?.state === 'connected' ? 'connected' : login?.state === 'unknown' ? 'unknown' : 'disconnected' };
+}
+
+// Native runner guards also apply to synchronous dispatch and Continue. Only the selected
+// endpoint's actual catalog can authorize an otherwise foreign native model name.
+export async function providerModelAdmission(runner: Runner, model?: string, recordedMethod?: string): Promise<{ providerModel?: string }> {
+  if (!model || !modelConflictsWithRunner(model, runner)) return {};
+  const entry = (await readAgentProviders()).agents[runner];
+  if (!entry) return {};
+  const selected = recordedMethod ?? entry.active;
+  const matches = Object.entries(entry.methods).filter(([id, method]) =>
+    (selected ? id === selected : authMethods(runner).mode === 'any') &&
+    remote(method.kind) && method.keyRef && method.models?.ids.some(item => item.id === model));
+  return matches.length === 1 ? { providerModel: model } : {};
 }
 
 export function freshMethodError(store: Store, runner: Runner, id: string, model: string | undefined, login?: ProviderLogin) {

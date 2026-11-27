@@ -1,7 +1,9 @@
 # Per-agent provider configuration
 
-Source doc: .ai/specs/2026-11-27-per-agent-provider-configuration.md  
+Source doc: .ai/specs/2026-11-27-per-agent-provider-configuration.md
 Spec PR #2548
+
+[Verified CLI versions, supported methods and launch evidence](2026-11-27-provider-cli-evidence.md)
 
 Give each agent a workspace-wide provider choice. Use the same encrypted credential and method store for Settings and headless setup. Keep existing host-configured and subscription-only installations working.
 
@@ -11,24 +13,24 @@ The implementation follows the three phases below. Vendor login remains with eac
 
 ### Phase 1: Workspace agents
 
-- [ ] 1.1 Verify vendor capabilities against shipped CLIs
+- [x] 1.1 Verify vendor capabilities against shipped CLIs — b39e324d0
 - [x] 1.2 Define provider, model and run contracts — c15958ba6
 - [x] 1.3 Implement encrypted storage and atomic changes — 679599f93
-- [ ] 1.4 Map verified methods to agent launch options
+- [x] 1.4 Map verified methods to agent launch options — b39e324d0
 - [ ] 1.5 Characterize existing launches and wire run selection and replay
 - [ ] 1.6 Fetch, cache and expose method-served models
 - [x] 1.7 Register local-write routes and check HTTP compatibility — f71c6f198
 - [x] 1.8 Add headless configuration and startup apply — 093c9a922
-- [ ] 1.9 Build workspace agent settings
-- [ ] 1.10 Fold account controls into subscription rows
+- [x] 1.9 Build workspace agent settings — 80263f852
+- [x] 1.10 Fold account controls into subscription rows — 05888bde6
 
 ### Phase 2: Project agents
 
-- [ ] 2.1 Show provider availability in project agent settings
+- [x] 2.1 Show provider availability in project agent settings — 8b420d539
 
 ### Phase 3: Composer
 
-- [ ] 3.1 Characterize composer availability
-- [ ] 3.2 Select and submit method-served models
+- [x] 3.1 Characterize composer availability — 9606823c6
+- [x] 3.2 Select and submit method-served models — 63e03c101
 - [x] 3.3 Document provider configuration — 3f1eda832
 - [x] 3.4 Archive the capability delta — 3f1eda832

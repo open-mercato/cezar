@@ -6,7 +6,7 @@ import { RunStore } from '../runs/store.ts';
 import type { RunManager } from '../workflows/run.ts';
 import { REVIEW_CHILD_SUFFIX, dispatchIntentOf, launchAutomationRun, launchScheduledRun, launchTrackerAutomationRun, rebaselineIdleAutomations, reconcileAutomationReceipts, renderAutomationTask, renderScheduleTask, renderTrackerTask, validateAutomationPrompt } from './task-template.ts';
 import { AutomationStore } from './store.ts';
-import type { GithubAutomationDefinition, TrackerAutomationDefinition } from './types.ts';
+import { automationTaskSchema, type GithubAutomationDefinition, type TrackerAutomationDefinition } from './types.ts';
 import type { TrackerAutomationCandidate } from './tracker-poller.ts';
 
 const definition: GithubAutomationDefinition = {
@@ -47,16 +47,16 @@ describe('automation task templates', () => {
     const root = await mkdtemp(join(tmpdir(), 'cezar-template-account-'));
     try {
       const store = RunStore.open(join(root, '.ai/cezar'));
-      const inputs: Array<{ agentProfile?: string }> = [];
+      const inputs: Array<{ agentProfile?: string; agentMethod?: string }> = [];
       const manager = {
-        startRun: (workflow: { name: string; steps: [] }, input: { task: string; agentProfile?: string }) => {
-          inputs.push({ agentProfile: input.agentProfile });
+        startRun: (workflow: { name: string; steps: [] }, input: { task: string; agentProfile?: string; agentMethod?: string }) => {
+          inputs.push({ agentProfile: input.agentProfile, agentMethod: input.agentMethod });
           return store.createRun({ title: 'automation', workflow: workflow.name, task: input.task, steps: [] });
         },
       } as unknown as RunManager;
-      const task = { ...definition.task, workflow: 'quick-task', agentProfile: 'work' };
+      const task = automationTaskSchema.parse({ ...definition.task, workflow: 'quick-task', agentProfile: 'work', agentMethod: 'custom' });
       await launchAutomationRun({ root, manager, store, definition: { ...definition, task }, candidate, receiptId: 'receipt' });
-      expect(inputs).toEqual([{ agentProfile: 'work' }]);
+      expect(inputs).toEqual([{ agentProfile: 'work', agentMethod: 'custom' }]);
     } finally { await rm(root, { recursive: true, force: true }); }
   });
 

@@ -163,6 +163,7 @@ function startInput(definition: AutomationDefinition, task: string, dispatchEnab
     model: definition.task.model,
     reasoningEffort: definition.task.reasoningEffort,
     runner: definition.task.runner ?? definition.deferredStart?.binding.runner as RunnerId | undefined,
+    agentMethod: definition.task.agentMethod,
     agentProfile: definition.task.agentProfile ?? definition.deferredStart?.binding.accounts.find(a => a.runner === definition.deferredStart?.binding.runner)?.id,
     systemPrompt: definition.task.systemPrompt,
     worktree: definition.task.worktree,

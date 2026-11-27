@@ -118,6 +118,29 @@ describe('a relay request is a hosted request', () => {
   });
 
   describe('each power localHandoff gates', () => {
+    it('serves provider status but refuses provider writes from phones and hosted browsers', async () => {
+      process.env.CEZ_DRY_RUN = '1';
+      process.env.CEZ_REMOTE_AGENT_ACCOUNTS = '1';
+      const path = '/api/v1/agent-providers';
+      const method = path + '/claude/methods/openrouter';
+      const app = makeApp();
+      expect(await (await apiRequest(app, path)).json()).toMatchObject({ editable: true });
+      for (const source of ['phone', 'hosted'] as const) {
+        if (source === 'hosted') process.env.CEZ_REMOTE = '1';
+        const request = source === 'phone' ? asPhone : apiRequest;
+        expect(await (await request(app, path)).json()).toMatchObject({ editable: false });
+        for (const [url, init] of [
+          [method, put({ kind: 'openrouter', apiKey: 'synthetic-relay-test' })],
+          [method, { method: 'DELETE' }],
+          [method + '/models', { method: 'POST' }],
+          [path + '/claude/active', put({ methodId: null })],
+        ] as const) {
+          expect((await request(app, url, init)).status).toBe(409);
+        }
+      }
+      expect(readdirSync(home)).not.toContain('agent-providers.json');
+    });
+
     it('agent-config PUT', async () => {
       const app = makeApp();
       const res = await asPhone(app, '/api/v1/agent-config/claude.project.settings', put({ content: '{"hooks":{}}', version: null }));

@@ -1,4 +1,4 @@
-import { deferredStartStateSchema } from '@open-mercato/cezar-contract';
+import { deferredStartStateSchema, providerMethodIdSchema } from '@open-mercato/cezar-contract';
 import { z } from 'zod';
 import {
   DISPATCH_MAX_SUBTASKS,
@@ -55,6 +55,7 @@ export const automationTaskSchema = z
     /** Agent account the launched runs use — `POST /runs`' own `agentProfile`. Omitted = the
      *  project's selection at launch time. */
     agentProfile: z.string().trim().min(1).max(64).optional(),
+    agentMethod: providerMethodIdSchema.optional(),
     model: z.string().trim().min(1).max(200).optional(),
     /** Codex/Claude effort of the launched runs — `POST /runs`' own `reasoningEffort`. */
     reasoningEffort: z.string().trim().min(1).max(64).optional(),

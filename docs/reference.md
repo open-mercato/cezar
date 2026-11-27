@@ -1153,6 +1153,8 @@ says so and falls back to the authenticated same-origin route instead of showing
 
 Open **Settings → Global → Agents** and expand the agent to see the login and key-based methods its CLI supports. A single-provider agent uses its active method. On a multi-provider agent the model choice also identifies the method. Projects can inherit or override accounts and models. Provider methods apply across the workspace.
 
+Pi's model list can include both OAuth and API-key models. Once Pi has a configured provider, Settings and model selection check its two native logins with `pi auth check --no-refresh`. Concurrent reads share the result for one minute. The agent checks its selected subscription again when it starts.
+
 The same settings can be applied before the cockpit listens with `cezar serve --providers providers.yaml`, or to a running workspace with `cezar providers apply providers.yaml`. The default serve command also accepts `--providers`. Both accept a JSON or YAML file, inline JSON, or `-` for standard input.
 
 ```yaml

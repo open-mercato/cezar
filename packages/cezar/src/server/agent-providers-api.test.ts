@@ -5,7 +5,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { Hono } from 'hono';
 import { agentProvidersResponseSchema } from '@open-mercato/cezar-contract';
 import { agentProvidersRoutes } from './agent-providers-routes.ts';
-import { applyProviderChanges, providerCatalog, providerEntry, refreshProviderModels } from '../agent-providers/service.ts';
+import { applyProviderChanges, providerCatalog, providerEntry, providerModelAdmission, refreshProviderModels } from '../agent-providers/service.ts';
 
 let home: string;
 beforeEach(async () => {
@@ -122,9 +122,9 @@ it('adds only connected native methods to a configured additive catalog', async 
     runner: 'pi' as const, source: 'cache' as const, stale: false,
     models: ['anthropic/native', 'openai-codex/unverified'].map(id => ({ id, label: id, description: '' })),
   }));
-  const catalog = await providerCatalog('pi', native, {
+  const catalog = await providerCatalog('pi', native, () => ({
     provider: 'pi', status: 'connected', methods: { anthropic: 'connected' },
-  });
+  }));
   expect(catalog.models.map(m => [m.id, m.via?.methodId])).toEqual([
     ['anthropic/native', 'anthropic'], ['anthropic/test-model', 'openrouter'], ['test-model', 'openrouter'],
   ]);
@@ -138,4 +138,19 @@ it('uses a detected vendor key without attributing an unverified subscription', 
   expect(entry).toMatchObject({ active: 'apiKey', methods: expect.arrayContaining([
     expect.objectContaining({ id: 'apiKey', origin: 'host', state: 'connected' }),
   ]) });
+});
+
+it('admits an otherwise foreign native model only from the selected or recorded gateway', async () => {
+  vi.stubEnv('CEZ_DRY_RUN', '0');
+  vi.stubGlobal('fetch', vi.fn(async () => Response.json({ data: [{ id: 'anthropic/claude-sonnet-5' }] })));
+  const server = app(true);
+  try {
+    await server.request(base + '/codex/methods/custom', put({ kind: 'custom', baseUrl: 'https://gateway.test', apiKey: 'fixture-only' }));
+    const model = 'anthropic/claude-sonnet-5';
+    expect(await providerModelAdmission('codex', model)).toEqual({});
+    expect(await providerModelAdmission('codex', model, 'custom')).toEqual({ providerModel: model });
+    await server.request(base + '/codex/active', put({ methodId: 'custom' }));
+    expect(await providerModelAdmission('codex', model)).toEqual({ providerModel: model });
+    expect(await providerModelAdmission('codex', 'anthropic/claude-opus-9')).toEqual({});
+  } finally { vi.unstubAllGlobals(); }
 });

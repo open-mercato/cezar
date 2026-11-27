@@ -1,6 +1,6 @@
 import { discoverNativeProviderModels } from '../agent-providers/native-models.ts';
 import { agentProvidersRoutes } from './agent-providers-routes.ts';
-import { configuredAuthStatus, freshMethodError, providerCatalog, selectedProviderLogin } from '../agent-providers/service.ts';
+import { configuredAuthStatus, freshMethodError, providerCatalog, providerModelAdmission, selectedProviderLogin } from '../agent-providers/service.ts';
 import { readAgentProviders } from '../workspace/agent-providers.ts';
 import { loadGithubAsset } from './forge/github-assets.ts';
 import { createWebhookRoutes } from './webhooks.ts';
@@ -2397,10 +2397,13 @@ export function createAppParts(deps: ServerDeps) {
       async (c) => {
         const query = { data: c.req.valid('query') };
         const { runner, refresh } = query.data;
-        const row = providerAuth.peekStatus()?.providers.find(p => p.provider === runner);
-        const login = row && { ...row, methods: providerAuth.methodStatuses(runner) };
         return c.json(await providerCatalog(runner,
-          () => refresh ? modelCatalog.reprobe(runner) : modelCatalog.get(runner), login));
+          () => refresh ? modelCatalog.reprobe(runner) : modelCatalog.get(runner),
+          async configured => {
+            const status = providerAuth.peekStatus() ?? (configured ? await providerStatus() : undefined);
+            const row = status?.providers.find(p => p.provider === runner);
+            return row && { ...row, methods: providerAuth.methodStatuses(runner) };
+          }));
       },
     );
 
@@ -5449,15 +5452,16 @@ export function createAppParts(deps: ServerDeps) {
     .post('/runs/:id/dispatch', jsonZodValidator(dispatchInputSchema), async (c) => {
       const { manager, store, automationStore } = c.get('project');
       const input = c.req.valid('json');
+      const parent = store.getRun(c.req.param('id'));
+      const root = parent && store.getRun(parent.dispatch?.rootRunId ?? parent.id);
+      const runner = input.runner ?? root?.dispatch?.intent?.runner ?? parent?.runner ?? 'claude';
       // An explicit account is checked like POST /runs checks one (#1497): unknown = refusal.
       if (input.account !== undefined) {
-        const parent = store.getRun(c.req.param('id'));
-        const root = parent && store.getRun(parent.dispatch?.rootRunId ?? parent.id);
-        const runner = input.runner ?? root?.dispatch?.intent?.runner ?? parent?.runner ?? 'claude';
         const account = await resolveWorkspaceProfile(runner, input.account);
         if ('error' in account) return c.json({ error: `dispatch refused — ${account.error}` }, 409);
       }
       const outcome = manager.dispatch(c.req.param('id'), input, {
+        ...await providerModelAdmission(runner, input.model),
         automationPaused: (id) => pauseHoldsDispatch(automationStore.get(id)),
       });
       if ('refused' in outcome) return c.json({ error: outcome.refused }, 409);
@@ -6033,7 +6037,9 @@ export function createAppParts(deps: ServerDeps) {
       const blocked = await providerActionError([input.runner], { repoRoot, profileFor: () => account.profile.id });
       if (blocked) return c.json({ error: blocked }, 409);
       const defaultRunner = run.runner ?? (await loadConfig(repoRoot)).defaultRunner;
-      const switched = manager.switchAgent(id, { ...input, agentProfile: account.profile.id }, defaultRunner);
+      const switched = manager.switchAgent(id, {
+        ...input, ...await providerModelAdmission(input.runner, input.model), agentProfile: account.profile.id,
+      }, defaultRunner);
       return 'error' in switched ? c.json({ error: switched.error }, 409) : c.json(switched);
     })
 
@@ -6091,7 +6097,10 @@ export function createAppParts(deps: ServerDeps) {
         }
         const images = resolveAttachments(parsed.data.images);
         if (typeof images === 'string') return c.json({ error: images }, 400);
+        const runner = providerForExistingRun(run, parsed.data.runner);
+        const recorded = runner === (run.runner ?? 'claude') ? recordedMethodFor(run, runner) : undefined;
         const result = manager.continueRun(id, {
+          ...await providerModelAdmission(runner, parsed.data.model, recorded),
           text: parsed.data.text,
           images,
           runner: parsed.data.runner,
@@ -9975,7 +9984,7 @@ export function createAppParts(deps: ServerDeps) {
   const workspaceV1 = new Hono()
     .route('/', healthRoutes)
     .route('/', modelsRoutes)
-    .route('/', agentProvidersRoutes(() => capabilities().localHandoff && !inRelayScope(),
+    .route('/', agentProvidersRoutes(() => capabilities().localHandoff,
       async () => (await providerStatus()).providers.map(row => ({ ...row, methods: providerAuth.methodStatuses(row.provider) }))))
     .route('/', providersRoutes)
     .route('/', agentSetupFamily)
