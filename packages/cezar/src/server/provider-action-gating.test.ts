@@ -182,6 +182,55 @@ describe('provider action gating', () => {
     } finally { vi.unstubAllEnvs(); }
   });
 
+  it('offers and admits only Kimi subscription aliases served by the managed provider', async () => {
+    vi.stubEnv('CEZ_HOME', join(repoRoot, 'workspace'));
+    vi.stubEnv('KIMI_CODE_HOME', repoRoot);
+    const configPath = join(repoRoot, 'config.toml');
+    const writeConfig = (defaultModel: string) => writeFileSync(configPath, [
+      'default_model = ' + JSON.stringify(defaultModel),
+      '[providers."managed:kimi-code"]', 'type = "kimi"', 'base_url = "https://api.kimi.ai/coding/v1/"',
+      '[models.managed]', 'provider = "managed:kimi-code"', 'display_name = "Subscription model"',
+      '[models.gateway]', 'provider = "private"',
+      '[models.override]', 'provider = "managed:kimi-code"', 'api_key_env = "FIXTURE_KEY"',
+      '[models." gateway "]', 'provider = "managed:kimi-code"',
+    ].join('\n'));
+    const models = async () => (await apiRequest(app, '/api/v1/models?runner=kimi')).json();
+    const start = (model?: string, agentProfile?: string) => apiRequest(app, '/api/v1/runs', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ task: 'Task', runner: 'kimi', agentMethod: 'subscription', model, agentProfile,
+        steps: [{ id: 'task', prompt: '{{task}}' }] }),
+    });
+    try {
+      writeConfig('gateway');
+      expect(await models()).toMatchObject({ models: [{ id: 'managed' }, { id: 'gateway' }, { id: 'override' }, { id: ' gateway ' }] });
+      await updateAgentProviders(state => { state.agents.kimi = { methods: {}, active: 'subscription' }; });
+      expect.soft(await models()).toMatchObject({ models: [
+        { id: 'managed', label: 'Subscription model', via: { methodId: 'subscription' } },
+      ] });
+      expect((await start('managed')).status).toBe(201);
+      for (const model of ['gateway', 'override', 'missing', 'auto', undefined]) {
+        expect.soft((await start(model)).status, String(model)).toBe(409);
+      }
+      writeConfig('managed');
+      expect((await start('auto')).status).toBe(201);
+      expect(startRun).toHaveBeenLastCalledWith(expect.anything(), expect.objectContaining({ model: undefined }));
+      expect((await start()).status).toBe(201);
+      const work = join(repoRoot, 'kimi-work');
+      mkdirSync(work);
+      writeFileSync(join(work, 'config.toml'), [
+        '[providers."managed:kimi-code"]', 'type="kimi"', '[models."kimi-code/work"]', 'provider="managed:kimi-code"',
+      ].join('\n'));
+      await mergeWriteAgentAccounts(accounts => {
+        accounts.accounts.push({ id: 'work', provider: 'kimi', configDir: work, label: 'Work', addedAt: '' });
+      });
+      expect((await start('managed', 'work')).status).toBe(409);
+      expect((await start('kimi-code/work', 'work')).status).toBe(201);
+      writeFileSync(configPath, '[invalid');
+      expect.soft(await models()).toMatchObject({ models: [] });
+      expect.soft((await start('managed')).status).toBe(409);
+    } finally { vi.unstubAllEnvs(); }
+  });
+
   it('blocks a mixed inline workflow when one agent step uses a disabled provider', async () => {
     const response = await apiRequest(app, '/api/v1/runs', {
       method: 'POST',

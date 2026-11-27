@@ -5669,7 +5669,11 @@ export function createAppParts(deps: ServerDeps) {
         }, providerAuth);
         const row = statuses.providers.find(p => p.provider === fallback);
         const login = row && await selectedProviderLogin(row, providerAuth);
-        const error = freshMethodError(await readAgentProviders(), fallback, parsed.data.agentMethod, parsed.data.model, login);
+        // Auto asks Kimi to use its native default, including when the client spells it out.
+        if (fallback === 'kimi' && parsed.data.agentMethod === 'subscription' && parsed.data.model?.trim() === 'auto') {
+          parsed.data.model = undefined;
+        }
+        const error = await freshMethodError(await readAgentProviders(), fallback, parsed.data.agentMethod, parsed.data.model, login);
         if (error) return c.json({ error }, 409);
       }
       const requiredProviders = providersRequiredByWorkflow(workflow, fallback);

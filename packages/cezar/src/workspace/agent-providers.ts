@@ -21,6 +21,7 @@ const method = z.object({
   models: z.object({
     fetchedAt: z.string(), ids: z.array(model), error: optionalText,
     generation: z.number().int().nonnegative().optional().catch(undefined),
+    successGeneration: z.number().int().nonnegative().optional().catch(undefined),
   }).passthrough().optional().catch(undefined),
   // A spread of a CLI/route input must never persist an inline key alongside display metadata.
   apiKey: z.never().optional(),

@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
@@ -117,6 +117,65 @@ it.each([true, false])('keeps a newer successful catalog fresh when an earlier r
   } finally { vi.unstubAllGlobals(); }
 });
 
+it.each([true, false])('retains the most recent successful list and later failure (failure finishes first=%s)', async failureFirst => {
+  await applyProviderChanges([{ runner: 'codex', active: 'custom', methods: [
+    { id: 'custom', baseUrl: 'https://gateway.test', apiKey: 'test-fixture-key' },
+  ] }], 'cli', []);
+  vi.stubEnv('CEZ_DRY_RUN', '0');
+  const pending: ((response: Response) => void)[] = [];
+  vi.stubGlobal('fetch', () => new Promise<Response>(resolve => pending.push(resolve)));
+  const begin = async (count: number) => {
+    const result = refreshProviderModels('codex', 'custom');
+    await vi.waitFor(() => expect(pending).toHaveLength(count));
+    return { result, finish: pending[count - 1]! };
+  };
+  const success = (id: string) => Response.json({ data: [{ id }] });
+  const stale = { models: ['current'], error: expect.stringContaining('retry') };
+  try {
+    const oldest = await begin(1);
+    const current = await begin(2);
+    const failure = await begin(3);
+    if (failureFirst) {
+      failure.finish(new Response(null, { status: 502 }));
+      expect(await failure.result).toMatchObject({ models: [], error: stale.error });
+      current.finish(success('current'));
+      expect(await current.result).toEqual(stale);
+    } else {
+      current.finish(success('current'));
+      expect(await current.result).toEqual({ models: ['current'] });
+      failure.finish(new Response(null, { status: 502 }));
+      expect(await failure.result).toEqual(stale);
+    }
+    oldest.finish(success('retired'));
+    expect(await oldest.result).toEqual(stale);
+    expect(await providerCatalog('codex', vi.fn())).toMatchObject({ stale: true, models: [{ id: 'current' }] });
+    const retry = await begin(4);
+    retry.finish(success('recovered'));
+    expect(await retry.result).toEqual({ models: ['recovered'] });
+    expect(await providerCatalog('codex', vi.fn())).toMatchObject({ stale: false, models: [{ id: 'recovered' }] });
+  } finally { vi.unstubAllGlobals(); }
+});
+
+it.each([{ apiKey: 'rotated-key' }, { baseUrl: 'https://gateway.test/other' }])(
+  'discards an in-flight result after a method change %o', async changed => {
+    await applyProviderChanges([{ runner: 'codex', methods: [
+      { id: 'custom', baseUrl: 'https://gateway.test', apiKey: 'fixture-key' },
+    ] }], 'cli', []);
+    vi.stubEnv('CEZ_DRY_RUN', '0');
+    let finish!: (response: Response) => void;
+    const fetch = vi.fn(() => new Promise<Response>(resolve => { finish = resolve; }));
+    vi.stubGlobal('fetch', fetch);
+    try {
+      const pending = refreshProviderModels('codex', 'custom');
+      await vi.waitFor(() => expect(fetch).toHaveBeenCalledOnce());
+      await applyProviderChanges([{ runner: 'codex', methods: [{ id: 'custom', ...changed }] }], 'cli', []);
+      finish(Response.json({ data: [{ id: 'old-method-model' }] }));
+      await expect(pending).rejects.toThrow('Provider changed');
+      expect((await readAgentProviders()).agents.codex?.methods.custom?.models).toBeUndefined();
+    } finally { vi.unstubAllGlobals(); }
+  },
+);
+
 it('adds only connected native methods to a configured additive catalog', async () => {
   await app(true).request(base + '/pi/methods/openrouter', put({ kind: 'openrouter', apiKey: 'fixture-provider' }));
   const native = vi.fn(async () => ({
@@ -178,9 +237,13 @@ it('can return to a Kimi subscription verified at launch after removing a gatewa
   ]) });
   expect((await configuredAuthStatus(state, login)).status).toBe('connected');
   expect((await configuredAuthStatus(state, { ...login, status: 'disconnected' })).status).toBe('disconnected');
-  const native = vi.fn(async () => ({ runner: 'kimi' as const, source: 'live' as const, stale: false,
-    models: [{ id: 'kimi-code/native', label: 'Native', description: '' }] }));
+  vi.stubEnv('KIMI_CODE_HOME', home);
+  await writeFile(join(home, 'config.toml'), [
+    '[providers."managed:kimi-code"]', 'type="kimi"', '[models."kimi-code/native"]', 'provider="managed:kimi-code"',
+  ].join('\n'));
+  const native = vi.fn();
   expect((await providerCatalog('kimi', native, () => login)).models[0]?.via?.methodId).toBe('subscription');
+  expect(native).not.toHaveBeenCalled();
 });
 
 it('uses a detected vendor key without attributing an unverified subscription', () => {

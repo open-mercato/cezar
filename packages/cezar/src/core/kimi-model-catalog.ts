@@ -7,9 +7,14 @@ import type { ModelOption } from './runner-model-catalog.ts';
 export interface KimiModelDiscoveryOptions {
   /** Defaults to `process.env`; `KIMI_CODE_HOME` relocates the config like it does for the CLI. */
   env?: NodeJS.ProcessEnv;
+  subscriptionOnly?: boolean;
 }
 
 const MAX_MODELS = 200;
+
+async function readKimiConfig(env: NodeJS.ProcessEnv) {
+  return parseToml(await readFile(join(kimiHome(env), 'config.toml'), 'utf8'));
+}
 
 /**
  * Discover the models the host's Kimi Code offers by reading its own `config.toml`: every
@@ -21,18 +26,18 @@ const MAX_MODELS = 200;
  * which `RunnerModelCatalog` turns into an `unavailable` answer; `auto` stays selectable.
  */
 export async function discoverKimiModels(options: KimiModelDiscoveryOptions = {}): Promise<ModelOption[]> {
-  const content = await readFile(join(kimiHome(options.env ?? process.env), 'config.toml'), 'utf8');
-  return kimiModelsFromConfig(parseToml(content));
+  return kimiModelsFromConfig(await readKimiConfig(options.env ?? process.env), options.subscriptionOnly);
 }
 
 /** The picker entries a parsed Kimi config declares — the pure half, for tests. */
-export function kimiModelsFromConfig(config: unknown): ModelOption[] {
+export function kimiModelsFromConfig(config: unknown, subscriptionOnly = false): ModelOption[] {
   if (!isRecord(config) || !isRecord(config.models)) return [];
   const defaultModel = typeof config.default_model === 'string' ? config.default_model : undefined;
   const models: ModelOption[] = [];
   for (const [id, table] of Object.entries(config.models)) {
     if (models.length >= MAX_MODELS) break;
     if (!id.trim() || !isRecord(table)) continue;
+    if (subscriptionOnly && (id !== id.trim() || id === 'auto' || !isKimiSubscriptionModel(config, id))) continue;
     const label = typeof table.display_name === 'string' && table.display_name.trim() ? table.display_name.trim() : id;
     const context = typeof table.max_context_size === 'number' ? contextLabel(table.max_context_size) : undefined;
     const parts = [id, ...(context ? [`${context} context`] : []), ...(id === defaultModel ? ['your Kimi default'] : [])];
@@ -48,4 +53,25 @@ function contextLabel(tokens: number): string | undefined {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+/** Picker, admission and launch all require the same vendor-managed OAuth provider. */
+function isKimiSubscriptionModel(config: Record<string, unknown>, alias: string): boolean {
+  if (!isRecord(config.models) || !isRecord(config.providers)) return false;
+  const model = config.models[alias];
+  const provider = config.providers['managed:kimi-code'];
+  if (!isRecord(model) || model.provider !== 'managed:kimi-code' || !isRecord(provider) || provider.type !== 'kimi') return false;
+  const allowed = (row: Record<string, unknown>) => !row.api_key && !row.api_key_env && !row.env && !row.custom_headers
+    && !row.protocol && !row.base_url;
+  const { base_url, ...rest } = provider;
+  return allowed(model) && allowed(rest) && (!base_url || (typeof base_url === 'string' && /^https:\/\/api\.kimi\.(?:com|ai)\/coding\/v1\/?$/.test(base_url)));
+}
+
+/** Fresh auto uses the native default. On resume the runner supplies the actual ACP alias. */
+export async function kimiSubscriptionModel(env: NodeJS.ProcessEnv, alias?: string): Promise<boolean> {
+  try {
+    const config = await readKimiConfig(env);
+    const effective = alias ?? config.default_model;
+    return typeof effective === 'string' && isKimiSubscriptionModel(config, effective);
+  } catch { return false; }
 }
