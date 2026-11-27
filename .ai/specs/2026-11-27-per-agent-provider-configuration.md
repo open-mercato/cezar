@@ -21,8 +21,9 @@ one-backend CLIs) run on **one auth method at a time**. Multi-provider agents (p
 **any combination**, and each connected method adds its models. cezar stores the keys the user types,
 encrypted, and injects them only into the run that uses them. The composer's model menu ends with
 **Manage providers**, and an agent with no usable method shows **Configure providers** in place of the
-model chip. The same methods can also be set without the cockpit, from a providers file passed to
-`cezar serve --providers <file>` or `cezar providers apply <file>`, or one at a time with `cezar providers set`.
+model chip. The same methods can also be set without the cockpit: `cezar serve --providers <file|json|->` (so
+`npx cezar-cli --providers '{"agents":…}'` works), `cezar providers apply`, or one at a time with
+`cezar providers set`.
 Each entry is saved into that agent's method in the same store the cockpit writes.
 
 ## 📝 Owner decisions (gate, 2026-11-27)
@@ -214,6 +215,14 @@ never take a key value from the command line.
   `apiKeyEnv: OPENROUTER_API_KEY` and `active: openrouter`
 - THEN Claude's OpenRouter method is stored with the key encrypted, it is Claude's active method, and Settings →
   Agents shows it marked "from providers file"
+
+##### Scenario: Inline JSON on npx
+- WHEN the user runs `npx cezar-cli --providers '{"version":1,"agents":{"claude":{"active":"openrouter","methods":{"openrouter":{"apiKeyEnv":"OPENROUTER_API_KEY"}}}}}'`
+- THEN the result is the same as passing that JSON as a file
+
+##### Scenario: Inline JSON carrying a key value
+- WHEN the `--providers` value is inline JSON and an entry has `apiKey`
+- THEN the apply is refused with "a key on the command line is visible in ps; use apiKeyEnv, apiKeyFile or --providers -"
 
 ##### Scenario: One method by parameters
 - WHEN the user runs `printf %s "$KEY" | cezar providers set codex custom --base-url https://llm.example.com --key-stdin --active`
@@ -407,7 +416,7 @@ passes them sees no change.
 
 ### The providers file
 
-JSON or YAML (by extension). Its schema is `providersFileSchema` in `packages/contract/src/agent-providers.ts`,
+JSON or YAML (by extension). The same document can also be given inline or on stdin (§ Inline JSON). Its schema is `providersFileSchema` in `packages/contract/src/agent-providers.ts`,
 built from the same method shape as the `PUT …/methods/:methodId` body, so the file and the API cannot drift.
 
 ```yaml
@@ -452,12 +461,43 @@ agents:
   shows "from providers file" on those rows. A cockpit edit is allowed, but `serve --providers` applies the file
   again on the next start and overwrites it, and the row says so.
 
+### Inline JSON
+
+`--providers` (and `providers apply`) takes one value, read as follows:
+
+| Value | Read as |
+| --- | --- |
+| starts with `{` after trimming whitespace | inline JSON |
+| `-` | JSON or YAML from stdin |
+| anything else | a file path, JSON or YAML by extension |
+
+So a one-off start needs no file:
+
+```sh
+OPENROUTER_API_KEY=sk-or-… npx cezar-cli --providers '{"version":1,"agents":{
+  "claude":{"active":"openrouter","methods":{"openrouter":{"apiKeyEnv":"OPENROUTER_API_KEY"}}},
+  "pi":{"methods":{"openrouter":{"apiKeyEnv":"OPENROUTER_API_KEY"}}}}}'
+
+# a key inline in the document: pipe it, so it never reaches argv
+printf '%s' "$PROVIDERS_JSON" | npx cezar-cli --providers -
+```
+
+- **Same document, same rules.** Inline and stdin go through `providersFileSchema` and the all-or-nothing apply,
+  exactly like a file. Entries get `origin: 'file'`.
+- **No `apiKey` in inline JSON.** Argv is visible in `ps` and shell history, so an inline `apiKey` is refused there.
+  `apiKeyEnv` and `apiKeyFile` are fine, because they name a key without containing it. Stdin (`-`) accepts an
+  inline `apiKey`, since nothing else can read it. This replaces the file-permission check, which has no file to
+  check.
+- **Re-applied on every start**, like a file. An `npx` alias or service line that carries `--providers` keeps the
+  store matching it.
+- Parsing is `JSON.parse` for inline and the existing `yaml` dependency for files and stdin. Nothing new is added.
+
 ### Commands and parameters
 
 | Command | What it does |
 | --- | --- |
-| `cezar serve --providers <file>` | Applies the file before the server listens. An invalid file logs one error and the boot continues with the store unchanged (§ Zero config: never fail the boot). Model lists are fetched after listen, in the background. |
-| `cezar providers apply <file> [--no-fetch]` | Same apply without a server. It fetches each openrouter or custom method's models (10 s timeout each) and prints one line per method. Exit 1 on an invalid file. A failed models fetch saves the method with `error` and is a warning, not a failure. |
+| `cezar serve --providers <file│json│->` | Applies the document before the server listens. `serve` is the default command, so `npx cezar-cli --providers …` is the same thing. An invalid file logs one error and the boot continues with the store unchanged (§ Zero config: never fail the boot). Model lists are fetched after listen, in the background. |
+| `cezar providers apply <file│json│-> [--no-fetch]` | Same apply without a server. It fetches each openrouter or custom method's models (10 s timeout each) and prints one line per method. Exit 1 on an invalid file. A failed models fetch saves the method with `error` and is a warning, not a failure. |
 | `cezar providers set <runner> <kind> [--label <s>] [--base-url <url>] [--key-stdin │ --key-env <NAME> │ --key-file <path>] [--active] [--no-fetch]` | Writes one method by parameters, with the same validation and fetch as `apply`. `--active` selects it for a one-mode agent. |
 | `cezar providers select <runner> <kind│none>` | Sets or clears a one-mode agent's active method. |
 | `cezar providers remove <runner> <kind>` | Removes a method and its key, and clears `active` when it pointed there. |
@@ -574,7 +614,7 @@ Proposal: the mockups listed at the top. Not accepted yet.
    `select`, `remove` and `list`, the `serve --providers` hook before listen, the help text, and the
    `docs/reference.md` and BC entries. Tests cover every scenario under "Methods can be configured from a file or
    the CLI": all-or-nothing on an invalid entry, idempotent re-apply, untouched unnamed methods, the inline-key
-   permission check, the empty key source, `origin`, and that a boot with an invalid file still listens.
+   permission check, inline JSON and stdin values, the refused `apiKey` in inline JSON, the empty key source, `origin`, and that a boot with an invalid file still listens.
 9. **Settings UI.** Characterize `accounts-defaults.test.tsx`, then build the Agents card from the mockup with both
    modes, the custom form, the host-environment rows, the "from providers file" tag and the read-only hosted view,
    each with unit tests.
