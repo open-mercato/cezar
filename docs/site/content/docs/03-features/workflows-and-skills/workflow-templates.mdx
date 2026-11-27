@@ -16,6 +16,14 @@ sources:
 ---
 Templates cover implementation with tests (implement-and-verify), implementation with review and a PR (implement-review-pr), review by several agents (review-council), a read-only review of a pull request (review-pr), and CI repair (fix-ci). Select a template, adapt its test commands and prompts, then save your own copy.
 
+## Run only the tests related to the change
+
+This is one result of the rule that [global instructions](../agents-and-models/system-prompt) reach every step. The Run tests step of implement-and-verify and implement-review-pr does not run the whole suite. The implement agent runs the tests related to its change and records that command in the file named by `$CEZ_TEST_COMMAND_FILE`, one command per line, for example `npm test -- src/cart/total.test.ts`. The Run tests step prints the recorded command, then sources it with `set -eo pipefail` inside the step's own login shell, so your profile loads once and never under errexit. A failing line, or a failing stage of a pipeline such as `… | tail`, turns the step red and sends the output to the fixer. When the file is missing, or holds only blank lines and comments, the step runs `npm test`.
+
+cezar empties the file at the start of every agent round (the fixer, review follow-ups, Continue), so an old narrow command never outlives its round. In implement-review-pr, the gate before the PR shows the command the agent recorded. It is blank when the whole suite ran.
+
+> **Good to know**: The record lives in the task's artifacts folder as a hidden file, so it never reaches the diff or the Assets view. An agent could narrow the command or make it a no-op, just as it could edit the tests, which is why the step and the gate show it. To always run one fixed command, edit the Run tests step's command in your own copy of the workflow.
+
 ## Where to find it
 
 Workflows → built-in templates
@@ -23,18 +31,22 @@ Workflows → built-in templates
 ## How to use it
 
 1. Choose implement-and-verify, implement-review-pr, review-council, review-pr, or fix-ci.
-2. Adapt test commands and prompts.
+2. Adapt prompts, and the Run tests command if your repository needs a fixed one.
 3. Save your own copy of the workflow.
 
 ## Review a pull request without touching it
 
-Start a task with the review-pr workflow and the pull request's URL as the task text. Correctness, security and tests reviewers read it with `gh pr view` and `gh pr diff`, then a judge ends with a verdict (approve, changes or reject), the findings as `path:line`, and a draft review comment for each, in its final message. Nothing is posted.
+Start a task with the review-pr workflow and the pull request's URL as the task text. Before any agent runs, cezar checks the pull request out into a folder of its own, beside the task, with its metadata and diff; copies of those two land in the task's artifacts. Correctness, security and tests reviewers read the pull request there (falling back to `gh pr view` and `gh pr diff` when the checkout fails), then a judge ends with a verdict (approve, changes or reject), the findings as `path:line`, and a draft review comment for each, in its final message. Nothing is posted. On Claude Code the reviewers may also save notes to the artifacts folder (and nowhere else); Codex reviewers only read.
+
+> **Good to know**: The task's own worktree and branch stay on the base branch: the pull request's code is exported outside every working directory (including in-place runs) and only ever read, never run in. Its `.claude` settings, hooks, skills, `CLAUDE.md` and `.mcp.json` therefore never load, while your own Claude Code settings (including `.claude/settings.local.json` and any provider environment such as Bedrock or `ANTHROPIC_BASE_URL`) apply as in any other task. The task has no changes of its own, so there is nothing to merge, push or open a PR for. Review steps always run in `dontAsk` (never `bypassPermissions` or `acceptEdits`), and no agent may change the exported pull request, its diff or its metadata. The exported `tree/` is freed after 7 idle days by default, on archive, and on a manual reclaim, and deleted with the task.
+
+> **Good to know**: cezar checks a pull request out only from a remote of your repository that is the pull request's repository (an SSH host alias counts when GitHub confirms the pull request's head), with your own SSH command and keys. With no such remote, or when the fetch fails (a private repository the remote cannot reach, git older than 2.29), the reviewers read the pull request through `gh pr view` and `gh pr diff` instead. A broad allow rule in your own Claude Code settings, such as `Bash(npm run:*)`, still lets a reviewer run that command, now with the pull request's code on disk; keep such rules out of the settings review tasks use.
 
 Its agents get Read, Grep, Glob and a Bash limited to read-only `gh` and `git` commands, with no private MCP servers. Claude Code, Pi and supported Codex installations enforce those limits. Other backends refuse to start this workflow. Claude Code’s own settings can still widen its allow rules.
 
 Codex uses an isolated configuration and a read broker. Native shell tools and execution environments stay disabled, including after Continue, restart and fork. The broker validates every operation and refuses writes, pushes, PR mutations, unrestricted shell and MCP calls. Explicit empty grants stay empty in dispatched tasks.
 
-> **Good to know**: Restricted Codex execution requires the verified 0.169.0 protocol on macOS or Linux. Unsupported versions, system policy or authentication settings produce a diagnostic before a model turn. Your ordinary unrestricted Codex tasks keep their native settings. Codex managers require an unsupported shell grant and remain unavailable; planning and naming can use isolated no-tools calls.
+> **Good to know**: Restricted Codex execution requires Codex 0.169.0 or newer on macOS or Linux. Older versions, system policy or authentication settings produce a diagnostic before a model turn. Your ordinary unrestricted Codex tasks keep their native settings. A Codex manager uses the same isolated mode, with its `cez-manager` commands checked and run by cezar. Planning and naming can use isolated no-tools calls.
 
 ## What each workflow can do
 

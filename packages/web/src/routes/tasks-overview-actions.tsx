@@ -2,6 +2,7 @@ import * as React from 'react'
 import { ArchiveIcon, ArchiveRestoreIcon, EyeIcon, EyeOffIcon, ListChecksIcon } from 'lucide-react'
 import type { RunRecord } from '@open-mercato/cezar-api-client'
 import { Button } from '@/components/ui/button'
+import { BulkTagButton, RunTagQuickAction } from '@/components/run-tags'
 import { canBeUnread, isDoneItem, isUnread } from '@/lib/read-state'
 import { runTitle } from '@/lib/task-groups'
 
@@ -68,7 +69,7 @@ export function useTasksOverviewSelection(
     locked.current = false
     setBusy(false)
   }, [onAction])
-  return { ids, selected, busy, message, toggle, clear, toggleAll, apply }
+  return { ids, selected, busy, message, setMessage, toggle, clear, toggleAll, apply }
 }
 
 export function TaskSelectionCheckbox({ checked, mixed = false, label, disabled, onChange }: {
@@ -113,6 +114,7 @@ export function TasksSelectionToolbar({ displayed, selection, archived, selectin
         return <Button key={action} type="button" size="sm" variant="outline" disabled={busy || count === 0}
           onClick={() => void selection.apply(action, selected)}>{labels[action]} ({count})</Button>
       })}
+      <BulkTagButton runs={selected} disabled={busy} onMessage={selection.setMessage} />
       <Button type="button" size="sm" variant="ghost" disabled={busy} onClick={selection.clear}>Clear selection</Button>
       <span className="text-xs text-muted-foreground">Only eligible selected tasks are changed; others are skipped.{archived ? '' : ' Archiving frees each task’s worktree (branch kept).'}</span>
     </> : null}
@@ -134,5 +136,6 @@ export function TaskQuickActions({ run, busy, onAction }: {
       return <Button key={action} type="button" variant="ghost" size="icon-sm" title={label} aria-label={label}
         disabled={busy} onClick={() => void onAction(action, [run])}><Icon className="size-3.5" aria-hidden="true" /></Button>
     })}
+    <RunTagQuickAction run={run} title={runTitle(run)} disabled={busy} />
   </span>
 }

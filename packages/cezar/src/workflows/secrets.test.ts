@@ -353,6 +353,7 @@ describe('run context for check steps', () => {
       CEZ_BASE: finished.baseBranch,
       CEZ_STEP_ID: 'verify',
       CEZ_ATTEMPT: '1',
+      CEZ_TEST_COMMAND_FILE: join(repoRoot, '.ai/cezar', 'artifacts', record.id, '.test-command'),
     });
     expect(seen.CEZ_SHARED_CACHE_DIR).toBe(join(process.env.CEZ_HOME!, 'cache', PROJECT));
     // Absent, not empty — including the stale values this process inherited. Driven off

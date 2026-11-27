@@ -132,6 +132,9 @@ export const graphNodeSchema = z.discriminatedUnion('type', [
   z.object({ ...nodeBase, type: z.literal('if'), condition: conditionSchema }),
   // ---- more git / GitHub ----
   z.object({ ...nodeBase, type: z.literal('git.push') }),
+  /** Export the PR named in `{{task}}` into its own folder (`pr-checkout.ts`), never the task's
+   *  tree, so read-only reviewers only read files. */
+  z.object({ ...nodeBase, type: z.literal('github.pr-checkout') }),
   /** Merge the freshest base (`origin/<base>`) into the task branch. On conflict the merge is
    *  LEFT in progress and the node leaves by `conflict`, so the next agent sees the conflicts. */
   z.object({ ...nodeBase, type: z.literal('git.sync-base') }),
@@ -169,6 +172,8 @@ export type GraphNode = z.infer<typeof graphNodeSchema>;
 export type GraphNodeType = GraphNode['type'];
 export type GraphEdge = z.infer<typeof graphEdgeSchema>;
 export type WorkflowGraph = z.infer<typeof workflowGraphSchema>;
+/** A request body's graph, as a NAMED type the server's route types refer to instead of inlining. */
+export interface WorkflowGraphBody extends z.input<typeof workflowGraphSchema> {}
 export type WorkflowGraphFile = z.infer<typeof workflowGraphFileSchema>;
 
 /** Output ports per node type; the first is the default a bare `from: <node>` means. */
@@ -190,6 +195,7 @@ export const NODE_PORTS: Record<GraphNodeType, readonly string[]> = {
   workflow: ['done', 'failed'],
   if: ['true', 'false'],
   'git.push': ['done', 'failed'],
+  'github.pr-checkout': ['done', 'failed'],
   'git.sync-base': ['done', 'conflict', 'failed'],
   'github.pr-update': ['done', 'failed'],
   'github.issue-comment': ['done', 'failed'],
@@ -214,7 +220,7 @@ export const NODE_CATALOG: NodeCatalogEntry[] = [
   { type: 'end', category: 'flow', label: 'End', description: 'Finishes the run as success or failed.', ports: [], outputs: [] },
   { type: 'loop', category: 'flow', label: 'Loop', description: 'Bounded repeat; every cycle passes through one.', ports: ['repeat', 'exhausted'], outputs: ['iteration', 'max'] },
   { type: 'agent', category: 'agents', label: 'Agent', description: 'One agent session: prompt, skill, runner, model, optional verdicts.', ports: ['done', 'failed'], outputs: ['summary', 'verdict', 'costUsd'] },
-  { type: 'check', category: 'scripts', label: 'Check', description: 'Shell command in the worktree — exit 0 passes.', ports: ['pass', 'fail'], outputs: ['exitCode', 'output'] },
+  { type: 'check', category: 'scripts', label: 'Check', description: 'Shell command in the worktree — exit 0 passes.', ports: ['pass', 'fail'], outputs: ['exitCode', 'output', 'recordedTests'] },
   { type: 'gate.human', category: 'flow', label: 'Human gate', description: 'Pause for your approve / reject. Holds no slot while it waits.', ports: ['approve', 'reject'], outputs: ['comment'] },
   { type: 'ask-user', category: 'agents', label: 'Ask user', description: 'Ask a question and continue with the answer.', ports: ['answered'], outputs: ['answer'] },
   { type: 'dispatch', category: 'agents', label: 'Dispatch subtask', description: 'A child task in its own worktree, budget carved from this run.', ports: ['done', 'failed'], outputs: ['runId', 'status', 'summary'] },
@@ -226,6 +232,7 @@ export const NODE_CATALOG: NodeCatalogEntry[] = [
   { type: 'join', category: 'flow', label: 'Join', description: "Where a fork's agents meet: wait for all, or the first to succeed.", ports: ['done', 'failed'], outputs: ['succeeded', 'failed'] },
   { type: 'if', category: 'flow', label: 'If', description: 'Branch on the diff size, changed paths, a node output or the base branch.', ports: ['true', 'false'], outputs: ['result', 'value'] },
   { type: 'git.push', category: 'git', label: 'Push', description: 'Push the task branch to origin.', ports: ['done', 'failed'], outputs: [] },
+  { type: 'github.pr-checkout', category: 'git', label: 'Check out PR', description: "Export the head of the PR named in the task into its own read-only folder, with its metadata and diff. The task's tree and branch are not touched. Never pushes or posts.", ports: ['done', 'failed'], outputs: ['number', 'head', 'tree', 'diff', 'meta', 'checkedOut'] },
   { type: 'git.sync-base', category: 'git', label: 'Sync with base', description: 'Merge the latest base branch in; stops on conflict for an agent to resolve.', ports: ['done', 'conflict', 'failed'], outputs: ['conflicts'] },
   { type: 'github.pr-update', category: 'git', label: 'Update PR', description: 'Mark the task PR ready, add labels, request reviewers.', ports: ['done', 'failed'], outputs: [] },
   { type: 'github.issue-comment', category: 'git', label: 'Issue comment', description: "Comment on the task's issue.", ports: ['done', 'failed'], outputs: ['issue'] },

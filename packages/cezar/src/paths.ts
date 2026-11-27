@@ -135,6 +135,17 @@ export function agentAccountsPath(): string {
   return join(cezarHomeDir(), 'agent-accounts.json');
 }
 
+/** The task-tag registry (spec 2026-11-23-task-tags) — its own file for the `agentAccountsPath`
+ *  reason: a cezar that has never heard of tags never opens it, so it cannot drop them. */
+export function taskTagsPath(): string {
+  return join(cezarHomeDir(), 'task-tags.json');
+}
+
+/** Folders cezar creates for accounts added from the cockpit (spec 2026-11-24-add-account-in-cockpit). */
+export function agentHomesDir(): string {
+  return join(cezarHomeDir(), 'agent-homes');
+}
+
 /** Manager definitions (spec 2026-10-31-managers). */
 export function managersPath(): string {
   return join(cezarHomeDir(), 'managers.json');
@@ -148,6 +159,11 @@ export function managersDir(): string {
 /** Dismissed, snoozed and kept attention items (spec 2026-11-23-needs-you-triage). */
 export function attentionOverridesPath(): string {
   return join(cezarHomeDir(), 'attention-overrides.json');
+}
+
+/** Pull requests cezar has seen end, so a Probably done verdict outlives the forge cache. */
+export function attentionPrEndsPath(): string {
+  return join(cezarHomeDir(), 'attention-pr-ends.json');
 }
 
 /** Per-project automatic agent fallback policy. Kept separate from account credentials. */

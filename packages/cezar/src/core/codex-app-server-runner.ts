@@ -2,8 +2,8 @@ import { unwrapJsonErrorEnvelope } from './agent-errors.ts';
 import { CodexToolPolicyError } from './codex-tool-policy.ts';
 import { compileCodexRestrictedPolicy, type CodexRestrictedPolicy } from './codex-restricted-policy.ts';
 import { prepareRestrictedCodexHome, type RestrictedCodexHome } from './codex-restricted-home.ts';
-import { CODEX_READ_TOOL, CodexReadBroker } from './codex-restricted-tools.ts';
-import { verifyRestrictedCodexIdentity, verifyRestrictedCodexConfig, verifyRestrictedCodexRequirements, verifyRestrictedCodexServices, verifyRestrictedCodexThread } from './codex-restricted-preflight.ts';
+import { CodexReadBroker, codexReadTool } from './codex-restricted-tools.ts';
+import { codexFeaturesToDisable, parseCodexFeaturePage, verifyRestrictedCodexFeatures, verifyRestrictedCodexIdentity, verifyRestrictedCodexConfig, verifyRestrictedCodexRequirements, verifyRestrictedCodexServices, verifyRestrictedCodexThread, type CodexFeature } from './codex-restricted-preflight.ts';
 import { emitUsageWindows, normalizeCodexUsageWindows } from './usage-windows.ts';
 import type { ChildProcessWithoutNullStreams } from 'node:child_process';
 import type {
@@ -58,6 +58,9 @@ export interface CodexRunnerOptions {
 
 /** ~16s: outlasts a previous session's own EOF→TERM→KILL teardown (12s) before forking. */
 const RESUME_LOCK_RETRY_MS: readonly number[] = [250, 500, 1_000, 2_000, 4_000, 4_000, 4_000];
+/** After a hard-stopped app-server exits, how long its stdout may stay open before we stop reading.
+ *  A normal exit closes it well within this; only a pipe a descendant inherited outlives it (#1929). */
+const EXITED_STDOUT_GRACE_MS = 1_000;
 
 /**
  * `AgentRunner` over `codex app-server` — the same JSONL transport the VS Code
@@ -144,6 +147,7 @@ interface PendingUserInput {
 /** One live `codex app-server` process driving a single thread. */
 class CodexSession implements AgentSession {
   readonly result: Promise<AgentRunResult>;
+  readonly processExited!: Promise<void>;
 
   private readonly child!: ChildProcessWithoutNullStreams;
   private readonly restrictedHome?: RestrictedCodexHome;
@@ -188,6 +192,9 @@ class CodexSession implements AgentSession {
   private eofTermTimer: NodeJS.Timeout | undefined;
   private eofKillTimer: NodeJS.Timeout | undefined;
   private hardKillTimer: NodeJS.Timeout | undefined;
+  private stdoutReleaseTimer: NodeJS.Timeout | undefined;
+  /** Set when a hard stop stopped reading stdout itself, so the read loop's end is teardown, not an error. */
+  private stdoutReleased = false;
   private spawnFailed: Error | null = null;
   private timedOut = false;
   /** Set the moment WE signal the child (EOF watchdog, cancel, kill switch).
@@ -228,6 +235,10 @@ class CodexSession implements AgentSession {
     }
 
     this.hasExited = trackChildExit(this.child);
+    this.processExited = new Promise<void>((resolve) => {
+      if (this.hasExited()) resolve();
+      else this.child.once('exit', () => resolve());
+    });
     this.child.once('exit', () => {
       this.readBroker?.close();
       this.stdinOpen = false;
@@ -292,7 +303,7 @@ class CodexSession implements AgentSession {
         // promises makes every bootstrap rejection part of session.result.
         await Promise.all([this.ready, readLoop()]);
       } catch (err) {
-        if (!this.timedOut) {
+        if (!this.timedOut && !this.stdoutReleased) {
           sessionError = err;
           // Bootstrap failed before a usable turn exists. Closing stdin lets
           // app-server exit normally; end() also owns the TERM/KILL watchdog
@@ -311,6 +322,7 @@ class CodexSession implements AgentSession {
       if (this.eofTermTimer) clearTimeout(this.eofTermTimer);
         if (this.eofKillTimer) clearTimeout(this.eofKillTimer);
         if (this.hardKillTimer) clearTimeout(this.hardKillTimer);
+        if (this.stdoutReleaseTimer) clearTimeout(this.stdoutReleaseTimer);
       this.rpc.rejectPending();
 
       if (this.spawnFailed) throw this.spawnFailed;
@@ -477,6 +489,11 @@ class CodexSession implements AgentSession {
 
   hardStop(): void {
     this.interrupt();
+    void this.processExited.then(() => {
+      if (this.stdoutReleaseTimer) return;
+      this.stdoutReleaseTimer = setTimeout(() => this.releaseStdout(), EXITED_STDOUT_GRACE_MS);
+      this.stdoutReleaseTimer.unref?.();
+    });
     if (this.hardKillTimer || this.hasExited()) return;
     this.hardKillTimer = setTimeout(() => {
       if (!this.hasExited()) {
@@ -485,6 +502,16 @@ class CodexSession implements AgentSession {
       }
     }, KILL_GRACE_MS);
     this.hardKillTimer.unref?.();
+  }
+
+  /** End the read loop on a stdout a surviving descendant still holds open (#1929). */
+  private releaseStdout(): void {
+    const stdout = this.child.stdout;
+    if (stdout.readableEnded || stdout.destroyed) return;
+    this.stdoutReleased = true;
+    stdout.destroy();
+    // No reply can arrive any more; a handshake still in flight must not keep `ready` pending.
+    this.rpc.rejectPending();
   }
 
   // ---- protocol -----------------------------------------------------------
@@ -534,7 +561,7 @@ class CodexSession implements AgentSession {
 
   private async bootstrapRestricted(identity: Record<string, unknown>): Promise<string | undefined> {
     const home = this.restrictedHome!;
-    verifyRestrictedCodexIdentity(identity, home);
+    const { baseline } = verifyRestrictedCodexIdentity(identity, home);
     verifyRestrictedCodexConfig(await this.rpc.request('config/read', { cwd: this.spec.cwd, includeLayers: true }), home);
     verifyRestrictedCodexRequirements(await this.rpc.request('configRequirements/read', {}));
     const absentServices = async (threadId?: string) => verifyRestrictedCodexServices(
@@ -542,22 +569,39 @@ class CodexSession implements AgentSession {
       await this.rpc.request('mcpServerStatus/list', threadId ? { threadId } : {}),
     );
     await absentServices();
+    // Past the 0.169.0 baseline, a feature this isolation has never heard of may be a native tool.
+    const unknownOn = baseline ? [] : codexFeaturesToDisable(await this.codexFeatures());
     if (!this.stdinOpen) throw new Error('codex: isolated startup was interrupted');
     const overrides = clean({ model: this.spec.model, cwd: this.spec.cwd, sandbox: 'read-only', approvalPolicy: 'never', config: {
+      ...Object.fromEntries(unknownOn.map(key => [`features.${key}`, false])),
       ...Object.fromEntries(Object.entries(this.restrictedHome!.config.features as Record<string, boolean>).map(([key, value]) => [`features.${key}`, value])),
       web_search: 'disabled',
     } });
     let model: string | undefined;
     if (this.spec.resume && this.spec.sessionId) ({ threadId: this.threadId, model } = await this.resumeThread(this.spec.sessionId, overrides));
     else {
-      const res = await this.rpc.request('thread/start', { ...overrides, environments: [], dynamicTools: [CODEX_READ_TOOL] });
+      const res = await this.rpc.request('thread/start', { ...overrides, environments: [], dynamicTools: [codexReadTool(this.policy!)] });
       verifyRestrictedCodexThread(res, this.spec.cwd);
       this.threadId = threadIdOf(res);
       model = threadModelOf(res);
     }
     if (!this.threadId) throw new Error('codex: isolated thread did not return an id');
+    if (!baseline) verifyRestrictedCodexFeatures(await this.codexFeatures(this.threadId));
     await absentServices(this.threadId);
     return model;
+  }
+
+  /** Every page of `experimentalFeature/list`, for the thread's effective config when given. */
+  private async codexFeatures(threadId?: string): Promise<CodexFeature[]> {
+    const features: CodexFeature[] = [];
+    let cursor: string | null | undefined;
+    for (let page = 0; page < 20; page++) {
+      const result = parseCodexFeaturePage(await this.rpc.request('experimentalFeature/list', { limit: 500, ...(cursor ? { cursor } : {}), ...(threadId ? { threadId } : {}) }));
+      features.push(...result.data);
+      cursor = result.nextCursor;
+      if (!cursor) return features;
+    }
+    throw new CodexToolPolicyError('Codex reported too many native features to verify');
   }
 
   /**

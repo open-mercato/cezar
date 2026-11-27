@@ -2076,7 +2076,7 @@ describe('gemini provider status (#581): an environment read, never a login prob
     const service = new ProviderAuthService({ runCommand, platform: 'linux' });
     const rows = await statuses(service);
     expect(rows.gemini!.status).toBe('not-installed');
-    expect(rows.gemini!.hint).toContain('npm i -g @google/gemini-cli');
+    expect(rows.gemini!.hint).toContain('npm install -g @google/gemini-cli');
     expect(service.loginCommand('gemini')).toBe("'/tools/gemini custom'");
   });
 
@@ -2377,7 +2377,7 @@ describe('inconclusive probe reports', () => {
     it('is not-installed with the update hint and sends no report when --version has no semver', async () => {
       const onInconclusive = vi.fn();
       const row = await rowFor({ stdout: 'hello\n', stderr: '', exitCode: 0 }, onInconclusive);
-      expect(row).toMatchObject({ status: 'not-installed', hint: expect.stringContaining('npm i -g @github/copilot') });
+      expect(row).toMatchObject({ status: 'not-installed', hint: expect.stringContaining('npm install -g @github/copilot') });
       expect(onInconclusive).not.toHaveBeenCalled();
     });
 

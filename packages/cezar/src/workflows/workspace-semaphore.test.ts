@@ -133,6 +133,69 @@ describe('workspace semaphore across RunManagers (step 2.5)', () => {
     expect(internals.busySlots()).toBe(1);
   });
 
+  describe('restart when idle (the restart gate)', () => {
+    it('a task monitoring its CI blocks a restart although it holds no slot', () => {
+      const semaphore = new WorkspaceSemaphore({ initial: { maxParallel: 2, maxMonitoringSessions: 2 } });
+      const { store, manager } = project('cez-restart-monitor-', semaphore);
+      const internals = manager as unknown as { active: Map<string, object>; waiting: Set<string>; monitoring: Set<string> };
+      const watcher = store.createRun({ title: 'ci watcher', workflow: 'quick-task', task: 't', steps: [] });
+      store.updateRun(watcher.id, { status: 'running', activity: 'monitoring' });
+      internals.active.set(watcher.id, {});
+      internals.waiting.add(watcher.id);
+      internals.monitoring.add(watcher.id);
+      const asking = store.createRun({ title: 'asks the user', workflow: 'quick-task', task: 't', steps: [] });
+      store.updateRun(asking.id, { status: 'waiting' });
+      internals.active.set(asking.id, {});
+      internals.waiting.add(asking.id);
+
+      // The old test: no slot held, nothing queued — it called this idle and restarted.
+      expect(semaphore.idle()).toBe(true);
+      expect(semaphore.restartGate.idle()).toBe(false);
+      // The run waiting on the user does not hold the restart up.
+      expect(semaphore.restartGate.blockers()).toEqual([{ kind: 'task', count: 1, names: ['ci watcher'] }]);
+    });
+
+    it('holds new tasks while a restart is pending, without letting them block it; release starts them', async () => {
+      const semaphore = new WorkspaceSemaphore({ initial: { maxParallel: 2 } });
+      const { store, manager } = project('cez-restart-hold-', semaphore);
+      const busy = manager.startRun(SLOW, { task: 'already running' });
+      await waitFor(() => store.getRun(busy.id)?.status === 'running', 'the running task');
+      semaphore.restartGate.hold();
+
+      // Work that arrives after the restart was requested — the race — waits instead of starting.
+      const late = manager.startRun(INSTANT, { task: 'arrived while pending' });
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      expect(store.getRun(late.id)?.status).toBe('queued');
+      expect(semaphore.restartGate.blockers()).toEqual([{ kind: 'task', count: 1, names: [store.getRun(busy.id)!.title] }]);
+
+      await waitFor(() => settled.includes(store.getRun(busy.id)?.status ?? ''), 'the running task to finish');
+      expect(semaphore.restartGate.idle()).toBe(true);
+      expect(store.getRun(late.id)?.status).toBe('queued');
+
+      // Cancelled: the held task starts.
+      semaphore.restartGate.release();
+      await waitFor(() => settled.includes(store.getRun(late.id)?.status ?? ''), 'the held task to run');
+    });
+
+    it('never holds a dispatched child: its parent is waiting on it', () => {
+      const semaphore = new WorkspaceSemaphore();
+      const { store, manager } = project('cez-restart-child-', semaphore);
+      const internals = manager as unknown as { heldForRestart(run: ReturnType<typeof store.createRun>): boolean };
+      const parent = store.createRun({ title: 'parent', workflow: 'quick-task', task: 't', steps: [] });
+      const child = store.createRun({ title: 'child', workflow: 'quick-task', task: 't', steps: [] });
+      store.updateRun(child.id, { status: 'queued', dispatch: { rootRunId: parent.id, parentRunId: parent.id } });
+      const fresh = store.createRun({ title: 'fresh', workflow: 'quick-task', task: 't', steps: [] });
+      store.updateRun(fresh.id, { status: 'queued' });
+      semaphore.restartGate.hold();
+      expect(internals.heldForRestart(store.getRun(child.id)!)).toBe(false);
+      expect(internals.heldForRestart(store.getRun(fresh.id)!)).toBe(true);
+      // The queued child will run, so it blocks the restart; the held fresh task does not.
+      expect(semaphore.restartGate.blockers()).toEqual([{ kind: 'task', count: 1, names: ['child'] }]);
+      // Hand-made records the engine never queued: settle them for the shared teardown.
+      for (const id of [parent.id, child.id, fresh.id]) store.updateRun(id, { status: 'cancelled' });
+    });
+  });
+
   afterEach(async () => {
     // Settle everything before tearing the fixtures down: cancel whatever is
     // still live and wait for terminal statuses, so no check-step child or

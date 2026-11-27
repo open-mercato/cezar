@@ -20,6 +20,7 @@ import android.os.Message;
 import android.os.SystemClock;
 import android.util.Log;
 import android.view.Gravity;
+import android.view.HapticFeedbackConstants;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.WindowInsets;
@@ -1012,6 +1013,10 @@ public final class ServerActivity extends AppCompatActivity implements AppLock.H
                     // The cockpit's "Retry now": a dead socket is replaced at once, a live one is asked.
                     startLog.step("page asked to reconnect");
                     if (link != null) link.start("page");
+                    return true;
+                case HAPTIC:
+                    // A long-press quick action: one tap of feedback, no load, no UI, no history.
+                    view.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS);
                     return true;
                 case EXTERNAL:
                     openExternally(url);

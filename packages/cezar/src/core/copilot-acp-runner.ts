@@ -1,4 +1,5 @@
 import { readOnlyPermissionOutcome } from './junie-runner.ts';
+import { installHintCommand } from './agent-install.ts';
 import { spawn as nodeSpawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { statSync } from 'node:fs';
 import { dirname, resolve as resolvePath } from 'node:path';
@@ -204,7 +205,7 @@ class CopilotAcpSession implements AgentSession {
     this.child.on('error', (error: NodeJS.ErrnoException) => {
       this.spawnError =
         error.code === 'ENOENT'
-          ? new Error(`\`${bin}\` not found on PATH — install GitHub Copilot CLI (npm i -g @github/copilot) and run \`copilot login\``)
+          ? new Error(`\`${bin}\` not found on PATH — install GitHub Copilot CLI (${installHintCommand('copilot')}) and run \`copilot login\``)
           : error;
     });
     this.child.stderr.setEncoding('utf8');

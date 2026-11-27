@@ -152,7 +152,7 @@ describe('SubagentSheet — the child stream', () => {
     const { rerender } = render(
       <SubagentSheet runId="r1" agent={agent()} entries={[toolChild('c1', 'Ran npm test')]} onClose={() => {}} />,
     )
-    expect(stream()!.textContent).not.toContain('npm run build')
+    expect(stream()!.textContent).toContain('npm test')
     rerender(
       <SubagentSheet
         runId="r1"
@@ -161,7 +161,8 @@ describe('SubagentSheet — the child stream', () => {
         onClose={() => {}}
       />,
     )
-    expect(stream()!.textContent).toContain('npm run build')
+    // The second call folds both into one activity row (thread-groups).
+    expect(stream()!.textContent).toContain('Ran 2 commands')
   })
 
   it('an agent completing while inspected flips the status pill and keeps the sheet open', () => {

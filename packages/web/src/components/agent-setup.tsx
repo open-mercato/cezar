@@ -33,7 +33,7 @@ interface Stopped {
   message: string
 }
 
-export function agentSetupHeading(setup: Extract<AgentSetupState, { available: true }>, status: ProviderStatusResponse | undefined): string {
+export function agentSetupHeading(setup: AgentSetupState, status: ProviderStatusResponse | undefined): string {
   return agentSetupListRows(setup, status).some((row) => row.state === 'signed-out') ? 'Sign in to an agent' : 'Pick your agent'
 }
 
@@ -41,7 +41,7 @@ export function AgentSetupList({
   setup,
   status,
 }: {
-  setup: Extract<AgentSetupState, { available: true }>
+  setup: AgentSetupState
   status: ProviderStatusResponse | undefined
 }) {
   const onHealthChanged = useInvalidateHealth()
@@ -188,7 +188,12 @@ export function AgentSetupList({
               </div>
               <RowAction row={row} open={open} busy={busy} onStart={begin} />
             </div>
-            {!open && !rowStopped && row.state === 'missing' && row.installCommand === null ? <p className="mt-3 text-ui text-soft-foreground">{row.installHint}</p> : null}
+            {!open && !rowStopped && row.state === 'missing' && row.installCommand === null ? (
+              <p className="mt-3 text-ui text-soft-foreground">
+                {row.install.command ? <>Run <code className="font-mono text-meta">{row.install.command}</code> on this computer, or see </> : 'See '}
+                <a href={row.docsUrl} target="_blank" rel="noopener noreferrer" className="underline underline-offset-2">the install docs</a>.
+              </p>
+            ) : null}
             {!open && !rowStopped && row.state === 'missing' && row.installCommand ? <CommandLine command={row.installCommand} /> : null}
             {open && shown ? <SetupTerminal key={shown.id} session={shown} running={running} installing={installing} /> : null}
             {rowStopped && !open ? <CommandLine command={(rowStopped.action === 'install' ? row.installCommand : row.loginCommand) ?? ''} /> : null}
@@ -259,7 +264,7 @@ function CommandLine({ command }: { command: string }) {
   )
 }
 
-function SetupTerminal({ session, running, installing }: { session: AgentSetupSession; running: boolean; installing: boolean }) {
+export function SetupTerminal({ session, running, installing }: { session: AgentSetupSession; running: boolean; installing: boolean }) {
   const [link, setLink] = React.useState<string | null>(null)
   const id = session.id
   const output = React.useRef('')
@@ -290,7 +295,11 @@ function SetupTerminal({ session, running, installing }: { session: AgentSetupSe
       {running ? (
         <p role="status" className="flex items-center gap-2 text-ui text-muted-foreground">
           <LoaderCircleIcon className="size-3.5 shrink-0 motion-safe:animate-spin" aria-hidden="true" />
-          {installing
+          {session.action === 'update'
+            ? session.command.startsWith('sudo ')
+              ? `Updating ${label}. Click the terminal and type your computer password if it asks.`
+              : `Updating ${label}…`
+            : installing
             ? session.command.startsWith('sudo ')
               ? `Installing ${label}. Click the terminal and type your computer password if it asks.`
               : `Installing ${label}…`

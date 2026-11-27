@@ -1,3 +1,4 @@
+import { managerFixture } from '@/routes/manager/manager-fixtures'
 import { QueryClientProvider, type QueryClient } from '@tanstack/react-query'
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { MemoryRouter } from 'react-router'
@@ -445,12 +446,18 @@ describe('sidebar wiring', () => {
       expect(tasksRow().getAttribute('href')).toBe('/p/cezar/tasks')
     })
 
-    it('leads the manager sidebar\'s Now into the last project, with its needs-you count', async () => {
+    it('leads the manager sidebar\'s Now to Manager mode\'s own Now, counting managers\' items only', async () => {
       rememberLastProject('shop')
+      const attention = (key: string, over: Record<string, unknown>) => ({ key, kind: 'question', title: key, since: '2026-11-23T10:00:00.000Z', counted: true, ...over })
       serve({
         ...routes,
         '/api/v1/health': { ...HEALTH, bootProject: 'cezar', capabilities: { ...HEALTH.capabilities, managers: true } },
-        '/api/v1/workspace/managers': { managers: [] },
+        '/api/v1/workspace/managers': { managers: [{ ...managerFixture({ id: 'scout', name: 'Scout' }), followedTasks: [] }] },
+        '/api/v1/workspace/attention': {
+          items: [attention('mine', { managerId: 'scout', managerName: 'Scout' }), attention('project-only', { kind: 'task', projectId: 'shop', runId: 'r1' })],
+          counts: { total: 2, question: 1, approval: 0, task: 1, review: 0, failed: 0, message: 0 },
+          revision: 'r', overrides: [], olderAfterDays: 7,
+        },
         '/api/v1/p/shop/runs': [run({ status: 'waiting' })],
       })
       renderShell('/manager')
@@ -458,8 +465,37 @@ describe('sidebar wiring', () => {
       await waitFor(() => expect(document.querySelector('[data-slot="manager-sidebar-now"]')).not.toBeNull())
       const now = document.querySelector('[data-slot="manager-sidebar-now"]')!
       expect(now.closest('nav')?.getAttribute('aria-label')).toBe('Workspace')
-      expect(now.getAttribute('href')).toBe('/p/shop/')
+      // Never a project's Now (spec 2026-11-23-needs-you-triage).
+      expect(now.getAttribute('href')).toBe('/manager/now')
       await waitFor(() => expect(now.querySelector('[data-slot="nav-needs-you-badge"]')?.textContent).toBe('1'))
+    })
+
+    it('the phone bar\'s Now badge counts managers\' items in Manager mode and the project\'s list outside it (review of #2444)', async () => {
+      vi.stubGlobal('innerWidth', 390)
+      rememberLastProject('shop')
+      const attention = (key: string, over: Record<string, unknown>) => ({ key, kind: 'question', title: key, since: '2026-11-23T10:00:00.000Z', counted: true, ...over })
+      const fixtures = {
+        ...routes,
+        '/api/v1/health': { ...HEALTH, bootProject: 'cezar', capabilities: { ...HEALTH.capabilities, managers: true } },
+        '/api/v1/workspace/managers': { managers: [{ ...managerFixture({ id: 'scout', name: 'Scout' }), followedTasks: [] }] },
+        '/api/v1/workspace/attention': {
+          items: [
+            attention('mine', { managerId: 'scout', managerName: 'Scout' }),
+            attention('project-1', { kind: 'task', projectId: 'shop', runId: 'r1' }),
+            attention('project-2', { kind: 'review', projectId: 'shop', runId: 'r2' }),
+          ],
+          counts: { total: 3, question: 1, approval: 0, task: 1, review: 1, failed: 0, message: 0 },
+          revision: 'r', overrides: [], olderAfterDays: 7,
+        },
+      }
+      const nowBadge = () => document.querySelector('[data-slot="phone-bottom-bar"] [data-slot="bottom-bar-now-count"]')?.textContent
+      serve(fixtures)
+      renderShell('/manager')
+      await waitFor(() => expect(nowBadge()).toBe('1'))
+      cleanup()
+      serve(fixtures)
+      renderShell('/p/shop/')
+      await waitFor(() => expect(nowBadge()).toBe('3'))
     })
 
     it('remembers the project on screen', async () => {

@@ -70,23 +70,19 @@ afterEach(() => {
 })
 
 describe('ReconnectCard — expired', () => {
-  it('names the account and starts its login, opening the tab inside the click', async () => {
-    const tab = { location: { href: '' }, close: vi.fn(), opener: {} }
-    const open = vi.fn(() => tab)
+  it('names the account and starts its login without opening a tab (spec 2026-11-24)', async () => {
+    const open = vi.fn()
     vi.stubGlobal('open', open)
     api.startLoginSession.mockResolvedValue(session({ phase: 'starting' }))
     renderCard()
 
     expect(screen.getByRole('group', { name: 'Claude Code · Work is signed out' }).textContent).toContain('Login expired')
     fireEvent.click(screen.getByRole('button', { name: 'Reconnect Work' }))
-    // Synchronous: before the start route has answered.
-    expect(open).toHaveBeenCalledWith('', '_blank')
-    expect(tab.opener).toBeNull()
     await waitFor(() => expect(api.startLoginSession).toHaveBeenCalledWith({ provider: 'claude', profileId: 'work' }))
 
     act(() => applyAgentLoginEvent(client, session({ url: 'https://claude.ai/oauth/authorize?x=1' })))
-    await waitFor(() => expect(tab.location.href).toBe('https://claude.ai/oauth/authorize?x=1'))
-    expect(screen.getByText(/claude\.ai/).textContent).toContain('claude.ai')
+    await waitFor(() => expect(screen.getByText('https://claude.ai/oauth/authorize?x=1')).toBeTruthy())
+    expect(open).not.toHaveBeenCalled()
   })
 
   it('never opens a tab on a remote cockpit, and sends no profile for the default login', async () => {
@@ -158,11 +154,18 @@ describe('ReconnectCard — signing in', () => {
     expect(screen.getByRole('button', { name: 'Copy link' })).toBeTruthy()
   })
 
-  it('browser: Reopen sign-in page, and Cancel ends the session', async () => {
+  it('browser: the link to copy, never an opened tab, and Cancel ends the session', async () => {
     api.cancelLoginSession.mockResolvedValue(session({ phase: 'cancelled' }))
+    api.startLoginSession.mockResolvedValue(session({ phase: 'starting' }))
+    const opened = vi.spyOn(window, 'open').mockReturnValue(null)
     renderCard()
+    fireEvent.click(screen.getByRole('button', { name: 'Reconnect Work' }))
     await seedSession(session({ url: 'https://claude.ai/oauth' }))
-    expect(screen.getByRole('button', { name: /Reopen sign-in page/ })).toBeTruthy()
+    expect(screen.getByText('https://claude.ai/oauth')).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Copy link' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: /Open in default browser/ })).toBeTruthy()
+    expect(opened).not.toHaveBeenCalled()
+    opened.mockRestore()
     fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
     await waitFor(() => expect(api.cancelLoginSession).toHaveBeenCalledWith('s1'))
     await waitFor(() => expect(screen.getByRole('button', { name: 'Reconnect Work' })).toBeTruthy())

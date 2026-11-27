@@ -123,7 +123,7 @@ import {
   getRepoSync,
   runRepoSyncAction,
 } from './client'
-import { queryScope, REFERENCE_STATUS_MAX, runnerDiscoversModels } from '@open-mercato/cezar-api-client'
+import { queryScope, REFERENCE_STATUS_MAX, runnerDiscoversModels, type ModelDiscoveryRunner } from '@open-mercato/cezar-api-client'
 import { useProjectScope } from './project-scope-context'
 import { isReferenceStatus } from '@/lib/reference-status'
 import { githubRepoBase } from '@/lib/tasks-table'
@@ -554,6 +554,31 @@ export function useRunnerModels(runner: Runner, enabled = true) {
 }
 
 /**
+ * Force an on-demand refresh of a runner's discovered host models, bypassing the in-memory cache.
+ */
+export function useRefreshRunnerModels() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (runner: ModelDiscoveryRunner) => getRunnerModels(runner, { refresh: true }),
+    onSuccess: (data, runner) => {
+      queryClient.setQueryData(workspaceQueryKeys.models(runner), data)
+    },
+  })
+}
+
+/** The model pill's "Refresh models…" action — `undefined` for a runner with no host catalog. */
+export function useModelRefreshAction(runner: Runner) {
+  const refresh = useRefreshRunnerModels()
+  if (!runnerDiscoversModels(runner)) return undefined
+  return {
+    label: refresh.isPending ? 'Refreshing models…' : 'Refresh models…',
+    slot: 'model-pill-refresh',
+    disabled: refresh.isPending,
+    onSelect: () => refresh.mutate(runner),
+  }
+}
+
+/**
  * Every runner's catalog at once, keyed by runner — for the screens that render a row PER runner
  * (the Settings default-model selects) rather than one for the runner the user picked.
  *
@@ -618,10 +643,12 @@ export function useRefreshProviderStatus() {
 /** While a setup terminal runs, its exit code is the page's only signal: read it often, in a hidden
  *  tab too, because the server forgets an exited session after a minute. Nothing is kept for a later
  *  visit: a session remembered as running would read as one that vanished. */
-export function useAgentSetup() {
+export function useAgentSetup(options: { latest?: boolean; enabled?: boolean } = {}) {
   return useQuery({
-    queryKey: workspaceQueryKeys.agentSetup,
-    queryFn: ({ signal }) => getAgentSetup({ signal }),
+    // `latest` asks npm for the newest releases (Settings → Agents only), so it is its own entry.
+    queryKey: options.latest ? [...workspaceQueryKeys.agentSetup, 'latest'] : workspaceQueryKeys.agentSetup,
+    queryFn: ({ signal }) => getAgentSetup({ signal, latest: options.latest }),
+    enabled: options.enabled ?? true,
     retry: false,
     gcTime: 0,
     refetchInterval: (state) => {
@@ -643,10 +670,11 @@ export function useInvalidateHealth() {
 export function useStartAgentSetup() {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: ({ provider, action }: { provider: AgentSetupProvider; action: AgentSetupAction }) => startAgentSetup(provider, action),
+    mutationFn: ({ provider, action, force }: { provider: AgentSetupProvider; action: AgentSetupAction; force?: boolean }) => startAgentSetup(provider, action, force),
     retry: false,
     // Written straight in: the polling above starts from this, even if the next read fails.
-    onSuccess: (session) => queryClient.setQueryData<AgentSetupState>(workspaceQueryKeys.agentSetup, (state) => (state?.available ? { ...state, session } : state)),
+    // `joined` is the client's own note on the response, not part of the contract: kept out of the cache.
+    onSuccess: ({ joined: _joined, ...session }) => queryClient.setQueryData<AgentSetupState>(workspaceQueryKeys.agentSetup, (state) => (state?.available ? { ...state, session } : state)),
     onSettled: () => queryClient.invalidateQueries({ queryKey: workspaceQueryKeys.agentSetup }),
   })
 }
@@ -847,8 +875,8 @@ function applyProjectPatch(
  * every project's reference to it server-side, so a projects cache left alone would keep showing
  * a selection that no longer exists.
  */
-function useAgentProfileMutation<TVariables>(
-  mutationFn: (variables: TVariables) => Promise<unknown>,
+function useAgentProfileMutation<TVariables, TData = unknown>(
+  mutationFn: (variables: TVariables) => Promise<TData>,
 ) {
   const queryClient = useQueryClient()
   return useMutation({

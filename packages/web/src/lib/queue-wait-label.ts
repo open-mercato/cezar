@@ -3,6 +3,7 @@ import type { QueueWaitReason } from '@open-mercato/cezar-api-client'
 export function queueWaitLabel(reason: QueueWaitReason | undefined, timeZone?: string): string | undefined {
   if (!reason) return undefined
   if (reason.kind === 'account-resume') return "Waiting for this account's automatic resume"
+  if (reason.kind === 'account-busy') return 'Waiting for a free account: every account its manager may use is busy'
   timeZone ??= reason.timeZone
   const until = new Date(reason.until)
   const time = timeZone
