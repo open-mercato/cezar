@@ -182,6 +182,57 @@ describe('ProjectContexts', () => {
     contexts.disposeAll();
   });
 
+  // PR #2430: one server per project data dir.
+  it('a project held by another server is never opened: no store, typed in-use error', async () => {
+    const contexts = new ProjectContexts({
+      listProjects: async () => [{ id: 'a', root: rootA, status: 'not-git' }],
+      claimDataDir: async () => ({ kind: 'held', pid: 4242 }),
+    });
+    const error = await contexts.context('a').catch((err: unknown) => err);
+    expect(error).toBeInstanceOf(ProjectContextError);
+    expect((error as ProjectContextError).reason).toBe('in-use');
+    expect((error as Error).message).toBe(`project a is in use: another cezar (pid 4242) already serves this project's tasks`);
+    expect(existsSync(join(rootA, '.ai/cezar', 'runs.json'))).toBe(false);
+    expect(contexts.ids()).toEqual([]);
+  });
+
+  it('re-probes a held project at most every few seconds, then opens it once free', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      let held = true;
+      const claim = vi.fn(async () => (held ? { kind: 'held' as const, pid: 4242 } : { kind: 'owned' as const, release: async () => {} }));
+      const contexts = new ProjectContexts({ listProjects: async () => [{ id: 'a', root: rootA, status: 'not-git' }], claimDataDir: claim });
+      await expect(contexts.context('a')).rejects.toThrow('in use');
+      await expect(contexts.context('a')).rejects.toThrow('in use');
+      expect(claim).toHaveBeenCalledOnce();
+
+      held = false;
+      vi.setSystemTime(Date.now() + 6_000);
+      expect((await contexts.context('a')).id).toBe('a');
+      expect(claim).toHaveBeenCalledTimes(2);
+      contexts.disposeAll();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('releases the data-dir lock on dispose and when the build fails after the claim', async () => {
+    const release = vi.fn(async () => {});
+    const contexts = new ProjectContexts({
+      listProjects: async () => [{ id: 'a', root: rootA, status: 'not-git' }, { id: 'b', root: rootB, status: 'not-git' }],
+      claimDataDir: async () => ({ kind: 'owned', release }),
+    });
+    await contexts.context('a');
+    expect(release).not.toHaveBeenCalled();
+    contexts.dispose('a');
+    expect(release).toHaveBeenCalledOnce();
+
+    const recover = vi.spyOn(RunManager.prototype, 'recover').mockRejectedValueOnce(new Error('recovery blew up'));
+    await expect(contexts.context('b')).rejects.toThrow('recovery blew up');
+    recover.mockRestore();
+    expect(release).toHaveBeenCalledTimes(2);
+  });
+
   it('dispose() of a never-built project is a no-op returning false', () => {
     const contexts = makeContexts([{ id: 'a', root: rootA, status: 'not-git' }]);
     expect(contexts.dispose('a')).toBe(false);

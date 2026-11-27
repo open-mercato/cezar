@@ -262,6 +262,24 @@ teardown_stale() {
   kill -9 "$pid" 2>/dev/null || true
 }
 
+# ---- live task data (PR #2430) ---------------------------------------------
+# The test cockpit serves $REPO_ROOT/.ai/cezar. In a main checkout cezar already keeps tasks in,
+# that is a live cockpit's data: it would resume those tasks on the mock. A linked worktree has a
+# `.git` FILE and its own data dir, so it is always safe; so is CI. A data dir this test env
+# created itself (first boot found no runs.json) is marked in its own CEZ_HOME and stays allowed.
+OWNS_DATA_MARKER="$CEZ_HOME/owns-repo-data"
+guard_live_task_data() {
+  [ -d "$REPO_ROOT/.git" ] || return 0
+  case "${CI:-}" in true|1) return 0 ;; esac
+  if [ -f "$REPO_ROOT/.ai/cezar/runs.json" ] && [ ! -f "$OWNS_DATA_MARKER" ]; then
+    log "refusing to start: $REPO_ROOT is a main checkout with live cezar tasks (.ai/cezar/runs.json)."
+    log "a test cockpit here would resume those tasks on the mock. Run it from a task worktree or a 'git worktree add' copy."
+    exit 1
+  fi
+  mkdir -p "$CEZ_HOME"
+  [ -f "$OWNS_DATA_MARKER" ] || : > "$OWNS_DATA_MARKER"
+}
+
 # ---- 4. build cache ---------------------------------------------------------
 # Node rather than `find | xargs stat`: `stat` takes -c on GNU and -f on BSD, and this
 # repo already requires Node 20+ — no reason to guess the flavor.
@@ -520,6 +538,8 @@ if try_reuse; then
   exit 0
 fi
 
+# After reuse: attaching to our own healthy instance never needs the guard.
+guard_live_task_data
 teardown_stale
 ensure_browser
 ensure_build

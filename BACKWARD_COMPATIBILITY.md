@@ -298,6 +298,11 @@ Breaking: removing/renaming a route; making a previously optional body field req
   format, configuration or default changes. The git-status preflight is not atomic
   against external filesystem writes.
 
+- `server-lock/` (PR #2430, additive, gitignored) is the one-server-per-project fence: `owner.lock`
+  plus `owner-*` candidate files from the single-cockpit ownership primitive. `serve` claims it for
+  the boot project and every lazily opened one; a dead owner is reclaimed, a missing directory is
+  recreated, and an older cezar that never claims it simply is not fenced.
+
 - `webhooks/` is private opt-in state, covered by `ensureDataGitignore` in boot and lazy project
   contexts and verified ignored/untracked before secrets are written. Files include root-bound
   installation identity, endpoints/keys/revisions/activation fences, ownership proof, bounded outbox

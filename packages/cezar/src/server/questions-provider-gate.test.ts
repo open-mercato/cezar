@@ -34,6 +34,7 @@ describe('Questions inbox provider gate', () => {
   const saved = { home: process.env.CEZ_HOME, dry: process.env.CEZ_DRY_RUN };
   let home: string;
   let repoRoot: string;
+  let projectRoot: string;
   let store: RunStore;
   let contexts: ProjectContexts;
   let app: ReturnType<typeof createApp>;
@@ -42,14 +43,18 @@ describe('Questions inbox provider gate', () => {
   beforeEach(async () => {
     home = mkdtempSync(join(tmpdir(), 'cez-qgate-home-'));
     repoRoot = mkdtempSync(join(tmpdir(), 'cez-qgate-'));
+    // A project other than the boot one: the boot project never enters the lazy map (PR #2430).
+    projectRoot = mkdtempSync(join(tmpdir(), 'cez-qgate-project-'));
     process.env.CEZ_HOME = home;
     process.env.CEZ_DRY_RUN = '1';
     mkdirSync(join(repoRoot, '.ai/cezar'), { recursive: true });
     writeFileSync(join(repoRoot, '.ai/cezar', 'config.json'), '{"skillsRepos": []}\n', 'utf8');
+    mkdirSync(join(projectRoot, '.ai/cezar'), { recursive: true });
+    writeFileSync(join(projectRoot, '.ai/cezar', 'config.json'), '{"skillsRepos": []}\n', 'utf8');
     clearProjectProbeCache();
     store = RunStore.open(join(repoRoot, '.ai/cezar'), { keepLive: true });
     contexts = new ProjectContexts({ listProjects });
-    await registerProject(repoRoot);
+    const project = await registerProject(projectRoot);
     app = createApp({
       repoRoot,
       store,
@@ -59,8 +64,7 @@ describe('Questions inbox provider gate', () => {
       providerAuth: providerAuth(),
       workspaceConfig: memoryWorkspaceConfig(['codex']),
     });
-    const [project] = await listProjects();
-    ctx = await contexts.context(project!.id);
+    ctx = await contexts.context(project.id);
   });
 
   afterEach(() => {
@@ -68,6 +72,7 @@ describe('Questions inbox provider gate', () => {
     store.flush();
     rmSync(home, { recursive: true, force: true });
     rmSync(repoRoot, { recursive: true, force: true });
+    rmSync(projectRoot, { recursive: true, force: true });
     for (const [key, value] of [['CEZ_HOME', saved.home], ['CEZ_DRY_RUN', saved.dry]] as const) {
       if (value === undefined) delete process.env[key];
       else process.env[key] = value;

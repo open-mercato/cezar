@@ -153,6 +153,30 @@ describe('createTaskQuestionProvider', () => {
     expect(await provider().answer('m:mgr:msg', 'A')).toMatchObject({ ok: false, status: 404 });
   });
 
+  // PR #2430: the boot project never enters the lazy map, which now refuses it (its data-dir lock is
+  // this process's own). Answering its question must use the boot context, never build a second one.
+  it('answers a boot-project question through the boot context, never the lazy map', async () => {
+    const home = project('home');
+    const runId = newRun(home);
+    home.store.recordTaskAsk(runId, ask('r1'));
+    registry = [{ id: 'home', root: home.root }];
+    contexts.context = (async (id: string) => {
+      throw new ProjectContextError('in-use', id, 'another cezar (pid 1) already serves the tasks');
+    }) as ProjectContexts['context'];
+    const manager = home.manager as unknown as ReturnType<typeof fakeManager>;
+    manager.sendMessage.mockImplementation(() => {
+      home.store.closeTaskAsks(runId, () => true, { reason: 'answered', at: new Date().toISOString(), answer: 'A' });
+      return true;
+    });
+    const p = createTaskQuestionProvider({ contexts, listProjects: async () => registry, boot: async () => home });
+    disposers.push(() => p.dispose());
+
+    const result = await p.answer(questionKey({ kind: 'task', projectId: 'home', runId, requestId: 'r1' }), 'A');
+    expect(result).toMatchObject({ ok: true, item: { closed: { reason: 'answered', answer: 'A' } } });
+    expect(manager.sendMessage).toHaveBeenCalledWith(runId, [{ type: 'text', text: 'A' }], { askRequestId: 'r1' });
+    home.store.flush();
+  });
+
   it('a project whose folder is gone answers 409, an unknown one 404', async () => {
     const missing = questionKey({ kind: 'task', projectId: 'gone', runId: 'run1', requestId: 'r1' });
     contexts.context = (async (id: string) => {

@@ -260,3 +260,27 @@ Exercise concurrent CLI processes, live sidebar refresh and the installed packag
 
 12. **Add an integration regression.** Spawn one dry-run cockpit in a sandboxed `CEZ_HOME`, invoke the packaged CLI from a second repo, and assert: the second command exits, no second listener/process survives, the returned URL names the registered slug, `GET /api/v1/projects` includes it, and the workspace SSE `project-added` event makes the browser/query refresh path observable without reload.
 13. **Prove the old paths.** Run the configured validation gate plus package tests, and explicitly run a no-owner start, an unrelated occupied-port start, a killed-primary recovery and a `--no-open` handoff. Record any platform identity cases not exercised on the current OS as review limits rather than weakening their existing tests.
+
+## Addendum (2026-11-23, PR #2430): one server per project data dir
+
+The slot above lives in `CEZ_HOME`, so it fences cockpits that share a home and nothing else. A
+server started with another home (the dry-run test env, `CEZ_HOME=.ai/qa/cez-home`) on a repo a live
+cockpit serves became a second owner of `<repo>/.ai/cezar`: it recovered the live tasks on the mock,
+fired automations and reclaimed worktrees.
+
+- `serve` claims `<repo>/.ai/cezar/server-lock/` with the same `acquireOwnership` primitive, for the
+  boot project (held → refuse to start, naming the owner pid) and for every lazily built project
+  context (held → that project answers 409 `in-use`, never built). `copiedRoot` keeps a `cp -r` of a
+  repo from being fenced by its original; a dead owner is reclaimed by liveness; a lock that cannot be
+  taken (symlinked ancestor, unsupported platform, read-only dir) degrades with one warning.
+- The fence is claimed when a context is built, not at registration: a registered project the live
+  cockpit has not opened since it started holds no lock, so another server can still open it.
+- Clients are never fenced: browser tabs, phones and other devices talk to the one server. A repeated
+  `npx cezar` still hands off through the slot. Headless `cezar run` takes no lock.
+- Multiplayer stays one server, many clients. Several backend processes on one project would need a
+  shared store and an elected scheduler/recovery owner; that design replaces this fence, it does not
+  conflict with it.
+- `.ai/scripts/test-env-up.sh` additionally refuses to start in a main checkout that holds cezar
+  tasks (outside CI), because a released cockpit that predates the lock holds none. A data dir the
+  test env created itself is marked in its own `CEZ_HOME` (`owns-repo-data`) and stays allowed.
+

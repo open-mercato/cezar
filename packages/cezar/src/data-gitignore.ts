@@ -18,6 +18,7 @@ export const DATA_GITIGNORE_ENTRIES = [
   'runs.json.tmp',
   'runs/',
   'webhooks/', // project-private signing keys and delivery snapshots
+  'server-lock/', // one-server-per-project ownership fence (PR #2430)
   'dispatch/', // filesystem channel for dispatched task trees
   // The per-project attachment library (#929): every named file a user attaches to any task is
   // copied here. It is USER content — a production log, an internal PDF, a brief — so it must

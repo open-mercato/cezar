@@ -296,3 +296,86 @@ test('an instance from another checkout on the recorded port is not reused as th
   assert.equal(rebooted.app.repoRoot, ours.app.repoRoot);
   launchedPids.add(rebooted.app.pid);
 });
+
+// ---- live task data (PR #2430) ---------------------------------------------
+// A main checkout cezar keeps tasks in is a live cockpit's data dir; a test cockpit booted there
+// resumed those tasks on the mock. Linked worktrees (a `.git` FILE) and CI stay allowed.
+
+function liveCheckout(fixture: { root: string }, gitEntry: 'directory' | 'worktree-file'): void {
+  if (gitEntry === 'directory') mkdirSync(join(fixture.root, '.git'));
+  else writeFileSync(join(fixture.root, '.git'), 'gitdir: /elsewhere/.git/worktrees/task\n');
+  mkdirSync(join(fixture.root, '.ai/cezar'), { recursive: true });
+  writeFileSync(join(fixture.root, '.ai/cezar/runs.json'), '{"runs":[]}\n');
+}
+
+function envWithoutCi(path: string, extra: Record<string, string> = {}): NodeJS.ProcessEnv {
+  const { CI: _ci, ...rest } = process.env;
+  return { ...rest, PATH: path, TEST_ENV_CACHE_TTL_SECONDS: '600', ...extra };
+}
+
+test('refuses to boot in a main checkout that holds live cezar tasks', () => {
+  const fixture = makeFixture(hasSetsid);
+  liveCheckout(fixture, 'directory');
+  const up = join(fixture.root, '.ai/scripts/test-env-up.sh');
+
+  const refused = spawnSync('/bin/sh', [up], { encoding: 'utf8', env: envWithoutCi(fixture.path), timeout: 20_000 });
+  assert.equal(refused.status, 1, refused.stderr);
+  assert.match(refused.stderr, /refusing to start: .* main checkout with live cezar tasks/);
+  // Nothing was built or booted.
+  assert.throws(() => readFileSync(join(fixture.root, '.ai/qa/test-env.json')));
+});
+
+for (const [label, gitEntry, extra] of [
+  ['a linked task worktree', 'worktree-file', {}],
+  ['CI', 'directory', { CI: 'true' }],
+] as const) {
+  test(`still boots in ${label} even with cezar tasks present`, () => {
+    const fixture = makeFixture(hasSetsid);
+    liveCheckout(fixture, gitEntry);
+    const up = join(fixture.root, '.ai/scripts/test-env-up.sh');
+    const down = join(fixture.root, '.ai/scripts/test-env-down.sh');
+    const env = envWithoutCi(fixture.path, extra);
+
+    const boot = spawnSync('/bin/sh', [up], { encoding: 'utf8', env, timeout: 20_000 });
+    assert.equal(boot.status, 0, boot.stderr);
+    assert.match(boot.stdout, /TEST_ENV_REUSED=0/);
+    const pid = descriptor(fixture.root).app.pid;
+    assert.ok(pid, 'the instance booted');
+    launchedPids.add(pid);
+    const stopped = spawnSync('/bin/sh', [down], { encoding: 'utf8', env, timeout: 20_000 });
+    assert.equal(stopped.status, 0, stopped.stderr);
+  });
+}
+
+test('a main checkout whose task data the test env created itself boots again and reuses', () => {
+  const fixture = makeFixture(hasSetsid);
+  mkdirSync(join(fixture.root, '.git'));
+  const up = join(fixture.root, '.ai/scripts/test-env-up.sh');
+  const down = join(fixture.root, '.ai/scripts/test-env-down.sh');
+  const env = envWithoutCi(fixture.path);
+  // The real test cockpit writes runs.json into the checkout it serves; the fake server does not.
+  const leaveTaskData = (): void => {
+    mkdirSync(join(fixture.root, '.ai/cezar'), { recursive: true });
+    writeFileSync(join(fixture.root, '.ai/cezar/runs.json'), '{"runs":[]}\n');
+  };
+
+  const first = spawnSync('/bin/sh', [up], { encoding: 'utf8', env, timeout: 20_000 });
+  assert.equal(first.status, 0, first.stderr);
+  const firstPid = descriptor(fixture.root).app.pid;
+  assert.ok(firstPid, 'the first instance booted');
+  launchedPids.add(firstPid);
+  leaveTaskData();
+
+  const reused = spawnSync('/bin/sh', [up], { encoding: 'utf8', env, timeout: 20_000 });
+  assert.equal(reused.status, 0, reused.stderr);
+  assert.match(reused.stdout, /TEST_ENV_REUSED=1/);
+
+  assert.equal(spawnSync('/bin/sh', [down], { encoding: 'utf8', env, timeout: 20_000 }).status, 0);
+  const again = spawnSync('/bin/sh', [up], { encoding: 'utf8', env, timeout: 20_000 });
+  assert.equal(again.status, 0, again.stderr);
+  assert.match(again.stdout, /TEST_ENV_REUSED=0/);
+  const againPid = descriptor(fixture.root).app.pid;
+  assert.ok(againPid, 'the second instance booted');
+  launchedPids.add(againPid);
+  spawnSync('/bin/sh', [down], { encoding: 'utf8', env, timeout: 20_000 });
+});

@@ -1,4 +1,4 @@
-import { constants, closeSync, fstatSync, linkSync, openSync, readFileSync, renameSync, unlinkSync } from 'node:fs';
+import { constants, closeSync, fstatSync, linkSync, openSync, readFileSync, renameSync, statSync, unlinkSync } from 'node:fs';
 import { open, readdir, rm } from 'node:fs/promises';
 import { hostname } from 'node:os';
 import { randomUUID } from 'node:crypto';
@@ -77,6 +77,18 @@ async function alive(identity: Identity, own: Identity): Promise<boolean> {
   }
   // A probe failure throws (fail closed): an unverifiable owner is never declared dead.
   return (await processStarts([identity.pid])).get(identity.pid) === identity.start;
+}
+/**
+ * A recorded directory is a copy only when it is a different PHYSICAL directory: another spelling of
+ * this one (case-insensitive filesystem, symlinked or bind-mounted path) must get the liveness check.
+ */
+function copiedFrom(recorded: string | undefined, directory: string): boolean {
+  if (recorded === directory) return false;
+  if (recorded === undefined) return true;
+  try {
+    const a = statSync(recorded), b = statSync(directory);
+    return a.dev !== b.dev || a.ino !== b.ino;
+  } catch { return true; } // The recorded original is gone or unreachable: this is a copy.
 }
 export interface WebhookOwnership {
   valid(): boolean;
@@ -157,7 +169,7 @@ export async function acquireOwnership(directory: string, copiedRoot = false): P
         // can fail to terminate. Fail closed there instead of capping the depth: a fixed bound would
         // let a long chain of crashed recoveries wedge the fence permanently.
         if (ancestors.has(previous.token)) throw new Error('Webhook owner recovery chain cycles');
-        if (!(copiedRoot && previous.directory !== directory) && await alive(previous, own)) return undefined;
+        if (!(copiedRoot && copiedFrom(previous.directory, directory)) && await alive(previous, own)) return undefined;
         ancestors.add(previous.token);
         const successorName = `owner-next-${previous.token}.json`;
         try {
