@@ -186,3 +186,22 @@ it('holds the limited gateway while letting the same runner use its subscription
   await vi.waitFor(() => expect(store.getRun(subscription)?.status).toBe('done'), { timeout: 10000 });
   expect(store.getRun(subscription)?.steps[0]?.agentMethod).toBe('subscription');
 }, 25000);
+
+
+it('retries a provider-blocked repair through the check that requested it', async () => {
+  metadata.agents.claude = { active: 'subscription', methods: {} };
+  const { id } = manager.startRun({ ...workflow, steps: [workflow.steps[0]!, { id: 'verify', command: 'exit 1' }] },
+    { task: 'mock:done', runner: 'claude', worktree: false });
+  const wait = (status: string) => vi.waitFor(() => {
+    expect(store.getRun(id)?.status).toBe(status);
+    expect(manager.isActive(id)).toBe(false);
+  }, { timeout: 10000 });
+  await wait('failed');
+  metadata.agents.claude.active = null;
+  expect(manager.switchAgent(id, { runner: 'claude', model: 'vendor/model', changedBy: 'fixture' })).toHaveProperty('summary');
+  await wait('waiting');
+  metadata.agents.claude = { active: 'custom', methods: { custom: gateway } };
+  expect(manager.continueRun(id, { model: 'vendor/model', text: 'mock:done' }).ok).toBe(true);
+  await wait('failed');
+  expect(store.getRun(id)?.steps.find(step => step.id === 'verify')).toMatchObject({ status: 'failed', iterations: 2 });
+}, 35000);

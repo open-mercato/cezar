@@ -2472,6 +2472,14 @@ export class ManagerEngine {
     const state = store.state(id);
     const field = SESSION_FIELD[turn.kind];
     const resumeId = state.sessionKey === sessionKey && this.resumes(turn.kind, state.sessions[turn.kind]) ? state[field] : undefined;
+    const pinnedModel = resumeId && !locked && !manager.model ? state.sessions[turn.kind]?.catalogModel : undefined;
+    if (provider && pinnedModel && provider.catalogModel !== pinnedModel) {
+      try {
+        provider = await agentProviderEnv(runner, { saved: provider.methodId, savedHost: provider.hostKey, model: pinnedModel });
+      } catch (error) {
+        return { text: '', commands: [], costUsd: 0, runner, error: error instanceof Error ? error.message : String(error) };
+      }
+    }
     const resumable = resumeId !== undefined;
     const sources = await this.sources(manager);
     const profile = supportsProfiles(runner) ? await resolveProfileEnvForRoot(undefined, runner, manager.agentProfile) : { env: {} };
@@ -2683,7 +2691,7 @@ export class ManagerEngine {
     try {
       if (retry && base.provider) {
         // A retry can outlive a key rotation or removal. Read the same method again.
-        spec.provider = await agentProviderEnv(runnerId, { saved: base.provider.methodId, savedHost: base.provider.hostKey, model: base.model, modelsLocked: agentModelsLocked() });
+        spec.provider = await agentProviderEnv(runnerId, { saved: base.provider.methodId, savedHost: base.provider.hostKey, model: base.provider.catalogModel ?? base.model, modelsLocked: agentModelsLocked() });
       }
       if (spec.provider?.model) spec.model = spec.provider.model;
       await verifyProviderLogin(runnerId, spec.provider, spec.cwd, spec.env);
@@ -2722,6 +2730,7 @@ export class ManagerEngine {
             [turn.kind]: {
               // Seen only once the turn ran; a failed one keeps what the resumed transcript had.
               ...(cardsDigest !== undefined ? { cardsDigest } : {}),
+              ...(spec.provider?.catalogModel ? { catalogModel: spec.provider.catalogModel } : {}),
               startedAt: priorSession?.startedAt ?? new Date(turnStartedAt).toISOString(),
               lastAt: at,
               turns: sessionTurn,
@@ -2851,7 +2860,8 @@ export class ManagerEngine {
 
   /** Why this row cannot answer now: its own hold, or a workspace hold on its account. */
   private rowHold(id: string, info: RowInfo, now: number): ChainHold | undefined {
-    const own = this.deps.store.state(id).chain?.holds[info.key];
+    const holds = this.deps.store.state(id).chain?.holds;
+    const own = holds?.[info.accountKey] ?? holds?.[info.key];
     if (own && msOf(own.until) > now && (!own.accountKey || own.accountKey === info.accountKey)) return own;
     if (info.workspaceUntil !== undefined && info.workspaceUntil > now) return { until: new Date(info.workspaceUntil).toISOString(), reason: 'held' };
     return undefined;
@@ -2973,10 +2983,15 @@ export class ManagerEngine {
       const resetAt = this.usageLimit(result, turn);
       const cause = result.error ? failureCause(result.error, result.text) : undefined;
       const reason = cause && !turn.stopped && !turn.timedOut ? failoverReason(classifyManagerFailure(cause), resetAt !== undefined) : undefined;
+      const account = info.ref.runner + ':' + info.ref.profileId;
+      const actualQuota = providerQuotaKey(info.ref.runner as RunnerId, account, result.agentMethod);
+      const holdKey = actualQuota === account ? info.key : actualQuota;
       if (!reason) {
-        // A turn that got through proves the row works again.
-        if (!result.error && !turn.stopped && this.deps.store.state(id).chain?.holds[info.key]) {
-          this.updateChain(id, (chain) => ({ ...chain, holds: Object.fromEntries(Object.entries(chain.holds).filter(([key]) => key !== info.key)) }));
+        // Only the budget that served this turn has proved capacity.
+        const existing = this.deps.store.state(id).chain?.holds;
+        if (!result.error && !turn.stopped && (existing?.[holdKey] || existing?.[info.key])) {
+          this.updateChain(id, (chain) => ({ ...chain, holds: Object.fromEntries(Object.entries(chain.holds).filter(([key, previous]) =>
+            !(key === holdKey || key === info.key) || Boolean(previous.accountKey && previous.accountKey !== actualQuota))) }));
         }
         // Every row was held and the preferred one got through anyway: it is the one answering now.
         if (!result.error && !turn.stopped && (this.deps.store.state(id).chain?.active?.slot ?? 0) !== row.slot) {
@@ -2985,8 +3000,9 @@ export class ManagerEngine {
         return { result, ran, ref: info.ref };
       }
       const reset = resetAt?.getTime() ?? (reason === 'usage-limit' ? parseUsageLimit(cause!, now)?.resetAt.getTime() : undefined);
-      const hold = holdFor(reason, this.deps.store.state(id).chain?.holds[info.key], now, reset);
-      this.updateChain(id, (chain) => ({ ...chain, holds: { ...chain.holds, [info.key]: { ...hold, ...(reason === 'usage-limit' ? { accountKey: providerQuotaKey(info.ref.runner as RunnerId, info.ref.runner + ':' + info.ref.profileId, result.agentMethod) } : {}) } } }));
+      const key = reason === 'usage-limit' ? holdKey : info.key;
+      const hold = holdFor(reason, this.deps.store.state(id).chain?.holds[key], now, reset);
+      this.updateChain(id, (chain) => ({ ...chain, holds: { ...chain.holds, [key]: { ...hold, ...(reason === 'usage-limit' ? { accountKey: actualQuota } : {}) } } }));
       const next = nextRow(rows, row.slot, attempted, (candidate) => this.rowHold(id, infos[candidate.slot]!, now));
       if (!next) {
         // Every row is out: wait for the first reset, as a manager without backups waits for its own.
@@ -3417,6 +3433,16 @@ export class ManagerEngine {
     let firstRunner: string | undefined;
     // Roles on the list switch on routing (spec 2026-11-25-manager-task-routing); none keeps the original order.
     const roles = agents && routedByRoles(scope.manager) ? roleRouting(scope.manager) : undefined;
+    // Default models from Settings → Agents (when not locked) and per-row pins on `taskAgents`.
+    const modelsLocked = agentModelsLocked(root);
+    const projectConfig = !modelsLocked && root ? await loadConfig(root).catch(() => undefined) : undefined;
+    const defaultModelFor = (candidateRunner: RunnerId, candidateProfile?: string): string | undefined => {
+      if (modelsLocked) return undefined;
+      const row = agents?.find((agent) => agent.runner === candidateRunner && agent.agentProfile === candidateProfile);
+      if (row?.model) return row.model;
+      if (projectConfig?.defaultModelsAuto?.[candidateRunner]) return undefined;
+      return projectConfig?.defaultModels?.[candidateRunner];
+    };
     if (compatibleAgents && candidates) {
       // The manager's settings are the default: a retried task's own account, then its own runner, then list order.
       // With roles, list order is the order (Backup rows are used top to bottom).
@@ -3424,7 +3450,7 @@ export class ManagerEngine {
       const ordered = [...candidates].sort((a, b) => rank(a) - rank(b));
       const load = roles ? this.deps.accountLoad?.() : undefined;
       const allowed = await Promise.all([...compatibleAgents].sort((a, b) => rank(a) - rank(b)).map(async (agent) => {
-        const option = await this.accountOption(agent.runner, agent.agentProfile, root);
+        const option = await this.accountOption(agent.runner, agent.agentProfile, root, modelsLocked ? undefined : input.model ?? defaultModelFor(agent.runner, agent.agentProfile));
         if (!roles) return option;
         const usage = fiveHourUsedPercent(option.runner, option.account, now);
         return { ...option, role: agent.role ?? 'main', load: load?.get(`${option.runner}:${option.account}`) ?? 0, ...(usage !== undefined ? { usage } : {}) };
@@ -3459,22 +3485,12 @@ export class ManagerEngine {
     }
     const accountIssue = await this.accountIssue(runner, agentProfile);
     if (accountIssue) return accountIssue;
-    choice ??= chooseTaskAgent([await this.accountOption(runner, agentProfile, root)], { explicitAccount: agentProfile !== undefined, fromSettings: false, now });
+    choice ??= chooseTaskAgent([await this.accountOption(runner, agentProfile, root, modelsLocked ? undefined : input.model ?? defaultModelFor(runner, agentProfile))], { explicitAccount: agentProfile !== undefined, fromSettings: false, now });
     // --model/--effort are checked on the runner the task really landed on. A runner the flags did not
     // pin (a limit skip off the first listed runner, a retry on another runner) drops only what fails
     // there; anywhere else a bad flag is refused with the valid choices, as before.
     const unpinned = (firstRunner !== undefined && !input.runner && firstRunner !== runner)
       || (retry?.runner !== undefined && retry.runner !== runner);
-    // Default models from Settings → Agents (when not locked) and per-row pins on `taskAgents`.
-    const modelsLocked = agentModelsLocked(root);
-    const projectConfig = !modelsLocked && root ? await loadConfig(root).catch(() => undefined) : undefined;
-    const defaultModelFor = (candidateRunner: RunnerId, candidateProfile?: string): string | undefined => {
-      if (modelsLocked) return undefined;
-      const row = agents?.find((agent) => agent.runner === candidateRunner && agent.agentProfile === candidateProfile);
-      if (row?.model) return row.model;
-      if (projectConfig?.defaultModelsAuto?.[candidateRunner]) return undefined;
-      return projectConfig?.defaultModels?.[candidateRunner];
-    };
     // Antigravity's effort is a model variant: --effort becomes the matching model id. Asked for
     // explicitly (--runner antigravity, an antigravity --model, the first listed agent) a missing
     // variant is refused; reached by a limit fallback it takes the closest variant, or is dropped.
@@ -3595,8 +3611,8 @@ export class ManagerEngine {
   }
 
   /** One account's usage-limit state, from the workspace holds; unknown = capacity. */
-  private async accountOption(runner: RunnerId, agentProfile: string | undefined, repoRoot?: string): Promise<AccountOption> {
-    const state = await this.deps.accountLimit?.(runner, agentProfile, repoRoot).catch(() => undefined);
+  private async accountOption(runner: RunnerId, agentProfile: string | undefined, repoRoot?: string, model?: string): Promise<AccountOption> {
+    const state = await this.deps.accountLimit?.(runner, agentProfile, repoRoot, model).catch(() => undefined);
     return {
       runner,
       ...(agentProfile !== undefined ? { agentProfile } : {}),
@@ -3613,7 +3629,7 @@ export class ManagerEngine {
       ?? [{ runner: manager.taskRunner && isRunnerId(manager.taskRunner) ? manager.taskRunner : await this.runnerOf(manager) }];
     const now = this.now();
     return Promise.all(agents.map(async (agent) => {
-      const option = await this.accountOption(agent.runner, agent.agentProfile, root);
+      const option = await this.accountOption(agent.runner, agent.agentProfile, root, agent.model);
       return {
         runner: option.runner,
         ...(option.agentProfile !== undefined ? { agentProfile: option.agentProfile } : {}),

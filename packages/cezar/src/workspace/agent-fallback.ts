@@ -332,6 +332,7 @@ export function eligibleFallbackCandidates(
   load?: ReadonlyMap<string, number>,
   /** The run's workflow, when tool-limit enforcement applies (skips incompatible runners). */
   workflowDef?: WorkflowDef,
+  quotaKey: (candidate: AgentFallbackCandidate) => string = candidateKey,
 ): { eligible: AgentFallbackCandidate[]; skipped: FallbackSkip[] } {
   const eligible: AgentFallbackCandidate[] = [];
   const skipped: FallbackSkip[] = [];
@@ -339,7 +340,7 @@ export function eligibleFallbackCandidates(
   const routing = policy.source === 'manager' ? currentManagerRouting(policy) : undefined;
   const managerList = routing === undefined || routing === null ? routing : routing.agents;
   for (const candidate of policy.candidates) {
-    const key = candidateKey(candidate);
+    const key = quotaKey(candidate);
     if (attempted.has(key)) continue;
     if (managerList === null || (managerList && !inManagerList(managerList, candidate, accounts, repoRoot))) {
       skipped.push({ candidate, reason: 'no longer in the manager’s settings for new tasks' }); continue;

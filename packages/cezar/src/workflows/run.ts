@@ -179,6 +179,7 @@ import {
   getAgentFallbackPolicySync,
   loadFallbackAccounts,
   type AgentFallbackPolicy,
+  type AgentFallbackCandidate,
 } from '../workspace/agent-fallback.ts';
 import { DEFAULT_IDLE_TIMEOUT_MINUTES } from '../workspace/config.ts';
 import { WorkspaceSemaphore, type AccountHolds } from '../workspace/semaphore.ts';
@@ -1075,9 +1076,14 @@ function runQuotaKey(run: RunRecord, fallbackRunner: RunnerId, accounts?: Accoun
   // A mixed workflow can exhaust a different runner or account than the task default.
   const step = run.status === 'failed' || resumeInFlight(run)
     ? [...run.steps].reverse().find(s => s.backend && s.status === 'failed') : undefined;
-  const backend = step?.backend ?? runner;
-  const account = step?.profileId ? backend + ':' + step.profileId : runAccountKey(run, runner, accounts);
-  return providerQuotaKey(backend, account, step ? step.agentMethod : run.agentMethod, providers, run.model);
+  const planned = run.status === 'queued' && !step ? taskAgentSelection(run, fallbackRunner) : undefined;
+  const backend = step?.backend ?? planned?.runner ?? runner;
+  const model = step?.model ?? planned?.model ?? (runner === backend ? run.model : undefined);
+  const taskMethodApplies = runner === backend && (authMethods(backend).mode === 'one' || model === run.model);
+  const method = step ? step.agentMethod : (taskMethodApplies ? run.agentMethod : undefined);
+  const profile = step?.profileId ?? planned?.agentProfile ?? (backend === runner ? run.agentProfile : undefined);
+  const account = runAccountKey({ runner: backend, agentProfile: profile, steps: run.steps }, backend, accounts);
+  return providerQuotaKey(backend, account, method, providers, model);
 }
 
 /** What `runAccountKey` needs to resolve an absent `agentProfile` to the account that really runs (#1722). */
@@ -4367,17 +4373,16 @@ export class RunManager {
     });
     // The account that actually ran the failed step — a run following the project's selection
     // records no `agentProfile`, so the run-level key would name the wrong login.
-    const originKey = `${failed.backend ?? run.runner ?? 'claude'}:${failed.profileId ?? run.agentProfile ?? DEFAULT_AGENT_ACCOUNT_ID}`;
+    const originKey = this.failedQuotaKey(run, failed);
     const attempted = new Set(episode?.attempted ?? []);
     attempted.add(originKey);
     if (!successorFailedToStart) {
       const limit = parseUsageLimit(run.error);
       if (limit) {
         const now = Date.now();
-        const billingKey = providerQuotaKey(failed.backend ?? run.runner ?? 'claude', originKey, failed.agentMethod);
-        const holds = (run.usageLimitHolds ?? []).filter((hold) => Date.parse(hold.until) > now && hold.account !== billingKey);
-        this.store.updateRun(run.id, { usageLimitHolds: [...holds, { account: billingKey, until: limit.resetAt.toISOString() }] });
-        this.usageHolds.remember({ account: billingKey, until: limit.resetAt.toISOString() });
+        const holds = (run.usageLimitHolds ?? []).filter((hold) => Date.parse(hold.until) > now && hold.account !== originKey);
+        this.store.updateRun(run.id, { usageLimitHolds: [...holds, { account: originKey, until: limit.resetAt.toISOString() }] });
+        this.usageHolds.remember({ account: originKey, until: limit.resetAt.toISOString() });
         this.armHoldExpiry(limit.resetAt.getTime());
       }
     }
@@ -4403,7 +4408,7 @@ export class RunManager {
    * a limit it keeps the reset-time auto-resume instead of failing (manager task agents, #5).
    */
   private managerFallbackHasCapacity(run: RunRecord, failed: RunRecord['steps'][number]): boolean {
-    const origin = `${failed.backend ?? run.runner ?? 'claude'}:${failed.profileId ?? run.agentProfile ?? DEFAULT_AGENT_ACCOUNT_ID}`;
+    const origin = this.failedQuotaKey(run, failed);
     const attempted = new Set([...(run.fallbackEpisode?.attempted ?? []), origin]);
 
     const policy = run.fallbackPolicy as AgentFallbackPolicy | undefined;
@@ -4416,19 +4421,17 @@ export class RunManager {
       accounts: policy.candidates.map((c) => ({ id: c.profileId, provider: c.provider, configDir: '', label: '', addedAt: '' })),
     } as AgentAccountStore;
     const workflowDef = run.enforceReadOnly ? undefined : run.workflowDef;
-    return eligibleFallbackCandidates(policy, attempted, this.heldFallbackAccounts(policy), accounts, this.repoRoot, failed.backend ?? run.runner ?? 'claude', undefined, workflowDef).eligible.length > 0;
+    return eligibleFallbackCandidates(policy, attempted, this.semaphore.accountHolds().deadline, accounts, this.repoRoot, failed.backend ?? run.runner ?? 'claude', undefined, workflowDef, this.candidateQuotaKey).eligible.length > 0;
   }
 
-  private heldFallbackAccounts(policy: AgentFallbackPolicy) {
-    const deadlines = this.semaphore.accountHolds().deadline;
-    const result = new Set<string>();
-    for (const candidate of policy.candidates) {
-      const account = candidateKey(candidate);
-      const key = providerQuotaKey(candidate.provider, account, undefined, this.providerStore, candidate.model);
-      if (deadlines.has(key)) result.add(account);
-    }
-    return result;
+  private failedQuotaKey(run: RunRecord, failed: StepState): string {
+    const runner = failed.backend ?? run.runner ?? 'claude';
+    const account = failed.profileId ?? run.agentProfile ?? DEFAULT_AGENT_ACCOUNT_ID;
+    return providerQuotaKey(runner, runner + ':' + account, failed.agentMethod);
   }
+
+  private readonly candidateQuotaKey = (candidate: AgentFallbackCandidate) =>
+    providerQuotaKey(candidate.provider, candidateKey(candidate), undefined, this.providerStore, candidate.model);
 
   private finishFallbackAdmission(runId: string, message: string): void {
     const run = this.store.getRun(runId);
@@ -4480,17 +4483,17 @@ export class RunManager {
     }
     // Say why a listed agent is not used when it is the one that just ran out.
     // A manager list always holds the task's own account; skipping it there is expected, not news.
-    if (startFailure === undefined && snapshot.source !== 'manager' && snapshot.candidates.some((candidate) => candidateKey(candidate) === fromKey)) {
+    if (startFailure === undefined && snapshot.source !== 'manager' && snapshot.candidates.some((candidate) => this.candidateQuotaKey(candidate) === fromKey)) {
       this.store.appendEvent(runId, { type: 'note', message: `fallback skipped ${label(fromKey)} — it is the agent that just reached its limit` });
     }
     const workflowDef = run.enforceReadOnly ? undefined : run.workflowDef;
-    const { eligible, skipped } = eligibleFallbackCandidates(snapshot, attempted, this.heldFallbackAccounts(snapshot), accounts, this.repoRoot, fromKey.split(':')[0], this.semaphore.accountLoad(), workflowDef);
+    const { eligible, skipped } = eligibleFallbackCandidates(snapshot, attempted, this.semaphore.accountHolds().deadline, accounts, this.repoRoot, fromKey.split(':')[0], this.semaphore.accountLoad(), workflowDef, this.candidateQuotaKey);
     for (const skip of skipped) {
-      attempted.add(candidateKey(skip.candidate));
+      attempted.add(this.candidateQuotaKey(skip.candidate));
       this.store.appendEvent(runId, { type: 'note', message: `fallback skipped ${label(candidateKey(skip.candidate))} — ${skip.reason}` });
     }
     for (const candidate of eligible) {
-      const key = candidateKey(candidate);
+      const key = this.candidateQuotaKey(candidate);
       attempted.add(key);
       const refusal = await this.fallbackProviderRefusal(candidate.provider as RunnerId, candidate.profileId);
       if (this.disposed) return;
@@ -4856,7 +4859,7 @@ export class RunManager {
     // hand an in-place run straight back, re-wedging the queue the rescue had just freed.
     // `dropActive` retires the entry on every terminal path, so the set still cleans itself up.
     if (this.forceStarted.has(runId)) return false;
-    if (!accountHeldFor({ ...run, runner }, this.semaphore.accountHolds(), runner, this.askingAccounts(), workflow, this.providerStore)) return false;
+    if (!accountHeldFor({ ...run, runner, status: 'queued' }, this.semaphore.accountHolds(), runner, this.askingAccounts(), workflow, this.providerStore)) return false;
     state?.releaseRepoRoot?.();
     if (state) state.releaseRepoRoot = undefined;
     this.pendingJobs.set(runId, { workflow, input });
@@ -6442,9 +6445,11 @@ export class RunManager {
       && !(internal.freshSessionAllowed && run.status === 'queued' && run.fallbackEpisode?.pending)) {
       return { ok: false, error: `cannot continue a ${run.status} run` };
     }
-    const blocked = isIdleParked(run) && run.error && run.steps.find(step =>
-      step.id === run.currentStepId && step.status === 'waiting' && step.error === run.error);
-    if (blocked && run.graphState?.cursor === blocked.id && run.workflowDef && !agentSwitch) {
+    const blocked = isIdleParked(run) && run.error ? run.steps.find(step =>
+      step.id === run.currentStepId && step.status === 'waiting' && step.error === run.error) : undefined;
+    const repair = run.agentSwitch?.checkRepair;
+    const checkpoint = repair && repair.stepId === blocked?.id ? repair.checkId : blocked?.id;
+    if (blocked && run.graphState?.cursor === checkpoint && run.workflowDef && !agentSwitch) {
       // No process opened at this checkpoint. Apply Continue's choice to this node only;
       // subsequent checks, review decisions and differently pinned nodes stay in the graph.
       const override = opts.runner !== undefined || opts.model !== undefined || opts.agentProfile !== undefined ||
@@ -8138,8 +8143,13 @@ export class RunManager {
     const repairRun = this.store.getRun(runId);
     const repair = repairRun?.agentSwitch?.checkRepair;
     if (repairRun && repair && resumeNode?.id === repair.checkId && !state.cancelled) {
-      const step = { id: repair.stepId, name: 'Repair failed check', model: repairRun.model };
-      const repairStep = repairRun.steps.find((candidate) => candidate.id === step.id);
+      const repairStep = repairRun.steps.find((candidate) => candidate.id === repair.stepId);
+      const retry = repairStep?.providerRetry;
+      const step = {
+        id: repair.stepId, name: 'Repair failed check', runner: retry?.runner ?? taskBackend,
+        model: retry ? retry.model : repairRun.model,
+        reasoningEffort: retry ? retry.reasoningEffort : repairRun.reasoningEffort,
+      };
       const failureTarget = graph.nodes.find((node) => node.id === edgeFrom(graph, repair.checkId, 'fail')?.to);
       const retryId = failureTarget?.type === 'loop' ? edgeFrom(graph, failureTarget.id, 'repeat')?.to : failureTarget?.id;
       const retryNode = graph.nodes.find((node) => node.id === retryId);
@@ -8172,7 +8182,7 @@ export class RunManager {
       const checkOutput = [...events].reverse().find((event) => event.type === 'check-output' && event.stepId === repair.checkId)?.text;
       const output = typeof checkOutput === 'string' ? checkOutput : String(outputs.get(repair.checkId)?.output ?? '');
       const interrupted = ctx.usageLimitResume?.id === step.id ? ctx.usageLimitResume : undefined;
-      const resumeSessionId = RESUMABLE_BACKENDS.has(taskBackend) ? interrupted?.sessionId : undefined;
+      const resumeSessionId = RESUMABLE_BACKENDS.has(step.runner) ? interrupted?.sessionId : undefined;
       const failure = await this.runAgentStep(runId, state, {
         ...step,
         allowedTools: toolsStep?.allowedTools,
@@ -8183,7 +8193,7 @@ export class RunManager {
         usageLimitResume: interrupted,
         savedTools,
         portableContext: resumeSessionId ? undefined : freshContinuationContext(repairRun, events, this.attachmentsDir(runId)),
-        workflowAgent: { agentProfile: repairRun.agentProfile, replaced: true },
+        workflowAgent: { agentProfile: retry ? retry.agentProfile : repairRun.agentProfile, replaced: true },
       });
       if (state.cancelled || state.askPark === 'waiting' || this.idleParks(runId, state)) return null;
       const idleFailed = await this.idleClosedFails(runId, state);
@@ -9589,8 +9599,13 @@ export class RunManager {
       emit({ type: 'note', stepId: step.id, message: mapped.note });
     }
     const run = this.store.getRun(runId);
-    const owner = graphHooks?.resumeSessionId ? run?.steps.slice().reverse().find(s => s.sessionId === graphHooks.resumeSessionId && (!s.backend || s.backend === stepBackend))
-      : run?.steps.find(s => s.id === step.id && (s.providerRetry || !graphHooks?.workflowAgent?.replaced));
+    const resumedOwner = resumeStep ?? (graphHooks?.resumeSessionId
+      ? run?.steps.slice().reverse().find(s => s.sessionId === graphHooks.resumeSessionId && (!s.backend || s.backend === stepBackend))
+      : undefined);
+    const owner = resumedOwner ?? run?.steps.find(s => s.id === step.id && (s.providerRetry || !graphHooks?.workflowAgent?.replaced));
+    if (resumedOwner?.backend === stepBackend && resumedOwner.agentMethod && !agentModelsLocked(this.repoRoot)) {
+      stepModel = resumedOwner.model || stepModel;
+    }
     const useTaskSelection = !owner?.providerRetry && stepBackend === run?.runner && (authMethods(stepBackend).mode === 'one' || !step.model || step.model === run.model);
     let provider: AgentProviderLaunch | undefined;
     try {
