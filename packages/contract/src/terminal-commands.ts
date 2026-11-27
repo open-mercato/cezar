@@ -7,9 +7,15 @@ import { startAppScopeSchema } from './start-app.ts';
  * task terminal's picker beside the commands discovered from `package.json` and the Makefile.
  * Commands always run in the task's worktree, through the same shell as any typed command.
  */
+// The command is typed into the shell verbatim (`${command}\r`): a newline would run a second line
+// and a control byte (^C, ^U, ESC…) would edit the line unseen, so C0/C1 controls never pass.
+const NO_CONTROL = /^[^\u0000-\u001f\u007f-\u009f]*$/;
+const noControl = (max: number) =>
+  z.string().trim().min(1).max(max).regex(NO_CONTROL, 'must be one line without control characters');
+
 export const terminalCommandSchema = z.object({
-  name: z.string().trim().min(1).max(80),
-  command: z.string().trim().min(1).max(500),
+  name: noControl(80),
+  command: noControl(500),
 });
 export type TerminalCommand = z.infer<typeof terminalCommandSchema>;
 

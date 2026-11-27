@@ -1,5 +1,5 @@
 import { ChevronDownIcon, ExternalLinkIcon, PanelRightIcon, PlusIcon } from 'lucide-react'
-import { useCallback, useEffect, useState } from 'react'
+import { Fragment, useCallback, useEffect, useState } from 'react'
 
 import { getRunTerminalUrls } from '@/api/client'
 import type { DetectedUrlEntry, DiscoveredCommandsResponse } from '@open-mercato/cezar-api-client'
@@ -31,6 +31,12 @@ import type { TerminalScope } from './terminal-scope'
 /** How often the detected-address strip re-probes. Each refresh is one TCP connect per address
  *  on the server, and a server coming up is something a user waits a second or two for anyway. */
 const URL_REFRESH_MS = 3_000
+
+/** The defined commands' groups, in the order the server sends them: yours, then the repo's. */
+const CONFIGURED_GROUPS = [
+  { scope: 'personal', label: 'Your commands' },
+  { scope: 'project', label: 'From the repo config' },
+] as const
 
 export function DetectedUrlsStrip({
   runId,
@@ -189,23 +195,30 @@ export function NewTerminalMenu({
             ))}
           </>
         ) : null}
-        {configured.length > 0 ? (
-          <>
-            <DropdownMenuSeparator />
-            <DropdownMenuLabel>Project commands</DropdownMenuLabel>
-            {configured.map((entry) => (
-              <DropdownMenuItem
-                key={`${entry.scope}:${entry.command}`}
-                data-slot="configured-command"
-                onSelect={() => onRun(entry.command)}
-                className="flex-col items-start gap-0"
-              >
-                <span className="text-xs">{entry.name}</span>
-                <span className="font-mono text-meta text-soft-foreground">{entry.command}</span>
-              </DropdownMenuItem>
-            ))}
-          </>
-        ) : null}
+        {/* Yours and the repo's apart (#1555 review): a repo-config command arrived with the
+            checkout, so the menu must not let it pass for one you saved yourself. */}
+        {CONFIGURED_GROUPS.map(({ scope: group, label }) => {
+          const entries = configured.filter((entry) => entry.scope === group)
+          if (entries.length === 0) return null
+          return (
+            <Fragment key={group}>
+              <DropdownMenuSeparator />
+              <DropdownMenuLabel data-slot="configured-group" data-scope={group}>{label}</DropdownMenuLabel>
+              {entries.map((entry) => (
+                <DropdownMenuItem
+                  key={`${entry.scope}:${entry.command}`}
+                  data-slot="configured-command"
+                  data-scope={entry.scope}
+                  onSelect={() => onRun(entry.command)}
+                  className="flex-col items-start gap-0"
+                >
+                  <span className="text-xs">{entry.name}</span>
+                  <span className="font-mono text-meta text-soft-foreground">{entry.command}</span>
+                </DropdownMenuItem>
+              ))}
+            </Fragment>
+          )
+        })}
         <DropdownMenuSeparator />
         <DropdownMenuLabel>Detected commands</DropdownMenuLabel>
         {detected.length === 0 ? (

@@ -8887,8 +8887,14 @@ export function createAppParts(deps: ServerDeps) {
       const setupScripts = (await readLifecycleConfigOrDefault(root)).config.afterCreate.length;
       const [commands, install] = await Promise.all([discoverCommands(root), setupScripts > 0 ? null : installCommand(root)]);
       const recipe = effectiveStartApp(await readStartApp(dataDir, root));
+      const configured = configuredCommands(await readTerminalCommands(dataDir, root));
       return c.json(
-        discoveredCommandsSchema.parse({ commands, ...(install ? { install } : {}), ...(recipe ? { recipe } : {}) }),
+        discoveredCommandsSchema.parse({
+          commands,
+          ...(install ? { install } : {}),
+          ...(recipe ? { recipe } : {}),
+          ...(configured.length > 0 ? { configured } : {}),
+        }),
       );
     })
     .get(

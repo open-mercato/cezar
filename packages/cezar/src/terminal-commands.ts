@@ -1,5 +1,6 @@
 import {
-  terminalCommandListSchema,
+  TERMINAL_COMMANDS_MAX,
+  terminalCommandSchema,
   type ConfiguredCommandEntry,
   type TerminalCommand,
   type TerminalCommandsState,
@@ -11,20 +12,36 @@ import { loadWorkspaceConfig } from './workspace/config.ts';
 /**
  * Run commands a project defines for its task terminals (#1555): `terminalCommands` in the repo's
  * `.ai/cezar/config.json` (the team's) and in the project's entry of `~/.cezar/config.json`
- * (yours). Optional in both; a value that does not parse counts as absent, like `startApp`.
+ * (yours). Optional in both; a value that is not a list counts as absent, like `startApp`.
  */
 const KEY = 'terminalCommands';
 
-function parse(value: unknown): TerminalCommand[] {
-  const parsed = terminalCommandListSchema.safeParse(value);
-  return parsed.success ? parsed.data : [];
+const warned = new Set<string>();
+
+/** Per-entry salvage: one hand-edited entry with a newline or control byte is dropped (with one
+ *  warning per distinct entry), never the whole list and never the terminal. */
+function parse(value: unknown, where: string): TerminalCommand[] {
+  if (!Array.isArray(value)) return [];
+  const out: TerminalCommand[] = [];
+  for (const raw of value) {
+    const parsed = terminalCommandSchema.safeParse(raw);
+    if (parsed.success) {
+      if (out.length < TERMINAL_COMMANDS_MAX) out.push(parsed.data);
+      continue;
+    }
+    const key = `${where}\0${JSON.stringify(raw)}`;
+    if (warned.has(key)) continue;
+    warned.add(key);
+    console.warn(`[cez] ignoring an invalid ${KEY} entry in ${where}: ${parsed.error.issues[0]?.message ?? 'invalid'}`);
+  }
+  return out;
 }
 
 export async function readTerminalCommands(dataDir: string, root: string): Promise<TerminalCommandsState> {
   const entry = (await loadWorkspaceConfig()).projects.find((project) => project.root === root);
   return {
-    project: parse((await readRaw(dataDir))[KEY]),
-    personal: entry ? parse((entry as Record<string, unknown>)[KEY]) : [],
+    project: parse((await readRaw(dataDir))[KEY], '.ai/cezar/config.json'),
+    personal: entry ? parse((entry as Record<string, unknown>)[KEY], '~/.cezar/config.json') : [],
     personalAvailable: entry !== undefined,
   };
 }

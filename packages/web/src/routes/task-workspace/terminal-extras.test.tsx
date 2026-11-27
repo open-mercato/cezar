@@ -57,7 +57,7 @@ describe('NewTerminalMenu (#1554, #1555)', () => {
 
     const items = await screen.findAllByRole('menuitem')
     expect(items[0]!.textContent).toContain('Empty terminal')
-    for (const label of ['Shell', 'Project commands', 'Detected commands', 'Custom command']) {
+    for (const label of ['Shell', 'From the repo config', 'Detected commands', 'Custom command']) {
       expect(await screen.findByText(label)).toBeTruthy()
     }
 
@@ -78,13 +78,36 @@ describe('NewTerminalMenu (#1554, #1555)', () => {
     expect(onRun).toHaveBeenCalledWith('pnpm test')
   })
 
-  it('with nothing defined still offers the detected commands, and no Project commands section', async () => {
+  it('keeps your commands apart from the repo config\'s, yours first', async () => {
+    const commands = vi.fn(async () => ({
+      commands: [],
+      configured: [
+        { name: 'Mine', command: 'make mine', scope: 'personal' as const },
+        { name: 'Theirs', command: 'make theirs', scope: 'project' as const },
+      ],
+    }))
+    const { container } = render(<NewTerminalMenu scope={{ commands }} shells={[]} onNew={vi.fn()} onRun={vi.fn()} />)
+    open()
+    await screen.findByText('Theirs')
+
+    const doc = container.ownerDocument
+    const groups = [...doc.querySelectorAll('[data-slot="configured-group"]')].map((node) => node.textContent)
+    expect(groups).toEqual(['Your commands', 'From the repo config'])
+    const scopes = [...doc.querySelectorAll('[data-slot="configured-command"]')].map((node) => [
+      node.getAttribute('data-scope'),
+      node.textContent,
+    ])
+    expect(scopes).toEqual([['personal', 'Minemake mine'], ['project', 'Theirsmake theirs']])
+  })
+
+  it('with nothing defined still offers the detected commands, and no defined-command section', async () => {
     const commands = vi.fn(async () => ({ commands: [{ command: 'make build', source: 'Makefile' }] }))
     render(<NewTerminalMenu scope={{ commands }} shells={[]} onNew={vi.fn()} onRun={vi.fn()} />)
     open()
 
     expect(await screen.findByText('make build')).toBeTruthy()
-    expect(screen.queryByText('Project commands')).toBeNull()
+    expect(screen.queryByText('Your commands')).toBeNull()
+    expect(screen.queryByText('From the repo config')).toBeNull()
     expect(screen.queryByText('Shell')).toBeNull()
   })
 
