@@ -4,7 +4,8 @@ import { existsSync, opendirSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { extname, isAbsolute, join } from 'node:path';
 import { AGENT_MODELS_LOCKED_ENV } from './agent-model-policy.ts';
-import { profileEnv } from './agent-profiles.ts';
+import { observedProviderMethods, type ProviderMethodStatuses } from './provider-method-status.ts';
+import { profileEnv, supportsProfiles } from './agent-profiles.ts';
 import { RUNNER_IDS, isSignalTerminationExit, type RunnerId } from './agent-runner.ts';
 import { resolveClaudeBin } from './claude-bin.ts';
 import { resolveAntigravityBin } from './antigravity-runner.ts';
@@ -37,6 +38,11 @@ export interface ProviderStatus {
    *  `status()` builds — that route answers for the discovered default only, and stays exactly
    *  as wide as it has always been. Stamped in by `profileStatus()`. */
   profileId?: string;
+}
+
+/** Decomposed at the cache boundary. Method facts are never part of a wire row. */
+interface ProviderProbeRow extends ProviderStatus {
+  methods?: ProviderMethodStatuses;
 }
 
 export interface ProviderStatusResponse {
@@ -122,7 +128,7 @@ interface ProviderDescriptor {
    * silently ate the fallback and reported 'unknown' no matter how valid the key was. Skipping the
    * spawn entirely removes that race instead of racing to out-guess it.
    */
-  precheck?: () => ProviderConnectionState | undefined;
+  precheck?: (env: NodeJS.ProcessEnv) => ProviderProbeRow | undefined;
   /** A more specific hint than "try again" for an answer `parse` could not read. */
   unrecognizedHint?: (result: ProviderCommandResult) => string | undefined;
   /** Arguments to ask once more with when the CLI answered `statusArgs` unreadably (a rejected flag, a failed service). */
@@ -496,9 +502,9 @@ export const OMP_CREDENTIAL_PREFIXES: readonly string[] = [
  * a gateway or a Vertex project is `connected`; its absence is `unknown`, never `disconnected` — a
  * keychain-stored key or a Workspace login is invisible from outside — and carries the API-key hint.
  */
-function parseGeminiStatus(result: ProviderCommandResult): ProviderConnectionState | null {
+function parseGeminiStatus(result: ProviderCommandResult, context: ProviderParseContext): ProviderConnectionState | null {
   if (result.exitCode !== 0 || !/\d+\.\d+/.test(result.stdout)) return null;
-  return geminiHasCredentials() ? 'connected' : 'unknown';
+  return geminiHasCredentials(context.env) ? 'connected' : 'unknown';
 }
 
 /** Telemetry 298c2e1f: a `copilot` that answered with no JSON-RPC frame never started an ACP
@@ -566,7 +572,9 @@ const DESCRIPTORS: readonly ProviderDescriptor[] = [
       `Install the Cursor CLI (\`${installHintCommand('cursor')}\`), then run \`agent login\` (or set CURSOR_API_KEY).`,
     parse: parseCursorStatus,
     // `agent status` doesn't itself know about CURSOR_API_KEY — see the `precheck` field's doc.
-    precheck: () => (process.env.CURSOR_API_KEY?.trim() ? 'connected' : undefined),
+    precheck: (env) => env.CURSOR_API_KEY?.trim()
+      ? { provider: 'cursor', status: 'connected', methods: { apiKey: 'connected' } }
+      : undefined,
   },
   {
     id: 'pi',
@@ -978,6 +986,7 @@ export class ProviderAuthService {
   private nextProbeGeneration = 0;
   private completed?: {
     response: ProviderStatusResponse;
+    methods: Map<ProviderId, ProviderMethodStatuses>;
     timestamp: number;
     generation: number;
   };
@@ -988,8 +997,12 @@ export class ProviderAuthService {
   /** Per-account probe results, keyed by `profileCacheKey` (spec 2026-07-29-agent-profiles).
    *  Separate from `completed` because a second Claude login is a different answer to the same
    *  question, and sharing one slot would let whichever probe ran last speak for both. */
-  private readonly completedProfiles = new Map<string, { status: ProviderStatus; timestamp: number }>();
-  private readonly inFlightProfiles = new Map<string, Promise<ProviderStatus>>();
+  private readonly completedProfiles = new Map<string, {
+    status: ProviderStatus; timestamp: number; configDir: string | null; methods?: ProviderMethodStatuses;
+  }>();
+  private readonly inFlightProfiles = new Map<string, {
+    configDir: string | null; probe: Promise<ProviderStatus>;
+  }>();
   /** The last probe that answered connected, keyed by provider (default login) or `profileCacheKey`;
    *  only {@link bridgeTimeout} reads it. */
   private readonly lastConnected = new Map<string, { status: ProviderStatus; at: number; configDir: string | null }>();
@@ -1065,6 +1078,22 @@ export class ProviderAuthService {
     }
     if (this.inFlight) return this.inFlight.visible;
     return this.startFreshProbe().visible;
+  }
+
+  /** Facts from the last completed status()/profileStatus() for this login. Never starts a probe.
+   *  Missing facts (including a cold cache or a runtime rejection with no method ID) mean unknown. */
+  methodStatuses(provider: ProviderId, configDir?: string | null): ProviderMethodStatuses {
+    if (process.env.CEZ_DRY_RUN === '1' || providerAuthChecksDisabled()) return {};
+    if (configDir) {
+      if (!supportsProfiles(provider)) return {};
+      for (const [key, cached] of this.completedProfiles) {
+        if (cached.status.provider === provider && cached.configDir === configDir) {
+          return this.profileRuntimeFailures.has(key) ? {} : { ...cached.methods };
+        }
+      }
+      return {};
+    }
+    return this.runtimeFailures.has(provider) ? {} : { ...this.completed?.methods.get(provider) };
   }
 
   reportRuntimeAuthFailure(provider: ProviderId, options?: { definitive?: boolean }): RuntimeAuthFailureReport | null {
@@ -1182,17 +1211,18 @@ export class ProviderAuthService {
     }
 
     this.verifyingRuntimeFailures.add(provider);
-    let probed: ProviderStatus;
+    let result: ProviderProbeRow;
     try {
       this.lastRuntimeVerification.set(provider, this.now());
-      probed = await this.probe(descriptorFor(provider));
+      result = await this.probe(descriptorFor(provider));
     } finally {
       this.verifyingRuntimeFailures.delete(provider);
     }
 
+    const { methods, ...probed } = result;
     if (probed.status !== 'connected') return null;
     if (!this.clearRuntimeAuthFailure(provider, failure.authFailureId)) return null;
-    this.rememberProbedRow(probed);
+    this.rememberProbedRow(probed, methods);
     return probed;
   }
 
@@ -1205,8 +1235,9 @@ export class ProviderAuthService {
    * a grey one. The cache TIMESTAMP is deliberately untouched: this corrects one row, it is not a
    * full probe, and it must not extend the whole response's lifetime.
    */
-  private rememberProbedRow(status: ProviderStatus): void {
+  private rememberProbedRow(status: ProviderStatus, methods?: ProviderMethodStatuses): void {
     if (!this.completed) return;
+    this.completed.methods.set(status.provider, methods ?? {});
     this.completed = {
       ...this.completed,
       response: {
@@ -1272,9 +1303,13 @@ export class ProviderAuthService {
     const generation = ++this.nextProbeGeneration;
     const raw = Promise.all(DESCRIPTORS.map((descriptor) => this.probe(descriptor)))
       .then((probed) => {
-        const response = { providers: probed.map((row) => this.bridgeTimeout(row.provider, row)) };
+        const methods = new Map<ProviderId, ProviderMethodStatuses>();
+        const response = { providers: probed.map(({ methods: observed, ...row }) => {
+          if (observed) methods.set(row.provider, observed);
+          return this.bridgeTimeout(row.provider, row);
+        }) };
         if (!this.completed || generation >= this.completed.generation) {
-          this.completed = { response, timestamp: this.now(), generation };
+          this.completed = { response, methods, timestamp: this.now(), generation };
         }
         return response;
       });
@@ -1313,17 +1348,22 @@ export class ProviderAuthService {
     }
     const key = profileCacheKey(provider, profile.id);
     const cached = this.completedProfiles.get(key);
-    if (cached && this.now() - cached.timestamp < cacheTtlFor([cached.status])) {
+    if (cached && cached.configDir === profile.configDir && this.now() - cached.timestamp < cacheTtlFor([cached.status])) {
       return this.withProfileFailure(cached.status, profile.id);
     }
     const pending = this.inFlightProfiles.get(key);
-    if (pending) return pending.then((status) => this.withProfileFailure(status, profile.id));
+    if (pending?.configDir === profile.configDir) {
+      return pending.probe.then((status) => this.withProfileFailure(status, profile.id));
+    }
     // A probe already running when a rejection arrived must not clear it (same rule as the default).
     const startedAt = this.nextRuntimeFailureGeneration;
     const probe = this.probe(descriptorFor(provider), profile.configDir)
-      .then((status) => {
-        const stamped = this.bridgeTimeout(key, { ...status, profileId: profile.id }, profile.configDir);
-        this.completedProfiles.set(key, { status: stamped, timestamp: this.now() });
+      .then(({ methods, ...status }) => {
+        // A removed/repointed account may finish probing after its replacement has started.
+        const row = { ...status, profileId: profile.id };
+        if (this.inFlightProfiles.get(key)?.probe !== probe) return this.withProfileFailure(row, profile.id);
+        const stamped = this.bridgeTimeout(key, row, profile.configDir);
+        this.completedProfiles.set(key, { status: stamped, timestamp: this.now(), configDir: profile.configDir, methods });
         const failure = this.profileRuntimeFailures.get(key);
         // The FRESH answer only: a bridged hang is not evidence that the rejection was transient.
         if (failure && probeLifts(failure, startedAt) && status.status === 'connected') {
@@ -1332,9 +1372,9 @@ export class ProviderAuthService {
         return this.withProfileFailure(stamped, profile.id);
       })
       .finally(() => {
-        if (this.inFlightProfiles.get(key) === probe) this.inFlightProfiles.delete(key);
+        if (this.inFlightProfiles.get(key)?.probe === probe) this.inFlightProfiles.delete(key);
       });
-    this.inFlightProfiles.set(key, probe);
+    this.inFlightProfiles.set(key, { configDir: profile.configDir, probe });
     return probe;
   }
 
@@ -1349,6 +1389,7 @@ export class ProviderAuthService {
   forgetProfileStatus(provider?: ProviderId, profileId?: string): void {
     if (provider === undefined || profileId === undefined) {
       this.completedProfiles.clear();
+      this.inFlightProfiles.clear();
       return;
     }
     this.completedProfiles.delete(profileCacheKey(provider, profileId));
@@ -1380,8 +1421,10 @@ export class ProviderAuthService {
    *  never inherits it. Not part of `forgetProfileStatus`: a refresh must keep the incident. */
   forgetProfile(provider: ProviderId, profileId: string): void {
     this.forgetProfileStatus(provider, profileId);
-    this.profileRuntimeFailures.delete(profileCacheKey(provider, profileId));
-    this.lastConnected.delete(profileCacheKey(provider, profileId));
+    const key = profileCacheKey(provider, profileId);
+    this.inFlightProfiles.delete(key);
+    this.profileRuntimeFailures.delete(key);
+    this.lastConnected.delete(key);
   }
 
   /**
@@ -1422,7 +1465,7 @@ export class ProviderAuthService {
     return this.withRuntimeFailures(this.completed.response);
   }
 
-  private async probe(descriptor: ProviderDescriptor, configDir?: string | null): Promise<ProviderStatus> {
+  private async probe(descriptor: ProviderDescriptor, configDir?: string | null): Promise<ProviderProbeRow> {
     // Junie exposes no read-only auth status command. Its prompt-free model probe establishes
     // both authentication and model access; invoking `junie --version` cannot establish either.
     if (descriptor.id === 'junie') {
@@ -1445,8 +1488,8 @@ export class ProviderAuthService {
         };
       }
     }
-    const precheck = descriptor.precheck?.();
-    if (precheck !== undefined) return { provider: descriptor.id, status: precheck };
+    const precheck = descriptor.precheck?.(this.env);
+    if (precheck !== undefined) return precheck;
     let result: ProviderCommandResult;
     // The default profile is probed with the SAME three-argument call it always was — no
     // trailing `undefined`. `runCommand` is an injected seam, and handing every existing
@@ -1520,7 +1563,9 @@ export class ProviderAuthService {
     // A deliberate `unknown` (omp: no credential visible) is the parser's answer, not an
     // inconclusive probe — it carries the descriptor's own hint and is never reported.
     if (status === 'unknown') return { provider: descriptor.id, status, hint: descriptor.unknownHint ?? UNKNOWN_HINT };
-    if (status !== null) return { provider: descriptor.id, status };
+    if (status !== null) {
+      return { provider: descriptor.id, status, methods: observedProviderMethods(descriptor.id, status, result, this.env) };
+    }
     // Still interrupted: unknown, but unreported — there is no CLI defect to group on.
     if (wasInterrupted(result)) return { provider: descriptor.id, status: 'unknown', hint: INTERRUPTED_HINT };
     // A launcher whose shell could not find (127) or run (126) what it wraps: nothing ran, so the
