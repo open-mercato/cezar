@@ -90,6 +90,9 @@ const WorkflowGraphRoute = lazyRoute('workflow-graph', () =>
 )
 
 /** Lazy: xterm is the heaviest chunk a page can pull in (#1526). */
+const ProjectWorkspaceRoute = lazyRoute('workspace', () =>
+  import('./routes/project-workspace/project-workspace').then((m) => ({ default: m.ProjectWorkspaceRoute })),
+)
 const ProjectTerminalRoute = lazyRoute('terminal', () =>
   import('./routes/project-terminal/project-terminal').then((m) => ({ default: m.ProjectTerminalRoute })),
 )
@@ -417,6 +420,7 @@ const PAGE_TITLE_ROUTES = [
   { pattern: '/tracker/*', pageLabel: 'Tracker' },
   { pattern: '/assets', pageLabel: 'Assets' },
   { pattern: '/terminal', pageLabel: 'Terminal' },
+  { pattern: '/workspace', pageLabel: 'Workspace' },
   { pattern: '/automations/*', pageLabel: 'Automations' },
   { pattern: '/skills', pageLabel: 'Skills' },
   { pattern: '/inbox', pageLabel: 'Inbox' },
@@ -749,6 +753,8 @@ export const AppRoutes = memo(function AppRoutes() {
         {/* The project Assets page (spec 2026-10-22-html-artifacts-and-impact, Phase 3): a table, no
             preview — light enough to ride the main bundle like the inbox. */}
         <Route path="assets" element={<AssetsRoute />} />
+        {/* #1608: preview + project terminal before any task; `cezar --preview-url` lands here. */}
+        <Route path="workspace" element={<Suspense fallback={<ScopeResolving />}><ProjectWorkspaceRoute /></Suspense>} />
         <Route path="terminal" element={<Suspense fallback={<ScopeResolving />}><ProjectTerminalRoute /></Suspense>} />
 
         {/* The workflow node editor (spec 2026-09-30-workflow-node-editor): /workflows opens a new
