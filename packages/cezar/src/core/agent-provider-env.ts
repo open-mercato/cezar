@@ -8,7 +8,7 @@ import { providerAuthChecksDisabled } from './provider-auth.ts';
 import { agentModelsLocked } from './agent-model-policy.ts';
 import { pickCheapModel } from '../runs/namer-model.ts';
 import { AgentProviderUnavailable, type RunnerId } from './agent-runner.ts';
-import { authMethods, providerLaunch } from './agent-auth-methods.ts';
+import { authMethods, providerHostKey, providerLaunch } from './agent-auth-methods.ts';
 import { readAgentProviderKey, readAgentProviders, type StoredAgentProviders } from '../workspace/agent-providers.ts';
 
 export { AgentProviderUnavailable } from './agent-runner.ts';
@@ -107,7 +107,7 @@ export async function agentProviderEnv(runner: RunnerId, selection: MethodSelect
         throw new AgentProviderUnavailable('The provider key store is unavailable. Unlock the OS keychain and retry.', methodId);
       }
     } else if (method.hostKeyEnv) {
-      const host = process.env[method.hostKeyEnv] || (runner === 'gemini' ? process.env.GOOGLE_API_KEY : undefined);
+      const host = providerHostKey(runner, method);
       if (host?.trim()) {
         hostKey = true;
         key = process.env.CEZ_DRY_RUN === '1' ? 'cezar-dry-run-provider-key' : host;
