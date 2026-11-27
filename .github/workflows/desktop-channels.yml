@@ -1,0 +1,217 @@
+name: Desktop channels
+
+# winget and AUR for the desktop shell (spec .ai/specs/2026-09-25-desktop-distribution.md, #1763).
+# Renders each channel's manifests from a PUBLISHED `desktop-v*` release (packages/desktop/scripts/
+# render-channels.mjs) and, when its credential exists, pushes them. Homebrew is not here: its
+# `homebrew-tap` job lives in desktop-release.yml and uses the release GitHub App.
+#
+# Neither target can use the release App or `github.token`: winget-pkgs is Microsoft's repository
+# (a PR from a fork the maintainer owns) and the AUR is reached over SSH, so each has its own
+# secret. Without it the job still renders the manifests, keeps them as a run artifact and says so
+# in the summary — it never fails the release's follow-up. `dry_run` renders and uploads only.
+#
+# Trigger: a successful "Desktop release" run (the tag push), or by hand with a tag — also how to
+# backfill a release, or to try the channels before anyone can find them (dry_run).
+
+on:
+  workflow_run:
+    workflows: ['Desktop release']
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Published release tag to render, e.g. desktop-v0.1.11 (empty: the version in tauri.conf.json)'
+        required: false
+        default: ''
+        type: string
+      dry_run:
+        description: 'Render the manifests as a run artifact only: nothing is pushed or opened'
+        required: false
+        default: true
+        type: boolean
+
+permissions:
+  contents: read # downloads release assets; every channel write uses its own credential
+
+concurrency:
+  group: desktop-channels-${{ inputs.tag || github.event.workflow_run.head_sha || github.run_id }}
+  cancel-in-progress: false
+
+jobs:
+  resolve:
+    name: Resolve the release
+    # A manual or dry-run desktop release publishes nothing to push; only a tag push does.
+    if: ${{ github.event_name == 'workflow_dispatch' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' && startsWith(github.event.workflow_run.head_branch, 'desktop-v')) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      tag: ${{ steps.release.outputs.tag }}
+      version: ${{ steps.release.outputs.version }}
+      date: ${{ steps.release.outputs.date }}
+      winget_sha: ${{ steps.release.outputs.winget_sha }}
+      deb_sha: ${{ steps.release.outputs.deb_sha }}
+      dry_run: ${{ steps.release.outputs.dry_run }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          sparse-checkout: packages/desktop/src-tauri/tauri.conf.json
+
+      - name: Read the published release
+        id: release
+        env:
+          GH_TOKEN: ${{ github.token }} # read-only
+          REPO: ${{ github.repository }}
+          INPUT_TAG: ${{ inputs.tag }}
+          RUN_TAG: ${{ github.event.workflow_run.head_branch }}
+          DRY: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run }}
+        run: |
+          TAG="${INPUT_TAG:-$RUN_TAG}"
+          [ -n "$TAG" ] || TAG="desktop-v$(node -p "require('./packages/desktop/src-tauri/tauri.conf.json').version")"
+          case "$TAG" in desktop-v[0-9]*.[0-9]*.[0-9]*) ;; *) echo "::error::not a desktop release tag: $TAG"; exit 1;; esac
+          VERSION="${TAG#desktop-v}"
+          if [ "$(gh release view "$TAG" --repo "$REPO" --json isDraft -q .isDraft)" != "false" ]; then
+            echo "::error::$TAG is not a published release"
+            exit 1
+          fi
+          mkdir sums
+          gh release download "$TAG" --repo "$REPO" --dir sums \
+            --pattern cezar-windows-x86_64-setup.exe.sha256 --pattern cezar-linux-x86_64.deb.sha256
+          {
+            echo "tag=$TAG"
+            echo "version=$VERSION"
+            echo "date=$(gh release view "$TAG" --repo "$REPO" --json publishedAt -q '.publishedAt[:10]')"
+            echo "winget_sha=$(cut -d' ' -f1 sums/cezar-windows-x86_64-setup.exe.sha256)"
+            echo "deb_sha=$(cut -d' ' -f1 sums/cezar-linux-x86_64.deb.sha256)"
+            echo "dry_run=$DRY"
+          } >> "$GITHUB_OUTPUT"
+
+  winget:
+    name: winget
+    needs: resolve
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      VERSION: ${{ needs.resolve.outputs.version }}
+      UPSTREAM: microsoft/winget-pkgs
+      ID_DIR: manifests/o/OpenMercato/Cezar
+      # A classic PAT (public_repo) or fine-grained token of the account that owns the winget-pkgs fork.
+      HAS_TOKEN: ${{ secrets.WINGET_PKGS_TOKEN != '' }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          sparse-checkout: packages/desktop/scripts
+
+      - name: Render the manifests
+        env:
+          SHA: ${{ needs.resolve.outputs.winget_sha }}
+          DATE: ${{ needs.resolve.outputs.date }}
+        run: node packages/desktop/scripts/render-channels.mjs winget "$VERSION" "$SHA" "out/$ID_DIR/$VERSION" "$DATE"
+
+      - name: Keep the manifests as a run artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: winget-manifests
+          path: out
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Submit to winget-pkgs
+        if: ${{ needs.resolve.outputs.dry_run != 'true' && env.HAS_TOKEN == 'true' }}
+        env:
+          GH_TOKEN: ${{ secrets.WINGET_PKGS_TOKEN }}
+        run: |
+          OWNER=$(gh api user -q .login)
+          if [ -n "$(gh pr list --repo "$UPSTREAM" --state all --search "OpenMercato.Cezar version $VERSION in:title" --json number -q '.[0].number')" ]; then
+            echo "A winget-pkgs PR for $VERSION already exists"; exit 0
+          fi
+          gh repo fork "$UPSTREAM" --clone=false || true
+          git clone --depth 1 --filter=blob:none --sparse "https://x-access-token:${GH_TOKEN}@github.com/$OWNER/winget-pkgs.git" fork
+          cd fork
+          git remote add upstream "https://github.com/$UPSTREAM.git"
+          git fetch --depth 1 upstream master
+          BRANCH="OpenMercato.Cezar-$VERSION"
+          git checkout -q -b "$BRANCH" upstream/master
+          mkdir -p "$ID_DIR/$VERSION"
+          cp "../out/$ID_DIR/$VERSION"/* "$ID_DIR/$VERSION/"
+          git add "$ID_DIR/$VERSION"
+          git -c user.name='open-mercato-assistant' -c user.email='noreply@github.com' commit -qm "New version: OpenMercato.Cezar version $VERSION"
+          git push -f origin "$BRANCH"
+          gh pr create --repo "$UPSTREAM" --head "$OWNER:$BRANCH" --base master \
+            --title "New version: OpenMercato.Cezar version $VERSION" \
+            --body "Automated by https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }} from the published release https://github.com/${{ github.repository }}/releases/tag/${{ needs.resolve.outputs.tag }}."
+          echo "🪟 winget-pkgs PR opened for $VERSION" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: winget status
+        if: ${{ needs.resolve.outputs.dry_run == 'true' || env.HAS_TOKEN != 'true' }}
+        run: |
+          if [ "${{ needs.resolve.outputs.dry_run }}" = "true" ]; then
+            echo "🪟 winget: dry run — manifests are in the winget-manifests artifact." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "::warning::WINGET_PKGS_TOKEN is not set — winget-pkgs was NOT updated. Add the secret (a token of the account that owns the winget-pkgs fork)."
+            echo "⚠️ winget not submitted: no WINGET_PKGS_TOKEN. Manifests are in the winget-manifests artifact." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+  aur:
+    name: AUR
+    needs: resolve
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      VERSION: ${{ needs.resolve.outputs.version }}
+      HAS_KEY: ${{ secrets.AUR_SSH_PRIVATE_KEY != '' }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          sparse-checkout: packages/desktop
+
+      - name: Render the package
+        env:
+          SHA: ${{ needs.resolve.outputs.deb_sha }}
+        run: node packages/desktop/scripts/render-channels.mjs aur "$VERSION" "$SHA" out
+
+      - name: Keep the package as a run artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: aur-package
+          path: out
+          include-hidden-files: true # .SRCINFO
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Push to the AUR
+        if: ${{ needs.resolve.outputs.dry_run != 'true' && env.HAS_KEY == 'true' }}
+        env:
+          AUR_SSH_PRIVATE_KEY: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
+        run: |
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$AUR_SSH_PRIVATE_KEY" > ~/.ssh/aur
+          chmod 600 ~/.ssh/aur
+          ssh-keyscan -t ed25519,rsa aur.archlinux.org >> ~/.ssh/known_hosts
+          export GIT_SSH_COMMAND='ssh -i ~/.ssh/aur -o IdentitiesOnly=yes'
+          git clone ssh://aur@aur.archlinux.org/cezar-desktop-bin.git aur
+          # Never downgrade: a re-run of an older release leaves a newer package alone.
+          CURRENT=$(sed -n 's/^pkgver=//p' aur/PKGBUILD 2>/dev/null || true)
+          if [ -n "$CURRENT" ] && [ "$(printf '%s\n%s\n' "$CURRENT" "$VERSION" | sort -V | tail -1)" != "$VERSION" ]; then
+            echo "AUR already at $CURRENT, newer than $VERSION"; exit 0
+          fi
+          cp out/PKGBUILD out/.SRCINFO aur/
+          cd aur
+          if git diff --quiet && [ -z "$(git status --porcelain)" ]; then echo "AUR already at $VERSION"; exit 0; fi
+          git add PKGBUILD .SRCINFO
+          git -c user.name='open-mercato' -c user.email='noreply@github.com' commit -qm "cezar-desktop-bin $VERSION"
+          git push origin HEAD:master
+          echo "🏹 AUR: cezar-desktop-bin $VERSION" >> "$GITHUB_STEP_SUMMARY"
+          rm -f ~/.ssh/aur
+
+      - name: AUR status
+        if: ${{ needs.resolve.outputs.dry_run == 'true' || env.HAS_KEY != 'true' }}
+        run: |
+          if [ "${{ needs.resolve.outputs.dry_run }}" = "true" ]; then
+            echo "🏹 AUR: dry run — PKGBUILD and .SRCINFO are in the aur-package artifact." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "::warning::AUR_SSH_PRIVATE_KEY is not set — the AUR was NOT updated. Add the secret (the private key of the AUR maintainer account)."
+            echo "⚠️ AUR not updated: no AUR_SSH_PRIVATE_KEY. The package is in the aur-package artifact." >> "$GITHUB_STEP_SUMMARY"
+          fi

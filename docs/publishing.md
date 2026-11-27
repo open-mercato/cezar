@@ -245,6 +245,36 @@ best-effort removes its `pr-<N>` dist-tag from every package (the versions
 themselves stay — npm allows unpublish only within 72 hours, and untagged
 prereleases are inert).
 
+## Desktop package-manager channels
+
+The desktop shell ships on its own `desktop-v*` releases (`desktop-release.yml`, spec
+`.ai/specs/2026-09-25-desktop-distribution.md`). Three channels follow a published release:
+
+| Channel | Where | How it updates | Credential |
+|---|---|---|---|
+| Homebrew | `open-mercato/homebrew-tap` | `homebrew-tap` job in `desktop-release.yml` (see `packages/desktop/homebrew/SETUP.md`) | the release GitHub App, scoped to the tap |
+| winget | `microsoft/winget-pkgs`, id `OpenMercato.Cezar` | `desktop-channels.yml` opens a PR from the maintainer's fork | secret `WINGET_PKGS_TOKEN` |
+| AUR | `cezar-desktop-bin` | `desktop-channels.yml` pushes `PKGBUILD` + `.SRCINFO` over SSH | secret `AUR_SSH_PRIVATE_KEY` |
+
+`desktop-channels.yml` runs after a successful tag-push **Desktop release**, or by hand
+(*Run workflow* → a `tag`, or empty for the version in `tauri.conf.json`). Manual runs default to
+`dry_run`: the manifests are rendered by `packages/desktop/scripts/render-channels.mjs` from the
+release's `.sha256` assets and kept as the `winget-manifests` / `aur-package` artifacts; nothing is
+pushed. The release App token and `github.token` cannot reach winget-pkgs (Microsoft's repository)
+or the AUR (SSH), so those two use their own secrets. **Without a secret the job still renders and
+keeps the artifact, warns, and stays green.** Microsoft reviews each winget PR, so that channel is
+"opens automatically", not hands-off. The AUR job never downgrades (a re-run of an older release is
+a no-op), and the Windows installer is unsigned until SignPath is wired in, so SmartScreen warns.
+
+One-time setup (a maintainer):
+
+1. winget: fork `microsoft/winget-pkgs` under the account that owns the token, and add its token as
+   the secret `WINGET_PKGS_TOKEN` (`public_repo`). The first version's PR also needs the package
+   identifier accepted; later versions are routine.
+2. AUR: create an AUR account, register `cezar-desktop-bin` (the first push creates it), add the
+   account's SSH public key to it, and add the private key as `AUR_SSH_PRIVATE_KEY`.
+3. Homebrew: see `packages/desktop/homebrew/SETUP.md`.
+
 ## Pieces
 
 | Piece | Role |
