@@ -35,6 +35,10 @@ vi.mock('../core/junie-auth-probe.ts', () => ({
   probeJunieAuthentication: vi.fn(async () => ({ connected: true })),
 }));
 
+// `/api/v1/health` runs `detectEnvironment`, which spawns every agent CLI on the host; under the
+// full parallel suite that blew the 5 s test timeout. Mocked as in `health-attention.test.ts`.
+vi.mock('../core/backend-detect.ts', () => ({ detectEnvironment: async () => [] }));
+
 /** One status command per provider — the size of a full probe round. Junie is probed through
  *  `probeJunieAuthentication` (mocked above), never `runCommand`, so it is not counted. */
 const PROBE_ROUND = PROVIDER_IDS.filter((provider) => provider !== 'junie').length;
