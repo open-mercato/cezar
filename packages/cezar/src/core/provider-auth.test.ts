@@ -2640,7 +2640,7 @@ describe('inconclusive probe reports', () => {
 
 describe('method evidence from the existing provider probes', () => {
   it('checks only the selected CLI and returns its method facts to a headless import', async () => {
-    const run = runner(resultFor);
+    const run = vi.mocked(runner(resultFor));
     const service = new ProviderAuthService({ runCommand: run });
     expect(await service.loginStatus('codex')).toMatchObject({
       provider: 'codex', status: 'connected', methods: { subscription: 'connected' },
