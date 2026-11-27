@@ -923,9 +923,9 @@ export async function getTodos(opts?: ReadOptions): Promise<TodoItem[]> {
   )
 }
 
-export async function getRepo(opts?: ReadOptions): Promise<RepoResponse> {
+export async function getRepo(opts?: ReadOptions, projectId = queryScope()): Promise<RepoResponse> {
   return unwrap(
-    await cez.api.v1.p[':projectId'].repo.$get({ param: { projectId: queryScope() } }, init(opts)),
+    await cez.api.v1.p[':projectId'].repo.$get({ param: { projectId } }, init(opts)),
     '/repo',
   )
 }

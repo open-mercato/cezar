@@ -78,6 +78,7 @@ function stubFetch(overrides: Record<string, () => Response> = {}): SentRequest[
       if (override) return override()
       if (method === 'GET' && path === '/api/v1/runs/r1/diff') return new Response(DIFF, { status: 200 })
       if (method === 'GET' && path === '/api/v1/runs') return jsonResponse([])
+      if (path === '/api/v1/agent-providers') return jsonResponse({ editable: true, agents: [] })
       if (method === 'GET' && path === '/api/v1/providers/status') {
         return jsonResponse({
           providers: [

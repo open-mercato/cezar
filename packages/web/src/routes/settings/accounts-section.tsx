@@ -229,6 +229,7 @@ function AccountsPane({ data }: { data: AgentProfilesResponse }) {
         }
       >
         {methods.data?.editable === false && <CardNote slot="providers-hosted">Read-only. Set keys and methods on the host with <code>cezar providers</code> or <code>serve --providers</code>.</CardNote>}
+        {methods.data?.nativeAuth && <CardNote>Tasks use the agent’s native authentication and model settings on this host.</CardNote>}
         {methods.isError && <CardNote tone="danger">Provider settings could not be loaded.</CardNote>}
 
         {shown.map((provider) => (

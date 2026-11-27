@@ -23,7 +23,7 @@ import {
   healthRecheckInterval,
   FORGE_RECHECK_MS,
   useRunnerModels,
-  useModelRefreshAction,
+  useModelPickerActions,
   useMarkRunSeen,
   useMarkRunUnseen,
   usePatchRun,
@@ -256,18 +256,20 @@ describe('useRunnerModels', () => {
   })
 })
 
-describe('useModelRefreshAction', () => {
+describe('useModelPickerActions', () => {
   it('offers no action for a runner without a host catalog', () => {
-    const { result } = renderHook(() => useModelRefreshAction('pi'), { wrapper: wrapper() })
-    expect(result.current).toBeUndefined()
+    fetchMock.mockResolvedValue(json({ editable: true, agents: [] }))
+    const { result } = renderHook(() => useModelPickerActions('pi'), { wrapper: wrapper() })
+    expect(result.current.action).toBeUndefined()
   })
 
   it('re-probes with refresh=1, disables itself while pending and writes the answer into the picker catalog', async () => {
     let answer!: (response: Response) => void
     fetchMock.mockResolvedValueOnce(json({ runner: 'codex', models: [{ id: 'old', label: 'Old', description: '' }], source: 'cache', stale: false }))
+    fetchMock.mockResolvedValueOnce(json({ editable: true, agents: [] }))
     fetchMock.mockImplementationOnce(() => new Promise<Response>((resolve) => { answer = resolve }))
     const { result } = renderHook(
-      () => ({ catalog: useRunnerModels('codex'), action: useModelRefreshAction('codex') }),
+      () => ({ catalog: useRunnerModels('codex'), ...useModelPickerActions('codex') }),
       { wrapper: wrapper() },
     )
     await waitFor(() => expect(result.current.catalog.data?.models[0]?.id).toBe('old'))

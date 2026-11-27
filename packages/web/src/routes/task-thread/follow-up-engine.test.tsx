@@ -99,6 +99,7 @@ function serve(
       const body = init.body ? (JSON.parse(String(init.body)) as unknown) : undefined
       requests.push({ method, url, body })
       if (url === '/api/v1/health') return json(health)
+      if (url === '/api/v1/agent-providers') return json({}, 404)
       if (url === '/api/v1/providers/status') return json(providerStatus, providerStatusCode)
       if (url === '/api/v1/models?runner=codex') {
         return json({
@@ -134,6 +135,8 @@ function serve(
       if (url === '/api/v1/runs' && method === 'GET') return json([])
       if (url === '/api/v1/workspace/agent-profiles' && method === 'GET')
         return agentProfiles ? json(agentProfiles) : json({ error: 'not found' }, 404)
+      const account = agentProfiles?.profiles.find(p => url.endsWith('/agent-profiles/' + p.id + '/status'))
+      if (account) return json({ status: account.status })
       if (url === '/api/v1/repo' && method === 'GET')
         return json({ info: { root: '/repo', branch: 'main' } })
       if (url.endsWith('/continue') && method === 'POST') return json({ continued: true })
@@ -174,6 +177,7 @@ function Harness({ run, draft = '' }: { run: ApiRun; draft?: string }) {
     return (
       <div data-slot="follow-up-provider-gate">
         <span>{action.reason}</span>
+        {action.canChooseRunner && action.engine}
         {!action.providerPending ? (
           <Link to="/settings/agents#providers">Configure providers</Link>
         ) : null}
@@ -579,6 +583,34 @@ describe('the follow-up runner pill carries the account', () => {
     serveAccounts()
     renderAction(makeRun({ steps: [step({ sessionId: 'sess-1', profileId: 'klaudiusz' })] }))
     await waitFor(() => expect(runnerPill()?.textContent).toContain('claude · Klaudiusz'))
+  })
+
+  it('keeps the named account recorded on this runner when the machine login is signed out', async () => {
+    serve(HEALTH_MULTI, {}, { providers: [
+      { provider: 'claude', status: 'disconnected', enabled: true },
+      { provider: 'codex', status: 'connected', enabled: true },
+    ] }, 200, false, ACCOUNTS)
+    renderAction(makeRun({ steps: [
+      step({ backend: 'claude', sessionId: 's1', profileId: 'klaudiusz' }),
+      step({ backend: 'codex', sessionId: 's2', profileId: 'default' }),
+    ] }))
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Continue' }).dataset.pending).toBe('false'))
+    expect(runnerPill()?.textContent).toContain('claude · Klaudiusz')
+    fireEvent.click(screen.getByRole('button', { name: 'Continue' }))
+    await waitFor(() => expect(continueBody()).toEqual({}))
+  })
+
+  it('keeps a signed-out recorded account until the user picks another login', async () => {
+    serveAccounts({ ...ACCOUNTS, profiles: ACCOUNTS.profiles.map(account => account.isDefault ? account : {
+      ...account, status: { provider: 'claude', status: 'disconnected' },
+    }) })
+    renderAction(makeRun({ agentProfile: 'klaudiusz' }))
+    const reason = await screen.findByText(/Klaudiusz.*is not signed in/)
+    expect(reason).toBeTruthy()
+    expect(continueBody()).toBeUndefined()
+    await pickFrom(runnerPill()!, 'Default')
+    fireEvent.click(await screen.findByRole('button', { name: 'Continue' }))
+    await waitFor(() => expect(continueBody()).toEqual({ agentProfile: 'default' }))
   })
 
   it('sends the picked account through to /continue', async () => {

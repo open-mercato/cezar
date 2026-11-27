@@ -1,6 +1,7 @@
 import { hashKey, useInfiniteQuery, useMutation, useQueries, useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query'
 import { useCallback, useEffect, useMemo, useRef } from 'react'
 
+import { agentProvidersPath, hasManagedCatalog } from '@/lib/agent-providers'
 import { mergeProviderStatusResponse } from '@/lib/provider-status'
 import { mergeRun } from './events'
 
@@ -558,16 +559,26 @@ export function useRefreshRunnerModels() {
   })
 }
 
-/** The model pill's "Refresh models…" action — `undefined` for a runner with no host catalog. */
-export function useModelRefreshAction(runner: Runner) {
+/** Managed catalogs refresh per endpoint in Settings; the models GET only refreshes native discovery. */
+export function useModelPickerActions(runner: Runner) {
+  const methods = useAgentProviders()
   const refresh = useRefreshRunnerModels()
-  if (!runnerDiscoversModels(runner)) return undefined
-  return {
+  const entry = methods.data?.nativeAuth ? undefined : methods.data?.agents.find(agent => agent.runner === runner)
+  const managed = entry?.configured && entry.methods.some(method =>
+    (entry.mode === 'any' || method.id === entry.active) && hasManagedCatalog(method),
+  )
+  const footerLink = entry ? {
+    label: managed && methods.data?.editable ? 'Refresh models in Settings…' : 'Manage providers',
+    to: agentProvidersPath(runner),
+  } : undefined
+  const legacy = methods.error instanceof ApiError && methods.error.status === 404
+  const action = !managed && (methods.isSuccess || legacy) && runnerDiscoversModels(runner) ? {
     label: refresh.isPending ? 'Refreshing models…' : 'Refresh models…',
     slot: 'model-pill-refresh',
     disabled: refresh.isPending,
     onSelect: () => refresh.mutate(runner),
-  }
+  } : undefined
+  return { action, footerLink }
 }
 
 /**
@@ -1785,10 +1796,10 @@ export function useLaunchKey() {
   })
 }
 
-export function useRepo() {
+export function useRepo(projectId = queryScope()) {
   return useQuery({
-    queryKey: queryKeys.repo,
-    queryFn: ({ signal }) => getRepo({ signal }),
+    queryKey: [projectId, 'repo'],
+    queryFn: ({ signal }) => getRepo({ signal }, projectId),
   })
 }
 
