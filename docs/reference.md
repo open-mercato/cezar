@@ -415,6 +415,7 @@ and a value inherited from the server's own environment is replaced:
 | `CEZ_BASE` | the recorded fork point |
 | `CEZ_STEP_ID` | this check step's id |
 | `CEZ_ATTEMPT` | 1-based attempt number of this check within the run |
+| `CEZ_TEST_COMMAND_FILE` | the file an agent records its related-tests command in (`.ai/cezar/artifacts/<runId>/.test-command`, set for agents too); the built-in Run tests check runs it, else `npm test` |
 | `CEZ_SHARED_CACHE_DIR` | `~/.cezar/cache/<projectId>` (`0700`), shared by the project's tasks — e.g. an e2e replay cache |
 | `CEZ_GITHUB_REPO`, `CEZ_GITHUB_NUMBER`, `CEZ_GITHUB_EVENT` | runs a GitHub automation launched only |
 | `CEZ_PR_HEAD_SHA`, `CEZ_PR_HEAD_REF`, `CEZ_PR_BASE_REF` | runs a `checkout: "pr-head"` automation launched on a pull request's head only |
@@ -504,6 +505,7 @@ whose counter never resets within a run, so every run is finite.
 | `workflow` (`workflow`, `prompt?`, `runner?`, `budgetUsd?`) | `done`, `failed` | `runId`, `status`, `summary` |
 | `if` (`condition`) | `true`, `false` | `result`, `value` |
 | `git.push` | `done`, `failed` | — |
+| `github.pr-checkout` | `done`, `failed` | `number`, `head`, `tree`, `diff`, `meta`, `checkedOut` |
 | `git.sync-base` | `done`, `conflict`, `failed` | `conflicts` |
 | `github.pr-update` (`ready?`, `addLabels?`, `reviewers?`) | `done`, `failed` | — |
 | `github.issue-comment` (`body`, `issue?` — default: the task's issue) | `done`, `failed` | `issue` |
@@ -520,12 +522,42 @@ whose counter never resets within a run, so every run is finite.
   `paths-changed` (`glob`: `*` within a folder, `**` across), `output` (`ref:
   <node>.<field>`, `op`, `value` — numeric when both sides are numbers) and `branch`
   (`equals` / `matches` on the base branch).
+- **`github.pr-checkout`** takes the first PR URL in the task whose repository this checkout has a
+  remote for (same owner/repo on the PR's host, or an SSH URL on a host alias such as
+  `git@github-work:o/r` that is no other forge — used only when GitHub names the PR's head), and
+  fetches its `pull/<n>/head` from that remote into a private ref deleted afterwards (never
+  `FETCH_HEAD`); with no such remote it fetches nothing. SSH runs with `-o BatchMode=yes` appended
+  to your own `GIT_SSH_COMMAND` or `core.sshCommand` (a `GIT_SSH` program is left as it is). When GitHub
+  reports the PR's head, the two must agree (one re-fetch after a short wait if
+  `refs/pull/<n>/head` lags a push). It exports that head under
+  `~/.cezar/pr-checkouts/<repo>/<run>/tree` (symlinks as plain files, no LFS download, and on git
+  2.42+ none of the PR's `.gitattributes` filter drivers), outside every working directory —
+  in-place runs included — so the task's branch, files, Changes and merge/push/PR actions stay the
+  base's. Beside the tree it saves read-only `pr-<n>.json` and `pr-<n>.diff` (`gh pr diff`, else a
+  diff against the PR's base fetched fresh; `headVerified` and `diffBase` say how much GitHub
+  confirmed, and `diffBase` names the task's base when GitHub did not name the PR's); the run's
+  artifacts get read-only copies. Every Claude step can read that folder once it exists (added at
+  the folder root, never `tree/`) and may write none of it, nor the artifacts copies (deny rules,
+  in every permission mode). No step runs in it, so the PR's `.claude`/`.pi` settings, hooks and
+  `.mcp.json` never load; a check against Claude Code 2.1.328 also found that a `CLAUDE.md` or
+  `.claude/skills` nested in `tree/` did not load on reading files there, and review steps have no
+  Skill tool. The exported `tree/` is freed on the idle-worktree schedule (default 7 days), on
+  archive and on a manual reclaim (`pr-<n>.json` and its artifacts copy then say `checkedOut: false`; a re-run exports
+  it again), and the whole folder is deleted with the task. It never throws: a disk error, no
+  remote, an old git without `--no-write-fetch-head` (2.29+) or a private repo the remote cannot
+  reach leaves by `failed`, and the reviewers fall back to `gh pr view`/`gh pr diff`. It posts
+  nothing, and under `CEZ_DRY_RUN=1` fetches nothing.
+  Your own Claude settings still apply to these steps: a broad allow rule there (say
+  `Bash(npm run:*)`) widens what a reviewer may run, now with the PR's code on disk.
 - **`git.sync-base`** merges the freshest base into the task branch. On a conflict it
   leaves the merge in progress and leaves by `conflict` — wire that to an agent to
   resolve it (`{{nodes.<id>.conflicts}}` lists the files).
 - **Built-in templates** — `implement-and-verify`, `implement-review-pr`, `review-council`
   (three fresh reviewers at once, then a judge that ships or sends it back), `fix-ci` — sit
   next to `quick-task` (still the default). Open one in the editor; it saves as your copy.
+  The Run tests check of the two implement templates runs only the tests related to the
+  change: the implement agent records the command it ran in `$CEZ_TEST_COMMAND_FILE`, and
+  the check re-runs it, or `npm test` when nothing was recorded.
 - **Human gates.** Choose **Approve** or **Reject**, or reply in the task composer or
   through `cez-manager task say`. Plain replies such as “approve” and “reject” take the
   corresponding path. “Request changes”, “stop here”, “not yet” and “don’t push” take the reject path. Other text, such as
@@ -613,6 +645,7 @@ Useful environment variables:
 | `CEZ_BROWSE_ROOT=~/` | Default root for **Add project → Open local folder…**. The picker cannot navigate above it; a saved workspace value overrides the environment default and must name an existing folder. |
 | `CEZ_PROJECTS_DIR=~/cezar/projects` | Default destination for **Clone from GitHub**. Saved workspace settings override it, and missing directories are created recursively. |
 | `CEZ_SKILLS_AUTO_UPDATE=0` | Disable automatic checks and updates for upstream-CLI-tracked Open Mercato skill installations. On by default; a saved global Skills setting overrides this environment default. Checks are delayed, bounded, cached, and non-blocking. |
+| `CEZ_AGENT_VERSION_CHECK=0` | Turn off the newest-release lookup behind the agent version chips in Settings → Agents. On by default; it asks the npm registry only while that page is open, at most once per six hours per agent, and sends nothing but the package name. Installed versions and minimums still show. |
 | `CEZ_UPDATE_CHANNEL=nightly` | Release channel the self-updater follows: `stable` (npm `latest`, the default), `nightly`, or `development` (no automatic updates; pick a cezar worktree or an open PR's preview build by hand). A channel saved from the version chip's dialog overrides this seed. |
 | `CEZ_SUPERVISED=1` | A supervisor relaunches cezar (the desktop shell sets `CEZ_DESKTOP=1`, which implies it): after an update the process exits with status 75 instead of re-exec'ing itself, so the supervisor starts the new version. Off by default. |
 | `CEZ_AUTONOMOUS_DEFAULT=0` | Seed the New Task Autonomous default (`0` or `1`). Without a seed, skills default on and workflows off; a saved global Resources setting overrides it. |
@@ -630,6 +663,7 @@ Useful environment variables:
 | `CEZ_SECRETS_KEYCHAIN=0` | Keep the secret store's data key out of the OS keychain and use the `0600` key file `~/.cezar/secrets/.key` only. By default the key goes to the keychain (macOS Keychain, Linux Secret Service, Windows Credential Manager, via the optional `@napi-rs/keyring`) when one is usable, and to the file otherwise; Settings → Secrets and `cezar secrets list` say which. Only the exact value `0`. |
 | `CEZ_REDACT_SECRETS=0` | Disable scrubbing of credential values/token shapes from the on-disk state (the NDJSON transcript and the free-text fields of `runs.json`). On by default; leave it on. Best-effort defense-in-depth, not a guarantee: it catches known token shapes and the values of your own secret-named env vars, so a credential in neither category can still get through. |
 | `CEZ_TITLE_UPDATES=0` | Turn off the live task-title refresh (the namer renames a task once, at its first turn end, then the title stays put). The Settings → Tasks toggle overrides this default. |
+| `CEZ_CHECK_INSTRUCTIONS=0` | Run every workflow check step as written. By default, when Settings → Global instructions is set, one cheap namer-model call before each check adjusts its command to them (e.g. only the related tests). Without instructions there is no call. Off under `CEZ_DRY_RUN=1` unless set to `1`. |
 | `CEZ_AUTONAME=0` | Disable ALL LLM task naming (creation + live) — titles stay heuristic (`437: /om-auto-review-pr`). Under `CEZ_DRY_RUN=1` naming is already off unless forced with `CEZ_AUTONAME=1`. |
 | `CEZ_REVIEW_GATE=1` | Turn ON the optional diff-first review gate (#489): a successful, non-autonomous run with changes parks at `review` (Accept / Send back / Draft PR) instead of finishing. Off by default — changed runs settle to `done` with the diff left in the worktree. Only `1` enables. The Settings → Tasks toggle overrides this; autonomous runs always skip it. |
 | `CEZ_NO_BANNER=1` | Silence every promo: the `open-mercato/skills` banner and the star-ask line on `cezar serve` startup, the sidebar's ⭐ chip, and the star-ask dialog (shown at most three times per browser, only after a task ends well once three have, and only while you are at the screen). It is also the star count's off switch — with it set, `GET /api/v1/star-count` answers `available: false` and cezar makes no request to github.com for it. Unset, the count refreshes at most every 15 minutes, and only alongside the cockpit's other requests — further paced to GitHub's rate limit (`GITHUB_TOKEN`/`GH_TOKEN`, when set, is sent with the request). Dismissing the banner in the cockpit (back when it had one) still silences the terminal half on its own. |

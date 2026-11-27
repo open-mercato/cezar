@@ -643,10 +643,12 @@ export function useRefreshProviderStatus() {
 /** While a setup terminal runs, its exit code is the page's only signal: read it often, in a hidden
  *  tab too, because the server forgets an exited session after a minute. Nothing is kept for a later
  *  visit: a session remembered as running would read as one that vanished. */
-export function useAgentSetup() {
+export function useAgentSetup(options: { latest?: boolean; enabled?: boolean } = {}) {
   return useQuery({
-    queryKey: workspaceQueryKeys.agentSetup,
-    queryFn: ({ signal }) => getAgentSetup({ signal }),
+    // `latest` asks npm for the newest releases (Settings → Agents only), so it is its own entry.
+    queryKey: options.latest ? [...workspaceQueryKeys.agentSetup, 'latest'] : workspaceQueryKeys.agentSetup,
+    queryFn: ({ signal }) => getAgentSetup({ signal, latest: options.latest }),
+    enabled: options.enabled ?? true,
     retry: false,
     gcTime: 0,
     refetchInterval: (state) => {
@@ -668,10 +670,11 @@ export function useInvalidateHealth() {
 export function useStartAgentSetup() {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: ({ provider, action }: { provider: AgentSetupProvider; action: AgentSetupAction }) => startAgentSetup(provider, action),
+    mutationFn: ({ provider, action, force }: { provider: AgentSetupProvider; action: AgentSetupAction; force?: boolean }) => startAgentSetup(provider, action, force),
     retry: false,
     // Written straight in: the polling above starts from this, even if the next read fails.
-    onSuccess: (session) => queryClient.setQueryData<AgentSetupState>(workspaceQueryKeys.agentSetup, (state) => (state?.available ? { ...state, session } : state)),
+    // `joined` is the client's own note on the response, not part of the contract: kept out of the cache.
+    onSuccess: ({ joined: _joined, ...session }) => queryClient.setQueryData<AgentSetupState>(workspaceQueryKeys.agentSetup, (state) => (state?.available ? { ...state, session } : state)),
     onSettled: () => queryClient.invalidateQueries({ queryKey: workspaceQueryKeys.agentSetup }),
   })
 }

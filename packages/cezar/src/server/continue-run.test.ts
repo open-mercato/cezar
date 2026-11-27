@@ -33,6 +33,7 @@ describe('POST /api/v1/runs/:id/continue override', () => {
     model?: string;
     reasoningEffort?: string;
     agentProfile?: string;
+    freshContext?: boolean;
   };
   let captured: { id: string; opts: ContinueOpts } | undefined;
   let calls: number;
@@ -113,6 +114,18 @@ describe('POST /api/v1/runs/:id/continue override', () => {
 
     expect((await post({ reasoningEffort: '' })).status).toBe(200);
     expect(captured?.opts.reasoningEffort).toBe('');
+  });
+
+  it('forwards freshContext only when it is set, and refuses a non-boolean', async () => {
+    expect((await post({ text: 'Re-review PR 7', freshContext: true })).status).toBe(200);
+    expect(captured?.opts).toMatchObject({ text: 'Re-review PR 7', freshContext: true });
+
+    expect((await post({ text: 'again', freshContext: false })).status).toBe(200);
+    expect(captured?.opts).not.toHaveProperty('freshContext');
+
+    const before = calls;
+    expect((await post({ freshContext: 'yes' })).status).toBe(400);
+    expect(calls).toBe(before);
   });
 
   it('an empty POST omits both — the run keeps its current backend (backward compat)', async () => {

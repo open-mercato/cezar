@@ -174,6 +174,7 @@ import {
 import { dispatchInputSchema, dispatchReportSchema } from '@open-mercato/cezar-contract';
 import { phoneDeviceParamSchema, phonePairingParamSchema, renamePhoneInputSchema, setComputerNameInputSchema, setPhonePushGrantInputSchema, setRelayAccountInputSchema, setRelayAddressInputSchema, setRelayKeepAwakeInputSchema, testRelayAddressInputSchema, type PhonePairingEvent, type PhonePushState, type PhoneSignalEvent, type RelayAccountError } from '@open-mercato/cezar-contract';
 import { detectEnvironment } from '../core/backend-detect.ts';
+import { LatestVersions } from '../core/agent-cli-versions.ts';
 import { resolveCursorAgentBin } from '../core/cursor-bin.ts';
 import { resolveAntigravityBin } from '../core/antigravity-runner.ts';
 import { hostUsageSampler, type HostSampler } from '../core/host-usage.ts';
@@ -205,6 +206,7 @@ import {
 } from './provider-telemetry.ts';
 import { RunnerModelCatalog } from '../core/runner-model-catalog.ts';
 import { setNamerModelCatalog } from '../runs/namer-model.ts';
+import { setAntigravityEffortCatalog } from '../core/antigravity-effort.ts';
 import { currentUsage, currentTimedUsage, onUsage } from '../core/process-usage.ts';
 import { DashboardReader } from '../workspace/dashboard.ts';
 import { dashboardRoutes } from './dashboard.ts';
@@ -232,6 +234,8 @@ import {
   graphToSteps,
   workflowGraphFileSchema,
   workflowGraphSchema,
+  type WorkflowGraph,
+  type WorkflowGraphBody,
 } from '../workflows/graph.ts';
 import {
   QUICK_TASK_WORKFLOW,
@@ -439,8 +443,9 @@ import { onPrClosed, reportPrClosed } from './forge/pr-closed.ts';
 import { fetchGithub, fetchGithubChecks, fetchGithubComments, fetchGithubPrDiff, fetchGithubRefStatus, forgetRefStatus, readCachedPrEnds, readCachedRefStatuses, refNumberFromUrl, searchGithubItems, GithubPrNotFoundError, GH_CHECKS_MAX, GH_SEARCH_MAX, GH_REF_STATUS_MAX, forgetGithubListCache } from './github.ts';
 import { ensureLaunchKey } from './launch-key.ts';
 import { openInTerminal } from './open-in-terminal.ts';
-import { AGENT_SETUP_OWNER, agentSetupRoutes } from './agent-setup-routes.ts';
-import type { InstallEnv } from './agent-setup.ts';
+import { AGENT_SETUP_OWNER, agentSetupRoutes, withoutHostPaths } from './agent-setup-routes.ts';
+import { countActiveRuns } from './agent-active-runs.ts';
+import { probeInstallEnv, type InstallEnv } from './agent-setup.ts';
 import {
   agentCliRunner,
   detectOpenTargets,
@@ -626,6 +631,8 @@ export interface ServerDeps {
   loginSessions?: LoginSessionManager;
   /** What the first-run page's install commands are chosen from. Injectable so a route test probes nothing. */
   agentSetupProbeEnv?: () => Promise<InstallEnv>;
+  /** The npm lookup behind the setup sheet's "update available"; tests inject one that fetches nothing. */
+  latestAgentVersions?: LatestVersions;
   /** The host-telemetry sampler behind the `host` topic and the `/workspace/host-usage` route.
    *  Defaults to the process-wide singleton; injectable so tests can drive a frame shape (a
    *  container object, for instance) that CI machines do not have. */
@@ -976,11 +983,18 @@ const saveWorkflowSchema = z
     message: 'provide either "steps" or "skills", not both',
   });
 
-const validateGraphSchema = z.object({ graph: workflowGraphSchema });
+// A NAMED body type: the inlined graph union tips `AppType` past TS7056's serialization limit.
+// Validation is unchanged — this is the same schema object.
+const graphBodySchema = workflowGraphSchema as unknown as z.ZodType<WorkflowGraph, WorkflowGraphBody>;
+// The cast is sound only while the named type and the schema's input agree, both ways.
+type GraphBodyMatches = [WorkflowGraphBody, z.input<typeof workflowGraphSchema>] extends [z.input<typeof workflowGraphSchema>, WorkflowGraphBody] ? true : false;
+const graphBodyMatches: GraphBodyMatches = true;
+void graphBodyMatches;
+const validateGraphSchema = z.object({ graph: graphBodySchema });
 const saveGraphSchema = z.object({
   name: z.string().trim().min(1).max(80),
   description: z.string().max(2_000, 'must be at most 2000 characters').optional(),
-  graph: workflowGraphSchema,
+  graph: graphBodySchema,
   overwrite: z.boolean().optional(),
 });
 
@@ -1539,6 +1553,7 @@ export function createAppParts(deps: ServerDeps) {
   });
   // Bookkeeping calls pick their cheap model from the same discovery (#2012).
   setNamerModelCatalog(modelCatalog);
+  setAntigravityEffortCatalog(modelCatalog);
   const providerAuth = deps.providerAuth
     ?? new ProviderAuthService({ cwd: bootRoot, onInconclusive: (probe) => void reportInconclusiveProbe(probe) });
   const workspaceConfig = deps.workspaceConfig ?? {
@@ -2503,6 +2518,14 @@ export function createAppParts(deps: ServerDeps) {
     || (await workspaceProjectSources({ salvageColdRuns: true })).some((project) => project.available
       && project.runs().some((run) => authParkForAccount(run, provider, profileId)));
 
+  // `npm prefix -g` and the PATH probes cost a process each: one answer serves for 30 s (#2474 review).
+  let updateEnvCache: { at: number; env: Promise<InstallEnv> } | null = null;
+  const updateInstallEnv = (): Promise<InstallEnv> => {
+    if (!updateEnvCache || Date.now() - updateEnvCache.at > 30_000) {
+      updateEnvCache = { at: Date.now(), env: (deps.agentSetupProbeEnv ?? probeInstallEnv)() };
+    }
+    return updateEnvCache.env;
+  };
   const providersRoutes = new Hono<ProjectApiEnv>()
     .get(
       '/providers/status',
@@ -2677,18 +2700,25 @@ export function createAppParts(deps: ServerDeps) {
       async (c) => {
         const provider = c.req.valid('param').provider as ProviderId;
         const sid = deviceSid(c.req.header('x-cezar-sid'));
-        const command = providerAuth.updateCommand(provider);
+        const plan = providerAuth.updatePlan(provider, await updateInstallEnv());
+        const command = plan?.command ?? null;
         if (command === null) {
           trackUpdateOpened(provider, 'unsupported', sid);
           return c.json({ error: 'This agent has no update command of its own. Update it the way you installed it.' }, 409);
         }
-        if (!capabilities().localHandoff) {
-          trackUpdateOpened(provider, 'hosted', sid);
-          return c.json({ error: 'Run this command on the machine hosting cezar.', command }, 409);
+        // A command cezar does not vouch for is shown, never run (`core/agent-install.ts`). One refusal
+        // with the hosted one: a separate `c.json` tipped AppType over TS7056 on Windows (#2474).
+        const runnable = plan?.runnable === true;
+        if (!runnable || !capabilities().localHandoff) {
+          trackUpdateOpened(provider, runnable ? 'hosted' : 'unsupported', sid);
+          const error = runnable ? 'Run this command on the machine hosting cezar.' : 'cezar does not run this update itself. Run it in a terminal.';
+          const shown = !capabilities().localHandoff ? withoutHostPaths(command) : command;
+          return c.json({ error, command: shown }, 409);
         }
         let opened = false;
         try {
-          opened = await openTerminal(bootRoot, command);
+          // Home, not the repo: a project's `.npmrc` must not redirect a global (or sudo) npm install.
+          opened = await openTerminal(homedir(), command);
         } catch {
           // Best-effort, as for Connect: the command is the fallback.
         }
@@ -6032,6 +6062,7 @@ export function createAppParts(deps: ServerDeps) {
           model: parsed.data.model,
           reasoningEffort: parsed.data.reasoningEffort,
           agentProfile: parsed.data.agentProfile,
+          ...(parsed.data.freshContext ? { freshContext: true } : {}),
           // The user's own Continue: answers its card, or flags open cards as replied in chat.
           reply: parsed.data.askRequestId ? { askRequestId: parsed.data.askRequestId } : {},
         });
@@ -8884,16 +8915,43 @@ export function createAppParts(deps: ServerDeps) {
 
   // Installing an agent changes the host and signing in changes its credentials, so setup follows
   // the provider login and the GitHub sign-in: never hosted, never in a single-project workspace.
+  const latestAgentVersions = deps.latestAgentVersions ?? new LatestVersions();
+  // The setup listing is polled every second while a session runs: read each project's default
+  // runner at most every 15 s, not once per provider per poll.
+  const defaultRunnerCache = new Map<string, { at: number; runner: Promise<RunnerId> }>();
+  const setupDefaultRunner = (root: string): Promise<RunnerId> => {
+    const cached = defaultRunnerCache.get(root);
+    if (cached && Date.now() - cached.at < 15_000) return cached.runner;
+    const runner = loadConfig(root).then((config) => config.defaultRunner);
+    defaultRunnerCache.set(root, { at: Date.now(), runner });
+    return runner;
+  };
   const agentSetupFamily = agentSetupRoutes({
     sessions: terminalSessions,
     loadPty,
     refusal: () => {
-      const caps = capabilities();
+      // A paired phone reads the HOST's capabilities: it may start a fixed, password-free install or
+      // update there (spec 2026-11-25-agent-cli-install-and-update), and the routes keep it read-only.
+      const caps = inRelayScope() ? outsideRelayScope(() => capabilities()) : capabilities();
       if (caps.singleProject) return 'This workspace runs one fixed project, so agents are set up on the host.';
       if (!caps.localHandoff) return 'Set up agents on the machine hosting cezar.';
       return terminalPolicyRefusal(caps);
     },
+    phone: () => inRelayScope(),
     status: () => providerAuth.status({ refresh: true }),
+    currentStatus: () => providerAuth.status(),
+    executable: (provider) => providerAuth.executable(provider),
+    // Built contexts only: counting must never build one.
+    activeRuns: (provider) => {
+      const built = [bootContext, ...contexts.ids().flatMap((id) => contexts.peek(id) ?? [])];
+      const unique = [...new Map(built.map((context) => [context.store, context])).values()];
+      return countActiveRuns(
+        unique.map((context) => ({ root: context.root, listRuns: () => context.store.listRuns() })),
+        provider,
+        setupDefaultRunner,
+      );
+    },
+    latest: latestAgentVersions,
     loginCommand: (provider) => providerAuth.loginCommand(provider),
     installHint: (provider) => providerAuth.installHint(provider),
     registerTopic: registerTerminalTopic,

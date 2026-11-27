@@ -17,17 +17,17 @@ import thinkingEditWriteTodo from '../../../../cezar/src/core/__fixtures__/claud
 import opencodeToolLifecycle from '../../../../cezar/src/core/__fixtures__/opencode/tool-lifecycle.expected.json'
 import { groupThreadItems } from './thread-groups'
 import {
+  ActivityGroup,
   AgentUpdateRequiredCard,
-  ContextGroup,
   AssistantMessage,
   isNearBottom,
+  NoteGroup,
   NoteLine,
   OUTPUT_CLAMP_LINES,
   ProviderAuthRequiredCard,
   ReasoningItem,
   THREAD_PROSE_MEASURE,
   ToolCard,
-  ToolStreak,
   UserBubble,
   WorkingIndicator,
 } from './thread-items'
@@ -153,57 +153,62 @@ describe('ProviderAuthRequiredCard', () => {
 })
 
 describe('AgentUpdateRequiredCard', () => {
-  const renderCard = () =>
+  const entry = (provider: string, update: { command: string; runnable: boolean; sudo: boolean }, method: string | null) => ({
+    provider,
+    loginCommand: null,
+    install: { command: null, runnable: false, sudo: false },
+    update: { command: update.command, runnable: update.runnable, sudo: update.sudo },
+    docsUrl: 'https://example.com/docs',
+    installed: true,
+    version: '1.17.0',
+    method,
+    minVersion: '1.18.0',
+    latestVersion: null,
+    activeRuns: 0,
+  })
+  const serve = (agents: unknown[]) => {
+    const calls: Array<{ url: string; method: string; body?: string }> = []
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      calls.push({ url, method: init?.method ?? 'GET', body: init?.body ? String(init.body) : undefined })
+      const body = url.includes('/providers/setup/sessions')
+        ? { id: 's1', runId: 'agent-setup', provider: 'opencode', action: 'update', command: "'opencode' upgrade", exitCode: null, topic: 't', cols: 80, rows: 24 }
+        : url.includes('/providers/setup')
+          ? { available: true, reason: null, interactive: true, session: null, agents }
+          : { providers: [{ provider: 'opencode', status: 'connected', enabled: true }, { provider: 'codex', status: 'connected', enabled: true }] }
+      return new Response(JSON.stringify(body), { status: url.includes('/sessions') ? 201 : 200, headers: { 'content-type': 'application/json' } })
+    }))
+    return calls
+  }
+  const renderCard = (provider: 'opencode' | 'gemini') =>
     render(
       <QueryClientProvider client={createQueryClient()}>
-        <AgentUpdateRequiredCard incident={{ kind: 'agent-update-required', id: 'v2:3:update', provider: 'opencode' }} />
+        <AgentUpdateRequiredCard incident={{ kind: 'agent-update-required', id: 'v2:3:update', provider }} />
       </QueryClientProvider>,
     )
+  afterEach(() => vi.unstubAllGlobals())
 
-  it('asks the server to open the CLI update', async () => {
-    const fetchMock = vi.fn(async () =>
-      new Response(JSON.stringify({ opened: true, command: "'opencode' upgrade" }), {
-        status: 200,
-        headers: { 'content-type': 'application/json' },
-      }),
-    )
-    vi.stubGlobal('fetch', fetchMock)
-    try {
-      renderCard()
-      expect(screen.getByRole('alert').textContent).toContain('OpenCode needs an update')
-      await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Update OpenCode' })))
-      expect(String((fetchMock.mock.calls[0] as unknown[])[0])).toContain('/providers/opencode/update')
-    } finally {
-      vi.unstubAllGlobals()
-    }
+  it('opens the setup sheet and runs the update for how the CLI was installed', async () => {
+    const calls = serve([entry('opencode', { command: "'opencode' upgrade", runnable: true, sudo: false }, 'npm')])
+    renderCard('opencode')
+    expect(screen.getByRole('alert').textContent).toContain('OpenCode needs an update')
+    await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Update OpenCode' })))
+    expect(await screen.findByText("'opencode' upgrade")).toBeTruthy()
+    expect(screen.getByText('1.18.0 or newer')).toBeTruthy()
+    await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Update' })))
+    await waitFor(() => expect(calls.some((call) => call.method === 'POST' && call.url.includes('/providers/setup/sessions'))).toBe(true))
+    const posted = calls.find((call) => call.method === 'POST')!
+    expect(JSON.parse(posted.body!)).toEqual({ provider: 'opencode', action: 'update' })
   })
 
-  it('shows the command to run when no terminal could be opened', async () => {
-    vi.stubGlobal('fetch', vi.fn(async () =>
-      new Response(JSON.stringify({
-        error: 'No terminal emulator could be opened. Run this command manually.',
-        command: "'opencode' upgrade",
-      }), { status: 409, headers: { 'content-type': 'application/json' } }),
-    ))
-    try {
-      renderCard()
-      await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Update OpenCode' })))
-      const manual = await screen.findByText("'opencode' upgrade")
-      expect(manual.tagName).toBe('CODE')
-      expect(screen.getByText(/No terminal emulator could be opened/)).toBeTruthy()
-    } finally {
-      vi.unstubAllGlobals()
-    }
-  })
-
-  it('offers no button for a CLI that cannot update itself', () => {
-    render(
-      <QueryClientProvider client={createQueryClient()}>
-        <AgentUpdateRequiredCard incident={{ kind: 'agent-update-required', id: 'v2:3:update', provider: 'codex' }} />
-      </QueryClientProvider>,
-    )
-    expect(screen.queryByRole('button')).toBeNull()
-    expect(screen.getByRole('alert').textContent).toContain('the way you installed it')
+  it('shows an update cezar does not run as a command to copy, with no run button (Gemini CLI from npm)', async () => {
+    serve([entry('gemini', { command: 'npm install -g @google/gemini-cli@latest', runnable: false, sudo: false }, 'npm')])
+    renderCard('gemini')
+    await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Update Gemini CLI' })))
+    expect(await screen.findByText('npm install -g @google/gemini-cli@latest')).toBeTruthy()
+    expect(screen.getByText(/does not run this command itself/)).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Update' })).toBeNull()
+    expect(screen.getByRole('button', { name: 'Copy' })).toBeTruthy()
   })
 })
 
@@ -526,29 +531,71 @@ describe('ReasoningItem', () => {
   )
 })
 
-describe('ContextGroup + ToolStreak', () => {
-  it('the group row expands to the individual tool cards', () => {
+describe('ActivityGroup + NoteGroup', () => {
+  const worktree = '/Users/me/repo/.ai/cezar/worktrees/571c15ae-0000-4000-8000-000000000000'
+  const bash = (id: string, command: string, status: UiToolItem['status'] = 'completed'): UiToolItem => ({
+    kind: 'tool', id, name: 'Bash', toolKind: 'execute', title: `Ran ${command}`, status, input: { command },
+  })
+
+  it('the summary row hides the calls until expanded, then shows every card', () => {
     const read = goldenItem(subagentTask, 'toolu_sub_01', 'completed') // the golden Grep
-    const blocks = groupThreadItems([read, { ...read, id: 'toolu_sub_02' }])
-    const group = blocks[0]!
-    if (group.kind !== 'context-group') throw new Error('expected a context group')
-    render(<ContextGroup group={group} />)
-    const button = screen.getByRole('button', { name: 'Explored 2 searches' })
+    const group = groupThreadItems([read, { ...read, id: 'toolu_sub_02' }])[0]!
+    if (group.kind !== 'activity') throw new Error('expected an activity group')
+    render(
+      <ActivityGroup group={group}>
+        {group.tools.map((tool) => <ToolCard key={tool.id} item={tool} />)}
+      </ActivityGroup>,
+    )
+    const button = screen.getByRole('button', { name: 'Searched twice.' })
+    expect(button.getAttribute('aria-expanded')).toBe('false')
     expect(document.querySelectorAll('[data-slot="tool-card"]')).toHaveLength(0)
     fireEvent.click(button)
+    expect(button.getAttribute('aria-expanded')).toBe('true')
     expect(document.querySelectorAll('[data-slot="tool-card"]')).toHaveLength(2)
   })
 
-  it('the streak fold hides its children until toggled', () => {
-    render(
-      <ToolStreak count={4}>
-        <div data-testid="older-card" />
-      </ToolStreak>,
-    )
-    const button = screen.getByRole('button', { name: '4 earlier tool calls' })
-    expect(screen.queryByTestId('older-card')).toBeNull()
+  it('while a call runs, the collapsed row is that one call, shortened, and the group is busy', () => {
+    const group = groupThreadItems([
+      bash('a', 'ls'),
+      bash('b', `cd ${worktree} && npm test -- ${worktree}/packages/web`, 'running'),
+    ])[0]!
+    if (group.kind !== 'activity') throw new Error('expected an activity group')
+    render(<ActivityGroup group={group}>{null}</ActivityGroup>)
+    const current = document.querySelector('[data-slot="activity-current"]')!
+    expect(current.textContent).toBe('Rannpm test -- packages/web')
+    expect(document.querySelector('[data-slot="activity-group"]')?.getAttribute('aria-busy')).toBe('true')
+    expect(screen.getByRole('button', { name: /^Running: Ran npm test -- packages\/web\. Ran 2 commands\.$/ })).toBeTruthy()
+  })
+
+  it('a failed call is counted on the collapsed row', () => {
+    const group = groupThreadItems([bash('a', 'ls', 'failed'), bash('b', 'pwd')])[0]!
+    if (group.kind !== 'activity') throw new Error('expected an activity group')
+    render(<ActivityGroup group={group}>{null}</ActivityGroup>)
+    expect(screen.getByText('1 failed')).toBeTruthy()
+  })
+
+  it('the setup row keeps its warnings visible, and expands to every note', () => {
+    const notes = [
+      'run started — workflow "quick-task" (runner: codex)',
+      'local "main" diverged from "origin/main" — forking from "origin/main"',
+      'worktree ready — branch cez/571c15ae (base origin/main)',
+    ].map((text, index) => ({ kind: 'note' as const, id: `n${index}`, text, tone: 'dim' as const }))
+    const group = groupThreadItems(notes)[0]!
+    if (group.kind !== 'note-group') throw new Error('expected a note group')
+    render(<NoteGroup group={group} />)
+    const button = screen.getByRole('button', { name: /^Set up: worktree cez\/571c15ae from origin\/main · runner Codex, 3 notes$/ })
+    expect(document.querySelectorAll('[data-slot="note-line"]')).toHaveLength(1)
+    expect(document.querySelector('[data-slot="note-group-warnings"]')?.textContent).toContain('diverged')
     fireEvent.click(button)
-    expect(screen.getByTestId('older-card')).toBeTruthy()
+    expect(document.querySelector('[data-slot="note-group-warnings"]')).toBeNull()
+    expect(document.querySelectorAll('[data-slot="note-line"]')).toHaveLength(3)
+  })
+
+  it('a tool card shows the shortened command, with the full one on hover', () => {
+    const command = `cd ${worktree}; grep -rn foo ${worktree}/src`
+    render(<ToolCard item={bash('c', command)} />)
+    const code = screen.getByText('grep -rn foo src')
+    expect(code.getAttribute('title')).toBe(command)
   })
 })
 
@@ -697,12 +744,12 @@ describe('WorkingIndicator — live clock', () => {
     const elapsed = () => document.querySelector('[data-slot="working-elapsed"]')?.textContent
     const last = () => document.querySelector('[data-slot="working-last-activity"]')?.textContent
     expect(elapsed()).toBe('1m 30s')
-    expect(last()).toContain('(12s ago)')
+    expect(last()).toContain('last activity 12s ago')
     act(() => {
       vi.advanceTimersByTime(5000)
     })
     expect(elapsed()).toBe('1m 35s')
-    expect(last()).toContain('(17s ago)')
+    expect(last()).toContain('last activity 17s ago')
   })
 
   it('stays a bare spinner when there are no stamps', () => {
