@@ -194,7 +194,8 @@ describe('provider action gating', () => {
       '[models.override]', 'provider = "managed:kimi-code"', 'api_key_env = "FIXTURE_KEY"',
       '[models." gateway "]', 'provider = "managed:kimi-code"',
     ].join('\n'));
-    const models = async () => (await apiRequest(app, '/api/v1/models?runner=kimi')).json();
+    const models = async (profile?: string) => (await apiRequest(app, '/api/v1/models?runner=kimi' +
+      (profile ? '&agentProfile=' + profile : ''))).json();
     const start = (model?: string, agentProfile?: string) => apiRequest(app, '/api/v1/runs', {
       method: 'POST', headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ task: 'Task', runner: 'kimi', agentMethod: 'subscription', model, agentProfile,
@@ -225,6 +226,14 @@ describe('provider action gating', () => {
       });
       expect((await start('managed', 'work')).status).toBe(409);
       expect((await start('kimi-code/work', 'work')).status).toBe(201);
+      await mergeWriteAgentAccounts(accounts => { accounts.defaults.kimi = 'work'; });
+      expect.soft(await models()).toMatchObject({ models: [{ id: 'kimi-code/work' }] });
+      expect.soft((await start('kimi-code/work')).status).toBe(201);
+      expect.soft((await start('managed')).status).toBe(409);
+      expect.soft(await models('default')).toMatchObject({ models: [{ id: 'managed' }] });
+      expect.soft(await models('removed')).toMatchObject({ models: [], source: 'unavailable' });
+      await mergeWriteAgentAccounts(accounts => { delete accounts.defaults.kimi; });
+      expect.soft(await models('work')).toMatchObject({ models: [{ id: 'kimi-code/work' }] });
       writeFileSync(configPath, '[invalid');
       expect.soft(await models()).toMatchObject({ models: [] });
       expect.soft((await start('managed')).status).toBe(409);

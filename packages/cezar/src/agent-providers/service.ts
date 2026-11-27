@@ -204,14 +204,25 @@ export async function refreshProviderModels(runner: Runner, id: string) {
   return { models: catalog.ids.map(m => m.id), ...(catalog.error ? { error: catalog.error } : {}) };
 }
 
+async function kimiCatalog(env: NodeJS.ProcessEnv, via?: NonNullable<RunnerModelOption['via']>): Promise<RunnerModelCatalogResponse> {
+  try {
+    const models = await discoverKimiModels({ env, subscriptionOnly: !!via });
+    return { runner: 'kimi', models: via ? models.map(m => ({ ...m, via })) : models, source: 'live', stale: false };
+  } catch {
+    return { runner: 'kimi', models: [], source: 'unavailable', stale: false, reason: 'Kimi model discovery is temporarily unavailable' };
+  }
+}
+
 export async function providerCatalog(
   runner: Runner, native: () => Promise<RunnerModelCatalogResponse>,
   loginFor?: (configured: boolean) => ProviderLogin | undefined | Promise<ProviderLogin | undefined>,
+  kimiEnv?: NodeJS.ProcessEnv,
 ): Promise<RunnerModelCatalogResponse> {
-  if (providerAuthChecksDisabled()) return native();
+  const nativeCatalog = () => runner === 'kimi' && kimiEnv ? kimiCatalog(kimiEnv) : native();
+  if (providerAuthChecksDisabled()) return nativeCatalog();
   const store = await readAgentProviders();
   const saved = store.agents[runner];
-  if (runner === 'kimi' && !saved) return native();
+  if (runner === 'kimi' && !saved) return nativeCatalog();
   const login = await loginFor?.(!!saved);
   const entry = providerEntry(runner, store, await configuredLogin(login, store));
   const selected = entry.methods.filter(m => entry.mode === 'any' || m.id === entry.active);
@@ -219,13 +230,7 @@ export async function providerCatalog(
   const kimiMethod = runner === 'kimi' && local.find(m => m.kind === 'subscription');
   if (kimiMethod) {
     // A cached native list can outlive a TOML provider change. Read aliases and ownership together.
-    const via = { methodId: kimiMethod.id, label: kimiMethod.label };
-    try {
-      const models = await discoverKimiModels({ env: await kimiAccountEnv(login), subscriptionOnly: true });
-      return { runner, models: models.map(m => ({ ...m, via })), source: 'live', stale: false };
-    } catch {
-      return { runner, models: [], source: 'unavailable', stale: false, reason: 'Kimi model discovery is temporarily unavailable' };
-    }
+    return kimiCatalog(kimiEnv ?? await kimiAccountEnv(login), { methodId: kimiMethod.id, label: kimiMethod.label });
   }
   const needsNative = !saved || local.length > 0;
   const legacy = needsNative ? await native() : undefined;

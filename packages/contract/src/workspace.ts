@@ -701,6 +701,14 @@ export const runnerModelOptionSchema = z.object({
 });
 export type RunnerModelOption = z.infer<typeof runnerModelOptionSchema>;
 
+// Repeated query keys keep their historical first-value behavior.
+const modelQueryValue = z.union([z.string(), z.array(z.string()).transform(values => values[0] as string)]);
+export const runnerModelCatalogQuerySchema = z.object({
+  runner: modelQueryValue.pipe(runnerSchema),
+  refresh: modelQueryValue.optional().refine(value => value === undefined || value === '1' || value === 'true'),
+  agentProfile: z.string().min(1).max(64).optional(),
+});
+
 /** `GET /api/v1/models?runner=claude|codex|opencode|cursor|junie|kimi` — the models discovered from that runner's
  *  own host installation, plus how fresh the answer is. Never an error: an unavailable CLI
  *  degrades to `source: 'unavailable'` with a `reason`. */
