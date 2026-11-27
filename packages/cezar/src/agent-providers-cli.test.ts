@@ -188,3 +188,38 @@ it('keeps a native host key active when importing it under its own name at start
   expect(await readAgentProviderKey('gemini', 'apiKey')).toBe(key);
   expect(process.env.GEMINI_API_KEY).toBeUndefined();
 });
+
+it.each(['GEMINI_API_KEY', 'GOOGLE_API_KEY'])('retains %s only for the explicitly selected host method after a successful startup', async source => {
+  // Each startup owns its captured credentials for the lifetime of that server.
+  vi.resetModules();
+  const { applyProvidersAtStartup: startup } = await import('./agent-providers-cli.ts');
+  const { authMethods, providerHostKey, providerLaunch } = await import('./core/agent-auth-methods.ts');
+  const gemini = authMethods('gemini').methods.find(method => method.id === 'apiKey')!;
+  const cursor = authMethods('cursor').methods.find(method => method.id === 'apiKey')!;
+  vi.stubEnv('GEMINI_API_KEY', undefined);
+  vi.stubEnv('GOOGLE_API_KEY', undefined);
+  const agents = {
+    gemini: { active: 'apiKey' },
+    codex: { active: 'custom', methods: { custom: { baseUrl: 'https://gateway.test', apiKeyEnv: source } } },
+    pi: { methods: { openrouter: { apiKeyEnv: 'CURSOR_API_KEY' } } },
+  };
+  vi.stubEnv(source, key);
+  vi.stubEnv('CURSOR_API_KEY', 'other-provider-fixture');
+  await expect(startup(JSON.stringify({ version: 1, agents: { ...agents, junie: { active: 'custom' } } }))).rejects.toThrow();
+  expect(providerHostKey('gemini', gemini)).toBeUndefined();
+  expect((await readAgentProviders()).agents).toEqual({});
+
+  for (let invocation = 0; invocation < 2; invocation++) {
+    vi.stubEnv(source, key);
+    vi.stubEnv('CURSOR_API_KEY', 'other-provider-fixture');
+    await startup(JSON.stringify({ version: 1, agents }));
+    expect(process.env[source]).toBeUndefined();
+    expect(process.env.CURSOR_API_KEY).toBeUndefined();
+    expect(providerHostKey('cursor', cursor)).toBeUndefined();
+    const stored = await readAgentProviders();
+    expect(stored.agents.gemini).toEqual({ active: 'apiKey', methods: {} });
+    expect(stored.agents.codex?.active).toBe('custom');
+    expect(await readAgentProviderKey('codex', 'custom')).toBe(key);
+    expect(providerLaunch('gemini', 'apiKey', { key: providerHostKey('gemini', gemini) }).env).toEqual({ GEMINI_API_KEY: key });
+  }
+});

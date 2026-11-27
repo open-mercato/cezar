@@ -4,7 +4,7 @@ import { extname } from 'node:path';
 import { parseArgs, type ParseArgsConfig } from 'node:util';
 import { isMap, isNode, parse as parseYaml, parseDocument as parseYamlDocument } from 'yaml';
 import { providerFileMethodSchema, providersFileSchema, runnerSchema, type ProvidersFile, type Runner } from '@open-mercato/cezar-contract';
-import { authMethods } from './core/agent-auth-methods.ts';
+import { authMethods, providerHostKey, retainStartupHostKey } from './core/agent-auth-methods.ts';
 import { ProviderAuthService } from './core/provider-auth.ts';
 import { applyProviderChanges, providerEntries, refreshProviderModels, removeProviderMethod, type ProviderChange, type ProviderLogin } from './agent-providers/service.ts';
 import { readAgentProviders } from './workspace/agent-providers.ts';
@@ -96,6 +96,10 @@ async function readDocument(source: string, stdin: () => Promise<string>, source
   return parsed.data;
 }
 
+function envName(name: string) {
+  return process.platform === 'win32' ? name.toUpperCase() : name;
+}
+
 async function changesFrom(doc: ProvidersFile, keys: ReadonlyMap<string, string | undefined>): Promise<ProviderChange[]> {
   const changes: ProviderChange[] = [];
   for (const runner of runnerSchema.options) {
@@ -104,7 +108,7 @@ async function changesFrom(doc: ProvidersFile, keys: ReadonlyMap<string, string 
     const methods: ProviderChange['methods'] = [];
     for (const [id, { apiKey, apiKeyFile, apiKeyEnv, ...rest }] of Object.entries(entry.methods ?? {})) {
       let key = apiKey;
-      if (apiKeyEnv) key = keys.get(apiKeyEnv);
+      if (apiKeyEnv) key = keys.get(envName(apiKeyEnv));
       if (apiKeyFile) {
         try { key = (await boundedFile(apiKeyFile)).value.replace(/\r?\n$/, ''); }
         catch { throw new Error('Could not read the key file for ' + runner + '/' + id + '.'); }
@@ -143,8 +147,8 @@ async function applyChanges(changes: ProviderChange[], origin: 'cli' | 'file', l
   const rows = await logins(runners, env);
   const evidence = rows.map(row => {
     const methods = { ...row.methods };
-    for (const { id, hostKeyEnv } of authMethods(row.provider).methods) {
-      if (hostKeyEnv && Object.hasOwn(present, hostKeyEnv)) methods[id] = 'connected';
+    for (const method of authMethods(row.provider).methods) {
+      if (providerHostKey(row.provider, method, present)) methods[method.id] = 'connected';
     }
     return { ...row, methods };
   });
@@ -153,15 +157,15 @@ async function applyChanges(changes: ProviderChange[], origin: 'cli' | 'file', l
 
 async function importMethods(doc: ProvidersFile, origin: 'cli' | 'file', logins: typeof loginStatus, sources: Iterable<string>) {
   // One import per CLI process. Take every input before the first await and never re-export it.
-  const keys = new Map(Array.from(sources, name => [name, Object.hasOwn(process.env, name) ? process.env[name] : undefined] as const));
+  const keys = new Map(Array.from(sources, name => [envName(name), Object.hasOwn(process.env, name) ? process.env[name] : undefined] as const));
   const present: Record<string, string> = Object.create(null);
   for (const [name, value] of keys) {
     delete process.env[name];
-    if (value?.trim()) present[process.platform === 'win32' ? name.toUpperCase() : name] = '1';
+    if (value?.trim()) present[name] = '1';
   }
   const changes = await changesFrom(doc, keys);
   const fetches = await applyChanges(changes, origin, logins, present);
-  return { changes, fetches };
+  return { changes, fetches, keys };
 }
 
 async function applyDocument(source: string, stdin: typeof stdinText, logins: typeof loginStatus) {
@@ -176,7 +180,17 @@ async function applyDocument(source: string, stdin: typeof stdinText, logins: ty
 }
 
 export async function applyProvidersAtStartup(source: string) {
-  return (await applyDocument(source, stdinText, loginStatus)).fetches;
+  const { changes, fetches, keys } = await applyDocument(source, stdinText, loginStatus);
+  if (keys.size) {
+    const { agents } = await readAgentProviders();
+    for (const { runner, active } of changes) {
+      const entry = agents[runner];
+      if (!active || entry?.active !== active || entry.methods[active]) continue;
+      const method = authMethods(runner).methods.find(m => m.id === active);
+      if (method) retainStartupHostKey(runner, method, keys);
+    }
+  }
+  return fetches;
 }
 
 type MethodRef = { runner: ProviderChange['runner']; id: string };
