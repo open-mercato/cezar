@@ -233,6 +233,21 @@ describe('provider action gating', () => {
     } finally { vi.unstubAllEnvs(); }
   });
 
+  it('checks current methods when an additive runner continues with a different model', async () => {
+    vi.stubEnv('CEZ_HOME', join(repoRoot, 'workspace'));
+    try {
+      await updateAgentProviders(state => { state.agents.pi = { methods: {} }; });
+      const run = createExistingRun('pi');
+      store.updateRun(run.id, { runner: 'pi', model: 'previous' });
+      store.updateStep(run.id, 'task', { agentMethod: 'custom' });
+      const response = await apiRequest(app, `/api/v1/runs/${run.id}/continue`, {
+        method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ model: 'another' }),
+      });
+      expect(response.status).toBe(409);
+      expect(continueRun).not.toHaveBeenCalled();
+    } finally { vi.unstubAllEnvs(); }
+  });
+
   it('blocks a continue override before resuming the run', async () => {
     const run = createExistingRun('claude');
     const response = await apiRequest(app, `/api/v1/runs/${run.id}/continue`, {

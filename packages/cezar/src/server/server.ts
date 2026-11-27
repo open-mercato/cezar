@@ -1,5 +1,6 @@
 import { discoverNativeProviderModels } from '../agent-providers/native-models.ts';
 import { agentProvidersRoutes } from './agent-providers-routes.ts';
+import { authMethods } from '../core/agent-auth-methods.ts';
 import { configuredAuthStatus, freshMethodError, providerCatalog, providerModelAdmission, selectedProviderLogin } from '../agent-providers/service.ts';
 import { readAgentProviders } from '../workspace/agent-providers.ts';
 import { loadGithubAsset } from './forge/github-assets.ts';
@@ -6077,10 +6078,14 @@ export function createAppParts(deps: ServerDeps) {
         if (agentModelsLocked(repoRoot) && (parsed.data.model?.trim() || parsed.data.reasoningEffort?.trim())) {
           return c.json({ error: AGENT_MODELS_LOCKED_ERROR }, 409);
         }
-        const blocked = await providerActionError([providerForExistingRun(run, parsed.data.runner)], {
+        const runner = providerForExistingRun(run, parsed.data.runner);
+        const changedProvider = runner !== (run.runner ?? 'claude') ||
+          (parsed.data.model !== undefined && parsed.data.model !== run.model && authMethods(runner).mode === 'any');
+        const recorded = changedProvider ? undefined : recordedMethodFor(run, runner);
+        const blocked = await providerActionError([runner], {
           repoRoot,
-          replay: true,
-          methodFor: (provider) => recordedMethodFor(run, provider),
+          replay: !!recorded,
+          methodFor: () => recorded,
           // A runner switch drops the run's account (`continueRun`), so only the same runner inherits it.
           profileFor: (provider) => parsed.data.agentProfile
             ?? (provider === (run.runner ?? 'claude') ? recordedProfileFor(run, provider) : undefined),
@@ -6097,8 +6102,6 @@ export function createAppParts(deps: ServerDeps) {
         }
         const images = resolveAttachments(parsed.data.images);
         if (typeof images === 'string') return c.json({ error: images }, 400);
-        const runner = providerForExistingRun(run, parsed.data.runner);
-        const recorded = runner === (run.runner ?? 'claude') ? recordedMethodFor(run, runner) : undefined;
         const result = manager.continueRun(id, {
           ...await providerModelAdmission(runner, parsed.data.model, recorded),
           text: parsed.data.text,
