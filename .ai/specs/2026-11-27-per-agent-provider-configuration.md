@@ -21,7 +21,9 @@ one-backend CLIs) run on **one auth method at a time**. Multi-provider agents (p
 **any combination**, and each connected method adds its models. cezar stores the keys the user types,
 encrypted, and injects them only into the run that uses them. The composer's model menu ends with
 **Manage providers**, and an agent with no usable method shows **Configure providers** in place of the
-model chip.
+model chip. The same methods can also be set without the cockpit, from a providers file passed to
+`cezar serve --providers <file>` or `cezar providers apply <file>`, or one at a time with `cezar providers set`.
+Each entry is saved into that agent's method in the same store the cockpit writes.
 
 ## 📝 Owner decisions (gate, 2026-11-27)
 
@@ -86,6 +88,11 @@ model chip.
    agent, and Skill repositories. Project → Agents keeps Default agent, Default models and Automatic fallback,
    and shows each agent's method. The composer adds the method to each model's "via …" line, a Manage providers
    footer, and Configure providers for an agent with no usable method.
+6. **Headless configuration (§ Configuring from a file or the CLI).** A providers file, applied at startup with
+   `cezar serve --providers <file>` or on demand with `cezar providers apply <file>`, and a per-method
+   `cezar providers set` command. Both write through the same store module as the API, so each entry lands in
+   that agent's method exactly as if it had been typed into Settings → Agents. This serves scripted setups,
+   containers and hosted installs, where Q7 keeps the cockpit read-only but the operator has a shell on the host.
 
 **Alternatives considered.** Writing keys into each CLI's own config (pi's auth file, Codex `config.toml`) was
 rejected at Q1: it scatters secrets over several formats cezar does not own, and a key there applies to the
@@ -196,6 +203,36 @@ answer reads.
 - WHEN a paired phone sends a key write
 - THEN the server answers 409 and stores nothing
 
+#### ADDED Requirement: Methods can be configured from a file or the CLI
+The system SHALL accept a providers file at startup (`cezar serve --providers <file>`) and on demand
+(`cezar providers apply <file>`), and single methods by parameters (`cezar providers set`). It SHALL save each
+entry into the named agent's method in the agent-providers store, with the same validation as the API, and SHALL
+never take a key value from the command line.
+
+##### Scenario: Startup with a providers file
+- WHEN the user runs `cezar serve --providers providers.yaml` and the file sets Claude's `openrouter` method with
+  `apiKeyEnv: OPENROUTER_API_KEY` and `active: openrouter`
+- THEN Claude's OpenRouter method is stored with the key encrypted, it is Claude's active method, and Settings →
+  Agents shows it marked "from providers file"
+
+##### Scenario: One method by parameters
+- WHEN the user runs `printf %s "$KEY" | cezar providers set codex custom --base-url https://llm.example.com --key-stdin --active`
+- THEN Codex's custom method is stored with that base URL and key, it is Codex's active method, and its models are
+  fetched before the command exits
+
+##### Scenario: Invalid file
+- WHEN a providers file names a method the runner does not support, or a key source that resolves empty
+- THEN nothing from that file is written, `cezar providers apply` exits non-zero naming the entry, and
+  `cezar serve` logs the same error once and boots with the store unchanged
+
+##### Scenario: Re-applying the same file
+- WHEN the same file is applied twice
+- THEN the store ends in the same state, and methods the file does not name are left as they were
+
+##### Scenario: Key value on argv
+- WHEN `cezar providers set` is given a key as a flag value
+- THEN there is no such flag: the key comes only from `--key-stdin`, `--key-env <NAME>` or `--key-file <path>`
+
 ### Capability: settings-agents
 
 #### MODIFIED Requirement: Defaults for new projects
@@ -261,6 +298,11 @@ any-mode agents, and end the menu with "Manage providers".
   request anyway. Ten-second timeout, 2 MB cap, no redirect to another origin, results cached in the metadata file.
 - **Codex** gets its provider through `thread/start` config overrides, which `codex-app-server-runner.ts` already
   passes (`config: {…}` at the `overrides` site), so no `config.toml` is written.
+- **Headless writes**, new: `packages/cezar/src/agent-providers-cli.ts` parses the providers file and the
+  `providers` subcommand, resolves key sources, and calls the same `workspace/agent-providers.ts` functions the
+  routes call. It is routed in `index.ts` before the cockpit's parser, like `cezar secrets`. No server is needed,
+  and a running cockpit sees the change on its next read because the store is read at use, not cached past the
+  file's mtime.
 - **Not touched:** vendor logins stay vendor-owned (provider-authentication, agent-profiles). `GET /providers/status`
   keeps answering "is the CLI signed in"; the new state answers "which method does cezar run it on".
 
@@ -268,6 +310,7 @@ any-mode agents, and end the menu with "Manage providers".
 flowchart LR
   ui["Settings → Agents (changed)"] --> api["/api/v1/agent-providers (new)"]
   api --> store["agent-providers.ts (new)"]
+  cli["cezar serve --providers · cezar providers (new)"] --> store
   store --> sec["secrets data key (existing)"]
   api --> fetch["models fetch (new)"]
   run["run manager · manager turns · namer (existing)"] --> helper["agentProviderEnv (new)"]
@@ -277,7 +320,7 @@ flowchart LR
   models --> store
 ```
 
-The takeaway: the UI and the runs meet only at the store, and the vendor table is the one place that knows how a
+The takeaway: the UI, the CLI and the runs meet only at the store, and the vendor table is the one place that knows how a
 method becomes env vars or Codex overrides.
 
 ## 📝 Data Model
@@ -296,6 +339,7 @@ method becomes env vars or Codex overrides.
           baseUrl?: string,                  // openrouter is fixed to https://openrouter.ai/api
           keyHint?: string,                  // '…9662'; the key itself is in the secrets file
           models?: { fetchedAt: string, ids: { id: string, label?: string, contextLength?: number }[], error?: string },
+          origin?: 'cockpit' | 'file' | 'cli',  // who last wrote it; absent = cockpit
           addedAt: string,
         }
       }
@@ -355,6 +399,79 @@ middleware with the `validators.ts` trio, schemas in `packages/contract/src/agen
   or the method that serves the chosen model in any mode.
 - New routes go into `BACKWARD_COMPATIBILITY.md` § 2 and the route inventory test, and `contract-parity*` covers them.
 
+## 📝 Configuring from a file or the CLI
+
+Settings → Agents is one way to fill the store. A file or command-line parameters are the other, for scripted
+setups, containers, and hosted installs where Q7 keeps the cockpit read-only. Both are optional. A user who never
+passes them sees no change.
+
+### The providers file
+
+JSON or YAML (by extension). Its schema is `providersFileSchema` in `packages/contract/src/agent-providers.ts`,
+built from the same method shape as the `PUT …/methods/:methodId` body, so the file and the API cannot drift.
+
+```yaml
+version: 1
+agents:
+  claude:
+    active: openrouter                 # one-mode agents only; omit to keep the current choice
+    methods:
+      openrouter:
+        apiKeyEnv: OPENROUTER_API_KEY   # read from cezar's own environment when applied
+  codex:
+    active: custom
+    methods:
+      custom:
+        label: Company gateway
+        baseUrl: https://llm.example.com
+        apiKeyFile: /run/secrets/llm-gateway
+  pi:
+    methods:                            # any-mode: every listed method is connected
+      openrouter: { apiKeyEnv: OPENROUTER_API_KEY }
+  gemini:
+    active: subscription                # selects the vendor login; it cannot sign in
+```
+
+- **Keys:** the method key names the kind (`subscription`, `openrouter`, `custom`, `apiKey`), as in the data model.
+  The key comes from exactly one of `apiKeyEnv` (a variable name), `apiKeyFile` (a path; trailing newline
+  trimmed) or `apiKey` (inline). Inline is accepted only when the file is not readable by group or others
+  (`mode & 0o077 === 0`), the way ssh treats a private key. Otherwise the apply is refused with the chmod to run.
+- **Saved, not referenced.** Applying resolves each key once and stores it encrypted under the secrets data key,
+  like a key typed into the cockpit. The environment variable or key file is not needed afterwards and is never
+  re-read by runs. A run reads only the store.
+- **Validation** is the API's: a runner and method kind from the capability table, the `baseUrl` rules (`https:`,
+  or `http:` to loopback, no credentials), `active` naming a method that is connected after the apply. A
+  `subscription` entry stores no key and can only be selected. Signing in stays with the vendor CLI or the
+  add-account flow.
+- **All or nothing.** The whole file is validated and every key resolved before anything is written. Then all
+  entries are written in one store write under the cross-process lock.
+- **Merge, not replace.** The file is authoritative for the methods it names and the `active` it sets. Methods it
+  does not name, and accounts in `agent-accounts.json`, are left alone. Removal is explicit (`cezar providers
+  remove`).
+- **Origin.** Entries written this way carry `origin: 'file'` (or `'cli'` for `providers set`). Settings → Agents
+  shows "from providers file" on those rows. A cockpit edit is allowed, but `serve --providers` applies the file
+  again on the next start and overwrites it, and the row says so.
+
+### Commands and parameters
+
+| Command | What it does |
+| --- | --- |
+| `cezar serve --providers <file>` | Applies the file before the server listens. An invalid file logs one error and the boot continues with the store unchanged (§ Zero config: never fail the boot). Model lists are fetched after listen, in the background. |
+| `cezar providers apply <file> [--no-fetch]` | Same apply without a server. It fetches each openrouter or custom method's models (10 s timeout each) and prints one line per method. Exit 1 on an invalid file. A failed models fetch saves the method with `error` and is a warning, not a failure. |
+| `cezar providers set <runner> <kind> [--label <s>] [--base-url <url>] [--key-stdin │ --key-env <NAME> │ --key-file <path>] [--active] [--no-fetch]` | Writes one method by parameters, with the same validation and fetch as `apply`. `--active` selects it for a one-mode agent. |
+| `cezar providers select <runner> <kind│none>` | Sets or clears a one-mode agent's active method. |
+| `cezar providers remove <runner> <kind>` | Removes a method and its key, and clears `active` when it pointed there. |
+| `cezar providers list [--json]` | Prints every agent's methods: kind, state, key hint, base URL, model count, origin. Never a key. |
+
+- **No key on argv.** There is no flag that takes a key value: argv is visible in `ps` and shell history. That is
+  the rule `cezar secrets set` already follows.
+- **Local by construction.** These commands run on the host and write the host's `~/.cezar`. That is Q7's "keys are
+  set on the host". The cockpit stays read-only off-host, and a hosted install's operator configures keys over ssh
+  with these commands, or by adding `--providers` to the service's start line.
+- **A running cockpit** needs no restart: the next run, models request or Settings read sees the store as written.
+- **`CEZ_DRY_RUN=1`:** apply and set write the store as usual and use the fixed fake model list instead of fetching.
+- No new `CEZ_*` variable. A file path given as a flag is enough, and `.env.example` stays untouched.
+
 ## 📝 UI/UX
 
 Proposal: the mockups listed at the top. Not accepted yet.
@@ -375,7 +492,10 @@ Proposal: the mockups listed at the top. Not accepted yet.
   and fallback pickers.
 - **Composer** as in the Delta. The deep link is `/settings/global/agents#agent-{runner}`, which opens and
   highlights that row.
-- **Hosted or phone cockpit** sees every row read-only, with a note that keys and methods are set on the host.
+- **Hosted or phone cockpit** sees every row read-only, with a note that keys and methods are set on the host
+  (`cezar providers …` or `serve --providers`).
+- **File-managed rows** show a "from providers file" tag. When the cockpit edits one, the row adds "the next
+  `serve --providers` start overwrites this".
 - **Accessibility:** one-mode rows are a `radiogroup`, the account menu is a `menu` with `menuitemradio` items, every
   icon button has a label naming the method and agent, and status is never colour alone.
 
@@ -394,6 +514,14 @@ Proposal: the mockups listed at the top. Not accepted yet.
   runs are unaffected.
 - **Older cezar after downgrade** ignores both new files, and agents run exactly as before.
 - **`CEZ_DRY_RUN=1`**: no models fetch (a fixed fake list) and no keys read. The mock CLI receives the env shape.
+- **Providers file with a world-readable inline key**: the apply is refused, and the error names the file and the
+  `chmod 600` that fixes it. Keys given through `apiKeyEnv` or `apiKeyFile` are not subject to this check.
+- **Key source empty or missing** (`apiKeyEnv` unset, `apiKeyFile` absent): the whole apply is refused, naming the
+  entry. A method is never stored without its key.
+- **Keychain locked during apply**: nothing is written, and the command exits with the keychain message. Under
+  `serve` the boot continues and the message is logged once.
+- **Two applies at once** (two `serve` processes, or `apply` beside a cockpit edit): the store's cross-process lock
+  orders them, and the last writer wins per method.
 - **The agent can read its own env.** A key injected for a run is visible to that agent's tools, as a
   subscription token in its config folder already is. The key is scoped to the run that needs it and never sits in
   the host env.
@@ -405,7 +533,9 @@ Proposal: the mockups listed at the top. Not accepted yet.
 - **Zero config:** nothing changes until the user adds a method. No new `CEZ_*` flag is needed: the network
   widening, the models fetch, happens only on a user's click or save to a URL the user typed. `.env.example` is
   untouched.
-- **Hard to reverse:** the store format and the `/agent-providers` routes are new public surfaces. Rollback is
+- **Hard to reverse:** the store format, the `/agent-providers` routes, the providers file format and the
+  `cezar providers` subcommand and `serve --providers` flag are new public surfaces. The file format and the CLI
+  go into `BACKWARD_COMPATIBILITY.md` next to the routes. Rollback is
   deleting `agent-providers.json` and its secrets scope, after which runs behave as today.
 - **Construction-site risk:** missing one env-building site would make a Continue or a manager turn run on the wrong
   method. Step 1.5 pins every site with a test.
@@ -415,7 +545,7 @@ Proposal: the mockups listed at the top. Not accepted yet.
 ## 📋 Phasing
 
 - **Phase 1, Workspace → Agents:** the store, the API, run injection with Continue and restart replay, the models
-  list extension, and the new settings page. Shippable alone: users configure methods, runs use them, and the
+  list extension, the providers file and `cezar providers` commands, and the new settings page. Shippable alone: users configure methods, runs use them, and the
   composer's existing model chip already lists method-served models.
 - **Phase 2, Project → Agents:** method lines, disabled pickers for agents without a method, Inherit labels.
 - **Phase 3, Composer:** "via" lines, grouping, Manage providers, Configure providers.
@@ -440,9 +570,15 @@ Proposal: the mockups listed at the top. Not accepted yet.
    for OpenAI and Anthropic shapes. Extend `GET /api/v1/models` with method-served models and `via`, including pi,
    OpenCode and OMP, and pin it in the contract-parity test.
 7. **Routes.** Chain the family, validators as middleware, the 409 gate, parity, route-inventory and BC entries.
-8. **Settings UI.** Characterize `accounts-defaults.test.tsx`, then build the Agents card from the mockup with both
-   modes, the custom form, the host-environment rows and the read-only hosted view, each with unit tests.
-9. **Fold the Accounts card.** Characterize `accounts-section.test.tsx`, add the account menu to subscription rows,
+8. **Headless configuration.** `providersFileSchema` in the contract, `agent-providers-cli.ts` with `apply`, `set`,
+   `select`, `remove` and `list`, the `serve --providers` hook before listen, the help text, and the
+   `docs/reference.md` and BC entries. Tests cover every scenario under "Methods can be configured from a file or
+   the CLI": all-or-nothing on an invalid entry, idempotent re-apply, untouched unnamed methods, the inline-key
+   permission check, the empty key source, `origin`, and that a boot with an invalid file still listens.
+9. **Settings UI.** Characterize `accounts-defaults.test.tsx`, then build the Agents card from the mockup with both
+   modes, the custom form, the host-environment rows, the "from providers file" tag and the read-only hosted view,
+   each with unit tests.
+10. **Fold the Accounts card.** Characterize `accounts-section.test.tsx`, add the account menu to subscription rows,
    then delete the Accounts card with its test. A separate commit, so it can be reverted on its own.
 
 ### Phase 2 — Project → Agents
