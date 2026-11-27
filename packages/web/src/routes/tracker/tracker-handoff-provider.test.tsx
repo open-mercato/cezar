@@ -34,7 +34,10 @@ it.each(['missing', 'failed'] as const)('explains a %s backend and recovers with
       submitted = JSON.parse(String(init.body)) as Record<string, unknown>
       return json({ id: 'run-recovered' })
     }
-    // Keep unrelated engine catalog/config queries pending; no real network is used.
+    if (path.endsWith('/agent-providers')) return json({ editable: true, agents: [] })
+    if (path.endsWith('/config')) return json({ defaultRunner: 'claude', defaultModels: {} })
+    if (path.endsWith('/agent-profiles') || path.endsWith('/repo')) return json({}, 404)
+    // Keep the unrelated model catalog pending.
     return new Promise<Response>(() => {})
   }))
   render(<MemoryRouter initialEntries={['/p/acme/tracker']}><QueryClientProvider client={client}>
@@ -59,4 +62,32 @@ it.each(['missing', 'failed'] as const)('explains a %s backend and recovers with
   fireEvent.click(run)
   await waitFor(() => expect(submitted).toBeDefined())
   expect(submitted?.task).toContain('Retain this draft')
+})
+
+it('issue handoff respects the project default Codex gateway with its vendor signed out', async () => {
+  const client = createQueryClient()
+  const posts: unknown[] = []
+  vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const path = String(input)
+    if (path.endsWith('/providers/status')) return json({ providers: [
+      { provider: 'codex', status: 'disconnected', enabled: true },
+      { provider: 'claude', status: 'connected', enabled: true },
+    ] })
+    if (path.endsWith('/agent-providers')) return json({ editable: true, agents: [
+      { runner: 'codex', mode: 'one', configured: true, active: 'custom', methods: [{ id: 'custom', kind: 'custom', label: 'Private', origin: 'cockpit', state: 'connected' }] },
+    ] })
+    if (path.endsWith('/config')) return json({ defaultRunner: 'codex', defaultModels: {} })
+    if (path.endsWith('/agent-profiles')) return json({ profiles: [], defaults: {}, selections: {} })
+    if (path.endsWith('/runs') && init?.method === 'POST') { posts.push(JSON.parse(String(init.body))); return json({ id: 'r1' }) }
+    return json({}, 404)
+  }))
+  render(<MemoryRouter initialEntries={['/p/acme/tracker']}><QueryClientProvider client={client}>
+    <TrackerHandoff item={ITEM} workflows={[]} skills={[]} />
+  </QueryClientProvider></MemoryRouter>)
+  const run = screen.getByRole<HTMLButtonElement>('button', { name: /Run agent/ })
+  await waitFor(() => expect(client.isFetching()).toBe(0))
+  expect(run.disabled).toBe(false)
+  fireEvent.click(run)
+  await waitFor(() => expect(posts).toHaveLength(1))
+  expect((posts[0] as { runner?: string }).runner ?? 'codex').toBe('codex')
 })

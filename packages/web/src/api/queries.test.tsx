@@ -257,6 +257,32 @@ describe('useRunnerModels', () => {
 })
 
 describe('useModelPickerActions', () => {
+  it('writes a late Kimi refresh to the account that requested it', async () => {
+    const refresh = deferredResponse()
+    const catalog = (id: string) => json({ runner: 'kimi', models: [{ id, label: id, description: '' }], source: 'live', stale: false })
+    fetchMock.mockImplementation(async input => {
+      const path = String(input)
+      if (path.endsWith('/agent-providers')) return json({ editable: true, agents: [] })
+      if (path === '/api/v1/models?runner=kimi&agentProfile=work&refresh=1') return refresh.promise
+      if (path === '/api/v1/models?runner=kimi&agentProfile=work') return catalog('work-alias')
+      if (path === '/api/v1/models?runner=kimi&agentProfile=default') return catalog('host-alias')
+      throw new Error('Unexpected catalog URL ' + path)
+    })
+    const { result, rerender } = renderHook(({ profile }) => ({
+      catalog: useRunnerModels('kimi', true, profile), ...useModelPickerActions('kimi', profile),
+    }), { wrapper: wrapper(), initialProps: { profile: 'work' } })
+    await waitFor(() => expect(result.current.catalog.data?.models[0]?.id).toBe('work-alias'))
+    act(() => result.current.action!.onSelect())
+    await waitFor(() => expect(result.current.action?.disabled).toBe(true))
+    rerender({ profile: 'default' })
+    await waitFor(() => expect(result.current.catalog.data?.models[0]?.id).toBe('host-alias'))
+    refresh.resolve(catalog('new-work-alias'))
+    await waitFor(() => expect(result.current.action?.disabled).toBe(false))
+    expect(result.current.catalog.data?.models[0]?.id).toBe('host-alias')
+    rerender({ profile: 'work' })
+    expect(result.current.catalog.data?.models[0]?.id).toBe('new-work-alias')
+  })
+
   it('offers no action for a runner without a host catalog', () => {
     fetchMock.mockResolvedValue(json({ editable: true, agents: [] }))
     const { result } = renderHook(() => useModelPickerActions('pi'), { wrapper: wrapper() })

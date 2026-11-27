@@ -177,7 +177,7 @@ function Harness({ run, draft = '' }: { run: ApiRun; draft?: string }) {
     return (
       <div data-slot="follow-up-provider-gate">
         <span>{action.reason}</span>
-        {action.canChooseRunner && action.engine}
+        {action.canChooseEngine && action.engine}
         {!action.providerPending ? (
           <Link to="/settings/agents#providers">Configure providers</Link>
         ) : null}
@@ -609,6 +609,18 @@ describe('the follow-up runner pill carries the account', () => {
     expect(reason).toBeTruthy()
     expect(continueBody()).toBeUndefined()
     await pickFrom(runnerPill()!, 'Default')
+    fireEvent.click(await screen.findByRole('button', { name: 'Continue' }))
+    await waitFor(() => expect(continueBody()).toEqual({ agentProfile: 'default' }))
+  })
+
+  it('requires a new login when the recorded account was removed, even on a single-runner host', async () => {
+    serve(HEALTH_MULTI, {}, { providers: [{ provider: 'claude', status: 'connected', enabled: true }] }, 200, false, {
+      ...ACCOUNTS, profiles: ACCOUNTS.profiles.filter(p => p.isDefault),
+    })
+    renderAction(makeRun({ runner: 'claude', agentProfile: 'removed' }))
+    await screen.findByText('The saved account is unavailable. Choose another account or runner.')
+    expect(continueBody()).toBeUndefined()
+    await pickFrom(runnerPill()!, 'claude')
     fireEvent.click(await screen.findByRole('button', { name: 'Continue' }))
     await waitFor(() => expect(continueBody()).toEqual({ agentProfile: 'default' }))
   })

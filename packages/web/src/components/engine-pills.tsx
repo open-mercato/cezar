@@ -1,8 +1,10 @@
 import { useEffect, useState } from 'react'
 
 import { hasAccountChoice, useAgentAccounts } from '@/api/agent-accounts'
-import { useConfig, useModelPickerActions, useProviderStatus, useRunnerModels } from '@/api/queries'
-import type { CreateRunInput, Runner } from '@open-mercato/cezar-api-client'
+import { useAgentProviders, useConfig, useModelPickerActions, useProviderStatus, useRunnerModels } from '@/api/queries'
+import { ApiError } from '@/api/client'
+import { accountSelection, canUseAgent, managedEntries } from '@/lib/agent-providers'
+import { DEFAULT_AGENT_ACCOUNT_ID, type AgentProviderEntry, type CreateRunInput, type Runner } from '@open-mercato/cezar-api-client'
 import { PickerPill, RunnerPill, type RunnerAccountChoice } from '@/components/picker-pill'
 import { ReasoningEffortPill } from '@/components/reasoning-effort-pill'
 import { usableRunners } from '@/lib/provider-status'
@@ -65,8 +67,12 @@ export interface ResolvedEngine {
   canRun: boolean
   /** Native agent settings are authoritative; model overrides must be omitted. */
   modelsLocked?: boolean
+  entry?: AgentProviderEntry
+  catalogAccount?: string | null
   providerPending: boolean
   providerError: boolean
+  accountUnavailable?: boolean
+  modelUnavailable?: boolean
   /** Every login for every runner. Empty on the zero-config host, which is why it renders as
    *  the same single-row-per-agent list it always did. */
   accounts: readonly RunnerAccountChoice[]
@@ -76,25 +82,50 @@ export interface ResolvedEngine {
   repoAccount?: Partial<Record<Runner, string>>
 }
 
-export function useResolvedEngine(pick: EnginePick): ResolvedEngine {
+function useEngineProviders(pick: EnginePick) {
   const providers = useProviderStatus()
   const config = useConfig()
-  const runners = usableRunners(providers.data)
+  const methods = useAgentProviders()
+  const { accounts, repoAccount, projectAccount, pending } = useAgentAccounts()
+  const entries = managedEntries(methods.data)
+  const runners = usableRunners(providers.data, row => {
+    const id = (row.provider === pick.runner ? pick.account : null) ?? repoAccount?.[row.provider]
+    const profile = accounts.find(p => p.provider === row.provider && p.id === id)
+    return canUseAgent(entries?.find(e => e.runner === row.provider), row, accountSelection(profile))
+  })
   // `/api/health` is deliberately boot-project-only. Runner policy is per project, so every
   // scoped start surface must read the active project's `/api/config` instead (#699).
   const defaultRunner = config.data?.defaultRunner
-  const runner = resolveRunner(pick.runner, runners, defaultRunner ?? runners[0] ?? 'claude')
+  const preferred = pick.runner ?? defaultRunner
+  const keepRunner = !!preferred && (!!pick.account || !!repoAccount?.[preferred] || entries?.some(e => e.runner === preferred && e.configured))
+  const runner = keepRunner ? preferred : resolveRunner(pick.runner, runners, defaultRunner ?? runners[0] ?? 'claude')
+  const chosenAccount = pick.account ?? repoAccount?.[runner]
+  const accountUnavailable = !!chosenAccount && chosenAccount !== DEFAULT_AGENT_ACCOUNT_ID &&
+    (!accounts.some(p => p.provider === runner && p.id === chosenAccount) || !runners.includes(runner))
+  const legacy = methods.error instanceof ApiError && methods.error.status === 404
+  return {
+    config, defaultRunner, runners, runner, accounts, repoAccount, keepRunner, accountUnavailable,
+    catalogAccount: (pick.runner === runner ? pick.account : null) ?? projectAccount?.[runner],
+    entry: entries?.find(e => e.runner === runner),
+    modelsLocked: methods.data?.nativeAuth === true || config.data?.modelsLocked === true,
+    providerPending: providers.isPending || methods.isPending || pending || config.isPending,
+    providerError: providers.isError || (methods.isError && !legacy),
+  }
+}
+
+export function useResolvedEngine(pick: EnginePick): ResolvedEngine {
+  const { config, defaultRunner, runners, runner, accounts, repoAccount, entry, catalogAccount, modelsLocked, providerPending, providerError, accountUnavailable } = useEngineProviders(pick)
   // Resolved first: each runner has its own host catalog (#794), so the fetch follows the pick.
-  const catalog = useRunnerModels(runner)
-  const modelsLocked = config.data?.modelsLocked === true
-  const model = resolveModel(modelsLocked ? null : pick.model, runner, config.data?.defaultModels, catalog.data)
+  const catalog = useRunnerModels(runner, runner !== 'kimi' || !providerPending, catalogAccount)
+  const model = resolveModel(modelsLocked ? null : pick.model, runner, config.data?.defaultModels, catalog.data, entry)
+  const checkModel = !!entry?.configured && !modelsLocked && pick.model != null
+  const modelUnavailable = checkModel && model !== pick.model
   const reasoningEfforts = reasoningEffortsForModel(runner, model, catalog.data)
   // Agent accounts (spec 2026-07-29-agent-profiles), read through the shared hook the /new composer
   // and the thread's Continue read, so no start surface can disagree about which login runs.
-  const { accounts, repoAccount } = useAgentAccounts()
   // An account belonging to ANOTHER runner is dropped rather than sent: switching runner must not
   // silently carry the previous runner's login along. Same guard as the composer's.
-  const account = accounts.some((choice) => choice.provider === runner && choice.id === pick.account)
+  const account = pick.account === DEFAULT_AGENT_ACCOUNT_ID || accounts.some((choice) => choice.provider === runner && choice.id === pick.account)
     ? pick.account
     : null
   return {
@@ -105,10 +136,12 @@ export function useResolvedEngine(pick: EnginePick): ResolvedEngine {
     reasoningEfforts,
     runners,
     defaultRunner,
-    canRun: providers.isSuccess && runners.length > 0,
-    modelsLocked,
-    providerPending: providers.isPending,
-    providerError: providers.isError,
+    canRun: !providerPending && !providerError && !accountUnavailable && !modelUnavailable && !(checkModel && catalog.isPending) && runners.includes(runner),
+    accountUnavailable,
+    modelUnavailable,
+    modelsLocked, entry, catalogAccount,
+    providerPending,
+    providerError,
     accounts,
     account,
     repoAccount,
@@ -183,13 +216,10 @@ export function useSeededEnginePick(): [EnginePick, (pick: EnginePick) => void] 
  * auto (`model: ''`) never conflicts with anything and always survives; that is the whole point.
  */
 function useEnginePickValidity(pick: EnginePick, onChange: (pick: EnginePick) => void): void {
-  const providers = useProviderStatus()
-  const config = useConfig()
-  const runners = usableRunners(providers.data)
-  const runner = resolveRunner(pick.runner, runners, config.data?.defaultRunner ?? runners[0] ?? 'claude')
-  const loaded = providers.isSuccess && runners.length > 0
-  const runnerGone = loaded && pick.runner !== null && !runners.includes(pick.runner)
-  const modelWrong = loaded && pick.model !== null && modelConflictsWithRunner(pick.model, runner)
+  const { runners, runner, providerPending, providerError, keepRunner, entry } = useEngineProviders(pick)
+  const loaded = !providerPending && !providerError && runners.length > 0
+  const runnerGone = loaded && !keepRunner && pick.runner !== null && !runners.includes(pick.runner)
+  const modelWrong = loaded && !entry?.configured && pick.model !== null && modelConflictsWithRunner(pick.model, runner)
   useEffect(() => {
     if (!runnerGone && !modelWrong) return
     onChange({
@@ -268,29 +298,31 @@ export function EnginePills({
   const resolved = useResolvedEngine(pick)
   const { runner, model, reasoningEffort, reasoningEfforts, runners, canRun, modelsLocked } = resolved
   const config = useConfig()
-  const catalog = useRunnerModels(runner)
-  const modelActions = useModelPickerActions(runner)
-  const models = modelsForRunner(runner, catalog.data, [pick.model, config.data?.defaultModels?.[runner]])
-  const unavailable = disabled || !canRun
+  const catalog = useRunnerModels(runner, runner !== 'kimi' || !resolved.providerPending, resolved.catalogAccount)
+  const modelActions = useModelPickerActions(runner, resolved.catalogAccount)
+  const models = modelsForRunner(runner, catalog.data, [pick.model, config.data?.defaultModels?.[runner]], resolved.entry)
+  const unavailable = disabled || resolved.providerPending || resolved.providerError || !runners.includes(runner)
   const accountChoices = accounts ? resolved.accounts : []
+  const runnerOptions = accounts && resolved.accountUnavailable && !runners.includes(runner) ? [runner, ...runners] : runners
   // Shown when there is a choice to make: more than one runner, or — where accounts are offered —
   // more than one login for one of them. A host with neither sees no pill, exactly as before.
   const showRunnerPill =
-    runners.length > 1 || runners.some((id) => hasAccountChoice(accountChoices, id))
+    runnerOptions.length > 1 || runnerOptions.some((id) => hasAccountChoice(accountChoices, id)) ||
+    (runnerOptions.length > 0 && (!runnerOptions.includes(runner) || (accounts && resolved.accountUnavailable)))
 
   return (
     <>
       {showRunnerPill ? (
         <RunnerPill
-          runners={runners}
+          runners={runnerOptions}
           value={runner}
           accounts={accountChoices}
           account={accounts ? resolved.account : null}
           repoAccount={accounts ? resolved.repoAccount : undefined}
-          disabled={unavailable}
+          disabled={disabled || resolved.providerPending || resolved.providerError}
           // Changing the AGENT drops the model pick: the presets are per-runner, so a kept model
           // would be a preset the new runner does not have (composer rule). Changing only the
-          // ACCOUNT keeps it — the catalog is identical across logins of the same runner.
+          // ACCOUNT keeps the pin, which must still be offered by that login.
           // Without accounts every row IS an agent, so that surface keeps its unconditional
           // reset rather than quietly gaining the re-pick-keeps-the-model behaviour.
           onPick={(next, picked) =>
@@ -312,7 +344,7 @@ export function EnginePills({
         ariaLabel="Model"
         // `resolveModel` only ever returns a member of `models` ('' is the auto preset), so
         // the lookup cannot miss.
-        label={models.find((m) => m.id === model)!.label}
+        label={resolved.modelUnavailable ? 'Choose a model' : models.find((m) => m.id === model)!.label}
         value={model}
         disabled={unavailable}
         readOnly={modelsLocked === true}
@@ -327,7 +359,7 @@ export function EnginePills({
         model={model}
         value={reasoningEffort}
         options={reasoningEfforts}
-        disabled={unavailable}
+        disabled={disabled || !canRun}
         modelsLocked={modelsLocked}
         onPick={(next) => onChange({ ...pick, reasoningEffort: next || null })}
       />

@@ -23,6 +23,8 @@ export interface AgentAccountChoices {
   /** What the active project's selection resolves to per runner — the row selected until the
    *  surface's own override replaces it. */
   repoAccount?: Partial<Record<Runner, string>>
+  /** Explicit project overrides. An absent catalog profile follows the workspace default server-side. */
+  projectAccount?: Partial<Record<Runner, string>>
 }
 
 export function useAgentAccounts(projectId?: string): AgentAccountChoices {
@@ -34,13 +36,12 @@ export function useAgentAccounts(projectId?: string): AgentAccountChoices {
   // `useRepo` is project-scoped, so it already answers for the ACTIVE project; going through the
   // projects list would mean re-deriving a mapping the API has already done.
   const repoRoot = repo.data?.info?.root
+  const projectAccount = repoRoot ? profiles.data?.selections?.[repoRoot] : undefined
   return {
     accounts,
     pending: profiles.isPending || repo.isPending,
-    repoAccount: resolveRepoAccounts(
-      repoRoot ? profiles.data?.selections?.[repoRoot] : undefined,
-      profiles.data?.defaults,
-    ),
+    projectAccount,
+    repoAccount: resolveRepoAccounts(projectAccount, profiles.data?.defaults),
   }
 }
 

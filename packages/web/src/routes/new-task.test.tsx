@@ -656,7 +656,8 @@ describe('picker data flows', () => {
     renderNewTask()
     await pillReady()
     const chip = screen.getByRole('button', { name: 'Model' })
-    expect(chip.textContent).toContain('auto')
+    expect(chip.textContent).toContain('Choose a model')
+    expect(screen.getByRole<HTMLButtonElement>('button', { name: 'Start task' }).disabled).toBe(true)
     fireEvent.keyDown(chip, { key: 'ArrowDown' })
     expect(await screen.findByText('Fake gateway')).toBeTruthy()
     expect(screen.getByText('OpenRouter')).toBeTruthy()
@@ -706,13 +707,15 @@ describe('picker data flows', () => {
     expect(requests.some(r => r.url.includes('refresh=1') || r.method === 'POST')).toBe(false)
   })
 
-  it('uses native authentication for a fresh draft when the host enforces it', async () => {
+  it('lets a restored gateway draft explicitly adopt enforced native settings', async () => {
     writeDraft({ ...readDraft(), runner: 'codex', model: 'gateway-model', agentMethod: 'custom', text: 'Run natively' })
     serve({ providerStatus: PROVIDERS_MULTI, config: { modelsLocked: true },
       agentProviders: { editable: true, nativeAuth: true, agents: [{ runner: 'codex', mode: 'one', configured: true,
         active: 'custom', methods: [{ id: 'custom', kind: 'custom', label: 'Gateway', state: 'connected', origin: 'cli' }] }] } })
     renderNewTask()
     await pillReady()
+    expect(screen.getByRole<HTMLButtonElement>('button', { name: 'Start task' }).disabled).toBe(true)
+    fireEvent.click(screen.getByRole('button', { name: 'Use native agent settings' }))
     await startTask()
     expect(postedBody()).toMatchObject({ runner: 'codex', task: 'Run natively' })
     expect(postedBody()).not.toHaveProperty('agentMethod')
@@ -2274,18 +2277,23 @@ describe('the composer runner pill carries the account', () => {
     expect(postedBody()).not.toHaveProperty('agentProfile')
   })
 
-  it('uses the project account for the selected subscription when the machine login is signed out', async () => {
-    writeDraft({ ...readDraft(), runner: 'claude', text: 'Use the project login' })
+  it.each([true, false])('uses the project subscription when the machine login is signed out (configured=%s)', async configured => {
+    writeDraft({ ...readDraft(), runner: 'claude', model: 'opus', agentMethod: 'subscription', text: 'Use the project login' })
     serve({ agentProfiles: { ...ACCOUNTS, selections: { '/repo': { claude: 'klaudiusz' } } },
       providerStatus: { providers: [{ provider: 'claude', status: 'disconnected', enabled: true }] },
-      agentProviders: { editable: true, agents: [{ runner: 'claude', mode: 'one', configured: true,
-        active: 'subscription', methods: [{ id: 'subscription', kind: 'subscription', label: 'Claude', state: 'disconnected' }] }] } })
+      agentProviders: { editable: true, agents: [{ runner: 'claude', mode: 'one', ...(configured && { configured: true }),
+        active: configured ? 'subscription' : null, methods: [{ id: 'subscription', kind: 'subscription', label: 'Claude', state: 'disconnected' }] }] },
+      modelCatalog: { runner: 'claude', source: 'live', stale: false, models: [
+        { id: 'opus', label: 'opus', description: '', via: { methodId: 'subscription', label: 'Claude' } },
+      ] } })
     renderNewTask()
     await pillReady()
     await waitFor(() => expect(runnerPill()?.textContent).toContain('Klaudiusz'))
     expect(screen.queryByRole('link', { name: 'Configure providers' })).toBeNull()
     await startTask()
-    expect(postedBody()).toMatchObject({ runner: 'claude', agentMethod: 'subscription' })
+    expect(postedBody()).toMatchObject({ runner: 'claude', model: 'opus' })
+    if (configured) expect(postedBody()).toMatchObject({ agentMethod: 'subscription' })
+    else expect(postedBody()).not.toHaveProperty('agentMethod')
     expect(postedBody()).not.toHaveProperty('agentProfile')
   })
 
@@ -3176,4 +3184,109 @@ describe('carried-over options are visible without opening Options', () => {
     // The skill's recommendation IS this composer's default, so the hint — not the summary — says it.
     expect(summary()).toBeNull()
   })
+})
+
+it('file model lock retains the billing method of a restored draft', async () => {
+  writeDraft({ ...readDraft(), runner: 'codex', model: 'same', agentMethod: 'custom', text: 'Private draft' })
+  serve({ config: { modelsLocked: true },
+    providerStatus: { providers: [{ provider: 'codex', enabled: true, status: 'disconnected' }] },
+    agentProviders: { editable: true, agents: [{ runner: 'codex', mode: 'one', configured: true, active: 'openrouter', methods: [
+      { id: 'openrouter', kind: 'openrouter', label: 'OpenRouter', origin: 'cockpit', state: 'connected' },
+      { id: 'custom', kind: 'custom', label: 'Gateway', state: 'disconnected' },
+    ] }] },
+    modelCatalog: { runner: 'codex', source: 'cache', stale: false, models: [
+      { id: 'same', label: 'Shared model', description: '', via: { methodId: 'openrouter', label: 'OpenRouter' } },
+    ] } })
+  renderNewTask()
+  await pillReady()
+  const start = screen.getByRole<HTMLButtonElement>('button', { name: 'Start task' })
+  expect(start.disabled).toBe(true)
+  fireEvent.click(start)
+  expect(postedBody()).toBeUndefined()
+  fireEvent.click(screen.getByRole('button', { name: 'Use OpenRouter' }))
+  await startTask()
+  expect(postedBody()).toMatchObject({ runner: 'codex', agentMethod: 'openrouter' })
+  expect(postedBody()).not.toHaveProperty('model')
+})
+
+it('a vanished named account cannot become a different subscription on Start', async () => {
+  writeDraft({ ...readDraft(), runner: 'claude', agentProfile: 'old-work', text: 'Private account draft' })
+  serve({ agentProfiles: { ...ACCOUNTS, profiles: ACCOUNTS.profiles.filter(p => p.isDefault) },
+    providerStatus: { providers: [{ provider: 'claude', status: 'connected', enabled: true }] },
+    agentProviders: { editable: true, agents: [{ runner: 'claude', mode: 'one', configured: true, active: 'subscription',
+      methods: [{ id: 'subscription', label: 'Claude', kind: 'subscription', state: 'connected' }] }] } })
+  renderNewTask()
+  await pillReady()
+  const start = screen.getByRole<HTMLButtonElement>('button', { name: 'Start task' })
+  expect(start.disabled).toBe(true)
+  fireEvent.click(start)
+  expect(postedBody()).toBeUndefined()
+  await pickPill('runner-pill', 'claude')
+  await startTask()
+  expect(postedBody()).toMatchObject({ runner: 'claude', task: 'Private account draft' })
+  expect(postedBody()).not.toHaveProperty('agentProfile')
+})
+
+it('an explicitly picked native subscription model does not become a gateway on remount', async () => {
+  const modelCatalog = (methodId: string, label: string) => ({ runner: 'codex' as const, source: 'live' as const, stale: false,
+    models: [{ id: 'shared', label: 'Shared model', description: '', via: { methodId, label } }] })
+  writeDraft({ ...readDraft(), runner: 'codex', text: 'Private native task' })
+  serve({ providerStatus: PROVIDERS_MULTI, agentProviders: { editable: true, agents: [{ runner: 'codex', mode: 'one', active: 'subscription',
+    methods: [{ id: 'subscription', label: 'ChatGPT', kind: 'subscription', state: 'connected' }] }] },
+    modelCatalog: modelCatalog('subscription', 'ChatGPT') })
+  const first = renderNewTask()
+  await pillReady()
+  fireEvent.keyDown(screen.getByRole('button', { name: 'Model' }), { key: 'ArrowDown' })
+  fireEvent.click(await screen.findByRole('menuitemradio', { name: /Shared model.*via ChatGPT/ }))
+  await waitFor(() => expect(readDraft()).toMatchObject({ runner: 'codex', model: 'shared', agentMethod: 'subscription' }))
+  first.unmount()
+  serve({ providerStatus: PROVIDERS_MULTI, agentProviders: { editable: true, agents: [{ runner: 'codex', mode: 'one', configured: true, active: 'openrouter',
+    methods: [{ id: 'openrouter', label: 'OpenRouter', kind: 'openrouter', state: 'connected', origin: 'cockpit' }] }] },
+    modelCatalog: modelCatalog('openrouter', 'OpenRouter') })
+  renderNewTask()
+  await pillReady()
+  const start = screen.getByRole<HTMLButtonElement>('button', { name: 'Start task' })
+  expect(start.disabled).toBe(true)
+  fireEvent.click(start)
+  expect(postedBody()).toBeUndefined()
+})
+
+it('a prior-release draft with an implicit runner cannot be rebound across runners', async () => {
+  writeDraft({ ...readDraft(), runner: null, model: 'shared', agentMethod: 'custom', text: 'Private Codex gateway draft' })
+  serve({ config: { defaultRunner: 'claude' }, providerStatus: PROVIDERS_MULTI,
+    agentProviders: { editable: true, agents: [{ runner: 'claude', mode: 'one', active: 'custom', configured: true,
+      methods: [{ id: 'custom', label: 'Claude gateway', kind: 'custom', state: 'connected', origin: 'cockpit' }] }] },
+    modelCatalog: { runner: 'claude', source: 'cache', stale: false,
+      models: [{ id: 'shared', label: 'Shared model', description: '', via: { methodId: 'custom', label: 'Claude gateway' } }] } })
+  renderNewTask()
+  await pillReady()
+  const start = screen.getByRole<HTMLButtonElement>('button', { name: 'Start task' })
+  expect(start.disabled).toBe(true)
+  fireEvent.click(start)
+  expect(postedBody()).toBeUndefined()
+})
+
+
+it('keeps an unavailable explicit runner until a replacement is picked', async () => {
+  writeDraft({ ...readDraft(), runner: 'codex', text: 'Stay on Codex' })
+  serve({ providerStatus: { providers: [{ provider: 'claude', status: 'connected', enabled: true }] } })
+  renderNewTask()
+  await pillReady()
+  expect(screen.getByRole<HTMLButtonElement>('button', { name: 'Start task' }).disabled).toBe(true)
+  expect(readDraft().runner).toBe('codex')
+  await pickPill('runner-pill', 'claude')
+  await startTask()
+  expect(postedBody()).toMatchObject({ task: 'Stay on Codex', runner: 'claude' })
+})
+
+it('keeps an available pinned method while the project controls its model', async () => {
+  writeDraft({ ...readDraft(), runner: 'codex', model: 'old-model', agentMethod: 'custom', text: 'Use my gateway' })
+  serve({ config: { modelsLocked: true }, providerStatus: PROVIDERS_MULTI,
+    agentProviders: { editable: true, agents: [{ runner: 'codex', mode: 'one', configured: true, active: 'custom',
+      methods: [{ id: 'custom', kind: 'custom', label: 'Gateway', state: 'connected' }] }] } })
+  renderNewTask()
+  await pillReady()
+  await startTask()
+  expect(postedBody()).toMatchObject({ runner: 'codex', agentMethod: 'custom' })
+  expect(postedBody()).not.toHaveProperty('model')
 })

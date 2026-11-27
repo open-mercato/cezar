@@ -15,11 +15,12 @@ export function useContinuationProvider(run: ApiRun, pickedRunner: Runner | null
   const selectedRunner = pickedRunner ?? currentRunner
   const providers = useRunProviderStatus(run, selectedRunner, { account: pickedAccount, replay: selectedRunner === currentRunner })
   const usable = providers.runners
-  const runner = providers.isPending || providers.bound ? selectedRunner : pickedRunner ?? resolveRunner(null, usable, currentRunner)
-  const canContinue = !providers.isError && (providers.isPending || usable.includes(runner))
+  const bound = providers.bound || pickedRunner !== null
+  const runner = providers.isPending || bound ? selectedRunner : resolveRunner(null, usable, currentRunner)
+  const canContinue = !providers.isError && !providers.checkingNamedAccount && (providers.isPending ? !providers.removedAccount : usable.includes(runner))
   // A blocked login can still be changed in the picker. A run bound to that account must
   // never start on some other agent just because it is first in the list.
-  const runners = providers.bound && !usable.includes(selectedRunner) ? [selectedRunner, ...usable] : usable
+  const runners = bound && !usable.includes(selectedRunner) ? [selectedRunner, ...usable] : usable
   const reason = providers.isError
     ? 'Provider authentication could not be verified.'
     : canContinue
@@ -28,7 +29,11 @@ export function useContinuationProvider(run: ApiRun, pickedRunner: Runner | null
 
   return {
     accounts: providers.accounts,
+    entry: providers.entries?.find(entry => entry.runner === runner),
+    recordedAccount: providers.recordedAccount,
     repoAccount: providers.repoAccount,
+    removedAccount: providers.removedAccount,
+    catalogAccount: runner === selectedRunner ? providers.catalogAccount : providers.projectAccount?.[runner],
     accountId: runner === selectedRunner ? providers.accountId : providers.repoAccount?.[runner],
     runners,
     currentRunner,

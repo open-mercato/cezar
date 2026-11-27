@@ -2,7 +2,7 @@ import { DEFAULT_AGENT_ACCOUNT_ID } from '@open-mercato/cezar-api-client'
 import type { ApiRun, ProviderStatusResponse, Runner } from '@open-mercato/cezar-api-client'
 import { ApiError } from '@/api/client'
 import { useAgentAccounts, useSelectedAccountCheck } from '@/api/agent-accounts'
-import { canUseAgent } from '@/lib/agent-providers'
+import { accountSelection, canUseAgent, managedEntries } from '@/lib/agent-providers'
 import { useAgentProviders, useProviderStatus } from '@/api/queries'
 import { providerRowRunnable, providerStatusFor } from '@/lib/provider-status'
 
@@ -56,9 +56,9 @@ export function useRunProviderStatus(
 ) {
   const status = useProviderStatus()
   const methods = useAgentProviders()
-  const { accounts, repoAccount, pending: accountsPending } = useAgentAccounts(options.projectId)
+  const { accounts, repoAccount, projectAccount, pending: accountsPending } = useAgentAccounts(options.projectId)
   const binding = options.replay !== false ? recordedBinding(run, provider) : undefined
-  const entries = methods.data?.nativeAuth ? undefined : methods.data?.agents
+  const entries = managedEntries(methods.data)
   const entry = entries?.find(agent => agent.runner === provider)
   const method = binding?.method ?? entry?.active
   // A replay on a managed key goes to the engine even if that key was removed. The engine
@@ -68,29 +68,35 @@ export function useRunProviderStatus(
   const accountId = options.account ?? binding?.profile ?? repoAccount?.[provider]
   const account = useSelectedAccountCheck(provider, usesLogin ? accountId : undefined)
   const namedAccount = !!accountId && accountId !== DEFAULT_AGENT_ACCOUNT_ID
-  const row = providerStatusFor(status.data, provider)
-  const bound = !!(binding?.method || namedAccount) && !!row?.enabled && row.status !== 'not-installed'
+  const bound = !!(binding?.method || binding?.profile || options.account || namedAccount)
+  const removedAccount = usesLogin && namedAccount && !accountsPending && !account.named
   const runners = (status.data?.providers ?? []).filter(row => {
     if (!row.enabled || row.status === 'not-installed') return false
     if (row.provider === provider) {
       const pinned = methods.data?.nativeAuth ? undefined : binding?.method
-      return replayKey || (!account.blocked && canUseAgent(entry, row, { namedAccount: usesLogin && namedAccount, pinned }))
+      return replayKey || (!removedAccount && !account.blocked && canUseAgent(entry, row, { namedAccount: usesLogin && account.named, pinned }))
     }
     const other = entries?.find(agent => agent.runner === row.provider)
     const named = accounts.find(a => a.provider === row.provider && a.id === repoAccount?.[row.provider] && !a.isDefault)
-    return canUseAgent(other, row, { namedAccount: named?.status?.status === 'connected' })
+    return canUseAgent(other, row, accountSelection(named))
   }).map(row => row.provider)
   const legacy = methods.error instanceof ApiError && methods.error.status === 404
   return {
     data: status.data,
     runners,
+    entries,
     isPending: status.isPending || methods.isPending || accountsPending,
+    checkingNamedAccount: usesLogin && namedAccount && accountsPending,
     isError: status.isError || (!replayKey && methods.isError && !methods.data && !legacy),
     accounts,
     repoAccount,
+    projectAccount,
+    catalogAccount: options.account ?? binding?.profile ?? projectAccount?.[provider],
     accountId,
+    recordedAccount: binding?.profile ?? repoAccount?.[provider] ?? DEFAULT_AGENT_ACCOUNT_ID,
     bound,
-    accountReason: account.blocked,
+    removedAccount,
+    accountReason: removedAccount ? 'The saved account is unavailable. Choose another account or runner.' : account.blocked,
   }
 }
 
@@ -137,6 +143,8 @@ export function existingProviderAvailability(
 export function useActiveProviderAvailability(run: ApiRun, projectId?: string) {
   const provider = providerForActiveRun(run)
   const status = useRunProviderStatus(run, provider, { projectId })
+  if (status.removedAccount) return { provider, usable: false, reason: status.accountReason ?? undefined }
+  if (status.checkingNamedAccount) return { provider, usable: false, reason: 'Checking the selected account…' }
   // Do not strand an existing task while the availability query is loading or retrying; the
   // server remains the boundary for a stale client. Once a complete response arrives, mirror
   // its fixed action gate exactly.
@@ -150,6 +158,8 @@ export function useActiveProviderAvailability(run: ApiRun, projectId?: string) {
 export function useExistingProviderAvailability(run: ApiRun, projectId?: string) {
   const provider = providerForExistingRun(run)
   const status = useRunProviderStatus(run, provider, { projectId })
+  if (status.removedAccount) return { provider, usable: false, reason: status.accountReason ?? undefined }
+  if (status.checkingNamedAccount) return { provider, usable: false, reason: 'Checking the selected account…' }
   if (!status.isPending && !status.isError && status.data) return existingProviderAvailability(run, status.data, status.runners.includes(provider))
   if (status.isError) {
     return {

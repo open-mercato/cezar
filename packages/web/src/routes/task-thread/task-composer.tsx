@@ -90,7 +90,7 @@ export function TaskComposer({
   // control row): the editable pickers when a Continue can choose one, the same chip read-only
   // otherwise (a live session cannot switch mid-turn). Effort, the one setting that is not a
   // value pill, lives behind Options — only while a Continue can change it.
-  const canPickEngine = hasContinuation && (continuable || continueAction.canChooseRunner)
+  const canPickEngine = hasContinuation && (continuable || continueAction.canChooseEngine)
   const engineChip = canPickEngine ? continueAction.engine : <RunEnginePills run={run} />
   const footerStatus = providerBlocked && !continueAction.providerPending ? (
     <Link to="/settings/agents#providers" className="text-xs font-medium text-foreground underline underline-offset-4">

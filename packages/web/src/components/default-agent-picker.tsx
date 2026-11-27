@@ -1,6 +1,6 @@
 import type { AgentProviderEntry, AgentProfile, AgentSetupEntry, ProviderStatusResponse, Runner } from '@open-mercato/cezar-api-client'
 import { AGENT_ROW_ACTION_LABEL, agentRowAction, agentVersionChip, type AgentRowAction } from '@/lib/agent-setup'
-import { canUseAgent, servingMethods } from '@/lib/agent-providers'
+import { accountSelection, canUseAgent, servingMethods } from '@/lib/agent-providers'
 import { cn } from '@/lib/utils'
 import { providerStatusFor } from '@/lib/provider-status'
 import { RUNNERS } from '@/routes/new-task-form'
@@ -27,11 +27,12 @@ export interface AgentPickerRow {
   label: string
   desc: string
   missing: boolean
+  profile?: AgentProfile
 }
 
 /** Build the rows once, so the caller's `checked` logic and the render agree by construction. */
 export function agentPickerRows(profiles: readonly AgentProfile[]): AgentPickerRow[] {
-  return RUNNERS.flatMap((runner) => {
+  return RUNNERS.flatMap<AgentPickerRow>((runner) => {
     // A pending account (sign-in never finished) is not a choice yet.
     const logins = profiles.filter((p) => p.provider === runner.id && !p.pending)
     // One login is not a choice, so the agent is the row.
@@ -48,6 +49,7 @@ export function agentPickerRows(profiles: readonly AgentProfile[]): AgentPickerR
       // to say so is where the choice is made.
       desc: login.exists ? login.configDir : `${login.configDir} — folder not created yet`,
       missing: !login.exists,
+      profile: login,
     }))
   })
 }
@@ -89,15 +91,15 @@ export function DefaultAgentPicker({
 }) {
   const stacked = hasAgentAccounts(rows)
   const ready = !providerStatus.isPending && !providerStatus.isError
-  const connected = (id: Runner) => {
-    const provider = providerStatusFor(providerStatus.data, id)
-    return ready && canUseAgent(entries?.find(entry => entry.runner === id), provider)
+  const connected = (row: AgentPickerRow) => {
+    const provider = providerStatusFor(providerStatus.data, row.runner.id)
+    return ready && canUseAgent(entries?.find(entry => entry.runner === row.runner.id), provider, accountSelection(row.profile))
   }
   const isChecked = (row: AgentPickerRow) => row.runner.id === runner && row.account === accountFor(row.runner.id)
   // With the setup catalog, the strip holds only what can be picked; every agent that needs a step
   // gets a row in the grouped list below (spec 2026-11-25-agent-cli-install-and-update).
   const setupAware = setup !== undefined && onAgentAction !== undefined && ready
-  const shown = setupAware && !entries ? rows.filter((row) => connected(row.runner.id) || isChecked(row)) : rows
+  const shown = setupAware && !entries ? rows.filter((row) => connected(row) || isChecked(row)) : rows
   const strip = (
     <div
       role="radiogroup"
@@ -113,7 +115,7 @@ export function DefaultAgentPicker({
       {shown.map((row) => {
         const provider = providerStatusFor(providerStatus.data, row.runner.id)
         const entry = entries?.find(e => e.runner === row.runner.id)
-        const providerConnected = connected(row.runner.id)
+        const providerConnected = connected(row)
         const providerReason = providerStatus.isPending
           ? 'Checking provider authentication…'
           : providerStatus.isError

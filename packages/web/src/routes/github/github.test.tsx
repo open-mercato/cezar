@@ -226,6 +226,7 @@ function stubFetch(
       }
       if (method === 'GET' && path === '/api/v1/workflows') return jsonResponse(WORKFLOWS)
       if (method === 'GET' && path === '/api/v1/skills') return jsonResponse(SKILLS)
+      if (path === '/api/v1/agent-providers') return jsonResponse({ editable: true, agents: [] })
       if (method === 'GET' && path === '/api/v1/providers/status') {
         return jsonResponse(PROVIDERS_CONNECTED)
       }
@@ -1934,6 +1935,37 @@ describe('the hand-to-agent backend pills (#401)', () => {
     expect(await screen.findByText('Provider authentication could not be verified.')).toBeTruthy()
     expect(document.body.textContent).not.toContain('No agent provider is connected')
     expect(screen.getByRole('link', { name: 'Configure providers' })).toBeTruthy()
+  })
+
+  it.each([null, 'retired'])('keeps a remembered Codex gateway when the vendor login is signed out (model %s)', async model => {
+    localStorage.setItem('cez-followup-selection', JSON.stringify({ runner: 'codex', model }))
+    const sent = stubFetch({
+      'GET /api/v1/config': () => jsonResponse({ defaultRunner: 'claude', defaultModels: {} }),
+      'GET /api/v1/providers/status': () => jsonResponse({ providers: [
+        { provider: 'claude', status: 'connected', enabled: true }, { provider: 'codex', status: 'disconnected', enabled: true },
+      ] }),
+      'GET /api/v1/agent-providers': () => jsonResponse({ editable: false, agents: [{
+        runner: 'codex', mode: 'one', configured: true, active: 'custom',
+        methods: [{ id: 'custom', kind: 'custom', label: 'Gateway', state: 'connected' }],
+      }] }),
+      'GET /api/v1/models?runner=codex': () => jsonResponse({ runner: 'codex', source: 'cache', stale: false,
+        models: [{ id: 'current', label: 'Current model', description: '', via: { methodId: 'custom', label: 'Gateway' } }] }),
+    })
+    await openDetail()
+    const start = screen.getByRole<HTMLButtonElement>('button', { name: /Run agent on this issue/ })
+    if (model) {
+      await screen.findByText('Choose an available model to run this item.')
+      expect(start.disabled).toBe(true)
+      fireEvent.click(start)
+      expect(postedRun(sent)).toBeUndefined()
+      fireEvent.keyDown(screen.getByRole('button', { name: 'Model' }), { key: 'ArrowDown' })
+      fireEvent.click(await screen.findByRole('menuitemradio', { name: /Current model/ }))
+    }
+    await waitFor(() => expect(start.disabled).toBe(false))
+    fireEvent.click(start)
+    await waitFor(() => expect(postedRun(sent)).toMatchObject({ runner: 'codex' }))
+    if (model) expect(postedRun(sent)).toMatchObject({ model: 'current' })
+    expect(readFollowupSelection().runner).toBe('codex')
   })
 
   it('explicitly sends a connected fallback that differs from the server default', async () => {

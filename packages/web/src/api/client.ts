@@ -594,9 +594,11 @@ export async function refreshProviderMethod(runner: Runner, id: string) {
   return providerModelsResponseSchema.parse(await workspaceRequest(`${methodPath(runner, id)}/models`, { method: 'POST' }))
 }
 
-export async function getRunnerModels(runner: Runner, opts?: ReadOptions & { refresh?: boolean }): Promise<RunnerModelCatalogResponse> {
-  const path = `/models?runner=${runner}${opts?.refresh ? '&refresh=1' : ''}`
-  return runnerModelCatalogResponseSchema.parse(await workspaceRequest(path, { signal: opts?.signal }))
+export async function getRunnerModels(runner: Runner, opts?: ReadOptions & { refresh?: boolean; agentProfile?: string | null }): Promise<RunnerModelCatalogResponse> {
+  const query = new URLSearchParams({ runner })
+  if (runner === 'kimi' && opts?.agentProfile) query.set('agentProfile', opts.agentProfile)
+  if (opts?.refresh) query.set('refresh', '1')
+  return runnerModelCatalogResponseSchema.parse(await workspaceRequest(`/models?${query}`, { signal: opts?.signal }))
 }
 
 /** Host-local authentication state shared by every project. */
