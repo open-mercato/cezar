@@ -4303,6 +4303,26 @@ describe("registry /skill expansion on a fresh run's opening prompt (#278)", () 
     }
   }, 40_000);
 
+  it("follows the shared skill's companions through an @open-mercato/cli override (#2395)", async () => {
+    // The CLI's wording ("repo-local override for the external `x` skill") left the short override
+    // body as the skill, so companions only the shared body names were never provisioned.
+    mkdirSync(join(repoRoot, '.ai/skills/om-demo'), { recursive: true });
+    writeFileSync(
+      join(repoRoot, '.ai/skills/om-demo/SKILL.md'),
+      '---\nname: om-demo\n---\n\nThis folder is a repo-local override for the external `om-demo` skill installed from `open-mercato/skills`.\n',
+    );
+    for (const [name, body] of [['om-demo', 'Shared workflow. Then run `om-demo-qa`.'], ['om-demo-qa', 'QA.']] as const) {
+      mkdirSync(join(repoRoot, '.agents/skills', name), { recursive: true });
+      writeFileSync(join(repoRoot, '.agents/skills', name, 'SKILL.md'), `---\nname: ${name}\n---\n\n${body}\n`);
+    }
+    const record = manager.startRun(SINGLE_STEP, { task: '/om-demo 12', worktree: true });
+    runId = record.id;
+    await waitFor(() => eventsOf(record.id).some((e) => e.stepId === 'task' && e.type === 'text'));
+    const wt = store.getRun(record.id)!.worktreePath!;
+    expect(readFileSync(join(wt, '.claude/skills/om-demo/SKILL.md'), 'utf8')).toContain('Shared workflow.');
+    expect(readFileSync(join(wt, '.claude/skills/om-demo-qa/SKILL.md'), 'utf8')).toContain('QA.');
+  }, 40_000);
+
   it('installs a repo skill whose text says it "extends the shared" something else, and never stalls on it', async () => {
     mkdirSync(join(repoRoot, '.ai/skills/button-rules'), { recursive: true });
     writeFileSync(
