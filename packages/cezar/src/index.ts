@@ -69,7 +69,7 @@ import { runUsageCommand } from './usage-ledger/cli.ts';
 
 import { runTrackerConnectionsCommand } from './server/tracker/connections-cli.ts';
 import { runTrackerCommand } from './server/tracker/task-cli.ts';
-import { applyProvidersDocument, fetchAppliedProviders, runProvidersCommand } from './agent-providers-cli.ts';
+import { applyProvidersAtStartup, fetchAppliedProviders, runProvidersCommand } from './agent-providers-cli.ts';
 import { configuredAuthStatus, selectedProviderLogin } from './agent-providers/service.ts';
 import { readAgentProviders } from './workspace/agent-providers.ts';
 import { runSecretsCommand } from './workspace/secrets-cli.ts';
@@ -279,12 +279,18 @@ async function main(): Promise<void> {
 
   const command = positionals[0] ?? 'serve';
   const cwd = resolve(values.repo ?? process.cwd());
+  let providerRefresh: Awaited<ReturnType<typeof applyProvidersAtStartup>> = [];
+  // Consume the declared key variables before even the first Git subprocess inherits the environment.
+  if (command === 'serve' && values.providers !== undefined) {
+    try { providerRefresh = await applyProvidersAtStartup(values.providers); }
+    catch (error) { console.error('[cez] providers: ' + (error instanceof Error ? error.message : 'invalid configuration')); }
+  }
   const repoInfo = await getRepoInfo(cwd);
   const repoRoot = repoInfo?.root ?? cwd;
 
   switch (command) {
     case 'serve':
-      await serveCommand(repoRoot, Number(values.port), !values['no-open'], values['bind-host'], values.providers);
+      await serveCommand(repoRoot, Number(values.port), !values['no-open'], values['bind-host'], providerRefresh);
       return;
     case 'run':
       await runCommand(repoRoot, positionals.slice(1).join(' ').trim(), values.workflow, values.model, values.effort);
@@ -358,7 +364,7 @@ async function serveCommand(
   preferredPort: number,
   openBrowser: boolean,
   bindHost?: string,
-  providers?: string,
+  providerRefresh: Awaited<ReturnType<typeof applyProvidersAtStartup>> = [],
 ): Promise<void> {
   // A failing request or task must not take the whole cockpit down, and must leave a trace.
   installCrashLogging({ report: (reason) => reportError(reason, { source: 'process', handler: 'unhandledRejection' }) });
@@ -372,11 +378,6 @@ async function serveCommand(
       console.warn(`[cez] could not clean cockpit runtime state (${error instanceof Error ? error.message : String(error)})`);
     });
   };
-  let providerRefresh: Awaited<ReturnType<typeof applyProvidersDocument>>['fetches'] = [];
-  if (providers !== undefined) {
-    try { providerRefresh = (await applyProvidersDocument(providers)).fetches; }
-    catch (error) { console.error('[cez] providers: ' + (error instanceof Error ? error.message : 'invalid configuration')); }
-  }
   const joinRunningCockpit = async (runtime: CockpitRuntimeRecord): Promise<void> => {
     await fetchAppliedProviders(providerRefresh);
     if (await shouldRegisterProject(repoRoot).catch(() => false)) {
