@@ -69,7 +69,7 @@ import { runUsageCommand } from './usage-ledger/cli.ts';
 
 import { runTrackerConnectionsCommand } from './server/tracker/connections-cli.ts';
 import { runTrackerCommand } from './server/tracker/task-cli.ts';
-import { applyProvidersDocument, fetchAppliedProviders, runProvidersCommand } from './agent-providers-cli.ts';
+import { applyProvidersAtStartup, fetchAppliedProviders, prepareProvidersDocument, runProvidersCommand } from './agent-providers-cli.ts';
 import { configuredAuthStatus, selectedProviderLogin } from './agent-providers/service.ts';
 import { readAgentProviders } from './workspace/agent-providers.ts';
 import { runSecretsCommand } from './workspace/secrets-cli.ts';
@@ -279,12 +279,16 @@ async function main(): Promise<void> {
 
   const command = positionals[0] ?? 'serve';
   const cwd = resolve(values.repo ?? process.cwd());
+  // Consume the declared key variables before even the first Git subprocess inherits the environment.
+  const providers = command === 'serve' && values.providers !== undefined
+    ? await prepareProvidersDocument(values.providers).catch(warnProviderImport)
+    : undefined;
   const repoInfo = await getRepoInfo(cwd);
   const repoRoot = repoInfo?.root ?? cwd;
 
   switch (command) {
     case 'serve':
-      await serveCommand(repoRoot, Number(values.port), !values['no-open'], values['bind-host'], values.providers);
+      await serveCommand(repoRoot, Number(values.port), !values['no-open'], values['bind-host'], providers);
       return;
     case 'run':
       await runCommand(repoRoot, positionals.slice(1).join(' ').trim(), values.workflow, values.model, values.effort);
@@ -353,12 +357,16 @@ async function main(): Promise<void> {
 
 // ---- serve -----------------------------------------------------------------
 
+function warnProviderImport(error: unknown): undefined {
+  console.error('[cez] providers: ' + (error instanceof Error ? error.message : 'invalid configuration'));
+}
+
 async function serveCommand(
   repoRoot: string,
   preferredPort: number,
   openBrowser: boolean,
   bindHost?: string,
-  providers?: string,
+  providers?: Awaited<ReturnType<typeof prepareProvidersDocument>>,
 ): Promise<void> {
   // A failing request or task must not take the whole cockpit down, and must leave a trace.
   installCrashLogging({ report: (reason) => reportError(reason, { source: 'process', handler: 'unhandledRejection' }) });
@@ -372,13 +380,14 @@ async function serveCommand(
       console.warn(`[cez] could not clean cockpit runtime state (${error instanceof Error ? error.message : String(error)})`);
     });
   };
-  let providerRefresh: Awaited<ReturnType<typeof applyProvidersDocument>>['fetches'] = [];
-  if (providers !== undefined) {
-    try { providerRefresh = (await applyProvidersDocument(providers)).fetches; }
-    catch (error) { console.error('[cez] providers: ' + (error instanceof Error ? error.message : 'invalid configuration')); }
-  }
+  const importProviders = async (ownerOrigin?: string) => {
+    if (!providers) return [];
+    try { return await applyProvidersAtStartup(providers, ownerOrigin); }
+    catch (error) { warnProviderImport(error); return []; }
+    finally { providers = undefined; }
+  };
   const joinRunningCockpit = async (runtime: CockpitRuntimeRecord): Promise<void> => {
-    await fetchAppliedProviders(providerRefresh);
+    await fetchAppliedProviders(await importProviders(runtime.origin));
     if (await shouldRegisterProject(repoRoot).catch(() => false)) {
       await handoffProject(runtime, repoRoot, { openBrowser, open: openUrl });
       return;
@@ -442,6 +451,7 @@ async function serveCommand(
     );
   }
 
+  const providerRefresh = await importProviders();
   const bootProjectId = await initServeWorkspace(repoRoot);
   // Lets a second cezar on this machine see which worktree this one runs from (worktree-in-use.ts).
   await registerRunningInstance();
