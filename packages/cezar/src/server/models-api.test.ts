@@ -187,6 +187,12 @@ describe('workspace model catalog API', () => {
     });
   });
 
+  it.each(['', 'x'.repeat(65)])('identifies an invalid catalog account', async (profile) => {
+    const response = await apiRequest(app(async () => []), '/api/v1/models?runner=kimi&agentProfile=' + profile);
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({ error: 'agentProfile must be 1 to 64 characters' });
+  });
+
   it.each(['/api/v1/models', '/api/v1/models?runner=nope'])('rejects invalid query %s', async (path) => {
     const response = await apiRequest(app(async () => []), path);
     expect(response.status).toBe(400);

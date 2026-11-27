@@ -234,6 +234,11 @@ describe('provider action gating', () => {
       expect.soft(await models('removed')).toMatchObject({ models: [], source: 'unavailable' });
       await mergeWriteAgentAccounts(accounts => { delete accounts.defaults.kimi; });
       expect.soft(await models('work')).toMatchObject({ models: [{ id: 'kimi-code/work' }] });
+      vi.stubEnv('CEZ_REMOTE', '1');
+      vi.stubEnv('CEZ_REMOTE_AGENT_ACCOUNTS', '0');
+      expect(await models('work')).toEqual(await models('removed'));
+      vi.stubEnv('CEZ_REMOTE_AGENT_ACCOUNTS', '1');
+      expect(await models('work')).toMatchObject({ models: [{ id: 'kimi-code/work' }] });
       writeFileSync(configPath, '[invalid');
       expect.soft(await models()).toMatchObject({ models: [] });
       expect.soft((await start('managed')).status).toBe(409);

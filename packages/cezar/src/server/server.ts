@@ -2384,17 +2384,22 @@ export function createAppParts(deps: ServerDeps) {
     // Configured endpoints can serve a catalog even when the CLI has no native discovery.
     .get(
       '/models',
-      // Two validators so each keeps its own message; the second one's output is what `valid` reads.
+      // Validate each optional field with its own diagnostic before parsing the full query.
       queryZodValidator(runnerModelCatalogQuerySchema.pick({ refresh: true }), { message: 'refresh must be 1 or true' }),
+      queryZodValidator(runnerModelCatalogQuerySchema.pick({ agentProfile: true }), { message: 'agentProfile must be 1 to 64 characters' }),
       queryZodValidator(
         runnerModelCatalogQuerySchema,
         { message: 'runner must be one of ' + RUNNER_IDS.join(', ') },
       ),
       async (c) => {
         const { runner, refresh, agentProfile } = c.req.valid('query');
+        const unavailable = { runner, models: [], source: 'unavailable' as const, stale: false, reason: 'This Kimi account is unavailable.' };
+        if (runner === 'kimi' && agentProfile && agentProfile !== DEFAULT_AGENT_ACCOUNT_ID && !accountsVisible()) {
+          return c.json(unavailable);
+        }
         const account = runner === 'kimi' ? await resolveProfileEnvForRoot(undefined, runner, agentProfile) : undefined;
         if (account && agentProfile && account.profile.id !== agentProfile) {
-          return c.json({ runner, models: [], source: 'unavailable' as const, stale: false, reason: 'This Kimi account is unavailable.' });
+          return c.json(unavailable);
         }
         return c.json(await providerCatalog(runner,
           () => refresh ? modelCatalog.reprobe(runner) : modelCatalog.get(runner),
