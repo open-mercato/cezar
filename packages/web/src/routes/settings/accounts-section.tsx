@@ -1,12 +1,14 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { ExternalLinkIcon, IdCardIcon } from 'lucide-react'
+import { ChevronRightIcon, ExternalLinkIcon, IdCardIcon, StarIcon } from 'lucide-react'
 import { Fragment, useEffect, useState } from 'react'
-import { useSearchParams } from 'react-router'
+import { Link, useLocation, useSearchParams } from 'react-router'
 
 import { ApiError, putWorkspaceConfig } from '@/api/client'
 
 import {
   useAgentAccountDetails,
+  useAgentProviders,
+  useRunnerModels,
   useAgentProfiles,
   useAgentSetup,
   useHealth,
@@ -25,6 +27,8 @@ import {
 } from '@/api/queries'
 import {
   agentAccountRouteId,
+  type AgentProviderEntry,
+  type AgentSetupEntry,
   type AgentProfile,
   type AgentProfilesResponse,
   type BackendCheck,
@@ -58,6 +62,10 @@ import { DefaultAgentPicker, agentPickerRows } from '@/components/default-agent-
 import { LoadingState, SettingsSkeleton } from '@/components/loading-state'
 import { modelCatalogStatus, modelsForRunner, RUNNERS } from '@/routes/new-task-form'
 import { useAddAccount } from '@/components/add-account/add-account-host'
+import { canUseAgent, methodSummary, servingMethods } from '@/lib/agent-providers'
+import { agentRowAction, AGENT_ROW_ACTION_LABEL } from '@/lib/agent-setup'
+import { AGENT_DESCRIPTORS } from './agent-descriptors'
+import { ProviderMethods } from './provider-methods'
 import { CursorConnection } from './cursor-connection'
 import { CardNote, FormRow, SavedIndicator, SettingsCard, useSavedFlash } from './form-row'
 import { AccountPlanUsage } from './account-plan-usage'
@@ -173,6 +181,16 @@ export function splitInstalled(
 
 function AccountsPane({ data }: { data: AgentProfilesResponse }) {
   const health = useHealth()
+  const methods = useAgentProviders()
+  const setup = useAgentSetup({ latest: true })
+  const sheet = useAgentSetupSheet()
+  const status = useProviderStatus()
+  const client = useQueryClient()
+  const saveDefault = useMutation({
+    mutationFn: (runner: Runner) => putWorkspaceConfig({ agentDefaults: { runner } }),
+    onSuccess: result => client.setQueryData(workspaceQueryKeys.config, result),
+    onError: (error: Error) => toast(error.message, { tone: 'danger' }),
+  })
   const addAccount = useAddAccount()
   // A paired phone gets no host paths (spec 2026-11-24-add-account-in-cockpit).
   const hostPaths = data.hostPaths !== false
@@ -187,7 +205,8 @@ function AccountsPane({ data }: { data: AgentProfilesResponse }) {
   // `?agent=<id>` names an agent — the Tools menu's "Set up →" deep link for a missing CLI: its
   // row must be visible, so the fold opens when the named agent is behind it.
   const [searchParams] = useSearchParams()
-  const requested = searchParams.get('agent')
+  const { hash } = useLocation()
+  const requested = hash.startsWith('#agent-') ? hash.slice(7) : searchParams.get('agent')
   const [showAll, setShowAll] = useState(false)
   useEffect(() => {
     if (requested && notInstalled.includes(requested as ProviderId)) setShowAll(true)
@@ -212,17 +231,6 @@ function AccountsPane({ data }: { data: AgentProfilesResponse }) {
   const capable = data.profileCapableProviders ?? []
   const defaultRunner = useDefaultRunner() ?? 'claude'
 
-  if (!data.editable) {
-    return (
-      <SettingsCard title="Accounts" slot="accounts-section">
-        <CardNote slot="accounts-hosted">
-          Agent accounts are disabled for remote access. On a trusted, authenticated self-hosted
-          deployment, set CEZ_REMOTE_AGENT_ACCOUNTS=1 and restart cezar.
-        </CardNote>
-      </SettingsCard>
-    )
-  }
-
   const shown = showAll ? [...installed, ...notInstalled] : installed
   const accounts = [...installed, ...notInstalled].flatMap((provider) =>
     (data.profiles ?? []).filter((p) => p.provider === provider),
@@ -236,7 +244,7 @@ function AccountsPane({ data }: { data: AgentProfilesResponse }) {
         slot="accounts-installed"
         title={
           <span className="flex items-center gap-2">
-            Installed on this machine
+            Agents
             <Badge variant="ghost" data-slot="accounts-installed-count" className="text-micro text-muted-foreground">
               {checks === undefined ? '…' : installed.length}
             </Badge>
@@ -257,7 +265,9 @@ function AccountsPane({ data }: { data: AgentProfilesResponse }) {
           ) : null
         }
       >
-        <DefaultsForNewProjects profiles={data} />
+        {methods.data?.editable === false && <CardNote slot="providers-hosted">Read-only. Set keys and methods on the host with <code>cezar providers</code> or <code>serve --providers</code>.</CardNote>}
+        {methods.isError && <CardNote tone="danger">Provider settings could not be loaded.</CardNote>}
+        {data.editable && methods.data === undefined && <DefaultsForNewProjects profiles={data} />}
         {shown.map((provider) => (
           <InstalledAgentRow
             key={provider}
@@ -266,13 +276,21 @@ function AccountsPane({ data }: { data: AgentProfilesResponse }) {
             // seeded by route gates, so a partially-populated cache entry is a real state.
             check={checks?.find((c) => c.name === provider)}
             accounts={(data.profiles ?? []).filter((p) => p.provider === provider)}
+            entry={methods.data?.agents.find(agent => agent.runner === provider)}
+            setup={setup.data?.agents.find(agent => agent.provider === provider)}
+            onSetup={sheet.open}
+            editable={methods.data?.editable === true}
+            onStar={() => saveDefault.mutate(provider)}
+            canStar={!saveDefault.isPending && canUseAgent(methods.data?.agents.find(agent => agent.runner === provider), status.data?.providers.find(row => row.provider === provider))}
+            staleModel={stale.includes(provider)}
             isDefault={provider === defaultRunner}
             highlighted={provider === requested}
           />
         ))}
       </SettingsCard>
 
-      <SettingsCard
+      {sheet.element}
+      {data.editable ? <SettingsCard
         slot="accounts-logins"
         title="Accounts"
         action={
@@ -307,6 +325,8 @@ function AccountsPane({ data }: { data: AgentProfilesResponse }) {
           ) : null}
         </CardNote>
       </SettingsCard>
+
+      : <CardNote slot="accounts-hosted">Agent accounts are disabled for remote access. Account management requires CEZ_REMOTE_AGENT_ACCOUNTS=1.</CardNote>}
 
       <AlertDialog open={confirming !== null} onOpenChange={(open) => !open && setConfirming(null)}>
         <AlertDialogContent data-slot="accounts-remove-confirm">
@@ -365,61 +385,64 @@ function useDefaultRunner(): Runner | undefined {
 }
 
 /** One agent on this machine: what the binary is, which logins it has, its default model. */
-function InstalledAgentRow({
-  provider,
-  check,
-  accounts,
-  isDefault,
-  highlighted = false,
-}: {
+function InstalledAgentRow({ provider, check, entry, setup, editable, onSetup, isDefault, highlighted, canStar, onStar, staleModel }: {
   provider: ProviderId
-  /** The `/api/v1/health` probe for this CLI — the ONE place a version can honestly come from. */
   check: BackendCheck | undefined
   accounts: AgentProfile[]
+  entry?: AgentProviderEntry
+  setup?: AgentSetupEntry
+  editable: boolean
+  onSetup: ReturnType<typeof useAgentSetupSheet>['open']
+  canStar: boolean
+  onStar: () => void
   isDefault: boolean
-  /** Named by the `?agent=` deep link. */
-  highlighted?: boolean
+  highlighted: boolean
+  staleModel: boolean
 }) {
-  const installed = check?.available === true
-  const facts = [
-    isDefault ? 'Default agent for new projects' : null,
-    accounts.length === 1 ? '1 account' : `${accounts.length} accounts`,
-  ].filter(Boolean)
+  const [open, setOpen] = useState(provider === 'claude' || highlighted || staleModel)
+  useEffect(() => { if (highlighted || staleModel) setOpen(true) }, [highlighted, staleModel])
+  const label = PROVIDER_LABEL[provider]
+  const installed = check?.available
+  const action = agentRowAction(setup, undefined)
+  const usable = entry && servingMethods(entry).length > 0
+  const summary = installed === false ? 'Not installed' : entry ? methodSummary(entry) : 'Checking…'
   return (
-    <FormRow
-      id={`agent-${provider}`}
-      slot="accounts-provider"
-      highlighted={highlighted}
-      label={
-        <span data-slot="accounts-provider-row" data-provider={provider} className="flex items-center gap-2">
-          {PROVIDER_LABEL[provider]}
-          {check === undefined ? (
-            <span data-slot="agent-installed" className="text-meta font-normal text-muted-foreground">Checking…</span>
-          ) : installed ? (
-            <>
-              <span data-slot="agent-installed" className="sr-only">Yes</span>
-              {check.version ? (
-                <Badge variant="ghost" data-slot="agent-version" className="font-mono text-micro text-muted-foreground">
-                  {check.version}
-                </Badge>
-              ) : null}
-            </>
-          ) : null}
-        </span>
-      }
-      description={
-        check !== undefined && !installed ? (
-          <span data-slot="agent-installed">
-            Not installed — <code className="text-label">{PROVIDER_INSTALL[provider]}</code>
-          </span>
-        ) : (
-          facts.join(' · ')
-        )
-      }
-    >
-      {/* Every runner, installed or not (as on main): a stale default must stay visible to clear. */}
-      <DefaultModelSelect runner={provider} />
-    </FormRow>
+    <section id={`agent-${provider}`} data-slot="accounts-provider" data-highlighted={highlighted ? '' : undefined}
+      className={`scroll-mt-16 px-4 py-2 ${highlighted ? 'bg-primary/5' : ''}`}>
+      <div className="flex flex-wrap items-center gap-2">
+        <button type="button" aria-expanded={open} aria-controls={`methods-${provider}`} onClick={() => setOpen(!open)}
+          data-slot="accounts-provider-row" data-provider={provider}
+          className="flex min-w-0 flex-1 flex-wrap items-center gap-2 rounded-sm py-1.5 text-left text-ui focus-visible:ring-2">
+          <ChevronRightIcon className={`size-4 text-muted-foreground ${open ? 'rotate-90' : ''}`} />
+          <span className="font-medium">{label}</span>
+          {installed && <span data-slot="agent-installed" className="sr-only">Yes</span>}
+          {check?.version && <Badge variant="ghost" data-slot="agent-version" className="font-mono text-micro">{check.version}</Badge>}
+          <StatusDot tone={usable ? 'success' : 'neutral'} />
+          <span className="text-label text-muted-foreground">{summary}</span>
+          {entry && <Badge variant="outline" className="text-micro">{entry.mode === 'one' ? 'One at a time' : 'Any combination'}</Badge>}
+        </button>
+        <Button type="button" size="icon-sm" variant="ghost" aria-label={`Start new projects with ${label}`} aria-pressed={isDefault}
+          disabled={!editable || !canStar || installed === false} onClick={onStar}>
+          <StarIcon className={isDefault ? 'fill-current text-primary' : ''} />
+          {isDefault && <span className="sr-only">Default agent for new projects</span>}
+        </Button>
+      </div>
+      {installed === false && <div data-slot="agent-installed" className="flex flex-wrap items-center gap-2 text-label text-muted-foreground">
+        <code>{setup?.install.command ?? PROVIDER_INSTALL[provider]}</code>
+        {editable && setup && <Button size="sm" variant="outline" onClick={() => onSetup(provider, setup.install.runnable ? 'install' : 'how-to-install')}>
+          {setup.install.runnable ? 'Install' : 'How to install'}
+        </Button>}
+      </div>}
+      {open && <div id={`methods-${provider}`} className="space-y-3 py-2 sm:pl-6">
+        {entry && <ProviderMethods agent={entry} editable={editable} />}
+        <DefaultModelSelect runner={provider} readOnly={entry !== undefined && !editable} entry={entry} />
+        <footer className="flex flex-wrap items-center gap-2 text-label text-muted-foreground">
+          {check?.version && <span>Installed {check.version}</span>}
+          {editable && action === 'update' && <Button size="sm" variant="ghost" onClick={() => onSetup(provider, action)}>{AGENT_ROW_ACTION_LABEL[action]} {setup?.latestVersion}</Button>}
+          {AGENT_DESCRIPTORS.some(d => d.id === provider) && <Link to={`/settings/agent-config?agent=${provider}`} className="ml-auto underline">Config files and MCP</Link>}
+        </footer>
+      </div>}
+    </section>
   )
 }
 
@@ -428,10 +451,10 @@ function InstalledAgentRow({
  * `null` clears the key back to "no opinion" — absence cannot say that in a partial patch, and
  * a stale value would keep seeding every unconfigured project.
  */
-function DefaultModelSelect({ runner }: { runner: Runner }) {
+function DefaultModelSelect({ runner, entry, readOnly }: { runner: Runner; entry?: AgentProviderEntry; readOnly: boolean }) {
   const queryClient = useQueryClient()
   const config = useWorkspaceConfig()
-  const catalogs = useRunnerModelCatalogs()
+  const catalog = useRunnerModels(runner)
   const [saved, flash] = useSavedFlash()
   const save = useMutation({
     mutationFn: (patch: SetWorkspaceConfigInput) => putWorkspaceConfig(patch),
@@ -445,12 +468,15 @@ function DefaultModelSelect({ runner }: { runner: Runner }) {
   const models = config.data.agentDefaults.models ?? {}
   const current = models[runner] ?? ''
   const label = RUNNERS.find((entry) => entry.id === runner)?.label ?? runner
-  const status = modelCatalogStatus(runner, catalogs[runner].data, catalogs[runner].isError)
+  const status = modelCatalogStatus(runner, catalog.data, catalog.isError)
+  const unavailable = entry && servingMethods(entry).length === 0
+  const options = unavailable ? [] : modelsForRunner(runner, catalog.data, [current], entry)
+  const missing = current && !options.some(m => m.id === current)
   return (
     <div className="flex items-center gap-2">
       <Select
         value={current === '' ? AUTO_MODEL : current}
-        disabled={save.isPending}
+        disabled={readOnly || save.isPending || (!!unavailable && !current)}
         onValueChange={(value) =>
           save.mutate({
             agentDefaults: {
@@ -467,11 +493,13 @@ function DefaultModelSelect({ runner }: { runner: Runner }) {
           data-value={current}
           className="max-w-56"
         >
-          <span className="text-muted-foreground">Model:</span>
+          <span className="text-muted-foreground">Default model</span>
           <SelectValue />
         </SelectTrigger>
         <SelectContent position="popper">
-          {modelsForRunner(runner, catalogs[runner].data, [current]).map((model) => (
+          {missing && <SelectItem value={current} disabled>{current} · no longer offered</SelectItem>}
+          {unavailable && <SelectItem value={AUTO_MODEL}>auto</SelectItem>}
+          {options.map((model) => (
             <SelectItem key={model.id || AUTO_MODEL} value={model.id || AUTO_MODEL}>
               {model.id === '' ? 'auto' : model.label}
             </SelectItem>

@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createQueryClient } from '@/api/query-client'
 import type { AgentConfigFile, AgentConfigListing } from '@open-mercato/cezar-api-client'
 import { Toaster } from '@/components/ui/toaster'
+import { MemoryRouter } from 'react-router'
 import { AgentConfigSection } from './agent-config-section'
 
 /**
@@ -71,7 +72,7 @@ function serve(listing: AgentConfigListing, fileContent = '{"a":1}') {
 function renderSection() {
   return render(
     <QueryClientProvider client={createQueryClient()}>
-      <AgentConfigSection />
+      <MemoryRouter><AgentConfigSection /></MemoryRouter>
       <Toaster />
     </QueryClientProvider>,
   )

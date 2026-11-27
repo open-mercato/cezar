@@ -7,6 +7,7 @@ import { queryKeys, workspaceQueryKeys } from '@/api/queries'
 import { createQueryClient } from '@/api/query-client'
 import type {
   AgentProfilesResponse,
+  AgentProvidersResponse,
   WorkspaceConfigResponse,
 } from '@open-mercato/cezar-api-client'
 import { Toaster, resetToasts } from '@/components/ui/toaster'
@@ -73,9 +74,11 @@ function serve({
   agentDefaults = {},
   accounts = ACCOUNTS,
   checks = [],
+  methods,
 }: {
   agentDefaults?: WorkspaceConfigResponse['agentDefaults']
   accounts?: AgentProfilesResponse
+  methods?: AgentProvidersResponse
   checks?: Array<{ name: string; available: boolean }>
 } = {}) {
   requests = []
@@ -115,6 +118,7 @@ function serve({
       const method = init?.method ?? 'GET'
       const body = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : undefined
       requests.push({ method, url, body })
+      if (url === '/api/v1/agent-providers' && methods) return json(methods)
       if (url === '/api/v1/workspace/config' && method === 'GET') return json(state)
       if (url === '/api/v1/workspace/config' && method === 'PUT') {
         const patch = (body?.agentDefaults ?? {}) as { runner?: string; models?: Record<string, string | null> }
@@ -196,6 +200,22 @@ afterEach(() => {
 })
 
 describe('Agent accounts → Defaults for new projects', () => {
+  it('moves the workspace default star without changing either account or project defaults', async () => {
+    serve({ methods: { editable: true, agents: ['claude', 'codex'].map(id => ({
+      runner: id as 'claude' | 'codex', mode: 'one', active: 'subscription',
+      methods: [{ id: 'subscription', kind: 'subscription', label: 'Subscription', state: 'connected' }],
+    })) } })
+    renderAccounts()
+    const star = await screen.findByRole('button', { name: 'Start new projects with Codex' })
+    await waitFor(() => expect(star.hasAttribute('disabled')).toBe(false))
+    fireEvent.click(star)
+    await waitFor(() => expect(star.getAttribute('aria-pressed')).toBe('true'))
+    expect(screen.getByRole('button', { name: 'Start new projects with Claude Code' }).getAttribute('aria-pressed')).toBe('false')
+    expect(configPuts().map(r => r.body)).toEqual([{ agentDefaults: { runner: 'codex' } }])
+    expect(selections()).toHaveLength(0)
+    expect(repoConfigWrites()).toHaveLength(0)
+  })
+
   it('survives a server that has never heard of agent defaults', async () => {
     // Version skew, and it crashed this page for real: Vite serves this bundle while `dist/` or
     // another process serves the API, so an older server answers `/workspace/config` with no

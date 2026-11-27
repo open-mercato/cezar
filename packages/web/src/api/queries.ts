@@ -48,6 +48,7 @@ import {
   getProjectRuns,
   getProjects,
   getRunnerModels,
+  getAgentProviders,
   getRepo,
   getRunCommit,
   getRunCommits,
@@ -467,6 +468,7 @@ export function useTrackerItem(association: TrackerAssociation | null | undefine
 export const workspaceQueryKeys = {
   dashboard: ['workspace', 'dashboard'] as const,
   models: (runner: string) => ['workspace', 'models', runner] as const,
+  agentProviders: ['workspace', 'agent-providers'] as const,
   providerStatus: ['workspace', 'providers', 'status'] as const,
   agentSetup: ['workspace', 'providers', 'setup'] as const,
   projects: ['workspace', 'projects'] as const,
@@ -526,30 +528,20 @@ export const workspaceQueryKeys = {
     [...workspaceQueryKeys.fsBrowseRoot, path, showHidden] as const,
 }
 
-/**
- * One runner's host-discovered catalog, cached per runner (#794 — this used to be hard-wired to
- * Codex, which is why OpenCode had nothing but stale presets to show). Cursor (#807) discovers
- * the same way — nothing runner-specific lives here, `runnerDiscoversModels` already knows it.
- *
- * A runner with no host catalog never fetches and never resolves data, so its picker falls back
- * to static presets — callers can pass any runner and read `data`/`isError` without checking
- * first. Claude joined the discovering runners in #784; `pi` is the one that still takes the
- * fallback path today.
- *
- * `enabled` lets a caller that only MIGHT render the model pills (the thread's Continue — hooks
- * cannot be called conditionally) skip the fetch when it definitely won't.
- */
+export function useAgentProviders() {
+  return useQuery({
+    queryKey: workspaceQueryKeys.agentProviders,
+    queryFn: ({ signal }) => getAgentProviders({ signal }),
+    staleTime: 0,
+  })
+}
+
 export function useRunnerModels(runner: Runner, enabled = true) {
   return useQuery({
     queryKey: workspaceQueryKeys.models(runner),
-    // The narrowing IS the guard — the query is disabled for a runner with no host catalog, so
-    // this branch is unreachable rather than merely unlikely, and no cast is needed to say so.
-    queryFn: ({ signal }) =>
-      runnerDiscoversModels(runner)
-        ? getRunnerModels(runner, { signal })
-        : Promise.reject(new Error(`${runner} has no host model catalog`)),
+    queryFn: ({ signal }) => getRunnerModels(runner, { signal }),
     staleTime: 5 * 60 * 1_000,
-    enabled: enabled && runnerDiscoversModels(runner),
+    enabled,
   })
 }
 

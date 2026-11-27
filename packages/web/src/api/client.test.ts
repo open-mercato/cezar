@@ -330,7 +330,9 @@ describe('request shapes', () => {
   ]
 
   it.each(cases)('$name hits $method $path', async ({ call, path, method, body }) => {
-    reply(path.startsWith('/api/v1/providers/') ? VALID_PROVIDER_STATUS : { ok: true })
+    const runner = new URL(path, 'http://example.test').searchParams.get('runner')
+    reply(path.startsWith('/api/v1/models?') ? { runner, models: [], source: 'live', stale: false }
+      : path.startsWith('/api/v1/providers/') ? VALID_PROVIDER_STATUS : { ok: true })
     await call()
 
     const sent = lastCall()
