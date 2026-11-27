@@ -9,6 +9,8 @@ import {
   automationSchedulesSchema,
   automationScheduleIssue,
   automationReportSchema,
+  automationTaskTagSchema,
+  RUN_TAGS_MAX,
   type AutomationSchedule,
 } from '@open-mercato/cezar-contract';
 import { RUNNER_IDS } from '../core/agent-runner.ts';
@@ -63,6 +65,8 @@ export const automationTaskSchema = z
     generateFollowups: z.boolean().optional(),
     autonomous: z.boolean().optional(),
     systemPrompt: z.string().max(100_000).optional(),
+    /** Task tags for every launched run (spec 2026-11-23-automation-task-tags). */
+    tags: z.array(automationTaskTagSchema).max(RUN_TAGS_MAX).optional(),
     /**
      * Where the launched run's worktree forks from (spec 2026-10-06-agentic-e2e-checks Phase 3):
      * omitted or `'base'` is the configured base branch, exactly as before; `'pr-head'` is the
@@ -84,12 +88,14 @@ export const automationTaskSchema = z
   .passthrough()
   .refine((task) => !(task.workflow && task.steps), {
     message: 'task selects either a named workflow or inline steps, not both',
-  })
-  // `.passthrough()` would keep it and the launch would apply it: tagging an automation's tasks is
-  // a later, separate decision (spec 2026-11-23-task-tags § 5).
-  .refine((task) => !Object.prototype.hasOwnProperty.call(task, 'tags'), {
-    message: 'automation tasks cannot carry task tags',
   });
+
+function dropInvalidTaskTags(raw: unknown): unknown {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw) || !('tags' in raw)) return raw;
+  if (z.array(automationTaskTagSchema).max(RUN_TAGS_MAX).safeParse((raw as { tags: unknown }).tags).success) return raw;
+  const { tags: _tags, ...rest } = raw as Record<string, unknown>;
+  return rest;
+}
 
 /**
  * A poll's two defaulted keys are filled BEFORE parsing, and only for a poll kind (`github` or
@@ -124,7 +130,8 @@ export const automationDefinitionObjectSchema = z
     trackerTrigger: trackerTriggerSchema.optional(),
     schedule: automationScheduleSchema.optional(),
     schedules: automationSchedulesSchema.optional(),
-    task: automationTaskSchema,
+    // A malformed `tags` drops the tags, never the definition (spec 2026-11-23-automation-task-tags).
+    task: z.preprocess(dropInvalidTaskTags, automationTaskSchema),
     deferredStart: deferredStartStateSchema.optional(),
     /** A manager's chat the server posts each run to. A link this version cannot read is dropped,
      *  never the definition: losing a report beats losing an automation. */

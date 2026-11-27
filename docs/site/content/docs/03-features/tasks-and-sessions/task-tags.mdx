@@ -51,6 +51,12 @@ cez task create "Fix the login redirect" --tag backend
 cez task tag TASK_ID --add backend --remove stale
 ```
 
+## Automations and scheduled starts
+
+An automation can tag every task it launches. In the automation editor, use **Tag each run**. From a shell, pass `--tag <name>` to `cez automation add`. A task you schedule with **Start later** in the composer keeps the tags you picked.
+
+An automation stores each tag's id and name. At launch it uses the tag with that id, or else a tag with the same name. When neither exists, for example because you deleted the tag, the run starts without it and a note on the task says so. A launch never recreates a deleted tag. The editor shows such a tag as a gray chip.
+
 > **Good to know**:
 >
 > - A task holds at most 10 tags, and the registry holds at most 500.

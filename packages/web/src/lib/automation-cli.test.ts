@@ -84,3 +84,9 @@ it('keeps explicit enable for a reviewed read-only tracker export', () => {
   const trackerTrigger = { association: { kind: 'jira' as const, source: { id: 'cloud', webUrl: 'https://fixture.atlassian.net' }, externalId: '1', externalName: 'Project' }, events: ['issue.opened' as const], access: { version: 1 as const, writes: [] } }
   expect(cliOf({ name: 'bugs', kind: 'tracker', trackerTrigger, enable: true, task: { prompt: 'Fix' } })).toContain('"enable":true')
 })
+
+it('passes task tags to the flag form by name', () => {
+  const flags = cliFlagsOf({ name: 'n', kind: 'schedule', schedule: { type: 'daily', hour: 4, minute: 0 }, task: { prompt: 'p', tags: [{ id: 'tt-abcdefgh1234', name: 'nightly run' }] } })
+  expect(flags).toContain('--tag "nightly run"')
+  expect(flags).not.toContain('tt-abcdefgh1234')
+})

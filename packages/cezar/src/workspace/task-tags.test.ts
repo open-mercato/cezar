@@ -7,6 +7,7 @@ import { taskTagsPath } from '../paths.ts';
 import {
   TASK_TAG_TOMBSTONES_MAX,
   applyRunTagDelta,
+  automationTagsForSave,
   createTaskTag,
   defaultTaskTagStore,
   deleteTaskTag,
@@ -15,6 +16,8 @@ import {
   mergeWriteTaskTags,
   resetTaskTagWarningForTests,
   resolveTagRefs,
+  resolveAutomationTags,
+  resolveAutomationTagsIn,
   resolveTagRefsIn,
   TaskTagError,
   TaskTagWriteError,
@@ -286,5 +289,73 @@ describe('task tag registry', () => {
     const { homedir } = await import('node:os');
     process.env.CEZ_HOME = join(homedir(), '.cezar');
     await expect(mergeWriteTaskTags(() => {})).rejects.toThrow();
+  });
+});
+
+/** Automation tags (spec 2026-11-23-automation-task-tags): saved as `{id, name}`, resolved fail-open. */
+describe('automation task tags', () => {
+  const originalHome = process.env.CEZ_HOME;
+  let home: string;
+
+  beforeEach(() => {
+    home = mkdtempSync(join(tmpdir(), 'cez-automation-tags-'));
+    process.env.CEZ_HOME = home;
+  });
+
+  afterEach(() => {
+    rmSync(home, { recursive: true, force: true });
+    if (originalHome === undefined) delete process.env.CEZ_HOME;
+    else process.env.CEZ_HOME = originalHome;
+  });
+
+  const seed = (names: string[], projectRoot: string | null = null): TaskTagStore => {
+    const store = defaultTaskTagStore();
+    for (const name of names) createTaskTag(store, { name, projectRoot });
+    return store;
+  };
+
+  it('resolves a live id, and falls back to the name when the id is gone or foreign', () => {
+    const store = seed(['nightly', 'batch']);
+    const nightly = store.tags[0]!;
+    const foreign = createTaskTag(store, { name: 'elsewhere', projectRoot: '/other' });
+    createTaskTag(store, { name: 'Elsewhere', projectRoot: '/repo' });
+    const { tags, dropped } = resolveAutomationTagsIn(store, [
+      { id: nightly.id, name: 'renamed-since' },
+      { id: 'tt-gone00000000', name: 'BATCH' },
+      { id: foreign.id, name: 'elsewhere' },
+    ], '/repo');
+    expect(tags.map((t) => t.name)).toEqual(['nightly', 'batch', 'Elsewhere']);
+    expect(dropped).toEqual([]);
+  });
+
+  it('drops a tag found neither by id nor by name, and never creates it', () => {
+    const store = seed(['kept']);
+    const before = JSON.stringify(store);
+    const { tags, dropped } = resolveAutomationTagsIn(store, [{ name: 'kept' }, { id: 'tt-gone00000000', name: 'deleted' }], '/repo');
+    expect(tags.map((t) => t.name)).toEqual(['kept']);
+    expect(dropped).toEqual(['deleted']);
+    expect(JSON.stringify(store)).toBe(before);
+  });
+
+  it('a deleted tag stays deleted across launches', async () => {
+    await mergeWriteTaskTags((store) => { createTaskTag(store, { name: 'gone', projectRoot: null }); });
+    const [tag] = (await loadTaskTags()).tags;
+    await mergeWriteTaskTags((store) => deleteTaskTag(store, tag!.id));
+    const result = await resolveAutomationTags([{ id: tag!.id, name: 'gone' }], '/repo');
+    expect(result).toEqual({ tags: [], dropped: ['gone'] });
+    expect((await loadTaskTags()).tags).toEqual([]);
+  });
+
+  it('saves {id, name}: a name creates its tag, a deleted id falls back to its name', async () => {
+    await mergeWriteTaskTags((store) => { createTaskTag(store, { name: 'old', projectRoot: null }); });
+    const [old] = (await loadTaskTags()).tags;
+    await mergeWriteTaskTags((store) => deleteTaskTag(store, old!.id));
+    const saved = await automationTagsForSave([{ name: 'fresh' }, { id: old!.id, name: 'old' }], '/repo');
+    const live = (await loadTaskTags()).tags;
+    expect(live.map((t) => t.name).sort()).toEqual(['fresh', 'old']);
+    const idOf = new Map(live.map((t) => [t.name, t.id]));
+    expect(saved).toEqual([{ id: idOf.get('fresh'), name: 'fresh' }, { id: idOf.get('old'), name: 'old' }]);
+    expect(idOf.get('old')).not.toBe(old!.id);
+    expect(await automationTagsForSave(undefined, '/repo')).toBeUndefined();
   });
 });

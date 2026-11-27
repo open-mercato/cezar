@@ -135,6 +135,7 @@ import {
   type GroupVariant,
   type PickVariantResponse,
   type RunIndexEntry,
+  type AutomationTaskTag,
   type RunTag,
   type RunsIndexResponse,
   type StarCountPayload,
@@ -336,7 +337,7 @@ import { configuredReclaimCandidates, enforceWorktreeRetention, isIdleReclaimabl
 import { inUseRefusal, worktreeInUse, worktreeInUseAfterStop } from '../worktree-in-use.ts';
 import { worktreeLifecycleRoutes, lifecycleError } from './worktree-lifecycle.ts';
 import { runTagsRoutes, taskTagError, taskTagsWorkspaceRoutes } from './task-tags.ts';
-import { resolveTagRefs } from '../workspace/task-tags.ts';
+import { automationTagsForSave, resolveTagRefs } from '../workspace/task-tags.ts';
 import { readLifecycleConfigOrDefault, readLifecycleConfigRaw, lifecycleConfigFromRaw, withLifecycleConfigLock, applyLifecycleConfigUpdate, isLifecycleConfigTracked, LifecycleConfigError, TRACKED_CONFIG_ERROR } from '../worktree-lifecycle/config.ts';
 import { atomicLifecycleWrite, LifecycleStoreError } from '../worktree-lifecycle/store.ts';
 import { validateLifecycleCommand } from '../worktree-lifecycle/templates.ts';
@@ -4813,6 +4814,12 @@ export function createAppParts(deps: ServerDeps) {
     return runs;
   };
 
+  // A definition stores `{id, name}`, resolved while the user saves (spec 2026-11-23-automation-task-tags).
+  const withSavedAutomationTags = async <T extends { tags?: AutomationTaskTag[] }>(task: T, root: string): Promise<T> => {
+    const { tags: refs, ...rest } = task;
+    const tags = await automationTagsForSave(refs, root);
+    return (tags ? { ...rest, tags } : rest) as T;
+  };
   /** An account named on save is checked like `POST /runs` checks one: the user just picked it, so
    *  a stale id is a 400. At launch a since-deleted id falls back to the default, as any stored
    *  reference does. */
@@ -4872,13 +4879,21 @@ export function createAppParts(deps: ServerDeps) {
         if (!resolved.preview.available) return c.json({ error: resolved.preview.message }, 400);
         if (resolved.preview.previewRevision !== input.previewRevision || !lease.isValid()) return c.json({ error: 'Settings or reset time changed. Check the preview again.' }, 409);
         if ((input.task.variants ?? 1) > 1 && !await getRepoInfo(project.root)) return c.json({ error: 'Parallel variants need a git repository.' }, 400);
-        // Task tags stay off automation definitions (spec 2026-11-23-task-tags § 5), so a scheduled
-        // start does not carry them; tag the task once it runs.
-        const { task, images: _images, todoId: _todoId, variants, tags: _tags, ...fields } = input.task;
+        const { task, images: _images, todoId: _todoId, variants, tags: tagRefs, ...fields } = input.task;
+        // Resolved now, while the user is here; the launch then resolves `{id, name}` fail-open
+        // like any automation's (spec 2026-11-23-automation-task-tags).
+        let tags: AutomationTaskTag[] = [];
+        if (tagRefs && tagRefs.length > 0) {
+          try {
+            tags = (await resolveTagRefs(tagRefs, project.root)).tags.map((tag) => ({ id: tag.id, name: tag.name }));
+          } catch (error) {
+            return taskTagError(c, error);
+          }
+        }
         const automation = store.create({
           name: task.trim().replace(/\s+/g, ' ').slice(0, 100), kind: 'schedule', enabled: true,
           schedule: resolved.schedule!,
-          task: { ...fields, prompt: task, variants: (variants ?? 1) as 1 | 2 | 3 },
+          task: { ...fields, prompt: task, variants: (variants ?? 1) as 1 | 2 | 3, ...(tags.length > 0 ? { tags } : {}) },
           deferredStart: { origin: 'composer', reason: input.start.kind, notBefore: resolved.preview.notBefore,
             timeZone: resolved.preview.timeZone, binding: resolved.binding!, creationKey: input.idempotencyKey,
             requestDigest, status: 'pending', runIds: [] },
@@ -5004,6 +5019,11 @@ export function createAppParts(deps: ServerDeps) {
       const { enable, ...input } = parsed.data;
       if (input.report && !managerStore.get(input.report.managerId)) return c.json({ error: `manager not found: ${input.report.managerId}` }, 400);
       try {
+        input.task = await withSavedAutomationTags(input.task, c.get('project').root);
+      } catch (error) {
+        return taskTagError(c, error);
+      }
+      try {
         const automation = automationStore.create(
           { ...input, kind, enabled: enable === true },
           undefined,
@@ -5077,6 +5097,11 @@ export function createAppParts(deps: ServerDeps) {
       const accountIssue = await automationAccountIssue(c.get('project').root, parsed.data.task);
       if (accountIssue) return c.json({ error: accountIssue }, 400);
       const { expectedRevision, ...input } = parsed.data;
+      try {
+        input.task = await withSavedAutomationTags(input.task, c.get('project').root);
+      } catch (error) {
+        return taskTagError(c, error);
+      }
       try {
         // Match the scanner's checkpoint identity: association and effective event selection.
         // Prompt and eligibility-filter edits keep progress so events since the last poll survive.

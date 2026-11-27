@@ -48,6 +48,19 @@ describe('AutomationStore', () => {
     );
   });
 
+  it('keeps a definition whose stored task tags are malformed, dropping only the tags', async () => {
+    const dir = await directory();
+    const tagged = AutomationStore.open(dir).create({ ...input, task: { ...input.task, tags: [{ id: 'tt-abcdefgh1234', name: 'nightly' }] } }, 'tagged');
+    expect(tagged.task.tags).toEqual([{ id: 'tt-abcdefgh1234', name: 'nightly' }]);
+    const path = join(dir, 'automations.json');
+    const raw = JSON.parse(readFileSync(path, 'utf8'));
+    raw.automations[0].task.tags = 'not-a-list';
+    writeFileSync(path, JSON.stringify(raw));
+    const reopened = AutomationStore.open(dir, { warn: () => undefined }).get('tagged');
+    expect(reopened?.task.prompt).toBe(input.task.prompt);
+    expect(reopened?.task.tags).toBeUndefined();
+  });
+
   it('salvages valid entries and malformed NDJSON rows with one warning per file', async () => {
     const dir = await directory();
     const valid = AutomationStore.open(dir).create(input, 'valid');

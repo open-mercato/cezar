@@ -30,6 +30,8 @@ Automations → New automation → When GitHub changes
 2. Save the rule and check Preview matches.
 3. Enable the rule to process future changes.
 
+To label every task a rule launches, use **Tag each run** in the editor. See [Task tags](/docs/features/tasks-and-sessions/task-tags#automations-and-scheduled-starts).
+
 > **Good to know**: The feature has been available by default since the interface redesign. `CEZ_AUTOMATIONS=0` disables it. A rule starts working after the user enables it and does not create tasks for earlier matches.
 
 ## Export and import
@@ -46,5 +48,7 @@ The same flow is available from the terminal. `import` without `--apply` prints 
 cez automation export [<id>…] [--out <file>]
 cez automation import <file> [--on-conflict skip|rename|replace] [--apply]
 ```
+
+> **Good to know**: Task tags travel by name. On another machine, an automation's tag applies when a tag with the same name exists there; otherwise its runs start without it.
 
 > **Good to know**: Every imported automation lands paused, so nothing runs until you enable it. A file written by a newer cezar, an invalid file, or one that is not valid JSON is refused with one message and no preview. If the project changes between the preview and the import, the import is refused and asks you to review again. `--on-conflict` defaults to `skip`.

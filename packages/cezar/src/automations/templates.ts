@@ -52,6 +52,7 @@ export function automationTemplatesOf(
           ...(definition.task.dispatch ? { dispatch: definition.task.dispatch } : {}),
           ...(definition.task.checkout ? { checkout: definition.task.checkout } : {}),
           ...(definition.task.allowForkHeads !== undefined ? { allowForkHeads: definition.task.allowForkHeads } : {}),
+          ...(definition.task.tags?.length ? { tags: definition.task.tags.map(({ name }) => ({ name })) } : {}),
         },
       });
     }

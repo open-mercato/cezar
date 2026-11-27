@@ -8,6 +8,7 @@ import { trackerAssociationSchema, trackerAutomationEventSchema, trackerFailureS
 import { createRunInputBaseSchema, runStatusSchema } from './runs.ts';
 import { DISPATCH_MAX_SUBTASKS, dispatchKindSchema, dispatchIntentSchema } from './dispatch.ts';
 import { automationScheduleSchema, automationSchedulesSchema } from './automation-schedule.ts';
+import { RUN_TAGS_MAX, automationTaskTagSchema } from './task-tags.ts';
 
 /**
  * The AUTOMATIONS family of `/api/v1` (#694) — the per-project GitHub triggers, their runtime
@@ -134,6 +135,9 @@ export const automationTaskSchema = createRunInputBaseSchema
     prompt: z.string(),
     variants: z.union([z.literal(1), z.literal(2), z.literal(3)]).optional(),
     systemPrompt: z.string().optional(),
+    /** Task tags every launched run gets (spec 2026-11-23-automation-task-tags): `{id, name}`, resolved
+     *  at launch by id, then by name; a tag that resolves neither way is dropped, never created. */
+    tags: z.array(automationTaskTagSchema).max(RUN_TAGS_MAX).optional(),
     dispatch: automationDispatchSchema.optional(),
     /** Where the launched run's worktree forks from (spec 2026-10-06-agentic-e2e-checks Phase 3):
      *  omitted/`'base'` = the configured base; `'pr-head'` = the matched pull request's head.
@@ -467,6 +471,8 @@ export const automationTemplateSchema = z.object({
     dispatch: automationDispatchSchema.optional(),
     checkout: automationTaskSchema.shape.checkout,
     allowForkHeads: automationTaskSchema.shape.allowForkHeads,
+    /** Names only: a tag id is the source project's, and the copy resolves the name in its own. */
+    tags: automationTaskSchema.shape.tags,
   }),
 });
 export type AutomationTemplate = z.infer<typeof automationTemplateSchema>;

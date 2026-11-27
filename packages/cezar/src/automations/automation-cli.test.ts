@@ -416,6 +416,7 @@ describe('cez automation add / run (spec 2026-09-14)', () => {
     expect(parseEvery('90s')).toBe(90);
     expect(parseEvery('45')).toBe(45);
     expect(() => parseEvery('soon')).toThrow('--every');
+    expect(bodyFromAddFlags({ name: 't', cron: '0 4 * * *', tag: ['nightly', 'deps'] }, 'p')).toMatchObject({ task: { tags: [{ name: 'nightly' }, { name: 'deps' }] } });
     expect(bodyFromAddFlags({ name: 'w', cron: '30 7 * * 1-5' }, 'p')).toMatchObject({ kind: 'schedule', schedule: { type: 'weekdays', hour: 7, minute: 30 } });
   });
 

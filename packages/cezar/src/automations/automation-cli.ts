@@ -53,7 +53,7 @@ const USAGE = `cez automation — create and manage automations (GitHub/Jira/Lin
   cez automation add --name <name> (--cron "<M H * * *>" | --at "YYYY-MM-DD HH:MM" | --on <event>[,<event>] --every <5m|1h>)
                      [--prompt <text> | --prompt-file <path>] [--workflow <w>] [--runner ${RUNNER_IDS.join('|')}]
                      [--model <m>] [--autonomous | --no-autonomous] [--dispatch [--max-subtasks N] [--review-child]]
-                     [--label <l>]... [--author <a>]... [--enable]
+                     [--label <l>]... [--author <a>]... [--tag <name>]... [--enable]
                      [--report-to-manager [--manager <id>] [--report-mode post-result|failure-only|none]]
                                                 the same, from flags: --cron takes "M H * * *" (daily), "M H * * 1-5"
                                                 (weekdays), "M H * * D" (one weekday, 0 or 7 = Sunday) or "0 */N * * *"
@@ -211,7 +211,7 @@ const REPORT_FLAGS = {
 /** The `add` flags as the `create` body they stand for. Exported so the tests pin the mapping. */
 export function bodyFromAddFlags(values: {
   name?: string; cron?: string; at?: string; on?: string; every?: string; prompt?: string; kind?: string; 'to-status'?: string[]; 'changed-label'?: string[]; 'require-label'?: string[];
-  workflow?: string; runner?: string; model?: string; autonomous?: boolean; 'no-autonomous'?: boolean;
+  workflow?: string; runner?: string; model?: string; autonomous?: boolean; 'no-autonomous'?: boolean; tag?: string[];
   dispatch?: boolean; 'max-subtasks'?: string; 'review-child'?: boolean; label?: string[]; author?: string[]; enable?: boolean;
 }, prompt: string): Record<string, unknown> {
   if (!values.name?.trim()) throw new Error('--name is required');
@@ -229,6 +229,7 @@ export function bodyFromAddFlags(values: {
   if (values.workflow) task.workflow = values.workflow;
   if (values.runner) task.runner = values.runner;
   if (values.model) task.model = values.model;
+  if (values.tag?.length) task.tags = values.tag.map((name) => ({ name }));
   if (values.dispatch || values['max-subtasks'] !== undefined || values['review-child']) {
     const dispatch: Record<string, unknown> = {};
     if (values['max-subtasks'] !== undefined) {
@@ -379,6 +380,7 @@ export async function runAutomationCommand(
             autonomous: { type: 'boolean', default: false }, 'no-autonomous': { type: 'boolean', default: false },
             dispatch: { type: 'boolean', default: false }, 'max-subtasks': { type: 'string' }, 'review-child': { type: 'boolean', default: false },
             label: { type: 'string', multiple: true }, author: { type: 'string', multiple: true },
+            tag: { type: 'string', multiple: true },
             enable: { type: 'boolean', default: false },
             ...REPORT_FLAGS,
           },
