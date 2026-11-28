@@ -2504,6 +2504,42 @@ describe('CEZ:ASK parks as waiting and emits ask.requested (#473)', () => {
       }
     });
 
+    // #2524: removing a project cancels its stranded runs and disposes the manager in one tick.
+    it('still hard-stops a cancelled agent when the manager is disposed inside the grace window', async () => {
+      vi.useFakeTimers();
+      try {
+        const id = cancelledRun();
+        const { session } = hangingSession({ exitsOnHardStop: false });
+        register(id, session);
+
+        manager.cancel(id);
+        manager.dispose();
+        await vi.advanceTimersByTimeAsync(1_000);
+
+        expect(session.hardStops).toBe(1);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('does not hard-stop a cancelled agent that exited on its own before the grace ran out', async () => {
+      vi.useFakeTimers();
+      try {
+        const id = cancelledRun();
+        const { session, settle } = hangingSession({ exitsOnHardStop: false });
+        register(id, session);
+
+        manager.cancel(id);
+        manager.dispose();
+        settle();
+        await vi.advanceTimersByTimeAsync(1_000);
+
+        expect(session.hardStops).toBe(0);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
     it('lets a late result from the released session leave a replacement owner alone', async () => {
       vi.useFakeTimers();
       try {

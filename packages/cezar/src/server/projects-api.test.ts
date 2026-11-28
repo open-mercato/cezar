@@ -809,6 +809,66 @@ describe('workspace projects API', () => {
       contexts.disposeAll();
     });
 
+    it.each(['project folder', 'task worktree'] as const)(
+      'removes a project whose %s was deleted under a waiting task, cancelling the stranded run', async (gone) => {
+        const contexts = new ProjectContexts({ listProjects });
+        const other = await registerProject(otherRoot);
+        const ctx = await contexts.context(other.id);
+        const worktreePath = join(otherRoot, '.ai/cezar/worktrees/stranded');
+        mkdirSync(worktreePath, { recursive: true });
+        const run = ctx.store.createRun({ title: 'stranded', workflow: 'quick-task', task: 'x', steps: [] });
+        ctx.store.updateRun(run.id, { status: 'waiting', worktreePath });
+        const cancel = vi.spyOn(ctx.manager, 'cancel');
+        rmSync(gone === 'project folder' ? otherRoot : worktreePath, { recursive: true, force: true });
+        try {
+          const { status, body } = await del(other.id, { contexts });
+          expect(status).toBe(200);
+          expect(body).toEqual({ removed: true, id: other.id });
+          expect(cancel).toHaveBeenCalledWith(run.id);
+          expect(contexts.peek(other.id)).toBeUndefined();
+        } finally {
+          contexts.disposeAll();
+          mkdirSync(otherRoot, { recursive: true });
+        }
+      },
+    );
+
+    it('still 409s a waiting task whose worktree exists', async () => {
+      const contexts = new ProjectContexts({ listProjects });
+      const other = await registerProject(otherRoot);
+      const ctx = await contexts.context(other.id);
+      const worktreePath = join(otherRoot, '.ai/cezar/worktrees/live');
+      mkdirSync(worktreePath, { recursive: true });
+      const run = ctx.store.createRun({ title: 'live', workflow: 'quick-task', task: 'x', steps: [] });
+      ctx.store.updateRun(run.id, { status: 'waiting', worktreePath });
+      const refused = await del(other.id, { contexts });
+      expect(refused.status).toBe(409);
+      expect(refused.body.runningTasks).toBe(1);
+      contexts.disposeAll();
+    });
+
+    // A reclaimed worktree comes back at dequeue (retention.ts), so a queued Continue is not stranded.
+    it.each([
+      ['a queued Continue', { status: 'queued' as const }],
+      ['a reclaimed worktree', { status: 'waiting' as const, worktreeReclaimedAt: new Date().toISOString() }],
+    ])('still 409s %s whose worktree is missing', async (_label, patch) => {
+      const contexts = new ProjectContexts({ listProjects });
+      const other = await registerProject(otherRoot);
+      const ctx = await contexts.context(other.id);
+      const worktreePath = join(otherRoot, '.ai/cezar/worktrees/reclaimed');
+      const run = ctx.store.createRun({ title: 'reclaimed', workflow: 'quick-task', task: 'x', steps: [] });
+      ctx.store.updateRun(run.id, { ...patch, worktreePath });
+      const cancel = vi.spyOn(ctx.manager, 'cancel');
+      try {
+        const refused = await del(other.id, { contexts });
+        expect(refused.status).toBe(409);
+        expect(refused.body.runningTasks).toBe(1);
+        expect(cancel).not.toHaveBeenCalled();
+      } finally {
+        contexts.disposeAll();
+      }
+    });
+
     it('404s an unknown id and a malformed one, without touching the registry', async () => {
       const other = await registerProject(otherRoot);
       for (const id of ['nope', 'Not%20A%20Slug', 'a'.repeat(120)]) {
