@@ -50,6 +50,12 @@ export const capabilitiesSchema = z.object({
   designMode: z.boolean(),
   followups: z.boolean(),
   /**
+   * `true` means this cockpit has the project workspace (#1608): `/p/:id/workspace?preview=<url>`
+   * opens an app in the Preview beside a project-checkout terminal with no task. Lets a launcher
+   * (cezar-run's `--preview-url`, an integration) detect support without a launch attempt.
+   */
+  projectWorkspace: z.boolean().optional(),
+  /**
    * `true` means Settings offers Connect a phone: `CEZ_RELAY=0` is not set. The relay address is a
    * setting, reported by `GET /workspace/phones` (spec `.ai/specs/2026-11-01-relay-qr-pairing.md`).
    * Always false in a relay scope, so a phone cannot pair another phone.

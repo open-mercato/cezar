@@ -1035,6 +1035,7 @@ describe('workspace projects API', () => {
         terminal: true,
         designMode: true,
         followups: false,
+        projectWorkspace: true,
         phonePairing: true,
         singleProject: false,
         automations: true,

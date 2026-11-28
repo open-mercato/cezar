@@ -37,6 +37,8 @@ Cezar requires Node.js 20 or later. Start it in your project directory. The pack
 
 The default command is serve. The server listens on 127.0.0.1, normally on port 4321. If that port is busy, read the actual address from the cockpit → message. Use --repo to select another directory and --no-open to prevent the browser from opening automatically.
 
+Use --preview-url with an http(s) address to land on the project workspace: that app in the Preview beside a terminal in the project checkout, with no task, worktree or agent started. Other schemes (javascript:, file:) are rejected.
+
 ```bash
 cd /path/to/project
 npx cezar-run --no-open

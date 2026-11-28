@@ -244,6 +244,7 @@ describe('resolveCapabilities — followups (#471)', () => {
       terminal: false,
       designMode: false,
       followups: true,
+      projectWorkspace: true,
       phonePairing: true,
       singleProject: false,
       automations: true, managers: true, managerSystemNotifications: MANAGER_NOTIFY,
@@ -302,6 +303,7 @@ describe('resolveCapabilities — automations (spec 2026-09-14, default-on)', ()
     expect(resolveCapabilities({})).toMatchObject({
       automations: true, managers: true, managerSystemNotifications: MANAGER_NOTIFY,
       followups: false,
+      projectWorkspace: true,
       phonePairing: true,
       singleProject: false,
       dispatch: true,
@@ -334,6 +336,7 @@ describe('resolveCapabilities — dispatch (spec 2026-09-10-dispatch)', () => {
       dispatch: true,
       automations: true, managers: true, managerSystemNotifications: MANAGER_NOTIFY,
       followups: false,
+      projectWorkspace: true,
       phonePairing: true,
       singleProject: false,
     });
@@ -402,7 +405,7 @@ describe('webhook platform availability', () => {
         expect(capabilitiesSchema.strict().parse(capabilities)).toEqual(capabilities);
         expect(capabilities.webhooks).toBe(supported && flag === '1');
         expect(capabilities).toEqual({
-          localHandoff: true, terminal: true, designMode: true, followups: false, phonePairing: true, singleProject: false, automations: true, managers: true, managerSystemNotifications: MANAGER_NOTIFY,
+          localHandoff: true, terminal: true, designMode: true, followups: false, projectWorkspace: true, phonePairing: true, singleProject: false, automations: true, managers: true, managerSystemNotifications: MANAGER_NOTIFY,
           dispatch: true, tokenMetrics: true, tokenUsageMetrics: true, costMetrics: true,
           webhooks: supported && flag === '1',
           ...(supported ? {} : { webhooksUnavailableReason: 'unsupported_platform' }),

@@ -250,6 +250,7 @@ export function resolveCapabilities(env: NodeJS.ProcessEnv = process.env, bindHo
     // Deliberately not re-derived here: RunManager enforces the same predicate,
     // and two spellings of "is the inbox on" would eventually disagree.
     followups: followupsEnabled(env),
+    projectWorkspace: true,
     // Not the address: it is a setting read per request, so the section can ask for it.
     phonePairing: !relayBlocked(env),
     singleProject: env.CEZ_SINGLE_PROJECT === '1',

@@ -768,6 +768,14 @@ and opens (or, with `--no-open`, prints) its canonical `/p/<project>/` URL. If n
 exists, the command starts the server normally. `--port` chooses the preferred port only for that
 new-server path; it does not request a second interactive cockpit.
 
+`--preview-url <http(s) address>` (#1608) opens the project's **workspace** instead,
+`/p/<project>/workspace?preview=<address>`: that app in the Preview beside a terminal in the
+project checkout, before any task exists. Nothing is started — no task, worktree, prompt or app
+command — and the address keeps its port, path and query exactly. Only `http:`/`https:` without
+credentials is accepted (anything else exits 1), the terminal keeps its own policy (`CEZ_TERMINAL`,
+hosted mode), and an app that is not up yet stays retryable in the Preview. A launcher can detect
+support from `capabilities.projectWorkspace` on `/api/v1/health`; an older cockpit rejects the flag.
+
 The disposable ownership records live under `~/.cezar/runtime/cockpits/` with user-only
 permissions. A PID is never trusted by
 itself: cezar checks the process's OS start/boot identity and a random identity echoed by health.

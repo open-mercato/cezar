@@ -71,6 +71,7 @@ import { runTrackerConnectionsCommand } from './server/tracker/connections-cli.t
 import { runTrackerCommand } from './server/tracker/task-cli.ts';
 import { runSecretsCommand } from './workspace/secrets-cli.ts';
 import { launchPageUrl } from './cockpit-address.ts';
+import { parsePreviewUrl, projectWorkspacePath } from './preview-launch.ts';
 import {
   claimCockpitSlot,
   inspectCockpitRuntime,
@@ -132,6 +133,9 @@ Options:
       --model <model>         model override for \`run\`
       --effort <value>        Codex/Claude reasoning-effort override for \`run\`
       --no-open               don't open the browser
+      --preview-url <url>     serve: open the project's workspace — this app in the Preview and
+                              a terminal in the project checkout — before any task exists
+                              (http/https only; no task, worktree or agent is started)
       --platform <id>         server-install target (ubuntu-vps | macosx-ngrok)
       --domain <host>         server-install (ubuntu-vps): host a SECOND, independent
                               cockpit for this domain (own nginx site + service + port).
@@ -239,6 +243,7 @@ async function main(): Promise<void> {
       model: { type: 'string' },
       effort: { type: 'string' },
       'no-open': { type: 'boolean', default: false },
+      'preview-url': { type: 'string' },
       platform: { type: 'string' },
       domain: { type: 'string' },
       'bind-host': { type: 'string' },
@@ -274,9 +279,20 @@ async function main(): Promise<void> {
   const repoRoot = repoInfo?.root ?? cwd;
 
   switch (command) {
-    case 'serve':
-      await serveCommand(repoRoot, Number(values.port), !values['no-open'], values['bind-host']);
+    case 'serve': {
+      let previewUrl: string | undefined;
+      if (values['preview-url'] !== undefined) {
+        const parsed = parsePreviewUrl(values['preview-url']);
+        if ('error' in parsed) {
+          console.error(`cezar: ${parsed.error}`);
+          process.exitCode = 1;
+          return;
+        }
+        previewUrl = parsed.url;
+      }
+      await serveCommand(repoRoot, Number(values.port), !values['no-open'], values['bind-host'], previewUrl);
       return;
+    }
     case 'run':
       await runCommand(repoRoot, positionals.slice(1).join(' ').trim(), values.workflow, values.model, values.effort);
       return;
@@ -349,6 +365,7 @@ async function serveCommand(
   preferredPort: number,
   openBrowser: boolean,
   bindHost?: string,
+  previewUrl?: string,
 ): Promise<void> {
   // A failing request or task must not take the whole cockpit down, and must leave a trace.
   installCrashLogging({ report: (reason) => reportError(reason, { source: 'process', handler: 'unhandledRejection' }) });
@@ -364,9 +381,10 @@ async function serveCommand(
   };
   const joinRunningCockpit = async (runtime: CockpitRuntimeRecord): Promise<void> => {
     if (await shouldRegisterProject(repoRoot).catch(() => false)) {
-      await handoffProject(runtime, repoRoot, { openBrowser, open: openUrl });
+      await handoffProject(runtime, repoRoot, { openBrowser, open: openUrl, previewUrl });
       return;
     }
+    // Without a registered project there is no scope to put a workspace in.
     const url = launchPageUrl(runtime.origin);
     console.log(`  cockpit already running (pid ${runtime.owner.pid}) — launch root is not registrable`);
     console.log(`  cockpit → ${url}`);
@@ -645,9 +663,12 @@ async function serveCommand(
       .finally(() => manager.lifecycle.start());
   });
   const url = `http://localhost:${port}`;
-  const launchUrl = bootProjectId
-    ? `${url}/p/${encodeURIComponent(bootProjectId)}/`
-    : launchPageUrl(url);
+  // `default` is the boot-project alias, so a workspace landing needs no registry id.
+  const launchUrl = previewUrl
+    ? `${url}${projectWorkspacePath(bootProjectId ?? 'default', previewUrl)}`
+    : bootProjectId
+      ? `${url}/p/${encodeURIComponent(bootProjectId)}/`
+      : launchPageUrl(url);
 
   console.log(`\n  cezar v${version} — ${repoRoot}`);
   console.log(`  ${repo ? `branch ${repo.branch}` : 'not a git repository (tasks run in place, one at a time; repo view is empty)'}`);

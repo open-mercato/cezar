@@ -2,6 +2,7 @@ import {
   registerProjectInputSchema,
   registerProjectResponseSchema,
 } from '@open-mercato/cezar-contract';
+import { projectWorkspacePath } from '../preview-launch.ts';
 import type { CockpitRuntimeRecord } from './cockpit-runtime.ts';
 
 /** Machine-readable twin of the "cockpit →" line: the desktop shell parses it when its sidecar
@@ -25,6 +26,8 @@ export async function handoffProject(
     openBrowser?: boolean;
     log?: (message: string) => void;
     timeoutMs?: number;
+    /** #1608: land on the project's pre-task workspace with this app in the Preview. */
+    previewUrl?: string;
   } = {},
 ): Promise<CockpitHandoffResult> {
   const input = registerProjectInputSchema.parse({ root });
@@ -47,7 +50,8 @@ export async function handoffProject(
     }
     const project = parsed.data.project;
     const added = response.status === 200;
-    const url = `${runtime.origin.replace(/\/+$/, '')}/p/${encodeURIComponent(project.id)}/`;
+    const origin = runtime.origin.replace(/\/+$/, '');
+    const url = opts.previewUrl ? `${origin}${projectWorkspacePath(project.id, opts.previewUrl)}` : `${origin}/p/${encodeURIComponent(project.id)}/`;
     (opts.log ?? console.log)(
       `  cockpit already running (pid ${runtime.owner.pid}) — ${added ? 'added' : 'opened'} ${project.name}`,
     );

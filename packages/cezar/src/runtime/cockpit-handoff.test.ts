@@ -54,6 +54,18 @@ describe('cockpit project handoff', () => {
     expect(log).toHaveBeenLastCalledWith(`cezar-handoff: ${result.url}`);
   });
 
+  it('lands on the project workspace with the preview address when one was asked for (#1608)', async () => {
+    const open = vi.fn();
+    const result = await handoffProject(runtime, '/work/my-project', {
+      fetcher: async () => new Response(JSON.stringify({ project }), { status: 200 }),
+      open,
+      log: () => {},
+      previewUrl: 'http://127.0.0.1:3000/x',
+    });
+    expect(result.url).toBe('http://127.0.0.1:4321/p/my-project/workspace?preview=http%3A%2F%2F127.0.0.1%3A3000%2Fx');
+    expect(open).toHaveBeenCalledWith(result.url);
+  });
+
   it('does not open a browser under --no-open and fails closed on malformed errors', async () => {
     const open = vi.fn();
     await handoffProject(runtime, '/work/my-project', {
