@@ -58,6 +58,22 @@ describe('replySelectionText', () => {
     expect(extent.endOffset).toBe('Last paragraph.'.length)
   })
 
+  it('answers for a triple-click that ends at offset 0 of an EMPTY element after the reply', () => {
+    render(
+      <div data-route="task-thread" data-run-id="r1">
+        <div data-slot="assistant-message"><p id="last">Last paragraph.</p></div>
+        <span id="empty" />
+        <p>2:31 PM</p>
+      </div>,
+    )
+    const range = document.createRange()
+    range.setStart(document.getElementById('last')!.firstChild!, 0)
+    range.setEnd(document.getElementById('empty')!, 0)
+    window.getSelection()!.removeAllRanges()
+    window.getSelection()!.addRange(range)
+    expect(replySelectionText(window.getSelection(), 'r1')).toBe('Last paragraph.')
+  })
+
   it('leaves a range that already ends inside its text alone', () => {
     thread()
     const text = document.getElementById('reply')!.firstChild!

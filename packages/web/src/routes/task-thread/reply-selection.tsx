@@ -41,29 +41,25 @@ function elementOf(node: Node | null): Element | null {
 
 /**
  * The range pulled back to the last character it really selects. A triple-click selects a whole
- * paragraph by ending at offset 0 of the NEXT block — for a reply's last paragraph that block is
- * outside the reply (the timestamp row, the next message), which failed the end check below.
+ * paragraph by ending at the START of whatever follows it — the next block's text, or an empty
+ * element — and for a reply's last paragraph that is outside the reply, which failed the end check.
  */
 export function selectedExtent(range: Range): Range {
-  const { endContainer, endOffset } = range
-  let boundary: Node | null = null
-  if (endContainer.nodeType === Node.TEXT_NODE) {
-    if (endOffset === 0) boundary = endContainer
-  } else if (endOffset < endContainer.childNodes.length) {
-    boundary = endContainer.childNodes[endOffset] ?? null
+  const root = range.commonAncestorContainer
+  if (root.nodeType === Node.TEXT_NODE) return range
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT)
+  let last: Node | null = null
+  for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+    if (!range.intersectsNode(node)) continue
+    const text = node.textContent ?? ''
+    const from = node === range.startContainer ? range.startOffset : 0
+    const to = node === range.endContainer ? range.endOffset : text.length
+    if (text.slice(from, to).trim() !== '') last = node
   }
-  if (!boundary) return range
-  const walker = document.createTreeWalker(range.commonAncestorContainer.ownerDocument?.body ?? document.body, NodeFilter.SHOW_TEXT)
-  walker.currentNode = boundary
-  for (let node = walker.previousNode(); node; node = walker.previousNode()) {
-    if (!range.intersectsNode(node)) break
-    if ((node.textContent ?? '').trim() === '') continue
-    if (node === range.startContainer && range.startOffset >= (node.textContent ?? '').length) break
-    const trimmed = range.cloneRange()
-    trimmed.setEnd(node, (node.textContent ?? '').length)
-    return trimmed
-  }
-  return range
+  if (!last || last === range.endContainer) return range
+  const trimmed = range.cloneRange()
+  trimmed.setEnd(last, (last.textContent ?? '').length)
+  return trimmed
 }
 
 /** The selected text when the whole selection lies in this run's assistant replies, else undefined. */
