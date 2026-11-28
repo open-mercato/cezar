@@ -209,6 +209,7 @@ describe('a run stopped by a usage limit resumes itself', () => {
       // Hold the resumed job in the capacity queue, then restart before it can spawn.
       const pump = typeof restart === 'string' ? vi.spyOn(scheduler, 'pump').mockResolvedValue() : undefined;
       clearTimeout(scheduler.autoResumeTimers.get(record.id));
+      store.updateRun(record.id, { autoResumeAt: new Date(Date.now() - 1_000).toISOString() }); // the window has reopened
       scheduler.fireAutoResume(record.id);
       if (pump) {
         expect(store.getRun(record.id)?.status).toBe('queued');
@@ -543,6 +544,59 @@ describe('a run stopped by a usage limit resumes itself', () => {
     expect(store.getRun(record.id)?.status).toBe('failed');
   }, 40_000);
 
+  it('waits out a reset past Node\'s timer limit instead of resuming at once (#2517)', async () => {
+    manager = new RunManager(store, repoRoot);
+    const record = manager.startRun(workflow, { task: 'mock:limit ship it', worktree: false });
+    await settle(record.id);
+    expect(store.getRun(record.id)?.status).toBe('failed');
+
+    // A monthly credits reset ~28 days out: past 2^31-1 ms, which Node would fire after 1 ms.
+    const timers = vi.spyOn(globalThis, 'setTimeout');
+    const deadline = Date.now() + 28 * 24 * 60 * 60_000;
+    (manager as unknown as { armAutoResume(id: string, at: number, reason: string): void })
+      .armAutoResume(record.id, deadline, 'usage_limit');
+    const capped = timers.mock.calls.filter(([, delay]) => delay === 2_147_483_647);
+    expect(capped).toHaveLength(1);
+
+    // The capped timer fires with the reset still weeks away: it re-arms, it does not resume.
+    // Disarm the real timer first; its callback runs by hand below.
+    clearTimeout(timers.mock.results[timers.mock.calls.indexOf(capped[0]!)]!.value as ReturnType<typeof setTimeout>);
+    (capped[0]![0] as () => void)();
+    const after = store.getRun(record.id);
+    expect(after?.status).toBe('failed');
+    expect(after?.autoResumeAttempts).toBeUndefined();
+    expect(Date.parse(after?.autoResumeAt ?? '')).toBe(deadline);
+    expect(timers.mock.calls.filter(([, delay]) => delay === 2_147_483_647)).toHaveLength(2);
+    clearTimeout((manager as unknown as { autoResumeTimers: Map<string, ReturnType<typeof setTimeout>> }).autoResumeTimers.get(record.id));
+  }, 30_000);
+
+  it('re-arms a persisted reset weeks away across a restart, capped, without resuming early (#2517)', async () => {
+    const first = new RunManager(store, repoRoot);
+    const record = first.startRun(workflow, { task: 'mock:limit ship it', worktree: false });
+    await settle(record.id);
+    first.dispose();
+
+    const deadline = Date.now() + 28 * 24 * 60 * 60_000;
+    store.updateRun(record.id, { autoResumeAt: new Date(deadline).toISOString() });
+    const timers = vi.spyOn(globalThis, 'setTimeout');
+    manager = new RunManager(store, repoRoot);
+    await manager.recover();
+
+    const scheduler = manager as unknown as { autoResumeTimers: Map<string, ReturnType<typeof setTimeout>> };
+    const capped = timers.mock.calls.filter(([, delay]) => delay === 2_147_483_647);
+    expect(capped).toHaveLength(1);
+    expect(scheduler.autoResumeTimers.has(record.id)).toBe(true);
+    // Node fires a too-long delay early; the woken timer must wait, not resume.
+    // Disarm the real timer first; its callback runs by hand below.
+    clearTimeout(timers.mock.results[timers.mock.calls.indexOf(capped[0]!)]!.value as ReturnType<typeof setTimeout>);
+    (capped[0]![0] as () => void)();
+    const after = store.getRun(record.id);
+    expect(after?.status).toBe('failed');
+    expect(after?.autoResumeAttempts).toBeUndefined();
+    expect(Date.parse(after?.autoResumeAt ?? '')).toBe(deadline);
+    clearTimeout(scheduler.autoResumeTimers.get(record.id));
+  }, 30_000);
+
   it('never leaves a deadline behind: a record with no armed timer heals on the next sweep', async () => {
     // The shape every "timer lost" case reduces to — a restart between the write and the arm, a
     // rebuilt project context, a manager disposed mid-wait. The record is the durable half, so
@@ -706,7 +760,11 @@ describe('a run stopped by a usage limit resumes itself', () => {
     const first = new RunManager(store, repoRoot, { semaphore });
     const runs = [1, 2].map((n) => first.startRun(workflow, { task: `mock:limit pair ${n}` }));
     for (const run of runs) await settle(run.id);
-    expect(runs.every((r) => store.getRun(r.id)?.autoResumeAt !== undefined)).toBe(true);
+    // A run reads `failed` a moment before its terminal cleanup arms the resume; under a loaded
+    // suite that gap is observable, so wait for the schedule as the other pair tests do.
+    await expect
+      .poll(() => runs.filter((r) => store.getRun(r.id)?.autoResumeAt !== undefined).length, { timeout: 20_000 })
+      .toBe(2);
     first.dispose();
 
     // Both windows reopen together — the exact state the live deadlock started from. The task
@@ -1084,6 +1142,7 @@ describe('a run stopped by a usage limit resumes itself', () => {
   function fireNow(runId: string): Scheduler {
     const scheduler = manager as unknown as Scheduler;
     clearTimeout(scheduler.autoResumeTimers.get(runId));
+    store.updateRun(runId, { autoResumeAt: new Date(Date.now() - 1_000).toISOString() }); // the window has reopened
     scheduler.fireAutoResume(runId);
     return scheduler;
   }

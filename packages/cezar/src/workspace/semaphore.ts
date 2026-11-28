@@ -1,6 +1,7 @@
 import { realpathSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { DEFAULT_IDLE_TIMEOUT_MINUTES, DEFAULT_MONITORING_WAKE_MINUTES, loadWorkspaceConfig } from './config.ts';
+import { RestartGate } from './restart-gate.ts';
 
 /**
  * Workspace-wide resource governance (spec 2026-07-20-multi-project-workspace,
@@ -118,9 +119,16 @@ export interface SemaphoreParticipant {
    * and any caller that predates the hold — keeps working; absent simply holds nothing.
    */
   accountHolds?(): AccountHolds;
+  /** Running tasks per agent account (`runAccountKey`), for a manager's busy rule (spec
+   *  2026-11-25-manager-task-routing). Optional: absent counts none. */
+  accountLoad?(): ReadonlyMap<string, number>;
   /** Runs a restart would interrupt (queued, waiting or running) — the self-update dialog's
    *  warning. Optional for stubs; absent counts none. */
   activeRuns?(): number;
+  /** Titles of the runs a restart would cut off mid-work — running, monitoring, starting, or
+   *  queued and not held by a pending restart. Waiting-on-the-user runs are not among them.
+   *  Optional for stubs; absent blocks nothing. */
+  restartBlockers?(): string[];
 }
 
 const DEFAULT_LIMITS: WorkspaceResourceLimits = {
@@ -174,10 +182,19 @@ export class WorkspaceSemaphore {
   /** A slot freed DURING a sweep. The in-flight sweep may already have pumped
    *  the manager that should get it, so re-run rather than drop the wakeup. */
   private pendingRelease = false;
+  /** "Restart when idle": what it waits for, and the hold on new task starts meanwhile. Tasks are
+   *  one source; the manager engine and setup terminals register their own. */
+  readonly restartGate = new RestartGate();
 
   constructor(options: WorkspaceSemaphoreOptions = {}) {
     this.load = options.load ?? loadResourceLimits;
     this.limits = { ...DEFAULT_LIMITS, ...options.initial };
+    this.restartGate.addSource(() => [{
+      kind: 'task',
+      names: [...this.participants].flatMap((participant) => participant.restartBlockers?.() ?? []),
+    }]);
+    // A cancelled restart: the queues it held may start now.
+    this.restartGate.onRelease(() => void this.release());
   }
 
   /** Join the shared counter. Returns the unregister handle — the manager's
@@ -197,6 +214,15 @@ export class WorkspaceSemaphore {
     finally { this.notifyingHolds = false; }
   }
 
+  /** Running tasks per account across the whole workspace; asked live, like `accountHolds`. */
+  accountLoad(): Map<string, number> {
+    const load = new Map<string, number>();
+    for (const participant of this.participants) {
+      for (const [key, count] of participant.accountLoad?.() ?? []) load.set(key, (load.get(key) ?? 0) + count);
+    }
+    return load;
+  }
+
   /** Slots held across EVERY registered manager (waiting runs excluded by
    *  each participant — the #347 rule). */
   busy(): number {
@@ -212,8 +238,8 @@ export class WorkspaceSemaphore {
     return total;
   }
 
-  /** No slot held and nothing queued anywhere in the workspace — when "update when idle" may
-   *  restart. Waiting runs do not count (#347): they are parked on the user, and boot resumes them. */
+  /** No slot held and nothing queued anywhere in the workspace. NOT the "restart when idle" test:
+   *  monitoring runs and manager turns hold no slot — that is `restartGate.idle()`. */
   idle(): boolean {
     for (const participant of this.participants) {
       if (participant.busySlots() > 0 || participant.oldestQueuedAt() !== null) return false;

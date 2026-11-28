@@ -5,7 +5,7 @@ import type {
   lifecyclePreviewInputSchema, lifecycleListQuerySchema, LifecycleOutputResponse,
   LifecyclePreviewResponse, LifecycleActionInput, StartLifecycleRemovalInput,
 } from '@open-mercato/cezar-api-client'
-import { deferredAlreadyStartedSchema, trackerReadScope, resolveApiUrl, workspaceBrandingLogoResponseSchema } from '@open-mercato/cezar-api-client'
+import { AGENT_SETUP_FORCE_HEADER, AGENT_SETUP_JOINED_HEADER, AGENT_SETUP_LATEST_HEADER, deferredAlreadyStartedSchema, trackerReadScope, resolveApiUrl, workspaceBrandingLogoResponseSchema } from '@open-mercato/cezar-api-client'
 import type {
   DetectedUrlsResponse,
   DiscoveredCommandsResponse,
@@ -218,6 +218,7 @@ import type { Ok, OkJson, RunUserMessages } from '@open-mercato/cezar-api-client
 import type { ClientResponse } from 'hono/client'
 import type { ResponseFormat } from 'hono/types'
 import type { AppType } from '@open-mercato/cezar/app-type'
+import type { CreateTaskTagInput, PatchTaskTagInput, RunTagsDeltaInput, RunTagsResponse, TaskTag, TaskTagsList } from '@open-mercato/cezar-api-client'
 import { SID_HEADER, sid, uuidv7 } from '@/lib/sid'
 import { noteFailedRequest } from '@/lib/failed-request'
 import { BUILD_HEADER, noteServerBuild } from '@/lib/build-identity'
@@ -566,9 +567,11 @@ export async function putTelemetryConsent(input: SetTelemetryConsentInput): Prom
  *  Workspace-level: one CLI/account serves every project. */
 export async function getRunnerModels(
   runner: ModelDiscoveryRunner,
-  opts?: ReadOptions,
+  opts?: ReadOptions & { refresh?: boolean },
 ): Promise<RunnerModelCatalogResponse> {
-  return unwrap(await cez.api.v1.models.$get({ query: { runner } }, init(opts)), '/models')
+  const query: { runner: ModelDiscoveryRunner; refresh?: string } = { runner }
+  if (opts?.refresh) query.refresh = '1'
+  return unwrap(await cez.api.v1.models.$get({ query }, init(opts)), '/models')
 }
 
 /** Host-local authentication state shared by every project. */
@@ -673,12 +676,19 @@ export async function cancelGithubLogin(): Promise<GithubLoginState> {
 }
 
 /** Installing and signing in to an agent on the first-run page: the state, and one setup terminal. */
-export async function getAgentSetup(opts?: ReadOptions): Promise<AgentSetupState> {
-  return unwrap(await cez.api.v1.providers.setup.$get({}, init(opts)), '/providers/setup')
+export async function getAgentSetup(opts?: ReadOptions & { latest?: boolean }): Promise<AgentSetupState> {
+  return unwrap(
+    await cez.api.v1.providers.setup.$get({}, { ...init(opts), ...(opts?.latest ? { headers: { [AGENT_SETUP_LATEST_HEADER]: '1' } } : {}) }),
+    '/providers/setup',
+  )
 }
 
-export async function startAgentSetup(provider: AgentSetupProvider, action: AgentSetupAction): Promise<AgentSetupSession> {
-  return unwrap(await cez.api.v1.providers.setup.sessions.$post({ json: { provider, action } }), '/providers/setup/sessions')
+/** `joined` (client-side only, from a response header) marks a session someone else started. */
+export async function startAgentSetup(provider: AgentSetupProvider, action: AgentSetupAction, force?: boolean): Promise<AgentSetupSession & { joined?: true }> {
+  const res = await cez.api.v1.providers.setup.sessions.$post({ json: { provider, action } }, force ? { headers: { [AGENT_SETUP_FORCE_HEADER]: '1' } } : undefined)
+  const joined = res.headers.get(AGENT_SETUP_JOINED_HEADER) === '1'
+  const session = await unwrap(res, '/providers/setup/sessions')
+  return joined ? { ...session, joined: true } : session
 }
 
 export async function readAgentSetup(sessionId: string, cursor: number): Promise<TerminalOutput> {
@@ -3372,4 +3382,40 @@ export async function getGithubAsset(url: string, opts?: ReadOptions, projectSco
   return unwrap(await cez.api.v1.p[':projectId'].github.asset.$post({
     param: { projectId: projectScope }, json: { url },
   }, init(opts)), '/github/asset')
+}
+
+// ---- task tags (spec 2026-11-23-task-tags) ------------------------------------------------
+
+/** The personal task-tag registry. Workspace-level: one list, whichever project is on screen. */
+export async function getTaskTags(opts?: ReadOptions): Promise<TaskTagsList> {
+  return unwrap(await cez.api.v1.workspace['task-tags'].$get({}, init(opts)), '/workspace/task-tags')
+}
+
+export async function createTaskTag(input: CreateTaskTagInput): Promise<{ tag: TaskTag }> {
+  return unwrap(await cez.api.v1.workspace['task-tags'].$post({ json: input }), '/workspace/task-tags')
+}
+
+export async function updateTaskTag(tagId: string, patch: PatchTaskTagInput): Promise<{ tag: TaskTag }> {
+  return unwrap(
+    await cez.api.v1.workspace['task-tags'][':tagId'].$patch({ param: { tagId }, json: patch }),
+    `/workspace/task-tags/${tagId}`,
+  )
+}
+
+export async function deleteTaskTag(tagId: string): Promise<{ deleted: true }> {
+  return unwrap(
+    await cez.api.v1.workspace['task-tags'][':tagId'].$delete({ param: { tagId } }),
+    `/workspace/task-tags/${tagId}`,
+  )
+}
+
+/** A delta on one run's tags — never a whole-list replacement (D8). */
+export async function editRunTags(id: string, delta: RunTagsDeltaInput): Promise<RunTagsResponse> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].runs[':id'].tags.$post({
+      param: { projectId: queryScope(), id: encodeURIComponent(id) },
+      json: delta,
+    }),
+    `${runPath(id)}/tags`,
+  )
 }

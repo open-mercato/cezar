@@ -91,3 +91,30 @@ it('clears a disposed holder reason while another participant still exhausts cap
     expect(a.getRun(queued.id)?.status).toBe('queued');
   } finally { ma.dispose(); mb.dispose(); offCapacity(); a.flush(); b.flush(); rmSync(root, { recursive: true, force: true }); }
 });
+
+it('releases the account-resume hold once the resumed run observes the window open, not at turn end (#2525)', () => {
+  const root = mkdtempSync(join(tmpdir(), 'deferred-window-'));
+  const semaphore = new WorkspaceSemaphore();
+  const store = RunStore.open(join(root, 'a'));
+  const manager = new RunManager(store, root, { semaphore });
+  const obs = (status: 'allowed' | 'blocked') => ({
+    provider: 'claude' as const, source: 'claude-stream' as const, observedAt: Date.now(),
+    windows: [{ id: 'five_hour', kind: 'five-hour' as const, applicability: 'all' as const, models: [], resetsAt: null, durationMinutes: 300, usedPercent: null, status, observedAt: Date.now() }],
+  });
+  const mark = (id: string, o: ReturnType<typeof obs>) => (manager as unknown as { markResumeWindowOpen(id: string, o: unknown): void }).markResumeWindowOpen(id, o);
+  try {
+    const queued = store.createRun({ title: 'Waiting', steps: [], task: 'Waiting', workflow: 'quick-task', runner: 'claude' });
+    const holder = store.createRun({ title: 'Resumed', steps: [], task: 'Resumed', workflow: 'quick-task', runner: 'claude' });
+    store.updateRun(holder.id, { status: 'running', autoResumeAttempts: 1, autoResumeReason: 'usage_limit' });
+    expect(store.getRun(queued.id)?.queueWaitReason).toEqual({ kind: 'account-resume' });
+    mark(holder.id, obs('blocked'));
+    expect(store.getRun(queued.id)?.queueWaitReason).toEqual({ kind: 'account-resume' });
+    mark(holder.id, obs('allowed'));
+    expect(store.getRun(holder.id)).toMatchObject({ status: 'running', autoResumeAttempts: 1 });
+    expect(store.getRun(queued.id)?.queueWaitReason).toBeUndefined();
+    // A re-limit still parks the holder behind its deadline, so the stampede guard holds.
+    const until = new Date(Date.now() + 60_000).toISOString();
+    store.updateRun(holder.id, { status: 'failed', autoResumeAt: until });
+    expect(store.getRun(queued.id)?.queueWaitReason).toMatchObject({ kind: 'usage-reset', until });
+  } finally { manager.dispose(); store.flush(); rmSync(root, { recursive: true, force: true }); }
+});

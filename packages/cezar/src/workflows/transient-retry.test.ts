@@ -39,6 +39,7 @@ describe('a run stopped by a transient provider failure retries itself', () => {
   function fireNow(runId: string): void {
     const scheduler = manager as unknown as Scheduler;
     clearTimeout(scheduler.autoResumeTimers.get(runId));
+    store.updateRun(runId, { autoResumeAt: new Date(Date.now() - 1_000).toISOString() }); // the backoff has elapsed
     scheduler.fireAutoResume(runId);
   }
   /** The deferred reports run.ts makes — the store's event-time calls are filtered inside the real one. */

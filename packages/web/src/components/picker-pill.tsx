@@ -68,8 +68,8 @@ export function PickerPill({
   searchPlaceholder?: string
   /** Extra trigger classes — the composer joins two pills into one `agent · model` chip. */
   className?: string
-  /** One command below the options (the runner pill's "Add account…"). */
-  action?: { label: string; slot: string; onSelect: () => void } | undefined
+  /** One command below the options (the runner pill's "Add account…", model pill's "Refresh models…"). */
+  action?: { label: string; slot: string; disabled?: boolean; onSelect: () => void } | undefined
 }) {
   const [open, setOpen] = useState(false)
   const [search, setSearch] = useState('')
@@ -221,7 +221,12 @@ export function PickerPill({
           </DropdownMenuItem>
         ) : null}
         {action ? (
-          <DropdownMenuItem data-action={action.slot} className="border-t border-border text-label" onSelect={action.onSelect}>
+          <DropdownMenuItem
+            data-action={action.slot}
+            disabled={action.disabled}
+            className="border-t border-border text-label"
+            onSelect={action.onSelect}
+          >
             {action.label}
           </DropdownMenuItem>
         ) : null}

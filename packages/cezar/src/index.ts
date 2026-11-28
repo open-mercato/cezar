@@ -1,5 +1,7 @@
 #!/usr/bin/env node
 import { initCommand } from './init.ts';
+import { installCrashLogging } from './crash-logging.ts';
+import { guardChildProcessKill } from './core/child-kill-guard.ts';
 import { sweepOrphanedServers } from './core/opencode-server-registry.ts';
 import { WebhookCoordinator } from './webhooks/coordinator.ts';
 import { webhooksEnabled } from './webhooks/service.ts';
@@ -49,7 +51,8 @@ import { initServeWorkspace, initWorkspace } from './workspace/boot.ts';
 import { loadWorkspaceConfig } from './workspace/config.ts';
 import { runProjectsCommand } from './workspace/projects-cli.ts';
 import { WorkspaceSemaphore } from './workspace/semaphore.ts';
-import { flushTelemetry, initTelemetry, installCrashReporter, registerDailyInventory, registerTelemetryContext, startDailyPing, track } from './telemetry.ts';
+import { flushTelemetry, initTelemetry, installCrashReporter, registerDailyInventory, registerTelemetryContext, reportError, startDailyPing, telemetryEnvelope, telemetryRuntime, track } from './telemetry.ts';
+import { reportUncleanExits, startLiveMarker, supervisorGoneError } from './unclean-exit.ts';
 import { collectFeatureInventory } from './feature-telemetry.ts';
 import { runTaskCommand } from './dispatch/task-cli.ts';
 import { runAutomationCommand } from './automations/automation-cli.ts';
@@ -347,6 +350,8 @@ async function serveCommand(
   openBrowser: boolean,
   bindHost?: string,
 ): Promise<void> {
+  // A failing request or task must not take the whole cockpit down, and must leave a trace.
+  installCrashLogging({ report: (reason) => reportError(reason, { source: 'process', handler: 'unhandledRejection' }) });
   const runtimeId = newRuntimeId();
   let cockpitLease: CockpitLease | undefined;
   let runtimeReleased = false;
@@ -444,6 +449,8 @@ async function serveCommand(
   const shutdown = (reason: 'signal' | 'supervisor_gone') => {
     if (stopping) process.exit(0); // a second Ctrl-C never waits on scripts or telemetry
     stopping = true;
+    // A quitting shell stops its cockpit first (SIGTERM); a vanished one was killed or crashed.
+    if (reason === 'supervisor_gone') reportError(supervisorGoneError(), {}, { code: 'supervisor_gone' });
     store.flush({ pretty: true }); // before the drain too: a second Ctrl-C must not lose run state
     void (httpServer?.shutdownLifecycle() ?? manager.lifecycle.shutdown())
       .catch((error: unknown) => {
@@ -459,6 +466,9 @@ async function serveCommand(
   };
   process.on('SIGINT', () => shutdown('signal'));
   process.on('SIGTERM', () => shutdown('signal'));
+  // A closed terminal (or, on Windows, console window): Node resets SIGHUP to its default at
+  // startup, which ends the process with no exit event and would read as an unclean shutdown.
+  process.on('SIGHUP', () => shutdown('signal'));
   const providerAuth = new ProviderAuthService({ cwd: repoRoot, onInconclusive: (probe) => void reportInconclusiveProbe(probe) });
   const workspaceEvents = new WorkspaceEventBus();
   const providerRuntimeAuth = new ProviderRuntimeAuthObserver(providerAuth, (status) => {
@@ -471,6 +481,14 @@ async function serveCommand(
   await initTelemetry({ version: readOwnVersion() });
   installCrashReporter();
   track('app_start');
+  // A previous cockpit that never shut down (SIGKILL, OOM) can only be reported by the next one.
+  reportUncleanExits();
+  startLiveMarker({
+    version: readOwnVersion(),
+    reportVersion: telemetryEnvelope().version ?? 'unknown',
+    runtime: telemetryRuntime(),
+    runsRunning: () => store.listRuns().filter((r) => r.status === 'running').length,
+  });
   registerDailyInventory(collectFeatureInventory);
   startDailyPing();
 
@@ -536,6 +554,8 @@ async function serveCommand(
   const selfUpdate = buildSelfUpdateService({
     // Workspace-wide, every project's manager — not the boot repo's store (#1524).
     runs: semaphore,
+    // What "when idle" waits for: tasks, manager turns and setup terminals, not just held slots.
+    gate: semaphore.restartGate,
     // The server's own predicate, not a second spelling of it: the `/apply` guard decides hosted
     // mode through `resolveCapabilities`, and the two must never disagree (they did, on 127.0.0.2).
     trimPaths: () => !narrowForRelay(resolveCapabilities(process.env, bindHost)).localHandoff,
@@ -1023,7 +1043,7 @@ function openStore(repoRoot: string, opts?: { keepLive?: boolean }): RunStore {
 
 /** The self-update service over THIS process: its package, version and entry file. */
 function buildSelfUpdateService(
-  overrides: Partial<Pick<ConstructorParameters<typeof SelfUpdateService>[0], 'restart' | 'runs' | 'trimPaths'>> & {
+  overrides: Partial<Pick<ConstructorParameters<typeof SelfUpdateService>[0], 'restart' | 'runs' | 'gate' | 'trimPaths'>> & {
     restart: () => void;
   },
 ): SelfUpdateService {
@@ -1095,6 +1115,9 @@ function firstLine(s: string): string {
   const line = s.split('\n')[0] ?? '';
   return line.length > 120 ? `${line.slice(0, 117)}…` : line;
 }
+
+// Before anything spawns: a kill of a child that failed to start must never reach our group.
+guardChildProcessKill();
 
 main().catch((err: unknown) => {
   console.error(err instanceof Error ? err.message : String(err));

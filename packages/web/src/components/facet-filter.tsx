@@ -165,7 +165,10 @@ export function ToggleChip({
   onToggle,
   slot,
   tone = 'neutral',
+  icon,
 }: {
+  /** A leading mark — a task tag's color dot. */
+  icon?: React.ReactNode
   label: string
   count?: number
   selected: boolean
@@ -190,6 +193,7 @@ export function ToggleChip({
         selected && 'border-violet bg-violet text-violet-foreground hover:bg-violet',
       )}
     >
+      {icon}
       {label}
       {count === undefined ? null : (
         <span className={cn('font-mono text-meta tabular-nums', !selected && 'text-soft-foreground')}>
