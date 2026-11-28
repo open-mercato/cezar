@@ -4586,6 +4586,9 @@ export function createAppParts(deps: ServerDeps) {
       if (wf.source !== 'file' || !wf.path) {
         return c.json({ error: 'built-in workflows cannot be deleted' }, 400);
       }
+      if (wf.scope === 'global') {
+        return c.json({ error: `"${name}" is a global workflow (${wf.path}) shared by every project; delete it from the global workflows directory instead` }, 409);
+      }
       const dir = resolve(repoRoot, WORKFLOWS_DIR);
       const target = resolve(wf.path);
       if (!target.startsWith(dir + sep)) {

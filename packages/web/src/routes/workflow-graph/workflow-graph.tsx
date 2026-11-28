@@ -696,7 +696,7 @@ function WorkflowGraphEditor() {
             <SelectGroup>
               <SelectLabel>This repo</SelectLabel>
               {workflows.data?.workflows
-                .filter((w) => w.source === 'file')
+                .filter((w) => w.source === 'file' && w.scope !== 'global')
                 .map((w) => (
                   <SelectItem key={w.name} value={w.name}>
                     {w.name}
@@ -704,6 +704,19 @@ function WorkflowGraphEditor() {
                   </SelectItem>
                 ))}
             </SelectGroup>
+            {workflows.data?.workflows.some((w) => w.scope === 'global') && (
+              <SelectGroup>
+                <SelectLabel>Global (read-only)</SelectLabel>
+                {workflows.data.workflows
+                  .filter((w) => w.scope === 'global')
+                  .map((w) => (
+                    <SelectItem key={w.name} value={w.name}>
+                      {w.name}
+                      {w.graph ? '' : ' (v1)'}
+                    </SelectItem>
+                  ))}
+              </SelectGroup>
+            )}
             <SelectGroup>
               <SelectLabel>Built-in templates</SelectLabel>
               {workflows.data?.workflows
@@ -1064,7 +1077,7 @@ function WorkflowGraphEditor() {
               <Button size="sm" variant="outline" disabled={!planText.trim() || autoPlan.isPending} onClick={() => autoPlan.mutate()}>
                 {autoPlan.isPending ? 'Building…' : 'Build workflow'}
               </Button>
-              {opened?.source === 'file' && (
+              {opened?.source === 'file' && opened.scope !== 'global' && (
                 <div className="border-t border-border pt-3">
                   <Button
                     size="sm"

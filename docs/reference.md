@@ -365,7 +365,7 @@ that calls it needs the extra segment.
 
 ## Workflow format
 
-A workflow is a small YAML file in `.ai/cezar/workflows/`:
+A workflow is a small YAML file in `.ai/cezar/workflows/`. Files in `~/.cezar/workflows/` (a directory or a symlink to a versioned checkout) are shared by every project: the project's own file wins a name clash, then the global one, then the built-ins; global entries are read-only in the cockpit (`scope: global`, delete answers 409):
 
 ```yaml
 name: fix-and-verify

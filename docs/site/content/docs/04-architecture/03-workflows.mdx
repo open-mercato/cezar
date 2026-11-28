@@ -27,6 +27,10 @@ sources:
 
 Save a `.yaml` or `.yml` file directly in `.ai/cezar/workflows/`. The loader reads files from this directory. It reports each file error separately and continues loading the others. The name field identifies the workflow. If it matches a built-in template, Cezar uses your file.
 
+### Share workflows across projects
+
+Put the same files in `~/.cezar/workflows/` (honours `CEZ_HOME`) and every project sees them; make it a symlink to a checkout of your versioned repo to maintain one definition. Precedence on a name clash: this project's `.ai/cezar/workflows/`, then the global directory, then the built-ins. The list API marks these entries with `scope: "global"`. They are read-only in the cockpit: `DELETE /workflows/:name` answers 409, and saving under the same name writes a project-local override instead of touching the shared file. A missing directory is ignored and a bad file is reported like a bad project file.
+
 In the list format, choose either steps or skills. You cannot declare both. Each step needs a unique id. An agent step contains prompt or skill; a check step contains command. Combining command with prompt fails validation. If you use `onFail.retry`, point it to an earlier step.
 
 ## Implementation, tests, and up to two repair attempts
