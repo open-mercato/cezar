@@ -126,7 +126,8 @@ Notable fields (full doc-comments in the source):
   blocks — pasted screenshots), `cwd` (the run dir and the only writable root),
   `model?`, `reasoningEffort?` (Codex `turn/start.effort` and Claude `--effort`, the
   `REASONING_EFFORT_RUNNERS` set in `packages/contract`; every other runner must refuse it with
-  `assertReasoningEffortSupported`, never ignore it), `timeoutMs?`, `env?` (merged over
+  `assertReasoningEffortSupported`, never ignore it; antigravity's effort is a model variant, which
+  managers and workflow steps resolve to the model id before the spawn — `core/antigravity-effort.ts`), `timeoutMs?`, `env?` (merged over
   `process.env` — carries
   `CEZ_HANDOFF_FILE` / `CEZ_TODOS_FILE` / `CEZ_TASK_ID`).
   Codex sends the current `systemPrompt` with each invocation's opening user turn, preserving

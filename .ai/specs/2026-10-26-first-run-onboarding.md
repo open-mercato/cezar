@@ -200,7 +200,7 @@ setup sessions, and share its cursor-only topic.
   pinned to `opencode-ai@1`: the runner cannot drive 2.x yet.
 - **Where.** The home folder, never the project: a repository's `.npmrc` must not get to redirect an
   install, nor its agent config a login.
-- **One at a time.** A second start of the same action joins the running session (200); another agent
+- **One at a time.** A second start of the same action joins the running session (201, like a fresh start, since spec 2026-11-25 kept the typed API under its size limit); another agent
   gets 409. The status decides what is allowed, so a stale page cannot reinstall an agent (409) or
   sign in to a missing one (409).
 - **Who.** Refused in a hosted cockpit, even with `CEZ_TERMINAL=1`, and in single-project mode:

@@ -51,9 +51,14 @@ export type ManagerSettingField = (typeof MANAGER_SETTING_FIELDS)[number];
 
 // Quick prompts have no label: the server enforces a closed set, and they are not a turn setting.
 // Neither does the active toggle: it is not a stored setting (spec 2026-11-19-manager-deactivate).
-const FIELD_OF: Record<Exclude<keyof UpdateManagerInput, 'quickPrompts' | 'clearBashDenials' | 'active' | 'catchUp'>, ManagerSettingField> = {
+const FIELD_OF: Record<Exclude<keyof UpdateManagerInput, 'quickPrompts' | 'clearBashDenials' | 'active' | 'catchUp' | 'switchToPrimary'>, ManagerSettingField> = {
   cronMinutes: 'watch',
   runner: 'runner',
+  // The agent chain is the manager's agent choice: the same closed label.
+  backups: 'runner',
+  failback: 'runner',
+  taskBusyAt: 'runner',
+  taskLimitSwitch: 'runner',
   taskRunner: 'runner',
   taskAgents: 'runner',
   agentProfile: 'runner',

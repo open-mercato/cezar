@@ -523,3 +523,20 @@ describe('composerOptionsSummary — carried-over choices are never silent', () 
     expect(composerOptionsSummary({ ...base, worktree: false, isolationChoosable: false })).toEqual([])
   })
 })
+
+describe('draft task tags (spec 2026-11-23-task-tags § 7.2)', () => {
+  const tag = { id: 'tt-aaaaaaaa01', name: 'batch' }
+  it('survive a reload, but not the start of the task, and are not a remembered option', () => {
+    writeDraft({ ...readDraft(), text: 'x', tags: [tag] })
+    expect(readDraft().tags).toEqual([tag])
+    clearStartedDraft()
+    expect(readDraft().tags).toBeUndefined()
+  })
+
+  it('drops malformed stored tags', () => {
+    localStorage.setItem('cez-new-task-draft', JSON.stringify({ text: '', tags: [tag, { id: 'nope', name: 1 }, 'x'] }))
+    resetDraft()
+    localStorage.setItem('cez-new-task-draft', JSON.stringify({ text: '', tags: [tag, { id: 'nope', name: 1 }, 'x'] }))
+    expect(readDraft().tags).toEqual([tag])
+  })
+})

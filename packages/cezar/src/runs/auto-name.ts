@@ -230,6 +230,8 @@ export async function generateRunName(repoRoot: string, ctx: NamerContext, execu
       result = await runner.run({
         systemPrompt: ctx.branchNaming ? NAMER_SYSTEM_PROMPT + NAMER_BRANCH_PROMPT : NAMER_SYSTEM_PROMPT,
         userPrompt: buildNamerPrompt(ctx),
+        // Parsed answer: global instructions shape its content, never its format.
+        globalInstructions: 'format-bound',
         cwd: repoRoot,
         allowedTools: [],
         model: choice?.model,

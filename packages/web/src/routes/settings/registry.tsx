@@ -16,6 +16,7 @@ import {
   ShieldCheckIcon,
   SlidersHorizontalIcon,
   SmartphoneIcon,
+  TagIcon,
 } from 'lucide-react'
 import type { ComponentType, SVGProps } from 'react'
 
@@ -32,6 +33,7 @@ import { BookmarkletsSection } from './bookmarklets-section'
 import { NotificationsSection } from './notifications-section'
 import { PhonesSection } from './phones-section'
 import { ProjectsSection } from './projects-section'
+import { TaskTagsSection } from './task-tags-section'
 import { TasksSection } from './tasks-section'
 import { WorktreesSection } from './worktrees-section'
 import { TrackerSection } from './tracker-section'
@@ -66,6 +68,7 @@ export type SettingsSectionId =
   | 'resources'
   | 'worktrees'
   | 'projects'
+  | 'task-tags'
   | 'notifications'
   | 'manager'
   | 'keyboard'
@@ -238,7 +241,7 @@ export const SETTINGS_SECTIONS: SettingsSection[] = [
     id: 'agents',
     title: 'Agents',
     description:
-      'Which coding agents run your tasks, with which logins, models and skills. A project can override any of this in its own Agents page.',
+      'Global instructions for every task and manager, and which coding agents run your tasks, with which logins, models and skills. A project can override any of this in its own Agents page.',
     icon: BotIcon,
     component: AgentsGlobalSection,
     scope: 'global',
@@ -277,6 +280,15 @@ export const SETTINGS_SECTIONS: SettingsSection[] = [
     description: 'The workspace registry and where GitHub checkouts land.',
     icon: FoldersIcon,
     component: ProjectsSection,
+    scope: 'global',
+    group: 'workspace',
+  },
+  {
+    id: 'task-tags',
+    title: 'Task tags',
+    description: 'Rename, recolor, describe or delete the tags you put on tasks.',
+    icon: TagIcon,
+    component: TaskTagsSection,
     scope: 'global',
     group: 'workspace',
   },

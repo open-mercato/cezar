@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 
 import { ApiError, connectProvider, setProviderEnabled } from '@/api/client'
 import {
+  useAgentSetup,
   useProviderStatus,
   useRefreshProviderStatus,
   useRetryProviderAuth,
@@ -15,6 +16,8 @@ import { Switch } from '@/components/ui/switch'
 import { toast } from '@/components/ui/toaster'
 import { Spinner } from '@/components/ui/spinner'
 import { providerStatusFor } from '@/lib/provider-status'
+import { useAgentSetupSheet } from '@/components/agent-setup-sheet'
+import { AGENT_ROW_ACTION_LABEL, agentRowAction, agentVersionChip } from '@/lib/agent-setup'
 import { writeClipboard } from '@/lib/clipboard'
 import { FormRow, SettingsCard } from './form-row'
 
@@ -84,6 +87,10 @@ export function ProviderSettings() {
   const retry = useRetryProviderAuth()
   const queryClient = useQueryClient()
   const [manual, setManual] = useState<ManualCommand | null>(null)
+  // Install and Update open the setup sheet (spec 2026-11-25-agent-cli-install-and-update);
+  // Connect keeps its terminal hand-off.
+  const setup = useAgentSetup({ latest: true })
+  const sheet = useAgentSetupSheet()
   const writeChain = useRef<Promise<unknown>>(Promise.resolve())
   const latestWrites = useRef(providerWriteState(0))
   const pendingWrites = useRef(providerWriteState(0))
@@ -234,6 +241,9 @@ export function ProviderSettings() {
           : status.isPending
             ? { label: 'Checking…', tone: 'neutral' as const }
             : STATUS_PRESENTATION.unknown
+        const entry = setup.data?.agents.find((agent) => agent.provider === provider.id)
+        const setupAction = agentRowAction(entry, current)
+        const chip = agentVersionChip(entry)
         const isConnecting = connect.isPending && connect.variables === provider.id
         const canRefresh = state === 'disconnected' || state === 'unknown'
         const incidentId = current?.authFailureId
@@ -256,6 +266,8 @@ export function ProviderSettings() {
                     <StatusDot tone={presentation.tone} pulse={status.isPending} />
                     <span>{presentation.label}</span>
                     {current?.enabled === false ? <span>Disabled</span> : null}
+                    {entry?.version ? <span data-slot="provider-version" className="font-mono">{entry.version}</span> : null}
+                    {chip ? <span data-slot="provider-version-chip" data-tone={chip.tone} className={chip.tone === 'danger' ? 'text-danger' : chip.tone === 'warn' ? 'text-pending-strong' : undefined}>{chip.label}</span> : null}
                   </span>
                   {hint ? <span className="mt-0.5 block text-soft-foreground">{hint}</span> : null}
                   {incidentId !== undefined ? (
@@ -273,6 +285,18 @@ export function ProviderSettings() {
                   aria-label={`Use ${provider.label}`}
                   onCheckedChange={(enabled) => queueToggle(provider.id, enabled)}
                 />
+              ) : null}
+              {setupAction && setupAction !== 'sign-in' ? (
+                <Button
+                  type="button"
+                  variant={setupAction === 'install' ? 'primary' : 'outline'}
+                  size="sm"
+                  data-slot="provider-setup-action"
+                  data-action={setupAction}
+                  onClick={() => sheet.open(provider.id, setupAction)}
+                >
+                  {AGENT_ROW_ACTION_LABEL[setupAction]}
+                </Button>
               ) : null}
               {canRefresh ? (
                 <Button
@@ -346,6 +370,7 @@ export function ProviderSettings() {
           </div>
         )
       })}
+      {sheet.element}
     </SettingsCard>
   )
 }

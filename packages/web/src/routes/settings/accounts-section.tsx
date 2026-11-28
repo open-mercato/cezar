@@ -8,6 +8,7 @@ import { ApiError, putWorkspaceConfig } from '@/api/client'
 import {
   useAgentAccountDetails,
   useAgentProfiles,
+  useAgentSetup,
   useHealth,
   useAgentAccountStatus,
   useConnectAgentAccount,
@@ -31,6 +32,7 @@ import {
   type Runner,
   type SetWorkspaceConfigInput,
 } from '@open-mercato/cezar-api-client'
+import { useAgentSetupSheet } from '@/components/agent-setup-sheet'
 import { CenteredState } from '@/components/centered-state'
 import {
   AlertDialog,
@@ -495,6 +497,8 @@ function DefaultsForNewProjects({ profiles }: { profiles: AgentProfilesResponse 
   const queryClient = useQueryClient()
   const config = useWorkspaceConfig()
   const providerStatus = useProviderStatus()
+  const setup = useAgentSetup({ latest: true })
+  const sheet = useAgentSetupSheet()
   const select = useSelectAgentProfile()
   const [saved, flash] = useSavedFlash()
 
@@ -529,6 +533,8 @@ function DefaultsForNewProjects({ profiles }: { profiles: AgentProfilesResponse 
         providerStatus={providerStatus}
         disabled={save.isPending}
         accountDisabled={select.isPending}
+        setup={setup.data?.agents}
+        onAgentAction={sheet.open}
         onPick={(picked, account, hasAccountChoice) => {
           if (picked !== runner) save.mutate({ agentDefaults: { runner: picked } })
           // `projectId: null` targets the machine-wide default rather than one repo. Only for an
@@ -541,6 +547,7 @@ function DefaultsForNewProjects({ profiles }: { profiles: AgentProfilesResponse 
           }
         }}
       />
+      {sheet.element}
     </FormRow>
   )
 }

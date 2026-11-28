@@ -190,6 +190,25 @@ describe('the managers routes', () => {
     expect(startRun.mock.calls[0]?.[1]).toMatchObject({ task: 'Fix the login', managerAgent: { note: expect.stringContaining('Agent chosen by manager') } });
   });
 
+  it('POST /runs refuses a read-only workflow on an incompatible runner before starting a run, and allows antigravity', async () => {
+    const refused = await request('/api/v1/runs', {
+      method: 'POST',
+      body: { workflow: 'review-pr', task: 'Review PR #1', runner: 'opencode' },
+    });
+    expect(refused.status).toBe(400);
+    expect(await refused.json()).toEqual({
+      error: expect.stringContaining('opencode does not enforce'),
+    });
+    expect(startRun).not.toHaveBeenCalled();
+
+    const allowed = await request('/api/v1/runs', {
+      method: 'POST',
+      body: { workflow: 'review-pr', task: 'Review PR #1', runner: 'antigravity' },
+    });
+    expect(allowed.status).toBe(201);
+    expect(startRun).toHaveBeenCalledOnce();
+  });
+
   it('POST /runs refuses a manager fallback policy from anyone but the manager engine', async () => {
     const { id } = await createManager();
     const body = {

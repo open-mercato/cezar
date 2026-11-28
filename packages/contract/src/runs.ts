@@ -12,6 +12,7 @@ import { referenceStatusSchema } from './github.ts';
 // consumes them rather than redeclaring. One-way on purpose — see the header of `./workflows.ts`.
 import { workflowDefSchema, workflowStepDefSchema } from './workflows.ts';
 import { taskAskRecordSchema } from './questions.ts';
+import { RUN_TAGS_MAX, runTagSchema, taskTagRefSchema } from './task-tags.ts';
 
 /** `GET /runs` query: `full=1` keeps each run's `workflowDef` (about 1.3 MB per run), which the list omits by default. */
 export const runsListQuerySchema = z.object({ full: z.enum(['1']).optional() });
@@ -46,6 +47,8 @@ export const runAgentSwitchSchema = z.object({
   checkRepair: z.object({ checkId: z.string(), stepId: z.string() }).optional(),
   /** Fresh continuation to reconstruct if the server restarts before it launches. */
   continuationStepId: z.string().optional(),
+  /** Its instruction, secrets redacted (like a step's `freshPrompt`): only a switch revived after a
+   *  restart reads it and sees [REDACTED]; the live switch keeps the verbatim text in memory. */
   continuationInput: z.object({ prompt: z.string(), attachmentUrls: z.array(z.string()) }).optional(),
 });
 
@@ -171,6 +174,10 @@ export const stepStateSchema = z.object({
    *  that created it, so resume and Continue read this rather than the project's current
    *  selection. Absent on records written before accounts existed. */
   profileId: z.string().optional(),
+  /** A Continue opened in a new session with no prior conversation; absent otherwise. */
+  freshContext: z.literal(true).optional(),
+  /** A queued fresh Continue's instruction until its session opens. */
+  freshPrompt: z.string().optional(),
   toolPolicy: stepToolPolicySchema.optional(),
   /** Canonical provider/model identity resolved for this step; absent for auto-model steps and
    *  records written before per-step attribution existed. */
@@ -270,6 +277,9 @@ export const runRecordSchema = z.object({
   /** The composer's per-task agent account (spec 2026-07-29-agent-profiles), applying to steps
    *  on `runner`. Absent = the run follows the project's own selection. */
   agentProfile: z.string().optional(),
+  /** Task tags: id plus a display snapshot (spec 2026-11-23-task-tags D4). Omitted, never `[]`,
+   *  when the run has none. */
+  tags: z.array(runTagSchema).max(RUN_TAGS_MAX).optional(),
   /** Set while the run waits on an expired agent login (spec 2026-11-18-inline-account-reconnect). */
   parked: runParkedSchema.optional(),
   /** Enabled policy captured at task creation; manual Continue does not refresh it. */
@@ -400,6 +410,8 @@ export const runRecordSchema = z.object({
   /** What the pending resume waits out: a usage limit's reset, or a transient provider failure's
    *  retry backoff. Absent on records written before it existed — read as `usage_limit`. */
   autoResumeReason: z.enum(['usage_limit', 'transient']).optional(),
+  /** The resumed session observed the usage window open; its account hold is released (#2525). */
+  autoResumeWindowOpen: z.boolean().optional(),
   /** ISO-8601 instant the run's session ended (inactivity, a crash, a restart) while a `CEZ:ASK`
    *  question was still unanswered. Present only on a `failed` run; the cockpit keeps such a run
    *  under "needs you" until the answer reopens it. Absent on records written before it existed. */
@@ -624,6 +636,9 @@ export const runIndexEntrySchema = z.object({
    *  refinement `workflowLabel` applies needs `steps[]`, which this row deliberately omits, so
    *  a `(planned)` chain reads as itself here rather than as its first agent's name. */
   workflow: z.string(),
+  /** Task tags, so the global page and the palette filter without the fat record (spec
+   *  2026-11-23-task-tags). */
+  tags: z.array(runTagSchema).max(RUN_TAGS_MAX).optional(),
   /** The task's branch, when it has one — a column on the global page, and the one field that
    *  makes a cross-project row identifiable at a glance without opening it. */
   branch: z.string().optional(),
@@ -1345,6 +1360,9 @@ export const createRunInputBaseSchema = z
     /** Agent account for this task (spec 2026-07-29-agent-profiles). Omit to follow the
      *  project's own selection; an id that no longer exists is a 400, not a silent default. */
     agentProfile: z.string().max(64).optional(),
+    /** Task tags (spec 2026-11-23-task-tags): resolved before the run is created, so a bad ref is a
+     *  400 and nothing starts. Every ×N variant gets the same tags. */
+    tags: z.array(taskTagRefSchema).max(RUN_TAGS_MAX).optional(),
     /** 1–3. Above 1 the response is `{ runs }` rather than a single record. */
     variants: z.number().int().min(1).max(3).optional(),
     /** false → run in the repo working tree instead of an isolated worktree (read-only skills).
@@ -1392,6 +1410,8 @@ export const createRunInputBaseSchema = z
      *  accounts a usage limit falls back to. Honored only with `startedByManager`. */
     managerAgent: z.object({
       note: z.string().min(1).max(500),
+      /** Chosen by the manager's roles: the queue may move it to an account that frees up. */
+      routed: z.literal(true).optional(),
       fallback: z.array(z.object({
         provider: runnerSchema,
         profileId: z.string().min(1).max(64),
@@ -1460,6 +1480,8 @@ export const continueInputSchema = z.object({
   idempotencyKey: z.string().uuid().optional(),
   /** Sent from an ask card: answers that card (Questions inbox spec), as on `messageInputSchema`. */
   askRequestId: z.string().min(1).max(200).optional(),
+  /** Open a new agent session with no prior conversation; same task, worktree, branch and PR. */
+  freshContext: z.boolean().optional(),
 });
 export type ContinueInput = z.input<typeof continueInputSchema>;
 
