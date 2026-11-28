@@ -28,6 +28,21 @@ approver running the **Desktop release** workflow from GitHub Actions or by push
 installer is signed only inside that GitHub Actions release workflow, and SignPath may enforce
 its own manual approval before it completes the signing request.
 
+The workflow refuses a manual run from any ref other than `main` or a `desktop-v*` tag. Its
+jobs that read signing secrets name the `desktop-release` GitHub environment. They do not yet
+require approval, because that environment is not set up. Until a maintainer does the steps
+below, the signing secrets are repository secrets, and the ref check only stops accidental runs:
+
+- [ ] Create the `desktop-release` environment (Settings → Environments), with the approvers
+      above as required reviewers.
+- [ ] Limit its deployment branches and tags to `main` and `desktop-v*`.
+- [ ] Move the signing secrets from repository secrets to environment secrets:
+      `APPLE_CERTIFICATE`, `APPLE_CERTIFICATE_PASSWORD`, `APPLE_SIGNING_IDENTITY`, `APPLE_ID`,
+      `APPLE_PASSWORD`, `APPLE_TEAM_ID`, `TAURI_SIGNING_PRIVATE_KEY`,
+      `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`, `SIGNPATH_API_TOKEN`, `SIGNPATH_ORGANIZATION_ID` and
+      `RELEASE_APP_PRIVATE_KEY`.
+- [ ] Add a tag ruleset that limits who can create `desktop-v*` tags.
+
 ## Privacy policy
 
 cezar runs on your machine and has no accounts. Telemetry is opt-in: nothing is sent until you
