@@ -108,7 +108,7 @@ function stubFetch(overrides: Record<string, () => Response> = {}): SentRequest[
       const override = overrides[`${method} ${path}`]
       if (override) return override()
       if (method === 'GET' && path === '/api/v1/runs/r1') return jsonResponse(RUN)
-      if (method === 'GET' && path === '/api/v1/runs/r1/changes') return jsonResponse(CHANGES)
+      if (method === 'GET' && path.split('?')[0] === '/api/v1/runs/r1/changes') return jsonResponse(CHANGES)
       if (method === 'GET' && path === '/api/v1/runs/r1/git/status') return jsonResponse({ uncommitted: 2, unpushed: null })
       if (method === 'GET' && path === '/api/v1/health') return jsonResponse(HEALTH)
       if (method === 'GET' && path === '/api/v1/repo') return jsonResponse(REPO)
@@ -299,6 +299,27 @@ describe('the Changes tab route', () => {
     const diffPane = document.querySelector('[data-slot="diff-pane"]') as HTMLElement
     expect(diffPane.hasAttribute('data-diff-scroller')).toBe(true)
     expect(diffPane.className).toContain('md:overflow-y-auto')
+  })
+
+  it('keeps the default request unchanged, switches the base, and marks files viewed (#2248)', async () => {
+    localStorage.clear()
+    const sent = stubFetch()
+    renderChangesRoute()
+    await waitFor(() => expect(document.querySelector('[data-slot="changes-tree"]')).not.toBeNull())
+    expect(sent.filter((r) => r.path.startsWith('/api/v1/runs/r1/changes')).every((r) => r.path === '/api/v1/runs/r1/changes')).toBe(true)
+
+    fireEvent.click(document.querySelector('[data-slot="changes-base"] [data-kind="worktree"]')!)
+    await waitFor(() => expect(sent.some((r) => r.path === '/api/v1/runs/r1/changes?base=worktree')).toBe(true))
+
+    await waitFor(() => expect(document.querySelector('[data-slot="tree-viewed"]')).not.toBeNull())
+    fireEvent.click(document.querySelector('[data-slot="tree-viewed"]')!)
+    await waitFor(() => expect(document.querySelector('[data-slot="viewed-counter"]')?.textContent).toContain('1 /'))
+  })
+
+  it('says so when the server truncated the diff, never a blank pane', async () => {
+    stubFetch({ 'GET /api/v1/runs/r1/changes': () => jsonResponse({ ...CHANGES, truncated: true }) })
+    renderChangesRoute()
+    await waitFor(() => expect(document.querySelector('[data-slot="truncated-note"]')).not.toBeNull())
   })
 
   it('shows the empty state when the worktree is clean', async () => {

@@ -24,6 +24,15 @@ import { useRememberedState } from '@/lib/view-memory'
 import { RunHeader } from '../task-thread/run-header'
 import { RunUsage } from '../task-thread/run-usage'
 import { ChangesTree } from './changes-tree'
+import {
+  baseParam,
+  ChangesBaseSelect,
+  TruncatedNote,
+  useViewedFiles,
+  ViewedCounter,
+  viewedScope,
+  type ChangesBase,
+} from './changes-review'
 import { TreePaneResizeHandle, treePaneWidthProps, useTreePaneWidth } from './tree-pane-resize'
 import { buildFileTree } from './file-tree'
 import { GitTabLoadError, GitTabLoading } from './git-tab-loading'
@@ -75,7 +84,11 @@ export function ChangesView({
   // repo reported no remote for every project (#791).
   const repo = useRepo()
   // Poll while the run is active so writes appear as the agent makes them.
-  const changes = useRunChanges(run.id, isRunActive(run.status))
+  // The comparison base (#2248). The default is the task's own anchor, so a task that never touches
+  // the switch sends the same request as before.
+  const [base, setBase] = useState<ChangesBase>({ kind: 'merge-base', ref: '' })
+  const sendBase = baseParam(base, 'merge-base')
+  const changes = useRunChanges(run.id, isRunActive(run.status), sendBase)
   const desktop = useIsDesktop()
 
   const [mode, setMode] = useState<DiffMode>('unified')
@@ -158,6 +171,7 @@ export function ChangesView({
   const diffShown = !changes.isPending && !changes.isError && files.length > 0
   const tree = useMemo(() => buildFileTree(files), [files])
   const hasMarkdown = useMemo(() => files.some(canPreviewMarkdown), [files])
+  const viewed = useViewedFiles(viewedScope({ id: run.id, branch: run.branch, base: sendBase ?? 'merge-base' }), files)
 
   // Phones force the readable combination; the toggles only exist ≥md (toolbar hides them).
   const effectiveMode: DiffMode = desktop ? mode : 'unified'
@@ -243,6 +257,13 @@ export function ChangesView({
         onPreviewChange={hasMarkdown ? setPreview : undefined}
       />
 
+      <div data-slot="changes-review-bar" className="flex flex-wrap items-center gap-3 border-b px-4 py-1.5 md:px-6">
+        <ChangesBaseSelect value={base} onChange={setBase} />
+        <ViewedCounter state={viewed} />
+      </div>
+
+      <TruncatedNote show={Boolean(changes.data?.truncated)} />
+
       {changes.data?.repointedHead ? (
         <p data-slot="repointed-head-note" className="border-b px-4 py-2 text-label text-muted-foreground md:px-6">
           HEAD is on <code>{changes.data.repointedHead.headBranch}</code>, not this task&apos;s branch{' '}
@@ -291,7 +312,13 @@ export function ChangesView({
               treeWidthProps.className,
             )}
           >
-            <ChangesTree root={tree} selected={selected} onSelect={selectFile} commentCounts={commentCounts} />
+            <ChangesTree
+              root={tree}
+              selected={selected}
+              onSelect={selectFile}
+              commentCounts={commentCounts}
+              viewed={viewed}
+            />
           </aside>
           <TreePaneResizeHandle
             paneRef={treePaneRef}

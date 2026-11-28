@@ -144,8 +144,23 @@ export const changesPayloadSchema = z.object({
   repointedHead: z.object({ headBranch: z.string(), taskBranch: z.string() }).optional(),
   /** The diff's anchor commit as a full sha — the `rev` an image's old side is fetched at. */
   baseSha: z.string().optional(),
+  /** True when the whole-payload patch budget ran out: later files keep their stat but carry an empty patch (#2248). */
+  truncated: z.boolean().optional(),
 });
 export type ChangesPayload = z.infer<typeof changesPayloadSchema>;
+
+/** Optional `?base=` of `GET /runs/:id/changes` and `GET /repo/changes` (#2248): `merge-base` (vs the base
+ *  branch), `worktree` (uncommitted only), or any other value = a git ref compared at its merge-base with
+ *  HEAD. Absent keeps each route's historical answer; the server rejects option-like refs. */
+export const changesQuerySchema = z.object({
+  base: z
+    .string()
+    .min(1)
+    .max(256)
+    .refine((v) => !v.startsWith('-') && !/[\u0000\n\r]/.test(v), 'invalid base')
+    .optional(),
+});
+export type ChangesQuery = z.infer<typeof changesQuerySchema>;
 
 /** `GET /api/v1/repo/commit/:sha?structured=1` (and `/runs/:id/commit/:sha`) — one commit's
  *  metadata plus the same `{files, stat}` shape the /changes routes serve. A merge commit

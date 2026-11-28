@@ -75,6 +75,8 @@ import { questionsTopic } from '../questions/topic.ts';
 import type { QuestionProvider } from '../questions/types.ts';
 import type { GithubLoginState, InitProjectGitResponse, PublishProjectGithubResponse, RepoSuggestionsResponse } from '@open-mercato/cezar-contract';
 import { publishProjectGithubInputSchema } from '@open-mercato/cezar-contract';
+import { changesQuerySchema } from '@open-mercato/cezar-contract';
+import { changesAnchor } from './changes-anchor.ts';
 import { automationReportSchema, setAutomationReportInputSchema, automationsExportQuerySchema, automationImportPreviewInputSchema, automationImportInputSchema, configBundleExportQuerySchema, configBundlePreviewInputSchema, configBundleImportInputSchema, type SecretEntry } from '@open-mercato/cezar-contract';
 import { deleteRunLayouts, readRunLayouts, writeRunLayouts } from '../runs/layouts.ts';
 import { discoverCommands, installCommand } from './terminal/commands.ts';
@@ -345,6 +347,7 @@ import { getBranches, getCommit, getDiff, getLog, getRepoInfo, getStatus } from 
 import {
   collectChanges,
   collectCommitChanges,
+  resolveRepoBaseBranch,
   collectRunCommits,
   commitAll,
   createOrSwitchBranch,
@@ -6322,8 +6325,9 @@ export function createAppParts(deps: ServerDeps) {
       return c.text(await worktreeDiff(run.worktreePath, run.baseBranch ?? 'HEAD'));
     })
 
-    .get('/runs/:id/changes', async (c) => {
+    .get('/runs/:id/changes', queryZodValidator(changesQuerySchema), async (c) => {
       const { root: repoRoot, store } = c.get('project');
+      const { base } = c.req.valid('query');
       const run = store.getRun(c.req.param('id'));
       if (!run) return c.json({ error: 'not found' }, 404);
       const workingDirectory = workingDirectoryOf(run, repoRoot);
@@ -6335,6 +6339,7 @@ export function createAppParts(deps: ServerDeps) {
         // A read-only GET against the user's real checkout must never modify its index.
         intentToAdd: run.worktreePath ? undefined : false,
         excludeCezarData: !run.worktreePath,
+        anchor: changesAnchor(base),
       });
       if (!result.ok) return c.json({ error: result.error }, 409);
       return c.json(result.changes);
@@ -8217,13 +8222,23 @@ export function createAppParts(deps: ServerDeps) {
     // surface, untouched): the same {files, stat} shape the session /changes
     // route serves, here for the MAIN working tree's uncommitted changes vs
     // HEAD (redesign R5 Step 1.3 — §"Git/session API additions").
-    .get('/repo/changes', async (c) => {
+    .get('/repo/changes', queryZodValidator(changesQuerySchema), async (c) => {
       const { root: repoRoot } = c.get('project');
+      const { base } = c.req.valid('query');
       const info = await getRepoInfo(repoRoot);
       if (!info) return c.json({ error: 'not a git repository' }, 409);
+      // `merge-base` compares the current branch with the project's base branch (#2248); absent keeps
+      // the historical uncommitted-only answer.
+      let baseBranch = 'HEAD';
+      if (base === 'merge-base') {
+        const resolved = await resolveRepoBaseBranch(info.root, (await loadConfig(repoRoot)).baseBranch);
+        if (!resolved) return c.json({ error: 'no base branch found to compare against' }, 409);
+        baseBranch = resolved;
+      }
       // The user's REAL working tree — never stage into their index (a GET must not write).
-      const result = await collectChanges(info.root, 'HEAD', {
+      const result = await collectChanges(info.root, baseBranch, {
         intentToAdd: false,
+        anchor: changesAnchor(base),
       });
       if (!result.ok) return c.json({ error: result.error }, 409);
       return c.json(result.changes);

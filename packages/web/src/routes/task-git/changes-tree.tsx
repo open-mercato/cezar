@@ -4,6 +4,7 @@ import { createContext, useContext, useState } from 'react'
 import { CommentCount } from '@/components/comment-count'
 import { cn } from '@/lib/utils'
 
+import type { ViewedState } from './changes-review'
 import { isJunkPath, partitionJunk, type TreeDir, type TreeFile } from './file-tree'
 import { JunkFold } from './junk-fold'
 import { isImagePath } from './worktree-files'
@@ -18,6 +19,7 @@ export function ChangesTree({
   selected,
   onSelect,
   commentCounts = NO_COMMENTS,
+  viewed = null,
 }: {
   root: TreeDir
   selected: string | null
@@ -25,8 +27,11 @@ export function ChangesTree({
   /** Drafted line comments per file path (the self-review flow) — shown on the file's row, and
    *  summed on a COLLAPSED folder, whose files' own counts are hidden. */
   commentCounts?: ReadonlyMap<string, number>
+  /** Per-file "Viewed" marks (#2248); absent, the rows carry no checkbox. */
+  viewed?: ViewedState | null
 }) {
   return (
+    <ViewedContext.Provider value={viewed}>
     <CommentCountsContext.Provider value={commentCounts}>
     <nav data-slot="changes-tree" aria-label="Changed files" className="min-w-0 text-ui">
       <ul className="flex flex-col gap-px">
@@ -37,8 +42,11 @@ export function ChangesTree({
       </ul>
     </nav>
     </CommentCountsContext.Provider>
+    </ViewedContext.Provider>
   )
 }
+
+const ViewedContext = createContext<ViewedState | null>(null)
 
 const NO_COMMENTS: ReadonlyMap<string, number> = new Map()
 /** Context rather than one more prop down the recursion — only the leaf badges read it. */
@@ -164,8 +172,21 @@ function FileNode({
   const active = selected === file.path
   const comments = useContext(CommentCountsContext).get(file.path) ?? 0
   const Icon = isImagePath(file.path) ? ImageIcon : FileIcon
+  const viewedState = useContext(ViewedContext)
+  const isViewed = viewedState?.viewed.has(file.path) ?? false
   return (
-    <li>
+    <li className="relative">
+      {viewedState ? (
+        <input
+          type="checkbox"
+          data-slot="tree-viewed"
+          aria-label={`Viewed ${file.path}`}
+          checked={isViewed}
+          onChange={() => viewedState.toggle(file.path)}
+          className="absolute top-1/2 size-3 -translate-y-1/2 cursor-pointer"
+          style={{ left: `${6 + depth * 14}px` }}
+        />
+      ) : null}
       <button
         type="button"
         data-slot="tree-file"
@@ -175,6 +196,7 @@ function FileNode({
         onClick={() => onSelect(file.path)}
         className={cn(
           'flex w-full min-w-0 items-center gap-1.5 rounded-sm px-1.5 py-1 text-left hover:bg-muted',
+          isViewed && !active && 'opacity-60',
           active
             ? 'bg-muted font-medium text-foreground'
             : junk

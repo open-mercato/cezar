@@ -311,6 +311,28 @@ describe('collectChanges — structured diff vs base', () => {
   });
 });
 
+describe('assemblePayload — aggregate patch budget (#2248)', () => {
+  const big = (name: string) =>
+    `diff --git a/${name} b/${name}\n--- a/${name}\n+++ b/${name}\n@@ -1 +1 @@\n-a\n+${'x'.repeat(150_000)}\n`;
+  const names = Array.from({ length: 40 }, (_, i) => `f${String(i).padStart(2, '0')}.txt`);
+
+  it('keeps every file and its stat but drops patches past the budget, flagging truncated', () => {
+    const nameStatus = names.map((n) => `M\0${n}\0`).join('');
+    const numstat = names.map((n) => `1\t1\t${n}\0`).join('');
+    const payload = assemblePayload(nameStatus, numstat, names.map(big).join(''), 200_000);
+    expect(payload.files).toHaveLength(40);
+    expect(payload.stat.files).toBe(40);
+    expect(payload.truncated).toBe(true);
+    expect(payload.files[0]?.patch).not.toBe('');
+    expect(payload.files[39]?.patch).toBe('');
+  });
+
+  it('omits the flag for a small diff', () => {
+    const payload = assemblePayload('M\0a.txt\0', '1\t1\ta.txt\0', big('a.txt'), 200_000);
+    expect(payload).not.toHaveProperty('truncated');
+  });
+});
+
 describe('assemblePayload — patches attach to files by path, not by position (#488)', () => {
   // `-z` name-status: `X NUL path NUL`. Two modified files, in this order.
   const nameStatus = 'M\0a.txt\0M\0b.txt\0';
@@ -634,6 +656,25 @@ describe('session git API routes', () => {
     expect(body.stat).toEqual({ adds: 1, dels: 0, files: 1 });
 
     expect((await apiRequest(app, '/api/v1/runs/nope/changes')).status).toBe(404);
+  });
+
+  it('GET /changes ?base= switches the anchor and rejects unsafe refs (#2248)', async () => {
+    writeFileSync(join(worktree, 'committed.txt'), 'c\n');
+    g(worktree, 'add', '-A');
+    g(worktree, 'commit', '-m', 'task work');
+    writeFileSync(join(worktree, 'dirty.txt'), 'd\n');
+    const paths = async (query: string) => {
+      const res = await apiRequest(app, `/api/v1/runs/${run.id}/changes${query}`);
+      expect(res.status).toBe(200);
+      return ((await res.json()) as ChangesPayload).files.map((f) => f.path).sort();
+    };
+    const dflt = await paths('');
+    expect(dflt).toEqual(['committed.txt', 'dirty.txt']);
+    expect(await paths('?base=merge-base')).toEqual(dflt);
+    expect(await paths('?base=worktree')).toEqual(['dirty.txt']);
+    expect(await paths('?base=main')).toEqual(dflt);
+    expect((await apiRequest(app, `/api/v1/runs/${run.id}/changes?base=--output%3Dx`)).status).toBe(400);
+    expect((await apiRequest(app, `/api/v1/runs/${run.id}/changes?base=nope`)).status).toBe(409);
   });
 
   it('GET /git/status counts what has not left the worktree; 404 unknown, 409 no worktree', async () => {
@@ -1133,6 +1174,56 @@ describe('repo git API routes (R5 Step 1.3 — main working tree)', () => {
     expect(byPath.get('new.txt')).toMatchObject({ status: 'added', adds: 1, dels: 0 });
     expect(byPath.get('new.txt')?.patch).toContain('+brand new');
     expect(body.stat).toEqual({ adds: 2, dels: 1, files: 2 });
+  });
+
+  describe('?base= comparison anchors (#2248)', () => {
+    beforeEach(() => {
+      g(repoRoot, 'checkout', '-q', '-b', 'feature');
+      writeFileSync(join(repoRoot, 'committed.txt'), 'committed work\n');
+      g(repoRoot, 'add', '-A');
+      g(repoRoot, 'commit', '-m', 'feature work');
+      writeFileSync(join(repoRoot, 'dirty.txt'), 'uncommitted\n');
+    });
+
+    const paths = async (query: string) => {
+      const res = await apiRequest(app, `/api/v1/repo/changes${query}`);
+      expect(res.status).toBe(200);
+      return ((await res.json()) as ChangesPayload).files.map((f) => f.path).sort();
+    };
+
+    it('no ?base= stays uncommitted-only; base=worktree is the same answer', async () => {
+      expect(await paths('')).toEqual(['dirty.txt']);
+      expect(await paths('?base=worktree')).toEqual(['dirty.txt']);
+    });
+
+    it('base=merge-base shows committed + uncommitted work since main', async () => {
+      expect(await paths('?base=merge-base')).toEqual(['committed.txt', 'dirty.txt']);
+    });
+
+    it('a named ref compares at its merge-base with HEAD, even after main moves on', async () => {
+      g(repoRoot, 'checkout', '-q', 'main');
+      writeFileSync(join(repoRoot, 'later-on-main.txt'), 'x\n');
+      g(repoRoot, 'add', 'later-on-main.txt');
+      g(repoRoot, 'commit', '-m', 'main moves');
+      g(repoRoot, 'checkout', '-q', 'feature');
+      expect(await paths('?base=main')).toEqual(['committed.txt', 'dirty.txt']);
+    });
+
+    it('never writes the real index (scratch-index path stays)', async () => {
+      const before = readFileSync(join(repoRoot, '.git', 'index'));
+      await paths('?base=merge-base');
+      expect(readFileSync(join(repoRoot, '.git', 'index')).equals(before)).toBe(true);
+    });
+
+    it('rejects option-like and unknown refs without running them', async () => {
+      const marker = join(repoRoot, 'pwned');
+      const injected = await apiRequest(app, `/api/v1/repo/changes?base=${encodeURIComponent(`--output=${marker}`)}`);
+      expect(injected.status).toBe(400);
+      expect(() => readFileSync(marker)).toThrow();
+      const unknown = await apiRequest(app, '/api/v1/repo/changes?base=no-such-ref');
+      expect(unknown.status).toBe(409);
+      expect(((await unknown.json()) as { error: string }).error).toContain('unknown base ref');
+    });
   });
 
   it('GET /api/v1/repo/changes on a clean tree is an all-zero payload, not an error', async () => {

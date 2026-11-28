@@ -954,10 +954,10 @@ export async function putAgentConfigFile(
 
 /** The main working tree's structured uncommitted diff vs HEAD (R5 repo view). 409 (as an
  *  ApiError with the reason) when the server runs outside a git repository. */
-export async function getRepoChanges(opts?: ReadOptions): Promise<ChangesPayload> {
+export async function getRepoChanges(opts?: ReadOptions & { base?: string }): Promise<ChangesPayload> {
   return unwrap(
     await cez.api.v1.p[':projectId'].repo.changes.$get(
-      { param: { projectId: queryScope() } },
+      { param: { projectId: queryScope() }, query: opts?.base ? { base: opts.base } : {} },
       init(opts),
     ),
     '/repo/changes',
@@ -1394,10 +1394,10 @@ export function getRunHandoff(id: string, opts?: ReadOptions): Promise<string> {
 
 /** The run's structured working-directory-vs-base diff (R5): per-file status/±/patch + the
  *  aggregate stat. Worktree-off runs read the repo checkout they executed in. */
-export async function getRunChanges(id: string, opts?: ReadOptions): Promise<ChangesPayload> {
+export async function getRunChanges(id: string, opts?: ReadOptions & { base?: string }): Promise<ChangesPayload> {
   return unwrap(
     await cez.api.v1.p[':projectId'].runs[':id'].changes.$get(
-      { param: { projectId: queryScope(), id: encodeURIComponent(id) } },
+      { param: { projectId: queryScope(), id: encodeURIComponent(id) }, query: opts?.base ? { base: opts.base } : {} },
       init(opts),
     ),
     runPath(id, '/changes'),
