@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ManagerMessage } from '@open-mercato/cezar-api-client'
 
 import {
@@ -52,12 +52,18 @@ describe('isManagerPathname', () => {
 })
 
 describe('managerMessageTime', () => {
-  const now = new Date(2026, 9, 31, 12, 0)
+  // Late evening local time: the default `now` must not depend on when the suite runs.
+  const now = new Date(2026, 9, 31, 23, 50)
+  beforeEach(() => {
+    vi.useFakeTimers()
+    vi.setSystemTime(now)
+  })
+  afterEach(() => vi.useRealTimers())
 
   it('shows the hour today, and the day with it before that', () => {
-    expect(managerMessageTime(new Date(2026, 9, 31, 7, 34).toISOString(), now)).toMatch(/7:34/)
-    expect(managerMessageTime(new Date(2026, 9, 31, 7, 34).toISOString(), now)).not.toMatch(/Oct/)
-    expect(managerMessageTime(new Date(2026, 9, 30, 23, 5).toISOString(), now)).toMatch(/Oct 30.*11:05|Oct 30.*23:05/)
+    expect(managerMessageTime(new Date(2026, 9, 31, 7, 34).toISOString())).toMatch(/7:34/)
+    expect(managerMessageTime(new Date(2026, 9, 31, 7, 34).toISOString())).not.toMatch(/Oct/)
+    expect(managerMessageTime(new Date(2026, 9, 30, 23, 5).toISOString())).toMatch(/Oct 30.*11:05|Oct 30.*23:05/)
   })
 
   it('stays silent on a time it cannot read', () => {
