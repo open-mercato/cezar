@@ -29,3 +29,7 @@ Closing an idle session is housekeeping, not a state change. The task keeps the 
 Tasks dispatched by another task are the exception: their session still settles when it closes, so the parent receives a report. Tasks closed by an older version of Cezar show a neutral **idle** mark.
 
 > **Good to know**: Sessions marked as monitoring are exempt from this timeout.
+
+## A turn that goes silent
+
+This timeout only covers a session that is waiting between turns. A turn that is still in flight but silent has its own bound, on by default and not configurable: after 45 minutes with no agent output (4 hours while the backend reports a tool as running) the task is parked as needing you and releases its slot. The session stays open. Any new output from the agent, or a message from you, makes the task active again; Cancel stops it.
