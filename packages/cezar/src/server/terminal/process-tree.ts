@@ -1,4 +1,5 @@
 import { execFileSync } from 'node:child_process';
+import { readLinuxProcessTreeSync } from './linux-proc.ts';
 
 /**
  * The process groups under a shell (spec `.ai/specs/2026-10-07-task-workspace.md` §6: "stops its
@@ -12,7 +13,8 @@ export interface TreeRow {
   pgid: number;
 }
 
-/** Parse `ps -axo pid=,ppid=,pgid=`. Malformed rows are skipped — `ps` races process exits. */
+/** Parse `ps -axo pid=,ppid=,pgid=` (non-Linux; Linux walks /proc, #2349). Malformed rows are
+ *  skipped — `ps` races process exits. */
 export function parseTreeRows(text: string): TreeRow[] {
   const rows: TreeRow[] = [];
   for (const line of text.split('\n')) {
@@ -55,12 +57,15 @@ export function descendantGroups(rows: readonly TreeRow[], rootPid: number, self
 
 /**
  * One SYNCHRONOUS process-table read, or `null` when this host cannot give one (no `ps`, a
- * hidden table, a `ps` that hangs). Synchronous because its caller is a shutdown handler: the
- * tree has to be read before the process exits, and before the shell dies and its children are
- * reparented out of reach. Bounded for the same reason — a stuck `ps` must not hold the exit.
+ * hidden table, a reader that hangs). Linux reads only cezar's descendants from /proc in a
+ * killable helper (#2349); other hosts run `ps`. Synchronous because its caller is a shutdown
+ * handler: the tree has to be read before the process exits, and before the shell dies and its
+ * children are reparented out of reach. Bounded for the same reason — a stuck read must not
+ * hold the exit.
  */
 export function readProcessTreeSync(): TreeRow[] | null {
   if (process.platform === 'win32') return null;
+  if (process.platform === 'linux') return readLinuxProcessTreeSync();
   try {
     const text = execFileSync('ps', ['-axo', 'pid=,ppid=,pgid='], {
       encoding: 'utf8',

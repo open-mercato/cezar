@@ -1,4 +1,5 @@
 import { execFile } from 'node:child_process';
+import { readLinuxProcesses } from './linux-proc.ts';
 
 /**
  * What a terminal session is RUNNING right now (spec `.ai/specs/2026-10-07-task-workspace.md`
@@ -13,13 +14,14 @@ import { execFile } from 'node:child_process';
  * The same answer drives the close warning — "is there a process to lose" is exactly "does this
  * shell have a child" — so one mechanism serves both and the two can never disagree.
  *
- * Same constraints as `core/process-usage.ts`, which samples the same table for the runs table:
- * a missing or failing `ps` (Windows, exotic containers) degrades silently to "nothing running",
- * never an error; parsing and the tree walk are pure and table-testable; and one snapshot serves
- * every session rather than one `ps` per tab.
+ * The table is `ps` everywhere except Linux, where `linux-proc.ts` walks only cezar's own
+ * descendants through /proc so no other user's proc files are read (#2349). Same constraints as
+ * `core/process-usage.ts`: a missing or failing reader degrades silently to unknown, never an
+ * error; parsing and the tree walk are pure and table-testable; and one snapshot serves every
+ * session rather than one read per tab.
  */
 
-/** One parsed `ps` row. */
+/** One process row, from `ps` or Linux /proc. */
 export interface ProcessRow {
   pid: number;
   ppid: number;
@@ -97,17 +99,17 @@ export function tidyCommand(command: string): string {
   return line.length > 40 ? `${line.slice(0, 39)}…` : line;
 }
 
-/** How long one `ps` snapshot is reused. A terminal tab's name does not need to be fresher than
- *  this, and it keeps a polling cockpit from spawning a `ps` per request. */
+/** How long one process snapshot is reused. A terminal tab's name does not need to be fresher
+ *  than this, and it keeps a polling cockpit from re-reading the table per request. */
 const SNAPSHOT_TTL_MS = 1_000;
 
 let snapshot: { at: number; rows: ProcessRow[] } | undefined;
 let inFlight: Promise<ProcessRow[] | null> | undefined;
 
 /**
- * One shared, cached `ps` snapshot, or `null` when this host's process table cannot be read.
+ * One shared, cached process snapshot, or `null` when this host's process table cannot be read.
  *
- * Cached as the PROMISE while in flight so four tabs asking at once cost one `ps`, not four.
+ * Cached as the PROMISE while in flight so four tabs asking at once cost one read, not four.
  *
  * NULL IS NOT AN EMPTY TABLE. This used to resolve a failure to `[]`, which read downstream as
  * the positive claim "nothing is running" — and on Windows, where there is no `ps` at all, that
@@ -120,7 +122,7 @@ export function processSnapshot(now = Date.now()): Promise<ProcessRow[] | null> 
   if (inFlight) return inFlight;
   inFlight = readProcessTable()
     .then((rows) => {
-      // A failed read is deliberately NOT cached: `ps` failing once (a transient EAGAIN under
+      // A failed read is deliberately NOT cached: a read failing once (a transient EAGAIN under
       // load) should not freeze every tab's busy flag at "unknown" for the whole TTL.
       if (rows !== null) snapshot = { at: now, rows };
       return rows;
@@ -138,6 +140,8 @@ export function resetProcessSnapshot(): void {
 }
 
 function readProcessTable(): Promise<ProcessRow[] | null> {
+  // ps UID filters still open unrelated users' proc files on Linux (#2349).
+  if (process.platform === 'linux') return readLinuxProcesses();
   return new Promise((resolve) => {
     // Windows has no `ps`, and a hardened container can hide the table; both land on `null`,
     // which says "unknown" rather than "nothing running".

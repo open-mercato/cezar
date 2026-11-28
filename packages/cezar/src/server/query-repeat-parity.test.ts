@@ -7,6 +7,7 @@ import type { RunManager } from '../workflows/run.ts'
 import { createApp } from './server.ts'
 import { apiRequest } from './loopback-request.testkit.ts'
 import { connectedProviderAuth } from './provider-auth.testkit.ts'
+import { RunnerModelCatalog } from '../core/runner-model-catalog.ts'
 
 /**
  * Moving the query string onto `queryZodValidator` changed one thing on the wire that nothing
@@ -23,6 +24,7 @@ import { connectedProviderAuth } from './provider-auth.testkit.ts'
  * very cost that comment warns about, just below the timeout while there were three providers and
  * over it at four. The subject here is the query string, never discovery, so the fan-out is stubbed
  * out with `connectedProviderAuth()`: what this pins now stays pinned as providers are added.
+ * `/models?runner=codex` likewise spawned the host's codex CLI for discovery, so its catalog is a stub.
  */
 describe('a repeated query key stays 200 (c.req.query took the first value)', () => {
   let repoRoot: string
@@ -34,6 +36,7 @@ describe('a repeated query key stays 200 (c.req.query took the first value)', ()
       repoRoot, store: RunStore.open(join(repoRoot, '.ai/cezar')),
       manager: {} as RunManager, version: '0.0.0-test',
       providerAuth: connectedProviderAuth(),
+      modelCatalog: new RunnerModelCatalog({ adapters: { codex: { discover: async () => [] } } }),
     })
   })
   afterEach(() => rmSync(repoRoot, { recursive: true, force: true }))

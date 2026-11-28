@@ -327,6 +327,9 @@ describe('switching project', () => {
     // A leading `null` is the "No skill" row; the built-in `quick-task` has no row of its own.
     expect(sourceRefs()).toEqual([null, 'om-fix'])
     fireEvent.keyDown(document.body, { key: 'Escape' })
+    // Radix returns focus to the trigger a tick after closing; a popover opened before that
+    // reads the focus move as an outside interaction and closes again.
+    await waitFor(() => expect(document.activeElement).toBe(sourcePill()))
 
     await switchProject(OTHER)
     await waitFor(() => expect(pathname()).toBe(`/p/${OTHER}/new`))
