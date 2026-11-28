@@ -1224,6 +1224,42 @@ describe('ThreadView', () => {
       expect(commentWrites()).toEqual([])
     })
 
+    it('adds a passage of the reply as ONE quote chip, however often Add to chat is pressed', async () => {
+      const { commentWrites, posted, composer, sendButton } = withDiffCommentDraft(ok)
+      await screen.findByText('page.tsx +11')
+      const box = Range.prototype.getBoundingClientRect
+      Range.prototype.getBoundingClientRect = () =>
+        ({ top: 300, bottom: 320, left: 100, width: 200, height: 20, right: 300, x: 100, y: 300, toJSON: () => ({}) }) as DOMRect
+      try {
+        const paragraph = screen.getByText('cockpit').closest('p')!
+        const addTwice = async () => {
+          for (let i = 0; i < 2; i++) {
+            const range = document.createRange()
+            range.selectNodeContents(paragraph)
+            window.getSelection()!.removeAllRanges()
+            window.getSelection()!.addRange(range)
+            await act(async () => {
+              fireEvent.pointerUp(paragraph)
+              await new Promise((resolve) => setTimeout(resolve, 0))
+            })
+            fireEvent.click(await screen.findByRole('button', { name: /Add to chat/ }))
+          }
+        }
+        await addTwice()
+        await waitFor(() => expect(document.querySelectorAll('[data-slot="diff-comment-chip"][data-kind="quote"]')).toHaveLength(1))
+        await waitFor(() => expect(commentWrites().at(-1)).toContain('"kind":"quote"'))
+        expect(JSON.parse(commentWrites().at(-1)!).filter((c: { kind?: string }) => c.kind === 'quote')).toHaveLength(1)
+
+        // Held back from a backend command with the line comments — and named for what they are.
+        fireEvent.change(composer(), { target: { value: '/compact' } })
+        fireEvent.click(sendButton())
+        await waitFor(() => expect(posted()).toMatchObject({ text: '/compact' }))
+        expect(await screen.findByText(/^Comments kept — \/compact is a command/)).not.toBeNull()
+      } finally {
+        Range.prototype.getBoundingClientRect = box
+      }
+    })
+
     it('lets the diff comments ride a registry skill, which the server expands', async () => {
       const { commentWrites, posted, composer, sendButton } = withDiffCommentDraft(ok, [{ name: 'fix-review' }])
       await screen.findByText('page.tsx +11')

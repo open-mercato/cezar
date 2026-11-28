@@ -1,8 +1,9 @@
-import { FileIcon, MousePointerClickIcon } from 'lucide-react'
+import { FileIcon, MousePointerClickIcon, TextQuoteIcon } from 'lucide-react'
 import { useParams } from 'react-router'
 
 import { IconTooltip } from '@/components/ui/icon-tooltip'
 import { Link } from '@/lib/project-router'
+import { cn } from '@/lib/utils'
 
 import type { ReviewItem } from './diff-comments'
 
@@ -21,7 +22,33 @@ export function ReviewCommentsBlock({ items }: { items: readonly ReviewItem[] })
       <p className="text-label font-medium text-muted-foreground">
         {items.length} {items.length === 1 ? 'comment' : 'comments'} {whereLabel(items)}
       </p>
-      {items.map((item, index) => (
+      {items.map((item, index) => item.quote ? (
+        <div
+          key={index}
+          data-slot="review-comment"
+          data-kind="quote"
+          className="overflow-hidden rounded-lg border border-border bg-background/60"
+        >
+          <div className="flex min-w-0 items-center gap-1.5 border-b border-border/60 px-2.5 py-1.5 text-label text-muted-foreground">
+            <TextQuoteIcon aria-hidden="true" className="size-3.5 shrink-0" />
+            <span>On the agent’s reply</span>
+          </div>
+          <blockquote
+            data-slot="review-comment-quote"
+            className={cn(
+              'max-h-48 overflow-auto bg-muted/40 px-2.5 py-1.5 text-label leading-[1.6] break-words whitespace-pre-wrap text-muted-foreground',
+              item.body !== '' && 'border-b border-border/60',
+            )}
+          >
+            {item.excerpt}
+          </blockquote>
+          {item.body !== '' ? (
+            <p data-slot="review-comment-body" className="px-2.5 py-2 break-words whitespace-pre-wrap text-foreground">
+              {item.body}
+            </p>
+          ) : null}
+        </div>
+      ) : (
         <div
           key={index}
           data-slot="review-comment"
@@ -71,6 +98,8 @@ export function ReviewCommentsBlock({ items }: { items: readonly ReviewItem[] })
 }
 
 function whereLabel(items: readonly ReviewItem[]): string {
+  const quotes = items.filter((item) => item.quote).length
+  if (quotes > 0) return quotes === items.length ? 'on the reply' : 'on the reply and changes'
   const assets = items.filter((item) => item.asset).length
   if (assets === 0) return 'on the diff'
   return assets === items.length ? (assets === 1 ? 'on an asset' : 'on assets') : 'on the diff and assets'

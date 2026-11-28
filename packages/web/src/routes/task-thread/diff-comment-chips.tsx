@@ -1,9 +1,18 @@
-import { FileIcon, MousePointerClickIcon, XIcon } from 'lucide-react'
+import { FileIcon, MousePointerClickIcon, TextQuoteIcon, XIcon } from 'lucide-react'
 
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import { Link } from '@/lib/project-router'
 
-import { isAssetComment, linesLabel, sortReviewComments, type AssetComment, type DiffComment, type ReviewComment } from './diff-comments'
+import {
+  isAssetComment,
+  isQuoteComment,
+  linesLabel,
+  sortReviewComments,
+  type AssetComment,
+  type DiffComment,
+  type QuoteComment,
+  type ReviewComment,
+} from './diff-comments'
 import { assetCommentTarget, reviewTarget } from './review-comments-block'
 
 /**
@@ -31,6 +40,7 @@ export function DiffCommentChips({
     // as hover, and able to lay out a multi-line comment instead of one run-on line.
     <TooltipProvider delayDuration={300}>
       {sortReviewComments(comments).map((comment) => {
+        if (isQuoteComment(comment)) return <QuoteCommentChip key={comment.id} comment={comment} onRemove={onRemove} />
         if (isAssetComment(comment)) return <AssetCommentChip key={comment.id} runId={runId} comment={comment} onRemove={onRemove} />
         const name = comment.path.split('/').at(-1) ?? comment.path
         const sign = (side: 'old' | 'new') => (side === 'old' ? '−' : '+')
@@ -154,6 +164,53 @@ function AssetCommentChip({
             {comment.asset} · {comment.selector}
           </span>
           <span className="line-clamp-6 break-words whitespace-pre-wrap">{comment.body}</span>
+        </div>
+      </TooltipContent>
+    </Tooltip>
+  )
+}
+
+/** The passage on one line, for a chip label: whitespace folded, cut at `max` characters. */
+export function quoteSnippet(excerpt: string, max = 32): string {
+  const flat = excerpt.replace(/\s+/g, ' ').trim()
+  return flat.length <= max ? flat : `${flat.slice(0, max).trimEnd()}…`
+}
+
+/** A reply quote's chip: the passage's start, with the whole passage (and any note) as its tooltip. */
+function QuoteCommentChip({ comment, onRemove }: { comment: QuoteComment; onRemove: (id: string) => void }) {
+  const snippet = quoteSnippet(comment.excerpt)
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <span
+          data-slot="diff-comment-chip"
+          data-kind="quote"
+          tabIndex={0}
+          aria-label={comment.body.trim() === '' ? `Quote: ${snippet}` : `Comment on “${snippet}”`}
+          className="flex h-8 max-w-[260px] items-center overflow-hidden rounded-md border border-border bg-muted/40 text-xs text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none"
+        >
+          <span aria-hidden="true" className="flex h-full items-center border-r border-border px-2 text-muted-foreground">
+            <TextQuoteIcon className="size-3.5" />
+          </span>
+          <span className="min-w-0 truncate px-2 font-medium">{snippet}</span>
+          <button
+            type="button"
+            aria-label={`Remove quote “${snippet}”`}
+            onClick={() => onRemove(comment.id)}
+            className="flex h-full items-center px-1.5 text-soft-foreground hover:bg-muted hover:text-foreground"
+          >
+            <XIcon aria-hidden="true" className="size-3.5" />
+          </button>
+        </span>
+      </TooltipTrigger>
+      <TooltipContent side="top" sideOffset={6} className="max-w-[320px] text-left">
+        <div data-slot="diff-comment-tooltip" className="flex flex-col gap-1">
+          <span className="line-clamp-3 border-l-2 border-contrast-foreground/30 pl-2 break-words whitespace-pre-wrap text-contrast-foreground/80">
+            {comment.excerpt}
+          </span>
+          {comment.body.trim() !== '' ? (
+            <span className="line-clamp-6 break-words whitespace-pre-wrap">{comment.body}</span>
+          ) : null}
         </div>
       </TooltipContent>
     </Tooltip>

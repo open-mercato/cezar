@@ -306,3 +306,42 @@ describe('asset comments in the shared store', () => {
     await waitFor(() => expect(server.stored()).toEqual([]))
   })
 })
+
+describe('reply quotes in the shared store', () => {
+  it('keeps a bare quote and a quote with a note, persists them, and sends them', async () => {
+    const server = statefulServer([C1])
+    const { changes } = mountChangesHost()
+    await waitFor(() => expect(changes.result.current.ready).toBe(true))
+
+    act(() => {
+      expect(changes.result.current.addQuote({ excerpt: '\nthe passage\n', body: '' })).toBe(true)
+      expect(changes.result.current.addQuote({ excerpt: 'another', body: 'why?' })).toBe(true)
+    })
+    expect(changes.result.current.comments).toEqual([C1])
+    expect(changes.result.current.all.slice(1)).toMatchObject([
+      { kind: 'quote', excerpt: 'the passage', body: '' },
+      { kind: 'quote', excerpt: 'another', body: 'why?' },
+    ])
+    await waitFor(() => expect(server.stored()).toHaveLength(3))
+
+    let held: unknown[] = []
+    await act(async () => {
+      await changes.result.current.submit(async (comments) => {
+        held = comments
+      })
+    })
+    expect(held).toHaveLength(3)
+    await waitFor(() => expect(server.stored()).toEqual([]))
+  })
+
+  it('carries an entry of an unknown kind (a newer cockpit\'s) through its own saves', async () => {
+    const future = { kind: 'screenshot', id: 'f', region: [1, 2] }
+    const server = statefulServer([C1, future as unknown as DiffComment])
+    const { changes } = mountChangesHost()
+    await waitFor(() => expect(changes.result.current.ready).toBe(true))
+    expect(changes.result.current.all).toEqual([C1])
+
+    act(() => void changes.result.current.remove('c1'))
+    await waitFor(() => expect(server.stored()).toEqual([future]))
+  })
+})

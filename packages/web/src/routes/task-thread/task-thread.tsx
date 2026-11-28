@@ -38,7 +38,9 @@ import { useFinishRun } from './use-finish-run'
 import { usePromoteRun, useStartRunNow } from './use-start-run-now'
 import { E2eSetupVerdict } from './e2e-setup-verdict'
 import { useDraft } from './thread-draft'
-import { useDiffComments } from './diff-comments'
+import { holdsBareQuote, useDiffComments } from './diff-comments'
+import { ReplySelection } from './reply-selection'
+import { toast } from '@/components/ui/toaster'
 import { TaskComposer, TaskDock } from './task-composer'
 import { WorkingIndicator } from './thread-items'
 import { useContinueAction } from './follow-up-engine'
@@ -350,6 +352,18 @@ export function ThreadView({
   useEffect(() => {
     if (hash === '#reply') focusComposer()
   }, [hash, focusComposer, run.id])
+  // Text selected in the agent's replies rides the next message as a quote chip — bare (Add to
+  // chat) or with a note (Reply), in the same list as the diff comments.
+  const { addQuote, all: pendingComments } = diffComments
+  const addQuoteToChat = useCallback((excerpt: string) => {
+    // The same passage twice is one quote: a second Add to chat only refocuses the box.
+    if (holdsBareQuote(pendingComments, excerpt) || addQuote({ excerpt, body: '' })) focusComposer()
+  }, [addQuote, focusComposer, pendingComments])
+  const addReplyComment = useCallback((comment: { excerpt: string; body: string }) => {
+    const kept = addQuote(comment)
+    if (kept) toast('Comment added — it goes with your next message.')
+    return kept
+  }, [addQuote])
   const mode = threadRenderMode(search, rows.length)
   // A wait can ask for a plain-text reply. Without an open question card to handle #ask,
   // reveal the latest request instead of restoring an unrelated reading position.
@@ -390,6 +404,12 @@ export function ThreadView({
   return (
     <ReconnectSurfaceContext.Provider value={reconnectSurface}>
     <div data-route="task-thread" data-run-id={run.id} className="flex min-h-full flex-col">
+      <ReplySelection
+        runId={run.id}
+        onAddToChat={addQuoteToChat}
+        onComment={addReplyComment}
+        canComment={diffComments.ready}
+      />
       {embedded ? null : <RunHeader run={run} planTally={planTally} onMarkedUnread={markedUnread} />}
 
       {/* Row spacing lives on each thread row (pb-2.5, both render modes measure alike);
