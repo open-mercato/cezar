@@ -94,6 +94,7 @@ import {
   branchFor,
   chooseForkBase,
   commitAll,
+  localBranchExists,
   pushBranch,
   resolveBaseRef,
   syncWithBase,
@@ -5134,7 +5135,7 @@ export class RunManager {
     return this.retentionPass.then(() => out);
   }
 
-  private restoresInFlight = new Map<string, Promise<boolean>>();
+  private restoresInFlight = new Map<string, Promise<RestoreWorktreeOutcome>>();
   /**
    * Bring back a reclaimed task's worktree for the one surface that needs a checkout — publishing
    * its PR (the PR route and the draft-PR gate) — from its kept branch (spec
@@ -5146,18 +5147,48 @@ export class RunManager {
     if (!run?.worktreePath) return Promise.resolve(false);
     if (existsSync(run.worktreePath)) return Promise.resolve(true);
     if (!run.worktreeReclaimedAt) return Promise.resolve(false);
-    let pending = this.restoresInFlight.get(runId);
-    if (!pending) {
-      pending = restoreReclaimedForPublish(this.repoRoot, this.store, runId)
-        .then((restored) => {
-          if (restored) this.store.appendEvent(runId, { type: 'note', message: 'worktree restored from its branch' });
-          const now = this.store.getRun(runId);
-          return !!now?.worktreePath && existsSync(now.worktreePath);
-        })
-        .catch(() => false)
-        .finally(() => this.restoresInFlight.delete(runId));
-      this.restoresInFlight.set(runId, pending);
+    return this.restoreFromBranch(runId).then((outcome) => outcome.ok);
+  }
+
+  /**
+   * The Changes tab's "Restore worktree": the same restore, with the reason when it cannot.
+   * Idempotent — a present tree answers `present`, and a restore in flight is shared, not repeated.
+   */
+  restoreWorktreeOutcome(runId: string): Promise<RestoreWorktreeOutcome> {
+    const inFlight = this.restoresInFlight.get(runId);
+    if (inFlight) return inFlight;
+    const run = this.store.getRun(runId);
+    if (!run?.worktreePath) return Promise.resolve({ ok: false, error: 'this task has no worktree to restore' });
+    if (existsSync(run.worktreePath)) {
+      return Promise.resolve(run.worktreeReclaimedAt
+        ? { ok: false, error: `${run.worktreePath} already exists but is not this task's worktree — move it aside and retry` }
+        : { ok: true, status: 'present' });
     }
+    if (!run.worktreeReclaimedAt) return Promise.resolve({ ok: false, error: 'this task\'s worktree was not reclaimed — Continue recreates it' });
+    return this.restoreFromBranch(runId);
+  }
+
+  private restoreFromBranch(runId: string): Promise<RestoreWorktreeOutcome> {
+    let pending = this.restoresInFlight.get(runId);
+    if (pending) return pending;
+    let failure: unknown;
+    pending = restoreReclaimedForPublish(this.repoRoot, this.store, runId, { onError: (error) => { failure = error; } })
+      .then(async (restored): Promise<RestoreWorktreeOutcome> => {
+        if (restored) this.store.appendEvent(runId, { type: 'note', message: 'worktree restored from its branch' });
+        const now = this.store.getRun(runId);
+        if (now?.worktreePath && existsSync(now.worktreePath)) return { ok: true, status: restored ? 'restored' : 'present' };
+        // Restore reattaches the branch the tree had checked out, else the task's own (af94e8b9).
+        const branch = now?.branch ?? branchFor(runId);
+        const candidates = [now?.worktreeReclaimedBranch, branch].filter((b): b is string => !!b);
+        const surviving = await Promise.all(candidates.map((b) => localBranchExists(this.repoRoot, b)));
+        if (!surviving.some(Boolean)) {
+          return { ok: false, error: `this task's branch ${branch} no longer exists — there is nothing to restore` };
+        }
+        return { ok: false, error: restoreFailureReason(failure) };
+      })
+      .catch((error: unknown): RestoreWorktreeOutcome => ({ ok: false, error: restoreFailureReason(error) }))
+      .finally(() => this.restoresInFlight.delete(runId));
+    this.restoresInFlight.set(runId, pending);
     return pending;
   }
 
@@ -12054,4 +12085,16 @@ export function expandRegistrySlashSkill(
   const expanded = [...content];
   expanded[textIndex] = { type: 'text', text };
   return expanded;
+}
+
+/** What the cockpit's "Restore worktree" got: the tree is there, or why it is not. */
+export type RestoreWorktreeOutcome = { ok: true; status: 'restored' | 'present' } | { ok: false; error: string };
+
+/** A failed restore in words: a full disk and an occupied path say what to do, the rest is git's. */
+export function restoreFailureReason(error: unknown): string {
+  const code = (error as { code?: unknown } | undefined)?.code;
+  const message = error instanceof Error ? error.message : '';
+  if (code === 'ENOSPC' || /No space left on device/i.test(message)) return 'not enough disk space to restore the worktree — free some space and retry';
+  if (/already exists/.test(message)) return `${message} — move it aside and retry`;
+  return message ? `could not restore the worktree: ${message}` : 'could not restore the worktree';
 }

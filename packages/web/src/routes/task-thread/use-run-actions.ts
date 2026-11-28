@@ -239,7 +239,8 @@ export function useRunOpenChoices(run: ApiRun, canResume: boolean) {
   const agentAvailable = (runner: ApiRun['runner']) =>
     !providers.isSuccess || availableRunners.includes(runner ?? 'claude')
   const canResumeHere = canResume && agentAvailable(run.runner)
-  const choices: OpenInChoice[] = run.worktreePath
+  // A reclaimed tree is not on disk: nothing to open until the Changes tab restores it.
+  const choices: OpenInChoice[] = run.worktreePath && !run.worktreeReclaimedAt
     ? (targets.data?.targets ?? [])
         .filter((target) => {
           const runner = cliTargetRunner(target.id)

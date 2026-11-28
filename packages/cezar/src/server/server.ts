@@ -343,6 +343,7 @@ import { validateLifecycleCommand } from '../worktree-lifecycle/templates.ts';
 import { setConfigInputSchema, type WorktreeLifecycleInvalidation } from '@open-mercato/cezar-contract';
 import { getBranches, getCommit, getDiff, getLog, getRepoInfo, getStatus } from './git.ts';
 import {
+  collectBranchChanges,
   collectChanges,
   collectCommitChanges,
   collectRunCommits,
@@ -6326,8 +6327,15 @@ export function createAppParts(deps: ServerDeps) {
       const { root: repoRoot, store } = c.get('project');
       const run = store.getRun(c.req.param('id'));
       if (!run) return c.json({ error: 'not found' }, 404);
+      // A reclaimed task's Changes are its kept branch's committed diff (no checkout needed).
+      const kept = await reclaimedBranchOf(run, repoRoot);
+      if (kept) {
+        const fromBranch = await collectBranchChanges(repoRoot, run.baseBranch ?? 'HEAD', kept);
+        if (!fromBranch.ok) return c.json({ error: fromBranch.error }, 409);
+        return c.json({ ...fromBranch.changes, fromBranch: { branch: kept, ...(fromBranch.headSha ? { headSha: fromBranch.headSha } : {}) } });
+      }
       const workingDirectory = workingDirectoryOf(run, repoRoot);
-      if (!workingDirectory) return c.json({ error: run.worktreeReclaimedAt ? RECLAIMED_WORKTREE : NO_WORKTREE }, 409);
+      if (!workingDirectory) return c.json({ error: run.worktreeReclaimedAt ? RECLAIMED_BRANCH_GONE : NO_WORKTREE }, 409);
       const result = await collectChanges(workingDirectory, run.baseBranch ?? 'HEAD', {
         taskBranch: run.branch,
         // Anchors a repointed worktree at the branch as this run found it (#751).
@@ -6495,7 +6503,9 @@ export function createAppParts(deps: ServerDeps) {
           : negotiate(c.req.header('accept'), FILE_FORMATS) === 'image/*';
       const run = store.getRun(c.req.param('id'));
       if (!run) return c.json({ error: 'not found' }, 404);
-      const workingDirectory = workingDirectoryOf(run, repoRoot);
+      // A reclaimed task's images still resolve by sha from the shared object store (its Changes tab).
+      const workingDirectory = workingDirectoryOf(run, repoRoot)
+        ?? (query.rev !== undefined && await reclaimedBranchOf(run, repoRoot) ? repoRoot : null);
       if (!workingDirectory) return c.json({ error: NO_WORKTREE }, 409);
       // `rev` (a full sha, the changes payload's `baseSha`) serves an image's OLD side from git —
       // the before of a modified image, the only picture of a deleted one. Bytes only.
@@ -6765,6 +6775,18 @@ export function createAppParts(deps: ServerDeps) {
           return c.json({ removed: true });
         });
       } catch (error) { return lifecycleError(c, error); }
+    })
+
+    // The Changes tab's "Restore worktree": a reclaimed task's tree back from its kept branch,
+    // through the restore Continue and the PR path use. Concurrent calls share one restore.
+    .post('/runs/:id/restore-worktree', async (c) => {
+      const { store, manager } = c.get('project');
+      const id = c.req.param('id');
+      if (!store.getRun(id)) return c.json({ error: 'not found' }, 404);
+      if (manager.isActive(id)) return c.json({ error: 'run is active — wait for it to finish' }, 409);
+      const outcome = await manager.restoreWorktreeOutcome(id);
+      if (!outcome.ok) return c.json({ error: outcome.error }, 409);
+      return c.json({ status: outcome.status });
     })
 
     .delete('/runs/:id', async (c) => {
@@ -7100,11 +7122,17 @@ export function createAppParts(deps: ServerDeps) {
       : worktreeOf(run);
   const NO_WORKTREE = 'no worktree — this task ran directly in the repo working tree';
   const RECLAIMED_WORKTREE = 'this task\'s worktree was reclaimed to free disk — its branch is kept, and Continue restores it';
+  const RECLAIMED_BRANCH_GONE = 'this task\'s worktree was reclaimed and its branch no longer exists — there are no changes left to show';
   /** A reclaimed task's kept branch, when its tree is gone and the branch still exists: the read
    *  routes answer from it without a checkout (spec 2026-11-19-worktree-disk-usage). */
-  const reclaimedBranchOf = async (run: RunRecord, repoRoot: string): Promise<string | null> =>
-    run.worktreeReclaimedAt && run.branch && !(run.worktreePath && existsSync(run.worktreePath))
-      && await localBranchExists(repoRoot, run.branch) ? run.branch : null;
+  const reclaimedBranchOf = async (run: RunRecord, repoRoot: string): Promise<string | null> => {
+    if (!run.worktreeReclaimedAt || (run.worktreePath && existsSync(run.worktreePath))) return null;
+    // The branch the tree had checked out holds the work when the agent switched off `branch` (af94e8b9).
+    for (const branch of [run.worktreeReclaimedBranch, run.branch]) {
+      if (branch && await localBranchExists(repoRoot, branch)) return branch;
+    }
+    return null;
+  };
   /** Only the PR path restores a reclaimed tree: publishing needs a checkout (autosave, push). */
   const withRestoredWorktree = async (project: { store: RunStore; manager: RunManager }, run: RunRecord | undefined): Promise<RunRecord | undefined> => {
     if (!run?.worktreeReclaimedAt || !run.worktreePath || existsSync(run.worktreePath) || project.manager.isActive(run.id)) return run;

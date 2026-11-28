@@ -1081,3 +1081,139 @@ describe('the Changes tab composer dock and a Session draft', () => {
     expect(document.querySelector('[data-slot="thread-dock"]')).toBeNull()
   })
 })
+
+// Spec 2026-11-19-worktree-disk-usage: a reclaimed task's Changes are its kept branch's committed
+// diff, its line comments still work, and "Restore worktree" brings the live view back.
+describe('the Changes tab of a reclaimed task', () => {
+  const RECLAIMED: ApiRun = { ...RUN, status: 'done', worktreeReclaimedAt: '2026-11-20T00:00:00.000Z' }
+  const FROM_BRANCH: ChangesPayload = { ...CHANGES, fromBranch: { branch: 'cez/abc12345', headSha: 'a'.repeat(40) } }
+  const PROVIDERS = () =>
+    jsonResponse({ providers: [{ provider: 'claude', status: 'connected', enabled: true }] })
+  const reclaimedFetch = (overrides: Record<string, () => Response> = {}) =>
+    stubFetch({
+      'GET /api/v1/runs/r1': () => jsonResponse(RECLAIMED),
+      'GET /api/v1/runs/r1/changes': () => jsonResponse(FROM_BRANCH),
+      'GET /api/v1/runs/r1/drafts': () => diffCommentsDraft([]),
+      'GET /api/v1/providers/status': PROVIDERS,
+      ...overrides,
+    })
+
+  it('renders the branch diff under a notice that says what it is, with no worktree file reads', async () => {
+    const sent = reclaimedFetch()
+    renderChangesRoute()
+    await waitFor(() => expect(document.querySelectorAll('[data-slot="diff-file"]')).toHaveLength(2))
+    const notice = document.querySelector('[data-slot="reclaimed-worktree-notice"]')!
+    expect(notice.textContent).toContain('committed changes on cez/abc12345')
+    expect(notice.textContent).toContain('reclaimed')
+    expect(notice.querySelector('[data-slot="restore-worktree"]')?.textContent).toBe('Restore worktree')
+    // Nothing on disk: no `/files` read for context or an "open in" for a path.
+    expect(sent.some((r) => r.path.startsWith('/api/v1/runs/r1/files'))).toBe(false)
+  })
+
+  it('a live worktree shows no reclaimed notice', async () => {
+    stubFetch({ 'GET /api/v1/runs/r1/drafts': () => diffCommentsDraft([]) })
+    renderChangesRoute()
+    await waitFor(() => expect(document.querySelectorAll('[data-slot="diff-file"]')).toHaveLength(2))
+    expect(document.querySelector('[data-slot="reclaimed-worktree-notice"]')).toBeNull()
+  })
+
+  it('lands earlier comments on their lines, and adds and sends new ones', async () => {
+    const stored = [{ id: 'c1', path: 'src/util/a.ts', side: 'new', line: 3, body: 'earlier note', excerpt: 'two' }]
+    const sent = reclaimedFetch({ 'GET /api/v1/runs/r1/drafts': () => diffCommentsDraft(stored) })
+    renderChangesRoute()
+    const earlier = await screen.findByText('earlier note')
+    expect(earlier.closest('[data-slot="diff-file"]')?.textContent).toContain('src/util/a.ts')
+
+    fireEvent.click(document.querySelector('[aria-label="Comment on notes.md line 1"]')!)
+    const editor = screen.getByPlaceholderText('Add a comment for the AI')
+    fireEvent.change(editor, { target: { value: 'and this' } })
+    fireEvent.keyDown(editor, { key: 'Enter' })
+    await waitFor(() => {
+      const put = sent.filter((r) => r.method === 'PUT' && r.path === '/api/v1/runs/r1/drafts/diff-comments').at(-1)
+      expect(put).toBeDefined()
+      const written = JSON.parse((put!.body as { text: string }).text) as { path: string; line: number; body: string }[]
+      expect(written.map((c) => [c.path, c.line, c.body])).toEqual([['src/util/a.ts', 3, 'earlier note'], ['notes.md', 1, 'and this']])
+    })
+
+    const dock = (await screen.findByText('notes.md +1')).closest<HTMLElement>('[data-slot="thread-dock"]')!
+    const send = dock.querySelector<HTMLButtonElement>('button[aria-label="Continue"]')!
+    await waitFor(() => expect(send.disabled).toBe(false))
+    fireEvent.click(send)
+    await waitFor(() =>
+      expect(sent.find((r) => r.method === 'POST' && r.path === '/api/v1/runs/r1/continue')?.body).toMatchObject({
+        text: expect.stringContaining('`notes.md` line 1'),
+      }),
+    )
+  })
+
+  it('Restore worktree shows progress, then refreshes to the live worktree view', async () => {
+    let release: () => void = () => {}
+    const restored = new Promise<void>((resolve) => (release = resolve))
+    let live = false
+    const sent = reclaimedFetch({
+      'GET /api/v1/runs/r1': () => jsonResponse(live ? { ...RECLAIMED, worktreeReclaimedAt: undefined } : RECLAIMED),
+      'GET /api/v1/runs/r1/changes': () => jsonResponse(live ? CHANGES : FROM_BRANCH),
+      'POST /api/v1/runs/r1/restore-worktree': (() =>
+        restored.then(() => {
+          live = true
+          return jsonResponse({ status: 'restored' })
+        })) as unknown as () => Response,
+    })
+    renderChangesRoute()
+    const button = await waitFor(() => {
+      const el = document.querySelector<HTMLButtonElement>('[data-slot="restore-worktree"]')
+      expect(el).not.toBeNull()
+      return el!
+    })
+    fireEvent.click(button)
+    await waitFor(() => expect(button.textContent).toBe('Restoring…'))
+    expect(button.disabled).toBe(true)
+    release()
+    await waitFor(() => expect(document.querySelector('[data-slot="reclaimed-worktree-notice"]')).toBeNull())
+    expect(await screen.findByText('Worktree restored from its branch')).toBeDefined()
+    expect(document.querySelectorAll('[data-slot="diff-file"]')).toHaveLength(2)
+    expect(sent.filter((r) => r.method === 'POST' && r.path === '/api/v1/runs/r1/restore-worktree')).toHaveLength(1)
+  })
+
+  it('a failed restore says why and keeps the branch diff', async () => {
+    reclaimedFetch({
+      'POST /api/v1/runs/r1/restore-worktree': () =>
+        jsonResponse({ error: 'not enough disk space to restore the worktree — free some space and retry' }, 409),
+    })
+    renderChangesRoute()
+    const button = await waitFor(() => {
+      const el = document.querySelector<HTMLButtonElement>('[data-slot="restore-worktree"]')
+      expect(el).not.toBeNull()
+      return el!
+    })
+    fireEvent.click(button)
+    const alert = await waitFor(() => {
+      const el = document.querySelector('[data-slot="restore-worktree-error"]')
+      expect(el).not.toBeNull()
+      return el!
+    })
+    expect(alert.textContent).toContain('not enough disk space')
+    expect(document.querySelectorAll('[data-slot="diff-file"]')).toHaveLength(2)
+  })
+
+  it('a running task cannot be restored from here', async () => {
+    reclaimedFetch({ 'GET /api/v1/runs/r1': () => jsonResponse({ ...RECLAIMED, status: 'running' }) })
+    renderChangesRoute()
+    const button = await waitFor(() => {
+      const el = document.querySelector<HTMLButtonElement>('[data-slot="restore-worktree"]')
+      expect(el).not.toBeNull()
+      return el!
+    })
+    expect(button.disabled).toBe(true)
+  })
+
+  it('a branch deleted since shows a clear empty state, not a blank tab', async () => {
+    reclaimedFetch({
+      'GET /api/v1/runs/r1/changes': () =>
+        jsonResponse({ error: "this task's worktree was reclaimed and its branch no longer exists — there are no changes left to show" }, 409),
+    })
+    renderChangesRoute()
+    expect(await screen.findByText("This task's branch is gone")).toBeDefined()
+    expect(document.querySelector('[data-slot="restore-worktree"]')).toBeNull()
+  })
+})

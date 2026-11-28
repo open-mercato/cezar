@@ -292,6 +292,24 @@ describe('the Files tab route', () => {
     expect(document.querySelector('[data-slot="files-tree"]')).toBeNull()
   })
 
+  it('a reclaimed task offers Restore worktree, which reloads the browser', async () => {
+    let live = false
+    const sent = stubFetch({
+      'GET /api/v1/runs/r1': () => jsonResponse(live ? RUN : { ...RUN, status: 'done', worktreeReclaimedAt: '2026-11-20T00:00:00.000Z' }),
+      'GET /api/v1/runs/r1/files?path=': () =>
+        live ? jsonResponse(ROOT) : jsonResponse({ error: 'no worktree — this task ran directly in the repo working tree' }, 409),
+      'POST /api/v1/runs/r1/restore-worktree': () => {
+        live = true
+        return jsonResponse({ status: 'restored' })
+      },
+    })
+    renderFilesRoute()
+    await waitFor(() => expect(screen.getByRole('heading', { level: 2, name: 'Worktree reclaimed' })).toBeTruthy())
+    fireEvent.click(document.querySelector('[data-slot="restore-worktree"]')!)
+    await waitFor(() => expect(document.querySelector('[data-slot="files-tree"]')).not.toBeNull())
+    expect(sent).toContain('POST /api/v1/runs/r1/restore-worktree')
+  })
+
   it('a non-409 root failure is a danger state', async () => {
     stubFetch({
       'GET /api/v1/runs/r1/files?path=': () => jsonResponse({ error: 'boom' }, 500),

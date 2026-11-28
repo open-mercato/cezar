@@ -6,6 +6,7 @@ import { ApiError } from '@/api/client'
 import { useRun, useRunFile } from '@/api/queries'
 import type { ApiRun } from '@open-mercato/cezar-api-client'
 import { CenteredState } from '@/components/centered-state'
+import { RestoreWorktreeAction } from './reclaimed-worktree-notice'
 import { useIsDesktop } from '@/lib/use-desktop'
 
 import { cn } from '@/lib/utils'
@@ -67,6 +68,15 @@ export function FilesView({
         <p data-slot="files-loading" className="px-4 py-6 text-center text-label text-soft-foreground md:px-6">
           Loading files…
         </p>
+      ) : refused && run.worktreeReclaimedAt ? (
+        <CenteredState
+          icon={<FolderTreeIcon />}
+          tone="neutral"
+          heading="h2"
+          title="Worktree reclaimed"
+          subtitle="This task's worktree was removed to free disk. Its branch is kept: restore the worktree to browse its files."
+          action={<RestoreWorktreeAction run={run} />}
+        />
       ) : root.isError ? (
         <CenteredState
           icon={refused ? <FolderTreeIcon /> : <TriangleAlertIcon />}

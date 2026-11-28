@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { branchFor, createWorktree, removeWorktree } from '../git-worktree.ts';
 import {
   isReclaimable,
+  reclaimRunWorktrees,
   reclaimWorktrees,
   rematerializeReclaimedWorktree,
   type RematerializeStore,
@@ -192,5 +193,63 @@ describe('a resume racing a retention pass (27d2e432)', () => {
 
     expect(await rematerializeReclaimedWorktree(repo, fakeStore(record), runId)).toBe(false);
     expect(existsSync(wt.path)).toBe(false);
+  });
+});
+
+/** af94e8b9: the agent switched its tree to another branch; Restore brought back the empty task branch. */
+describe('a reclaimed tree whose agent switched branches (af94e8b9)', () => {
+  const finishedRun = (id: string, path: string, branch: string): RunRecord =>
+    ({ id, status: 'done', createdAt: '2026-07-01T00:00:00.000Z', finishedAt: '2026-07-01T00:00:00.000Z',
+      worktreePath: path, branch, baseBranch: 'main', steps: [] }) as unknown as RunRecord;
+  const listStore = (record: RunRecord) => ({
+    ...fakeStore(record),
+    listRuns: () => [{ ...record }],
+  });
+
+  async function switchedTree(runId: string) {
+    const repo = await fixtureRepo();
+    const wt = await createWorktree(repo, runId, 'main');
+    await run('git', ['switch', '-q', '-c', 'agent/feature'], { cwd: wt.path });
+    writeFileSync(join(wt.path, 'work.txt'), 'the task\'s work\n');
+    await run('git', ['add', '-A'], { cwd: wt.path });
+    await run('git', [...GIT_ID, 'commit', '-q', '-m', 'work'], { cwd: wt.path });
+    const record = finishedRun(runId, wt.path, wt.branch);
+    return { repo, wt, record, store: listStore(record) };
+  }
+
+  const head = async (dir: string) => (await run('git', ['symbolic-ref', '--short', 'HEAD'], { cwd: dir })).stdout.trim();
+
+  it('records the checked-out branch at reclaim and restores onto it, with the work', async () => {
+    const { repo, wt, record, store } = await switchedTree('eeeeeeee-0000-4000-8000-000000000001');
+
+    expect(await reclaimRunWorktrees(repo, store, [record.id], () => true)).toEqual([record.id]);
+    expect(record.worktreeReclaimedBranch).toBe('agent/feature');
+
+    expect(await rematerializeReclaimedWorktree(repo, store, record.id)).toBe(true);
+    expect(await head(wt.path)).toBe('agent/feature');
+    expect(existsSync(join(wt.path, 'work.txt'))).toBe(true);
+    expect(record.branch).toBe(wt.branch); // the task's own branch stays the diff anchor
+    expect(record.worktreeReclaimedAt).toBeUndefined();
+    expect(record.worktreeReclaimedBranch).toBeUndefined();
+  });
+
+  it('falls back to the task branch when the switched-to branch was deleted since', async () => {
+    const { repo, wt, record, store } = await switchedTree('eeeeeeee-0000-4000-8000-000000000002');
+    await reclaimRunWorktrees(repo, store, [record.id], () => true);
+    await run('git', ['branch', '-q', '-D', 'agent/feature'], { cwd: repo });
+
+    expect(await rematerializeReclaimedWorktree(repo, store, record.id)).toBe(true);
+    expect(await head(wt.path)).toBe(wt.branch);
+  });
+
+  it('records nothing extra when the tree stayed on the task branch', async () => {
+    const repo = await fixtureRepo();
+    const runId = 'eeeeeeee-0000-4000-8000-000000000003';
+    const wt = await createWorktree(repo, runId, 'main');
+    const record = finishedRun(runId, wt.path, wt.branch);
+
+    expect(await reclaimRunWorktrees(repo, listStore(record), [runId], () => true)).toEqual([runId]);
+    expect(record.worktreeReclaimedAt).toBeDefined();
+    expect('worktreeReclaimedBranch' in record && record.worktreeReclaimedBranch !== undefined).toBe(false);
   });
 });

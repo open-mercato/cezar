@@ -6,7 +6,7 @@
 // is pure and unit-testable; the enforcer never throws (helper discipline).
 import { existsSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { branchFor, createWorktree, localBranchExists, removeWorktree, worktreeHasUnpreservedWork } from '../git-worktree.ts';
+import { branchFor, createWorktree, localBranchExists, removeWorktree, worktreeCheckedOutBranch, worktreeHasUnpreservedWork } from '../git-worktree.ts';
 import { prunePrHeadRefs } from '../automations/pr-head.ts';
 import { holderOf, worktreeHolders, type WorktreeHolder } from '../worktree-in-use.ts';
 import type { RunRecord, RunStatus } from './store.ts';
@@ -52,7 +52,7 @@ export function selectReclaimableWorktrees(runs: readonly RunRecord[], keep: num
  *  enforcer stays easy to test and never imports the concrete store. */
 export interface RetentionStore {
   listRuns(): RunRecord[];
-  updateRun(id: string, patch: { worktreeReclaimedAt?: string }): unknown;
+  updateRun(id: string, patch: { worktreeReclaimedAt?: string; worktreeReclaimedBranch?: string }): unknown;
   /** The run's event-log mtime (ms) — its truest "last activity". Optional for test fakes. */
   eventsMtimeMs?(id: string): number | undefined;
   /** Where a run's PR review export lives (`prCheckoutDir`). Optional for test fakes. */
@@ -64,7 +64,7 @@ export interface RetentionStore {
 /** The slice of the store the re-materializer needs. */
 export interface RematerializeStore {
   getRun(id: string): RunRecord | undefined;
-  updateRun(id: string, patch: { worktreeReclaimedAt?: string }): unknown;
+  updateRun(id: string, patch: { worktreeReclaimedAt?: string; worktreeReclaimedBranch?: string }): unknown;
 }
 
 /**
@@ -100,6 +100,7 @@ export async function rematerializeReclaimedWorktree(
   repoRoot: string,
   store: RematerializeStore,
   runId: string,
+  opts: { onError?: (error: unknown) => void } = {},
 ): Promise<boolean> {
   resumeClaims.set(runId, Date.now());
   await reclaimsInFlight.get(runId)?.catch(() => undefined);
@@ -109,22 +110,36 @@ export async function rematerializeReclaimedWorktree(
     // A directory removed outside cezar comes back the same way, but only onto its own surviving
     // branch: a fresh tree off the base would silently stand in for the task's work (27d2e432).
     if (!run.worktreeReclaimedAt && !await localBranchExists(repoRoot, run.branch ?? branchFor(runId))) return false;
-    await createWorktree(repoRoot, runId, run.baseBranch ?? 'HEAD', { branch: run.branch });
-    store.updateRun(runId, { worktreeReclaimedAt: undefined });
+    await createWorktree(repoRoot, runId, run.baseBranch ?? 'HEAD', { branch: await restoreBranch(repoRoot, run) });
+    store.updateRun(runId, { worktreeReclaimedAt: undefined, worktreeReclaimedBranch: undefined });
     return true;
-  } catch {
+  } catch (error) {
+    // The cockpit's Restore worktree shows why (path conflict, disk); every other caller ignores it.
+    opts.onError?.(error);
     return false;
   }
+}
+
+/** The branch a restore reattaches: the one the tree had checked out when it was reclaimed, which
+ *  holds the work when the agent switched off `run.branch` (af94e8b9), else the task's own. */
+async function restoreBranch(repoRoot: string, run: RunRecord): Promise<string | undefined> {
+  const kept = run.worktreeReclaimedBranch;
+  return kept && await localBranchExists(repoRoot, kept) ? kept : run.branch;
 }
 
 /**
  * Restore a reclaimed tree for publishing (the PR path), only onto its surviving branch: a branch
  * deleted since (merged and cleaned up) must not come back as a fresh tree off the base.
  */
-export async function restoreReclaimedForPublish(repoRoot: string, store: RematerializeStore, runId: string): Promise<boolean> {
+export async function restoreReclaimedForPublish(
+  repoRoot: string,
+  store: RematerializeStore,
+  runId: string,
+  opts: { onError?: (error: unknown) => void } = {},
+): Promise<boolean> {
   const run = store.getRun(runId);
-  if (!run?.worktreeReclaimedAt || !await localBranchExists(repoRoot, run.branch ?? branchFor(runId))) return false;
-  return rematerializeReclaimedWorktree(repoRoot, store, runId);
+  if (!run?.worktreeReclaimedAt || !await localBranchExists(repoRoot, await restoreBranch(repoRoot, run) ?? branchFor(runId))) return false;
+  return rematerializeReclaimedWorktree(repoRoot, store, runId, opts);
 }
 
 /**
@@ -316,9 +331,16 @@ export async function reclaimRunWorktrees(
         await opts.lifecycle.reclaim(id);
         continue;
       }
+      // The agent may have switched the tree to another branch; that one holds the work, and only
+      // the tree knew it (af94e8b9). Restore reattaches it instead of `run.branch`.
+      const checkedOut = await worktreeCheckedOutBranch(run.worktreePath);
       await remove(repoRoot, run.worktreePath);
       if (existsSync(run.worktreePath)) continue; // reclaim failed; retry next pass
-      store.updateRun(id, { worktreeReclaimedAt: now() });
+      const ownBranch = run.branch ?? branchFor(id);
+      store.updateRun(id, {
+        worktreeReclaimedAt: now(),
+        ...(checkedOut && checkedOut !== ownBranch ? { worktreeReclaimedBranch: checkedOut } : { worktreeReclaimedBranch: undefined }),
+      });
       reclaimed.push(id);
     } catch {
       // best-effort: never let retention crash a terminal transition or startup.

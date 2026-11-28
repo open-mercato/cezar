@@ -569,6 +569,14 @@ export async function autosaveCommit(
   return commit.ok ? 'committed' : 'failed';
 }
 
+/** The branch checked out in this worktree (`undefined` when detached or unreadable). Never throws. */
+export async function worktreeCheckedOutBranch(dir: string): Promise<string | undefined> {
+  if (!existsSync(dir)) return undefined;
+  const head = await git(dir, ['symbolic-ref', '--quiet', '--short', 'HEAD']);
+  const name = head.ok ? head.stdout.trim() : '';
+  return name && isSafeGitRef(name) ? name : undefined;
+}
+
 /** Does the worktree hold content no commit has? Unreadable state counts as yes: automatic
  *  retention must never discard on uncertainty (#2215). A directory that is gone holds nothing. */
 export async function worktreeHasUnpreservedWork(dir: string): Promise<boolean> {

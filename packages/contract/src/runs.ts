@@ -509,6 +509,9 @@ export const runRecordSchema = z.object({
   /** Set when count-based retention (#483) reclaimed the worktree DIRECTORY (the branch is
    *  kept): the dir is gone but recoverable. */
   worktreeReclaimedAt: z.string().optional(),
+  /** The branch the reclaimed tree had checked out, when the agent had switched it off `branch`:
+   *  a restore reattaches this one, which holds the work (af94e8b9). Cleared on restore. */
+  worktreeReclaimedBranch: z.string().optional(),
   /** Parallel variants (spec 010): runs sharing a groupId are one group. */
   groupId: z.string().optional(),
   /** Variant letter within the group — 'A' | 'B' | 'C'. */
@@ -914,6 +917,11 @@ export type OpenInCliResponse = z.infer<typeof openInCliResponseSchema>;
 /** `POST /runs/:id/remove-worktree` — per-row delete in the worktrees panel (#483). */
 export const removeWorktreeResponseSchema = z.object({ removed: z.literal(true) });
 export type RemoveWorktreeResponse = z.infer<typeof removeWorktreeResponseSchema>;
+
+/** `POST /runs/:id/restore-worktree` — bring a reclaimed task's worktree back from its kept branch.
+ *  `present` when it was already on disk (idempotent); 409 `{error}` when it cannot be restored. */
+export const restoreWorktreeResponseSchema = z.object({ status: z.enum(['restored', 'present']) });
+export type RestoreWorktreeResponse = z.infer<typeof restoreWorktreeResponseSchema>;
 
 /** `POST /runs/:id/git/commit` — `git add -A && git commit` in the run's worktree. */
 export const gitCommitResponseSchema = z.object({

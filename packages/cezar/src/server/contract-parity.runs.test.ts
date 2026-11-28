@@ -21,6 +21,7 @@ import type {
   openInCliResponseSchema,
   removeQueuedMessageResponseSchema,
   removeWorktreeResponseSchema,
+  restoreWorktreeResponseSchema,
   runCommitsResponseSchema,
   runRecordSchema,
   runArtifactsResponseSchema,
@@ -84,6 +85,7 @@ describe('src/contract/runs.ts matches the runs routes exactly', () => {
   type CreatePr201 = InferResponseType<Run['pr']['$post'], 201>;
   type AdoptPr200 = InferResponseType<Run['pr']['adopt']['$post'], 200>;
   type RemoveWorktree200 = InferResponseType<Run['remove-worktree']['$post'], 200>;
+  type RestoreWorktree200 = InferResponseType<Run['restore-worktree']['$post'], 200>;
   type DeleteRun200 = InferResponseType<Run['$delete'], 200>;
   type Artifacts200 = InferResponseType<Run['artifacts']['$get'], 200>;
   type Impact201 = InferResponseType<typeof client.api.v1.impact.$post, 201>;
@@ -136,6 +138,7 @@ describe('src/contract/runs.ts matches the runs routes exactly', () => {
     Assert<Exact<z.infer<typeof gitPushResponseSchema>, GitPush200>>,
     Assert<Exact<z.infer<typeof gitStatusResponseSchema>, GitStatus200>>,
     Assert<Exact<z.infer<typeof removeWorktreeResponseSchema>, RemoveWorktree200>>,
+    Assert<Exact<z.infer<typeof restoreWorktreeResponseSchema>, RestoreWorktree200>>,
     Assert<Exact<z.infer<typeof runArtifactsResponseSchema>, Artifacts200>>,
     // Assess Impact (spec 2026-10-22-html-artifacts-and-impact)
     Assert<Exact<z.infer<typeof startImpactResponseSchema>, Impact201>>,
