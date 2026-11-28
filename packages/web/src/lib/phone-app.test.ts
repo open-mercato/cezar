@@ -1,7 +1,7 @@
 import type { ProjectsResponse } from '@open-mercato/cezar-api-client'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { isCezarShell, isPhone, shellRequest, lastProjectIndex, phoneLanding, showsBottomBar, type PhoneLandingInput } from './phone-app'
+import { isCezarShell, isPhone, shellRequest, lastProjectIndex, phoneLanding, type PhoneLandingInput } from './phone-app'
 
 const REGISTRY = {
   projects: [
@@ -41,6 +41,7 @@ describe('isPhone', () => {
   })
 })
 
+<<<<<<< HEAD
 describe('showsBottomBar', () => {
   it.each([
     ['a phone browser tab', {}, false],
@@ -60,6 +61,8 @@ describe('showsBottomBar', () => {
   })
 })
 
+=======
+>>>>>>> 9818254 (fix(mobile): open Manager after setup and adapt navigation to available width (#2268))
 describe('isCezarShell', () => {
   it('needs the token with its slash', () => {
     device({ userAgent: 'Mozilla/5.0 CezarMobile/0.1 (android)' })
@@ -108,20 +111,21 @@ describe('phoneLanding', () => {
   const ready: PhoneLandingInput = {
     health: { capabilities: { managers: true } },
     healthFailed: false,
-    registry: REGISTRY,
-    registryFailed: false,
     providers: { providers: [{ provider: 'claude', status: 'connected' }] },
     providersFailed: false,
-    agentCheckSkipped: undefined,
-    uiStateFailed: false,
   }
 
   it('lands on Manager from a signed-in agent without waiting on ui-state', () => {
     expect(phoneLanding(ready)).toBe('manager')
   })
 
-  it('still waits on ui-state while no agent is signed in', () => {
-    expect(phoneLanding({ ...ready, providers: { providers: [] } })).toBe('wait')
-    expect(phoneLanding({ ...ready, providers: { providers: [] }, agentCheckSkipped: true })).toBe('manager')
+  it('waits for provider detection and restores on an uncached failure', () => {
+    expect(phoneLanding({ ...ready, providers: undefined })).toBe('wait')
+    expect(phoneLanding({ ...ready, providers: undefined, providersFailed: true })).toBe('restore')
+    expect(phoneLanding({ ...ready, providersFailed: true })).toBe('manager')
+  })
+
+  it('opens the Manager entry for agent setup without waiting for ui-state', () => {
+    expect(phoneLanding({ ...ready, providers: { providers: [] } })).toBe('manager')
   })
 })
