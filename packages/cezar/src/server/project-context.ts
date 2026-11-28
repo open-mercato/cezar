@@ -1,4 +1,5 @@
 import { ensureDataGitignore } from '../data-gitignore.ts';
+import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { AutomationStore } from '../automations/store.ts';
 import { reconcileAutomationReceipts } from '../automations/task-template.ts';
@@ -302,6 +303,7 @@ export class ProjectContexts {
 /** Shared teardown for built and half-built contexts. */
 function teardown(ctx: { store: RunStore; manager: RunManager }): void {
   ctx.manager.dispose();
-  ctx.store.flush({ pretty: true });
+  // #2531: flush mkdirs the data dir recursively, resurrecting a project folder deleted on disk.
+  if (existsSync(ctx.store.getDataDir())) ctx.store.flush({ pretty: true });
   ctx.store.removeAllListeners();
 }
