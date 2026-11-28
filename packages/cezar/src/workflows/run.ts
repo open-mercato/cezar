@@ -3333,7 +3333,7 @@ export class RunManager {
   }
 
   /**
-   * Stop every process still carrying one of these runs' `CEZ_TASK_ID` (#1411) after `graceMs`,
+   * Stop processes still carrying one of these runs' task or check markers after `graceMs`,
    * skipping any run that became live again, and note what was stopped on the run.
    * Fire-and-forget: never delays or throws into the lifecycle.
    */
@@ -11587,10 +11587,12 @@ export class RunManager {
     // login shell `runCheckStep` spawns sources the user's profile after this, so the guarantee
     // is about the server's environment, not about a profile that exports one of these names.
     const base: NodeJS.ProcessEnv = { ...process.env };
-    // Parent task authority never belongs to a check, including trusted checks.
+    // Parent task authority never belongs to a check, including trusted checks. A check
+    // must carry only its own run marker so the reaper attributes it to the right run.
     // Match case-insensitively as agent env filtering does (and Windows requires).
     for (const name of Object.keys(base)) {
-      if (name.toUpperCase() === 'CEZ_TRACKER_CAPABILITY') delete base[name];
+      const canonicalName = name.toUpperCase();
+      if (canonicalName === 'CEZ_TRACKER_CAPABILITY' || canonicalName === 'CEZ_TASK_ID') delete base[name];
     }
     for (const name of CHECK_CONTEXT_VARS) {
       // `CEZ_PROJECT_ID` is the one context name that is ALSO a documented CLI input
