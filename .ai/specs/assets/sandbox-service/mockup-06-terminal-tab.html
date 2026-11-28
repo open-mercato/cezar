@@ -1,0 +1,52 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Mockup — Terminal tab inside the sandbox</title><link rel="stylesheet" href="mockup.css">
+<style>
+.views{display:flex;gap:2px;padding:0 20px;border-bottom:1px solid #262626}
+.views span{padding:10px 12px;color:#a1a1aa}.views span.on{color:#fff;border-bottom:2px solid #ececee}
+.ttabs{display:flex;gap:4px;padding:8px 14px;border-bottom:1px solid #262626;align-items:center}
+.tt{padding:5px 10px;border-radius:7px;font-size:12.5px;color:#b4b4bb;display:flex;gap:6px;align-items:center}
+.tt.on{background:#1f1f23;color:#fff}
+.term{flex:1;background:#0a0a0a;padding:14px 18px;font:12.5px/1.6 "JetBrains Mono",ui-monospace,Menlo,monospace;color:#d4d4d8;white-space:pre}
+.g{color:#86efac}.b{color:#93c5fd}.v{color:#c4b5fd}.y{color:#fcd34d}.m{color:#71717a}
+.menu{position:absolute;right:auto;left:470px;top:150px;width:330px;background:#18181b;border:1px solid #34343a;border-radius:12px;padding:6px;box-shadow:0 20px 50px #000b}
+.mi{padding:8px 10px;border-radius:8px}.mi.on{background:#26262b}
+.mh{font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:#8b8b93;padding:6px 10px 2px}
+.sep{height:1px;background:#262626;margin:5px 4px}
+</style></head>
+<body>
+<aside class="side"><div class="brand">cezar <small></small></div><div class="group">Active</div><div class="nav on"><span class="ic" style="color:#86efac">●</span>Test Open Mercato setup paths</div></aside>
+<main class="main" style="position:relative">
+  <div class="top"><h1>Test Open Mercato setup paths</h1><span class="pill violet">⬡ microsandbox · Ubuntu · 4 vCPU · 16 GB · <span style="color:#86efac">● running</span></span></div>
+  <div class="views"><span>Chat</span><span>Changes</span><span>Preview</span><span class="on">Terminal</span><span>Notes</span></div>
+  <div class="ttabs">
+    <span class="tt on"><span class="v">⬡</span> sandbox · bash <span class="m">×</span></span>
+    <span class="tt"><span class="v">⬡</span> npm run dev <span class="g">●</span> <span class="m">×</span></span>
+    <span class="tt">💻 host · zsh <span class="m">×</span></span>
+    <span class="tt" style="color:#fff">＋ ▾</span>
+    <span style="margin-left:auto" class="muted sm">New tabs open in the sandbox · <u>change</u></span>
+  </div>
+  <div class="term"><span class="m">⬡ cez-2afe116d · ubuntu:24.04 · /workspace is this task's worktree</span>
+<span class="g">root@cez-2afe116d</span>:<span class="b">/workspace</span># uname -sr &amp;&amp; nproc &amp;&amp; free -g | head -2
+Linux 6.12.34-microsandbox
+4
+               total        used        free
+Mem:              15           9           5
+<span class="g">root@cez-2afe116d</span>:<span class="b">/workspace</span># docker ps
+<span class="y">bash: docker: command not found</span>     <span class="m"># no host containers here, which is the point</span>
+<span class="g">root@cez-2afe116d</span>:<span class="b">/workspace</span># yarn mercato init
+<span class="m">…</span>
+<span class="g">✓</span> Database migrated (postgres 16 inside the sandbox)
+<span class="g">✓</span> Dev server: <span class="b"><u>http://localhost:3000</u></span>  <span class="v">→ Preview (forwarded to 127.0.0.1:54871)</span>
+<span class="g">root@cez-2afe116d</span>:<span class="b">/workspace</span># █</div>
+  <div class="menu">
+    <div class="mh">New terminal</div>
+    <div class="mi on"><b><span class="v">⬡</span> In the sandbox</b><div class="muted sm">bash in cez-2afe116d, cwd /workspace</div></div>
+    <div class="mi"><b>💻 On this computer</b><div class="muted sm">zsh in the host worktree (same files via the mount)</div></div>
+    <div class="sep"></div>
+    <div class="mh">Project commands · run in sandbox</div>
+    <div class="mi"><span class="mono">npm run dev</span> <span class="muted sm">package.json</span></div>
+    <div class="mi"><span class="mono">yarn mercato init</span> <span class="muted sm">package.json</span></div>
+  </div>
+</main>
+<div class="tag">Illustrative mockup — spec 2026-11-03-sandbox-service</div>
+</body></html>

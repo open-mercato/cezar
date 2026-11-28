@@ -1,0 +1,39 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Mockup — Add SSH host</title><link rel="stylesheet" href="mockup.css">
+<style>.dialog{width:680px}.chk-row{display:flex;gap:8px;align-items:center;font-size:13px;margin-top:6px}</style></head>
+<body>
+<aside class="side"><div class="brand">cezar <small>← Back</small></div><div class="group">General settings</div><div class="nav on"><span class="ic">⬡</span>Sandboxes</div></aside>
+<main class="main"><div class="top"><h1>Sandboxes</h1></div></main>
+<div class="overlay"><div class="dialog">
+  <h3>Add sandbox account</h3>
+  <div class="grid3" style="gap:8px;margin:12px 0 4px">
+    <div class="choice"><div class="logo msb" style="width:26px;height:26px;font-size:10px">msb</div><div><b class="sm">microsandbox</b><div class="muted sm">this computer</div></div></div>
+    <div class="choice on"><div class="logo" style="width:26px;height:26px;font-size:10px;background:#1f1a10;color:#fbbf24;border:1px solid #5a4613">ssh</div><div><b class="sm">SSH host</b><div class="muted sm">a machine you can ssh into</div></div></div>
+    <div class="choice"><div class="logo dt" style="width:26px;height:26px;font-size:10px">D</div><div><b class="sm">Daytona</b><div class="muted sm">cloud, billed</div></div></div>
+  </div>
+  <div class="grid2">
+    <div><label class="f">Host <span class="muted">(alias from ~/.ssh/config or user@host)</span></label><div class="input focus mono">build-box <span class="muted sm">▾ 4 aliases found</span></div></div>
+    <div><label class="f">Name</label><div class="input">build-box</div></div>
+  </div>
+  <div class="grid3">
+    <div><label class="f">User</label><div class="input mono muted">ci <span class="sm">from config</span></div></div>
+    <div><label class="f">Port</label><div class="input mono muted">22</div></div>
+    <div><label class="f">Identity</label><div class="input sm">ssh-agent (2 keys) <span class="muted">▾</span></div></div>
+  </div>
+  <div class="hint">cezar runs your own <span class="mono">ssh</span> binary with your config, agent and known_hosts. It never stores a private key.</div>
+  <label class="f">Run tasks there as</label>
+  <div class="chk-row"><span class="chk on">✓</span> <b>microVMs</b> <span class="muted">(microsandbox on the host: isolated, fresh per task)</span></div>
+  <div class="chk-row"><span class="chk on">✓</span> <b>Plain SSH session</b> <span class="muted">(a directory per task in</span> <span class="mono sm">~/cez-tasks</span><span class="muted">: no isolation, uses the host's toolchain)</span></div>
+  <div class="card" style="margin:14px 0 0;padding:12px 14px">
+    <div class="sm" style="display:grid;grid-template-columns:22px 1fr;gap:6px 6px">
+      <span style="color:#86efac">✓</span><span>Connected · host key <span class="mono">SHA256:q8x…Tz4</span> matches known_hosts</span>
+      <span style="color:#86efac">✓</span><span>Ubuntu 24.04 · x86_64 · 16 cores · 64 GiB · git 2.43</span>
+      <span style="color:#86efac">✓</span><span><span class="mono">/dev/kvm</span> readable · microsandbox v0.7.13</span>
+      <span style="color:#86efac">✓</span><span>Port forwarding allowed (<span class="mono">-L</span> for Preview, <span class="mono">-R</span> for the agent's <span class="mono">cez</span> CLI)</span>
+      <span style="color:#fcd34d">!</span><span>No <span class="mono">claude</span> on the host. cezar installs the version you have here (2.1.235) on first use.</span>
+    </div>
+  </div>
+  <div class="foot"><span class="btn ghost">Cancel</span><span class="btn">Test connection</span><span class="btn primary">Add account</span></div>
+</div></div>
+<div class="tag">Illustrative mockup — spec 2026-11-03-sandbox-service</div>
+</body></html>

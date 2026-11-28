@@ -1,0 +1,52 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Mockup — Sandboxes management view</title><link rel="stylesheet" href="mockup.css">
+<style>
+.content{width:auto;margin:0;padding:20px 24px}
+.totals{display:flex;gap:12px;margin-bottom:14px}
+.tot{flex:1;border:1px solid #262626;border-radius:10px;padding:10px 12px;background:#171717}
+.tot b{font-size:18px;display:block}
+.bar{height:5px;background:#262626;border-radius:4px;margin-top:6px;overflow:hidden}.bar i{display:block;height:100%;background:#8f86e8}
+.filters{display:flex;gap:6px;align-items:center;margin-bottom:10px}
+table{width:100%;border-collapse:collapse;font-size:13px}
+th{text-align:left;color:#8b8b93;font-weight:500;font-size:12px;padding:8px 8px;border-bottom:1px solid #262626}
+td{padding:9px 8px;border-bottom:1px solid #1f1f22;vertical-align:top}
+tr.sel{background:#17152a}
+.acts .btn{padding:3px 8px;font-size:12px}
+</style></head>
+<body>
+<aside class="side">
+  <div class="brand">cezar <small></small></div>
+  <div class="nav" style="background:#e5e5e5;color:#111;justify-content:center">＋ New task</div>
+  <div class="nav"><span class="ic">▦</span>Dashboard</div><div class="nav"><span class="ic">☰</span>Tasks</div><div class="nav"><span class="ic">⑂</span>Git</div><div class="nav"><span class="ic">◎</span>GitHub</div><div class="nav"><span class="ic">ϟ</span>Automations</div>
+  <div class="nav on"><span class="ic">⬡</span>Sandboxes <span class="new">5</span></div>
+  <div class="nav"><span class="ic">⚙</span>Settings</div>
+</aside>
+<main class="main">
+  <div class="top"><h1>Sandboxes</h1><p>Every sandbox on every account, across all projects.</p><span style="margin-left:auto" class="btn">Types &amp; accounts…</span></div>
+  <div class="content">
+    <div class="totals">
+      <div class="tot"><span class="muted sm">This computer · reserved RAM</span><b>40 <span class="muted sm">/ 124 GiB</span></b><div class="bar"><i style="width:32%"></i></div></div>
+      <div class="tot"><span class="muted sm">This computer · vCPU</span><b>10 <span class="muted sm">/ 16</span></b><div class="bar"><i style="width:62%"></i></div></div>
+      <div class="tot"><span class="muted sm">build-box (SSH) · RAM</span><b>32 <span class="muted sm">/ 64 GiB</span></b><div class="bar"><i style="width:50%"></i></div></div>
+      <div class="tot"><span class="muted sm">Disk · instances + caches</span><b>86 GiB</b><div class="muted sm">caches 2.7 GiB</div></div>
+      <div class="tot"><span class="muted sm">Daytona · this month (estimate)</span><b>$4.18</b><div class="muted sm">Acme work org</div></div>
+    </div>
+    <div class="filters">
+      <span class="pill violet">All · 6</span><span class="pill">Running · 3</span><span class="pill">Paused · 2</span><span class="pill warn">Failed · 0</span><span class="pill">No owner · 2</span><span class="pill">Orphans · 1</span>
+      <span class="pill">Project: all ▾</span><span class="pill">Account: all ▾</span>
+      <span style="margin-left:auto" class="btn">Delete paused older than… ▾</span><span class="btn">Delete selected (2)</span>
+    </div>
+    <table>
+      <tr><th></th><th>Sandbox</th><th>State</th><th>Where · type</th><th>Owner task</th><th>Resources</th><th>Disk</th><th>Has</th><th></th></tr>
+      <tr><td><span class="chk">&nbsp;</span></td><td class="mono">cez-2afe116d</td><td><span class="pill ok"><span class="dot"></span>running</span></td><td>microsandbox · Open Mercato dev</td><td>open-mercato · <u>Test setup paths</u></td><td class="mono">4 vCPU · 16 GiB</td><td class="mono">12 GiB</td><td class="sm muted">postgres, redis · claude 2.1.235</td><td class="acts"><span class="btn">Shell</span> <span class="btn">Pause</span> <span class="btn ghost">⋯</span></td></tr>
+      <tr><td><span class="chk">&nbsp;</span></td><td class="mono">try-debian-12</td><td><span class="pill ok"><span class="dot"></span>running</span></td><td>microsandbox · debian-12 <span class="pill off" style="font-size:10.5px">helper</span></td><td>open-mercato · <u>Test setup paths</u></td><td class="mono">2 vCPU · 8 GiB</td><td class="mono">5 GiB</td><td class="sm muted">—</td><td class="acts"><span class="btn">Shell</span> <span class="btn">Pause</span> <span class="btn ghost">⋯</span></td></tr>
+      <tr><td><span class="chk">&nbsp;</span></td><td class="mono">cez-41b0d2e3</td><td><span class="pill ok"><span class="dot"></span>running</span></td><td>SSH build-box · microVM 8/32</td><td>cezar · <u>Speed up e2e suite</u></td><td class="mono">8 vCPU · 32 GiB</td><td class="mono">21 GiB</td><td class="sm muted">claude 2.1.235, chrome</td><td class="acts"><span class="btn">Shell</span> <span class="btn">Pause</span> <span class="btn ghost">⋯</span></td></tr>
+      <tr class="sel"><td><span class="chk on">✓</span></td><td class="mono">cez-7c1e09aa</td><td><span class="pill off">paused 2 h</span></td><td>microsandbox · Open Mercato dev</td><td class="muted">none · kept from <u>Fix checkout totals</u></td><td class="mono muted">4 vCPU · 8 GiB</td><td class="mono">14 GiB</td><td class="sm muted">postgres (seeded), node_modules</td><td class="acts"><span class="btn primary">Attach to new task…</span> <span class="btn ghost">⋯</span></td></tr>
+      <tr class="sel"><td><span class="chk on">✓</span></td><td class="mono">cez-0a9f33c1</td><td><span class="pill off">paused 6 d</span></td><td>Daytona · Cloud large (EU)</td><td class="muted">none</td><td class="mono muted">4 vCPU · 8 GiB</td><td class="mono">10 GiB</td><td class="sm muted">storage only · ~$0.03/day</td><td class="acts"><span class="btn">Resume</span> <span class="btn ghost">⋯</span></td></tr>
+      <tr><td><span class="chk">&nbsp;</span></td><td class="mono">cez-93d1aa70</td><td><span class="pill warn"><span class="dot"></span>orphan</span></td><td>microsandbox · unknown type</td><td class="muted">no cezar record</td><td class="mono muted">2 vCPU · 4 GiB</td><td class="mono">3 GiB</td><td class="sm muted">labels: cez · project “shop-api”</td><td class="acts"><span class="btn">Shell</span> <span class="btn">Delete</span></td></tr>
+    </table>
+    <p class="muted sm" style="margin-top:12px">Paused sandboxes keep their disk (databases, installed packages) and can be attached to a new task. Deleting one that a task is using parks that task first.</p>
+  </div>
+</main>
+<div class="tag">Illustrative mockup — spec 2026-11-03-sandbox-service</div>
+</body></html>
