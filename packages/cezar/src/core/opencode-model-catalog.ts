@@ -5,11 +5,13 @@ import { trackChildExit } from './agent-runner.ts';
 import { buildChildEnv } from './agent-env.ts';
 import type { ModelOption } from './runner-model-catalog.ts';
 import { spawnableCommand } from './windows-shim.ts';
+import { opencodeUserModelVariants } from './opencode-config-credential.ts';
 
 export interface OpencodeModelDiscoveryOptions {
   cwd: string;
   bin?: string;
   timeoutMs?: number;
+  env?: NodeJS.ProcessEnv;
   spawn?: (bin: string, args: readonly string[], cwd: string) => ChildProcessWithoutNullStreams;
 }
 
@@ -53,8 +55,9 @@ export function mockOpencodePath(): string {
  * list OpenCode's own picker routes to.
  *
  * Best-effort by contract — `RunnerModelCatalog` turns any throw here into a cached or
- * `unavailable` answer, and `auto` stays selectable either way. No config is read or written,
- * no session is started; the child is short-lived and bounded by a deadline, a stdout cap and
+ * `unavailable` answer, and `auto` stays selectable either way. User config supplies named
+ * variants for CLI-listed models. No config is written or session started; the child is
+ * short-lived and bounded by a deadline, a stdout cap and
  * a model cap.
  */
 export async function discoverOpencodeModels(
@@ -62,7 +65,7 @@ export async function discoverOpencodeModels(
 ): Promise<ModelOption[]> {
   const bin = resolveOpencodeExecutable(options.bin);
   const args = ['models'] as const;
-  const child = (options.spawn ?? spawnOpencode)(bin, args, options.cwd);
+  const child = options.spawn ? options.spawn(bin, args, options.cwd) : spawnOpencode(bin, args, options.cwd, options.env);
   const kill = teardown(child);
 
   const timeoutMs = options.timeoutMs ?? DEFAULT_DISCOVERY_TIMEOUT_MS;
@@ -102,7 +105,15 @@ export async function discoverOpencodeModels(
           return;
         }
         try {
-          resolve(parseOpencodeModels(stdout));
+          const variants = opencodeUserModelVariants(options.env ?? process.env);
+          const models = parseOpencodeModels(stdout).flatMap((model) => [model,
+            ...(variants.get(model.id) ?? []).map((variant) => ({
+              id: `${model.id}#${variant}`, label: `${model.label} · ${variant}`,
+              description: `${model.description} (${variant} variant)`,
+            })),
+          ]);
+          if (models.length > MAX_MODELS) throw new Error('OpenCode model discovery exceeded the size limit');
+          resolve(models);
         } catch (error) {
           reject(error instanceof Error ? error : new Error(String(error)));
         }
@@ -149,10 +160,11 @@ function spawnOpencode(
   bin: string,
   args: readonly string[],
   cwd: string,
+  source?: NodeJS.ProcessEnv,
 ): ChildProcessWithoutNullStreams {
   const child = nodeSpawn(...spawnableCommand(bin, args), {
     cwd,
-    env: buildChildEnv({ backend: 'opencode' }),
+    env: buildChildEnv({ backend: 'opencode', source }),
   });
   // Closing a pipe the child already dropped reports EPIPE as an async 'error' (acfb01e4's
   // crash class); the 'close' handler owns settlement.

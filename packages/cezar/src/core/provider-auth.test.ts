@@ -31,6 +31,9 @@ vi.mock('./kimi-runner.ts', async (importOriginal) => ({
 vi.mock('./junie-auth-probe.ts', () => ({
   probeJunieAuthentication: vi.fn(async () => ({ connected: true })),
 }));
+// Inline-provider discovery has its own sandboxed integration suite; host config must not
+// change the auth-list format cases below.
+vi.mock('./opencode-config-credential.ts', () => ({ opencodeHasUserConfigCredential: () => false }));
 
 import { PROVIDER_IDS } from './provider-auth.ts';
 import { GEMINI_AUTH_FAILURE_MESSAGE, GEMINI_AUTH_HINT } from './gemini-ui-mapper.ts';
