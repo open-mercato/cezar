@@ -5,6 +5,8 @@ import {
   mkdirSync,
   openSync,
   readFileSync,
+  renameSync,
+  rmdirSync,
   statSync,
   unlinkSync,
   writeFileSync,
@@ -35,6 +37,7 @@ const LOG = 'automation-log.ndjson';
 const POLL_LOCK = 'automation-poll.lock';
 const MUTATION_LOCK = 'automation-mutation.lock';
 const GUARD_SUFFIX = '.guard';
+const RECLAIM_SUFFIX = '.reclaim';
 /**
  * Keep a contending process from reclaiming a live guard while its owner's event loop is stalled.
  *
@@ -431,8 +434,9 @@ export class AutomationStore {
 
   private createLease(path: string, staleAfterMs: number): AutomationLease {
     let compromised = false;
-    const releaseGuard = lockfile.lockSync(path, {
-      lockfilePath: `${path}${GUARD_SUFFIX}`,
+    const guardPath = `${path}${GUARD_SUFFIX}`;
+    const releaseGuard = withReclaimMutex(guardPath, () => lockfile.lockSync(path, {
+      lockfilePath: guardPath,
       realpath: false,
       stale: GUARD_STALE_MS,
       // Keep compromise detection responsive even though stale recovery is deliberately longer:
@@ -443,7 +447,7 @@ export class AutomationStore {
       // cockpit down for a lost guard; callers check validity before launching or
       // publishing after an asynchronous compromise notification.
       onCompromised: () => { compromised = true; },
-    });
+    }));
     try {
       const existed = existsSync(path);
       const previous = existed ? readLeaseMetadata(path) : undefined;
@@ -589,6 +593,49 @@ export class AutomationStore {
 
 function receiptKeyFor(automationId: string, eventId: string): string {
   return `${automationId}:${eventId}`;
+}
+
+/**
+ * Serialize proper-lockfile's stale-guard recovery across processes. Its reclaim is
+ * stat → rmdir → mkdir with nothing in between, so two contenders that both judge a guard stale
+ * can each delete the other's fresh one: both hold it, or neither does (CI flake on #2189/#2190).
+ * `lockSync` is synchronous, so the mutex is held for a few syscalls; one older than
+ * `GUARD_STALE_MS` was left by a process that died inside it. A held mutex reports busy, which
+ * is what its holder's competitor would have seen anyway.
+ */
+function withReclaimMutex<T>(guardPath: string, acquire: () => T): T {
+  const mutex = `${guardPath}${RECLAIM_SUFFIX}`;
+  try {
+    mkdirSync(mutex);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+    removeAbandonedMutex(mutex);
+    mkdirSync(mutex); // EEXIST: another contender reclaimed it first, so busy
+  }
+  try {
+    return acquire();
+  } finally {
+    try { rmdirSync(mutex); } catch { /* already reclaimed as abandoned */ }
+  }
+}
+
+/** Remove `mutex` only if it is the abandoned one we judged: the rename is atomic, and a
+ *  moved directory that is not the one we judged belongs to a live holder, so it goes back —
+ *  by `mkdir`, never by renaming over the path, which would silently replace a mutex a third
+ *  contender took meanwhile. */
+function removeAbandonedMutex(mutex: string): void {
+  const judged = statSync(mutex);
+  if (judged.mtimeMs >= Date.now() - GUARD_STALE_MS) throw new Error('lease guard is being reclaimed');
+  const tombstone = `${mutex}.${randomUUID()}`;
+  renameSync(mutex, tombstone);
+  const moved = statSync(tombstone);
+  if (moved.ino === judged.ino && moved.mtimeMs === judged.mtimeMs) {
+    rmdirSync(tombstone);
+    return;
+  }
+  try { mkdirSync(mutex); } catch { /* EEXIST: someone holds it now; leave theirs alone */ }
+  rmdirSync(tombstone);
+  throw new Error('lease guard is being reclaimed');
 }
 
 /**

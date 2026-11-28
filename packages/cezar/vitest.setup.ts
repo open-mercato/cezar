@@ -94,6 +94,11 @@ delete process.env.CEZ_DISCLAIM_EXEC
 // Nor may a case act as the desktop's supervised sidecar (restart via exit 75, watching the app's pid).
 delete process.env.CEZ_SUPERVISED
 delete process.env.CEZ_SUPERVISOR_PID
+// The outer cockpit's own process env reaches its tasks too: `CEZ_AUTOMATIONS=0` turns the
+// feature the suite assumes on (the default) off, and `CEZ_INSTANCE_ID` adds `instanceId` to
+// `/health`. A case that needs either stubs it itself.
+delete process.env.CEZ_AUTOMATIONS
+delete process.env.CEZ_INSTANCE_ID
 
 // `gh`'s signed-in hosts decide which remotes count as GitHub Enterprise (`src/github-hosts.ts`);
 // a developer's own `hosts.yml` must not change what the suite classifies. A case that wants
