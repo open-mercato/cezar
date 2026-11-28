@@ -10,6 +10,7 @@ import { describeLines } from './line-label'
 import type { HunkLine } from './parse-patch'
 import {
   COMMENT_MAX,
+  type DiffExternalThread,
   type DiffLineAnchor,
   type DiffLineComment,
   type DiffLineEnd,
@@ -97,17 +98,22 @@ export interface FileLines {
   path: string
   lines: readonly HunkLine[]
   orderOf: ReadonlyMap<HunkLine, number>
-  /** `selected` — inside the drag or the open editor's range; `commented` — under a saved comment. */
-  markAt: (order: number) => 'selected' | 'commented' | undefined
+  /** `selected` — inside the drag or the open editor's range; `commented` — under a saved comment;
+   *  `external` — under a read-only external (GitHub) thread. */
+  markAt: (order: number) => LineMark | undefined
 }
+
+export type LineMark = 'selected' | 'commented' | 'external'
 
 export const FileLinesContext = createContext<FileLines | null>(null)
 
 /** The row classes for a mark: a tint over the line for the live selection, a bar in the gutter
  *  edge for lines a saved comment covers — so commented code reads as commented at a glance. */
-export function markClass(mark: 'selected' | 'commented' | undefined): string | undefined {
+export function markClass(mark: LineMark | undefined): string | undefined {
   if (mark === 'selected') return 'relative before:pointer-events-none before:absolute before:inset-0 before:bg-primary/15'
   if (mark === 'commented') return 'shadow-[inset_3px_0_0_0_var(--color-primary)]'
+  // Neutral, not the accent: the user's own notes keep the primary bar.
+  if (mark === 'external') return 'shadow-[inset_3px_0_0_0_var(--color-muted-foreground)]'
   return undefined
 }
 
@@ -137,6 +143,10 @@ export interface LineSelection {
 export interface LineCommentsApi {
   comments: readonly DiffLineComment[]
   byKey: ReadonlyMap<string, readonly DiffLineComment[]>
+  /** Read-only external threads (GitHub), placed under their row before the user's comments. */
+  external: readonly DiffExternalThread[]
+  externalByKey: ReadonlyMap<string, readonly DiffExternalThread[]>
+  renderExternal?: (thread: DiffExternalThread) => React.ReactNode
   editing: LineCommentEditing | null
   selection: LineSelection | null
   canAdd: boolean
@@ -275,14 +285,29 @@ export function LineCommentThread({ anchors }: { anchors: readonly (DiffLineAnch
   if (!api) return null
   const keys = [...new Set(anchors.filter((a): a is DiffLineAnchor => a !== undefined).map(anchorKey))]
   const comments = keys.flatMap((key) => api.byKey.get(key) ?? [])
+  const external = api.renderExternal ? keys.flatMap((key) => api.externalByKey.get(key) ?? []) : []
   const editing = api.editing !== null && keys.includes(api.editing.threadKey) ? api.editing : null
-  if (comments.length === 0 && editing === null) return null
+  if (comments.length === 0 && external.length === 0 && editing === null) return null
   const editingId = editing?.commentId
+  // Only external threads here: a neutral band, so a row of GitHub review reads apart from the
+  // accent band of the user's own notes.
+  const ownBand = comments.length > 0 || editing !== null
   return (
-    <div data-slot="diff-line-comments" className="border-y border-primary/25 bg-primary/5 py-2.5 font-sans">
+    <div
+      data-slot="diff-line-comments"
+      className={cn(
+        'border-y py-2.5 font-sans',
+        ownBand ? 'border-primary/25 bg-primary/5' : 'border-border/70 bg-muted/40',
+      )}
+    >
       {/* Sticky + capped: in no-wrap mode the rows are as wide as the longest line, and the
           editor's buttons must not end up scrolled off to the right of it. */}
       <div className="sticky left-0 flex w-full max-w-2xl flex-col gap-2 px-3 md:pl-24">
+        {external.map((thread) => (
+          <div key={`external:${thread.id}`} data-slot="diff-external-thread" data-thread-id={thread.id}>
+            {api.renderExternal!(thread)}
+          </div>
+        ))}
         {comments.map((comment) =>
           // The comment being edited is swapped for its editor, in place.
           comment.id === editingId && editing ?

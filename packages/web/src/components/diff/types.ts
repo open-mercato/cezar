@@ -1,3 +1,5 @@
+import type { ReactNode } from 'react'
+
 /**
  * The `<Diff>` facade contract (spec §"Session git view — Changes & Files tabs (#390)",
  * R5 Step 1.4). These props are OURS — consumers (Changes tab, repo view, commit diff view)
@@ -105,6 +107,16 @@ export interface DiffNewLineComment extends DiffLineAnchor {
   body: string
 }
 
+/**
+ * A read-only thread from outside cezar (a GitHub review thread) anchored like a line comment.
+ * The diff only PLACES it — under its row, with its covered lines marked — and the host draws the
+ * card through `DiffProps.renderExternalThread`. Never editable, never part of `comments`.
+ */
+export interface DiffExternalThread extends DiffLineAnchor {
+  id: string
+  start?: DiffLineEnd
+}
+
 export interface DiffProps {
   files: DiffFileChange[]
   /** Layout: one interleaved column, or old|new side by side. Default `unified`. */
@@ -162,5 +174,9 @@ export interface DiffProps {
   /** Absent ⇒ saved comments offer no Edit. Return `false` to refuse, as above. */
   onEditComment?: (id: string, body: string) => boolean | void
   onRemoveComment?: (id: string) => void
+  /** Read-only external threads, drawn above the user's own comments on the same row. Ignored
+   *  without `renderExternalThread`, and by the fallback renderer. */
+  externalThreads?: readonly DiffExternalThread[]
+  renderExternalThread?: (thread: DiffExternalThread) => ReactNode
   className?: string
 }

@@ -10,6 +10,7 @@ export {
   fetchGithubChecks,
   fetchGithubComments,
   fetchGithubPrDiff,
+  fetchGithubReviewComments,
   fetchGithubRefStatus,
   forgetRefStatus,
   readCachedPrEnds,

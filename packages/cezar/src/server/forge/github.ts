@@ -2,7 +2,7 @@ import { execFile } from 'node:child_process';
 import { ghEnv } from '../../core/gh-env.ts';
 import { promisify } from 'node:util';
 import { z } from 'zod';
-import { REFERENCE_STATUS_MAX } from '@open-mercato/cezar-contract';
+import { REFERENCE_STATUS_MAX, type GithubReviewCommentsData } from '@open-mercato/cezar-contract';
 import { autosaveCommit, taskRemotes } from '../../git-worktree.ts';
 import { parseRemote, splitRemoteRef } from '../../git-remotes.ts';
 import { GITHUB_COM, isGithubHost } from '../../github-hosts.ts';
@@ -10,6 +10,13 @@ import { baseDivergence, rewriteLeaseArg } from '../git-changes.ts';
 import { getRepoInfo } from '../git.ts';
 import { fetchIssueMetadata } from './github-issue-metadata.ts';
 import { reportPrClosed } from './pr-closed.ts';
+import {
+  applyResolved,
+  mockGithubReviewComments,
+  normalizeReviewComments,
+  parseResolvedThreads,
+  reviewThreadsQuery,
+} from './github-review-comments.ts';
 import type {
   DraftPrInput,
   DraftPrOutcome,
@@ -2812,6 +2819,76 @@ function mockGithubComments(kind: 'issue' | 'pr'): ForgeCommentsData {
     events,
     detail: { body: kind === 'pr' ? 'Mock pull request body.' : 'Mock issue body.' },
   };
+}
+
+// ---- inline review comments (Changes tab) ----------------------------------
+// `pulls/{n}/comments` for the task Changes tab: the same bounded page walk, LRU and in-payload
+// degrade as the thread above. Pure half in `github-review-comments.ts`.
+
+const reviewCommentsCache = new Map<string, { at: number; data: GithubReviewCommentsData }>();
+
+/** Test-only: drop the review-comments cache. */
+export function __clearReviewCommentsCacheForTests(): void {
+  reviewCommentsCache.clear();
+}
+
+/**
+ * The PR's inline review comments, oldest first, replies threaded by `inReplyTo`. Resolved state
+ * is one best-effort GraphQL call; when it fails, `resolved` is simply absent. Never throws.
+ */
+export async function fetchGithubReviewComments(
+  repoRoot: string,
+  number: number,
+  refresh = false,
+): Promise<GithubReviewCommentsData> {
+  if (process.env.CEZ_DRY_RUN === '1') return mockGithubReviewComments();
+  const key = `${repoRoot}\0pr#${number}#review`;
+  const hit = reviewCommentsCache.get(key);
+  if (!refresh && hit && Date.now() - hit.at < CACHE_MS) return hit.data;
+  try {
+    const pages = await fetchTimelinePages((page, timeoutMs) =>
+      gh(
+        repoRoot,
+        ['api', '-H', 'Accept: application/vnd.github+json', `repos/{owner}/{repo}/pulls/${number}/comments?per_page=${TIMELINE_PER_PAGE}&page=${page}`],
+        timeoutMs,
+      ),
+    );
+    const { comments, truncated } = normalizeReviewComments(pages.rows);
+    if (comments.some((c) => c.inReplyTo === undefined)) {
+      try {
+        const handle = await resolveRepoHandle(repoRoot);
+        if (handle) {
+          const out = await gh(repoRoot, [
+            'api', 'graphql',
+            '-f', `query=${reviewThreadsQuery(number)}`,
+            '-f', `owner=${handle.owner}`,
+            '-f', `name=${handle.name}`,
+          ]);
+          applyResolved(comments, parseResolvedThreads(out));
+        }
+      } catch {
+        // Resolved state is optional: the comments render without it.
+      }
+    }
+    const data: GithubReviewCommentsData = { available: true, comments };
+    if (truncated || pages.stoppedShort) data.truncated = true;
+    reviewCommentsCache.delete(key);
+    reviewCommentsCache.set(key, { at: Date.now(), data });
+    while (reviewCommentsCache.size > COMMENTS_CACHE_MAX) {
+      const oldest = reviewCommentsCache.keys().next().value;
+      if (oldest === undefined) break;
+      reviewCommentsCache.delete(oldest);
+    }
+    return data;
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    const reason = /ENOENT/.test(message)
+      ? 'gh CLI not found — install it and run `gh auth login`'
+      : /404|not found/i.test(message)
+        ? 'pull request not found on GitHub'
+        : firstLine(message);
+    return { available: false, reason, comments: [] };
+  }
 }
 
 // ---- draft-PR creation (review gate, spec 009) ------------------------------

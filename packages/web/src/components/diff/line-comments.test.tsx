@@ -454,3 +454,43 @@ describe('Diff line comments after the agent changed the code', () => {
     expect(document.querySelector('[data-slot="diff-line-comment-outdated"]')).toBeNull()
   })
 })
+
+describe('Diff external (read-only) threads', () => {
+  const external = [
+    { id: 'gh-1', path: 'src/a.ts', side: 'old' as const, line: 4 },
+    { id: 'gh-2', path: 'src/a.ts', side: 'new' as const, line: 4 },
+  ]
+  const render = (thread: { id: string }) => <p data-testid={`ext-${thread.id}`}>external {thread.id}</p>
+
+  it.each(['unified', 'split'] as const)('places each thread under its own row in %s mode, ahead of own comments', async (mode) => {
+    const own: DiffLineComment[] = [{ id: 'c1', path: 'src/a.ts', side: 'new', line: 4, body: 'mine' }]
+    await renderDiff(
+      <Diff files={[MODIFIED]} mode={mode} comments={own} externalThreads={external} renderExternalThread={render} />,
+    )
+    const removed = screen.getByTestId('ext-gh-1').closest('[data-slot="diff-line-comments"]')!
+    const added = screen.getByTestId('ext-gh-2').closest('[data-slot="diff-line-comments"]')!
+    // Unified: one block per row. Split pairs the removed and added line into one row, so both
+    // threads share its block — as the user's own comments do.
+    if (mode === 'unified') expect(removed).not.toBe(added)
+    else expect(removed).toBe(added)
+    // The external card comes before the user's own comment on the same row, and offers no actions.
+    const order = [...added.querySelectorAll('[data-slot="diff-external-thread"], [data-slot="diff-line-comment"]')].map(
+      (el) => el.getAttribute('data-slot'),
+    )
+    expect(order).toEqual(
+      mode === 'unified'
+        ? ['diff-external-thread', 'diff-line-comment']
+        : ['diff-external-thread', 'diff-external-thread', 'diff-line-comment'],
+    )
+    expect(removed.querySelector('[data-slot="diff-external-thread"] button')).toBeNull()
+  })
+
+  it('draws nothing without a renderer, and marks the covered lines when it has one', async () => {
+    const { rerender } = await renderDiff(<Diff files={[MODIFIED]} externalThreads={external} />)
+    expect(document.querySelector('[data-slot="diff-external-thread"]')).toBeNull()
+    rerender(<Diff files={[MODIFIED]} externalThreads={external} renderExternalThread={render} />)
+    await waitFor(() =>
+      expect(document.querySelector('[data-slot="diff-line"][data-old-line="4"][data-line="del"]')?.getAttribute('data-mark')).toBe('external'),
+    )
+  })
+})

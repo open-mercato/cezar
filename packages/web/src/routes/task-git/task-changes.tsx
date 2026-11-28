@@ -4,7 +4,7 @@ import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState, ty
 import { useParams, useSearchParams } from 'react-router'
 
 import { ApiError, getRunFile, openRunFileInApp, runFileRawUrl } from '@/api/client'
-import { queryKeys, useHealth, useRepo, useRun, useRunChanges } from '@/api/queries'
+import { queryKeys, useGithubReviewComments, useHealth, useRepo, useRun, useRunChanges } from '@/api/queries'
 import type { ApiRun, ChangedFile } from '@open-mercato/cezar-api-client'
 import { CenteredState } from '@/components/centered-state'
 import { canPreviewMarkdown, Diff, type DiffHandle, type DiffMode, type DiffRevealTarget } from '@/components/diff'
@@ -30,6 +30,14 @@ import { GitTabLoadError, GitTabLoading } from './git-tab-loading'
 import { GitToolbar } from './git-toolbar'
 import type { DiffNewLineComment } from '@/components/diff/types'
 import { trackDiffCommentAdded } from '@/lib/telemetry'
+import { taskReviewPrNumber } from '@/lib/task-review-pr'
+import type { DiffExternalThread } from '@/components/diff'
+import {
+  GithubCommentsOffDiff,
+  GithubReviewThreadCard,
+  groupReviewThreads,
+  placeReviewThreads,
+} from './github-review-comments'
 
 /**
  * `/tasks/:id/changes` — the session git view's Changes tab (spec §"Session git view —
@@ -157,6 +165,22 @@ export function ChangesView({
   const diffRendering = diffFiles !== files
   const diffShown = !changes.isPending && !changes.isError && files.length > 0
   const tree = useMemo(() => buildFileTree(files), [files])
+  // The task PR's GitHub review threads: read-only, drawn beside — never inside — the user's own
+  // self-review comments, so they can be neither edited nor sent to the agent.
+  const reviewPr = taskReviewPrNumber(run)
+  const reviewComments = useGithubReviewComments(reviewPr)
+  const placed = useMemo(
+    () => placeReviewThreads(groupReviewThreads(reviewComments.data?.comments ?? []), files),
+    [reviewComments.data, files],
+  )
+  const externalThreads = useMemo(() => [...placed.anchored.values()].map((entry) => entry.anchor), [placed])
+  const renderExternalThread = useCallback(
+    (anchor: DiffExternalThread) => {
+      const entry = placed.anchored.get(anchor.id)
+      return entry ? <GithubReviewThreadCard thread={entry.thread} /> : null
+    },
+    [placed],
+  )
   const hasMarkdown = useMemo(() => files.some(canPreviewMarkdown), [files])
 
   // Phones force the readable combination; the toggles only exist ≥md (toolbar hides them).
@@ -308,6 +332,14 @@ export function ChangesView({
             data-diff-scroller={desktop ? '' : undefined}
             className="min-w-0 flex-1 md:overflow-y-auto md:overscroll-contain"
           >
+            <div className="md:pt-4 empty:hidden">
+              {reviewComments.data && !reviewComments.data.available ? (
+                <p data-slot="gh-review-unavailable" className="mb-3 px-1 text-label text-soft-foreground">
+                  GitHub review comments unavailable — {reviewComments.data.reason ?? 'GitHub did not answer'}
+                </p>
+              ) : null}
+              <GithubCommentsOffDiff items={placed.offDiff} />
+            </div>
             {diffFiles.length === 0 ? (
               <p data-slot="diff-rendering" className="px-1 pt-4 text-label text-soft-foreground">
                 Rendering {files.length.toLocaleString()} {files.length === 1 ? 'file' : 'files'}…
@@ -335,6 +367,8 @@ export function ChangesView({
                 onAddComment={diffComments.ready ? addComment : undefined}
                 onEditComment={diffComments.update}
                 onRemoveComment={diffComments.remove}
+                externalThreads={externalThreads}
+                renderExternalThread={renderExternalThread}
                 // The column runs under the floating dock, so its content pads its end by the dock's
                 // height, and reveals keep their target above the box. Diff targets only: scroll
                 // padding on a scroller also affects the dock textarea, and Chromium scrolls the page

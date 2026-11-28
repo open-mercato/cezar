@@ -153,8 +153,29 @@ query ($owner: String!, $name: String!, $endCursor: String) {
 ## Out of scope
 
 - Posting, editing, or reacting to comments from Cezar (read-only view).
-- Inline diff-anchored PR review comments and review-thread resolution state (belongs in a future diff-view integration; the flat thread notes review summaries only).
+- ~~Inline diff-anchored PR review comments and review-thread resolution state~~ — shipped in the task Changes tab; see the follow-up note below. The flat GitHub-tab thread still shows review summaries only.
 - Background polling/webhooks for live comment updates — the 60 s TTL + manual refresh matches the tab's existing sync model.
 - A `gh`-authenticated server-side image proxy for private-repo attachments (named follow-up; revisit if private-repo usage shows up).
 - Tightening Streamdown's allow-all image/link origins to an allow-list — a separate security-hardening decision affecting every markdown surface in the app (task threads included), to be specced on its own if pursued.
 - Timeline events (labels, assignments, cross-references, commits).
+
+## Follow-up (2026-11-25): inline review comments in the Changes tab
+
+The Changes tab is the diff view this spec waited for. `GET /api/v1/github/prs/:number/review-comments`
+(additive; contract `githubReviewCommentsDataSchema`) fetches `pulls/{n}/comments` through the forge
+seam — bounded page loop under one time budget, zod boundary, 60 s LRU, `refresh=1`, in-payload
+degrade, `CEZ_DRY_RUN=1` fixtures anchored on the mock agent's `notes.md`. Resolved state comes from
+one best-effort GraphQL `reviewThreads(first: 100)` call and is absent when it fails or the thread
+is past the first 100.
+
+- Anchor: `path` + side (`RIGHT` → new, `LEFT` → old) + `line`. Replies group under their root by
+  `in_reply_to_id`.
+- A comment with no current line (outdated), a file-level comment, or one whose line is outside the
+  task's displayed hunks is listed in a "not on this diff" group with its original line and a GitHub
+  link — never dropped.
+- Read-only: never editable or deletable, never part of the user's self-review draft, never sent to
+  the agent.
+- Line numbers are the PR head's. When the worktree has unpushed edits, a comment can sit on a
+  shifted line; the GitHub link is the source of truth.
+- A reclaimed worktree leaves the Changes tab empty (known gap, unchanged here), so the GitHub
+  comments are not shown there either; the GitHub tab still shows the PR's conversation thread.

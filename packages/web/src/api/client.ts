@@ -105,6 +105,7 @@ import type {
   GithubSearchData,
   GithubRefStatusData,
   GithubCommentsData,
+  GithubReviewCommentsData,
   GithubData,
   GithubMergeMethod,
   GithubMergeResponse,
@@ -1312,6 +1313,24 @@ export async function getGithubRefStatus(
 
 /** The full comment thread for one issue/PR (#499). Degrades to `{ available: false, reason }`
  *  server-side — an unreachable thread is a one-line hint in the detail view, not an ApiError. */
+/** A PR's inline review comments for the task Changes tab. `refresh` busts the 60 s server cache. */
+export async function getGithubReviewComments(
+  number: number,
+  params: { refresh?: boolean } = {},
+  opts?: ReadOptions,
+): Promise<GithubReviewCommentsData> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].github.prs[':number']['review-comments'].$get(
+      {
+        param: { projectId: queryScope(), number: String(number) },
+        query: { refresh: params.refresh ? '1' : undefined },
+      },
+      init(opts),
+    ),
+    `/github/prs/${number}/review-comments`,
+  )
+}
+
 export async function getGithubComments(
   kind: 'issue' | 'pr',
   number: number,
