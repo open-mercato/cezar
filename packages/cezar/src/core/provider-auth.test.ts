@@ -360,6 +360,40 @@ describe('provider auth parsers', () => {
     expect(JSON.stringify(response)).not.toContain(masked);
   });
 
+  // Every connected answer of codex 0.164–0.166 `login status` (codex-rs/cli/src/login.rs), all on
+  // stderr with exit 0 and an empty stdout. The API-key case is the real 89-byte capture (b82b92cf).
+  it.each([
+    'API key configured - sk-proj-***12345\nAuthentication is checked when you send a request.\n',
+    'API key configured - ***\nAuthentication is checked when you send a request.\n',
+    'Logged in using ChatGPT\n',
+    'Logged in using access token\n',
+    'Logged in using personal access token\n',
+    'Logged in using Amazon Bedrock API key\n',
+    'Logged in using Amazon Bedrock AWS access keys\n',
+    'Logged in using workload identity\n',
+  ])('recognizes Codex 0.164 connected stderr: %j', async (stderr) => {
+    const service = new ProviderAuthService({
+      runCommand: runner((executable) => executable.includes('codex')
+        ? { stdout: '', stderr, exitCode: 0 }
+        : resultFor(executable)),
+    });
+
+    await expect(statuses(service)).resolves.toMatchObject({ codex: { status: 'connected' } });
+  });
+
+  it.each([
+    'Error checking login status: failed to read auth.json',
+    'Unexpected error retrieving API key: missing token',
+  ])('keeps a Codex 0.164 status error inconclusive: %s', async (stderr) => {
+    const service = new ProviderAuthService({
+      runCommand: runner((executable) => executable.includes('codex')
+        ? { stdout: '', stderr, exitCode: 1 }
+        : resultFor(executable)),
+    });
+
+    await expect(statuses(service)).resolves.toMatchObject({ codex: { status: 'unknown' } });
+  });
+
   it('recognizes current Codex not-logged-in stderr on exit 1', async () => {
     const service = new ProviderAuthService({
       runCommand: runner((executable) => executable.includes('codex')
