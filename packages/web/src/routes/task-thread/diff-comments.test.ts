@@ -2,7 +2,14 @@ import { describe, expect, it } from 'vitest'
 
 import {
   cleanAssetLabel,
+  foreignEntries,
+  holdsBareQuote,
   isAssetComment,
+  QUOTE_EXCERPT_MAX,
+  isLineComment,
+  isQuoteComment,
+  REVIEW_GENERIC_HEADING,
+  REVIEW_REPLY_HEADING,
   REVIEW_ASSETS_HEADING,
   REVIEW_MIXED_HEADING,
   sortReviewComments,
@@ -273,5 +280,62 @@ describe('asset element comments', () => {
   it('orders comments of one asset as they were left — the number their marker wears', () => {
     const F = { ...E, id: 'f', selector: 'button' }
     expect(sortReviewComments([F, E, A]).map((c) => c.id)).toEqual(['a', 'f', 'e'])
+  })
+})
+
+describe('reply quote comments', () => {
+  const Q = { kind: 'quote' as const, id: 'q', excerpt: 'It applies one rule:\na colored SplitPill beats outline.', body: 'Is that intended?' }
+
+  it('round-trips through the stored JSON and drops a quote without its passage', () => {
+    const stored = JSON.stringify([Q, { kind: 'quote', id: 'x', excerpt: '', body: 'b' }])
+    expect(parseDiffComments(stored)).toEqual([Q])
+  })
+
+  it('heads an all-quote review as comments on the reply, the passage fenced and the note apart', () => {
+    const review = formatDiffComments([Q])
+    expect(review).toBe(
+      `${REVIEW_REPLY_HEADING}\n\n- On this passage of your reply:\n\n  \`\`\`\n  It applies one rule:\n  a colored SplitPill beats outline.\n  \`\`\`\n\n  Is that intended?`,
+    )
+  })
+
+  it('leads a mixed review with the quotes under the generic heading, and reads every item back', () => {
+    const review = formatDiffComments([A, Q])
+    expect(review.startsWith(`${REVIEW_GENERIC_HEADING}\n\n- On this passage`)).toBe(true)
+    const parsed = parseReviewMessage(`hi\n\n${review}`)
+    expect(parsed?.lead).toBe('hi')
+    expect(parsed?.items.map((item) => item.quote ?? false)).toEqual([true, false])
+    expect(parsed?.items[0]).toMatchObject({ excerpt: Q.excerpt, body: Q.body })
+    expect(parsed?.items[1]).toMatchObject({ path: 'src/b.ts', line: 12, body: 'rename this' })
+  })
+
+  it('sends an Add-to-chat quote (no note) as the passage alone, and reads it back', () => {
+    const bare = { ...Q, body: '' }
+    const review = formatDiffComments([bare])
+    expect(review.endsWith('a colored SplitPill beats outline.\n  ```')).toBe(true)
+    expect(parseReviewMessage(review)?.items[0]).toMatchObject({ quote: true, excerpt: Q.excerpt, body: '' })
+  })
+
+  it('knows a bare quote it already holds — a passage past the cap included', () => {
+    const long = 'x'.repeat(QUOTE_EXCERPT_MAX + 50)
+    const held = [{ kind: 'quote' as const, id: 'l', excerpt: `${'x'.repeat(QUOTE_EXCERPT_MAX)}…`, body: '' }]
+    expect(holdsBareQuote(held, long)).toBe(true)
+    expect(holdsBareQuote([{ ...Q, body: '' }], `\n${Q.excerpt}\n`)).toBe(true)
+    // A quote with a note is a comment, not the bare quote Add to chat would make.
+    expect(holdsBareQuote([Q], Q.excerpt)).toBe(false)
+  })
+
+  it('sets aside entries of a kind it does not know, for the next save to carry back', () => {
+    const future = { kind: 'screenshot', id: 'f', region: [1, 2] }
+    const text = JSON.stringify([A, Q, future, { kind: 'asset', id: 'x' }])
+    expect(foreignEntries(text)).toEqual([future])
+    expect(parseDiffComments(text)).toEqual([A, Q])
+    expect(foreignEntries('not json')).toEqual([])
+  })
+
+  it('is neither a line nor an asset comment', () => {
+    expect(isQuoteComment(Q)).toBe(true)
+    expect(isLineComment(Q)).toBe(false)
+    expect(isAssetComment(Q)).toBe(false)
+    expect(sortReviewComments([A, Q])[0]).toBe(Q)
   })
 })

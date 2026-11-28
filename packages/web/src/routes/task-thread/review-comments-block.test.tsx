@@ -72,4 +72,19 @@ describe('a sent asset comment in the transcript', () => {
     expect(cards[1]!.querySelector('[data-slot="review-comment-body"]')?.textContent).toBe('bigger')
     expect(cards[1]!.querySelector('[data-slot="review-comment-element"]')?.textContent).toBe('· element main > h2')
   })
+
+  it('renders a reply quote as its own card: the passage, then the note', () => {
+    renderBubble(formatDiffComments([{ kind: 'quote', id: 'q', excerpt: 'beats outline', body: 'why?' }]))
+    const card = document.querySelector('[data-slot="review-comment"][data-kind="quote"]')!
+    expect(card.querySelector('[data-slot="review-comment-quote"]')?.textContent).toBe('beats outline')
+    expect(card.querySelector('[data-slot="review-comment-body"]')?.textContent).toBe('why?')
+    expect(screen.getByText('1 comment on the reply')).not.toBeNull()
+  })
+
+  it('renders an Add-to-chat quote without an empty note', () => {
+    renderBubble(formatDiffComments([{ kind: 'quote', id: 'q', excerpt: 'beats outline', body: '' }]))
+    const card = document.querySelector('[data-slot="review-comment"][data-kind="quote"]')!
+    expect(card.querySelector('[data-slot="review-comment-quote"]')?.textContent).toBe('beats outline')
+    expect(card.querySelector('[data-slot="review-comment-body"]')).toBeNull()
+  })
 })

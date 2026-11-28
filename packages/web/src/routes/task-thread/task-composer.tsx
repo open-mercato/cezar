@@ -13,6 +13,7 @@ import { useDeliverPrompt } from './deliver-prompt'
 import { DiffCommentChips } from './diff-comment-chips'
 import {
   commentsRideWith,
+  isLineComment,
   slashCommandOf,
   messageWithReview,
   type DiffComment,
@@ -130,7 +131,8 @@ export function TaskComposer({
           try {
             return await draft.submit<unknown>(() => {
               if (hasDiffComments && !commentsRideWith(text, skillNames)) {
-                toast(`Diff comments kept — /${slashCommandOf(text)} is a command, so they go with your next message.`)
+                const kept = diffComments.all.every(isLineComment) ? 'Diff comments' : 'Comments'
+                toast(`${kept} kept — /${slashCommandOf(text)} is a command, so they go with your next message.`)
                 return deliverPrompt(text, images)
               }
               return diffComments.submit(async (held) => deliverPrompt(messageWithReview(text, held), images))

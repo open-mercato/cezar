@@ -49,11 +49,49 @@ export interface AssetComment {
 
 export type NewAssetComment = Omit<AssetComment, 'id' | 'kind'>
 
-/** Everything the review carries: a diff line comment or an asset element comment. */
-export type ReviewComment = DiffComment | AssetComment
+/**
+ * A comment on a passage of the agent's own reply: the user selected text in an assistant message
+ * of the thread and chose Reply. Same list, same review message as the other two kinds.
+ */
+export interface QuoteComment {
+  kind: 'quote'
+  id: string
+  /** The selected text, as selected. */
+  excerpt: string
+  body: string
+}
+
+export type NewQuoteComment = Omit<QuoteComment, 'id' | 'kind'>
+
+/** Everything the review carries: a diff line comment, an asset element comment or a reply quote. */
+export type ReviewComment = DiffComment | AssetComment | QuoteComment
 
 export function isAssetComment(comment: ReviewComment): comment is AssetComment {
   return (comment as { kind?: unknown }).kind === 'asset'
+}
+
+export function isQuoteComment(comment: ReviewComment): comment is QuoteComment {
+  return (comment as { kind?: unknown }).kind === 'quote'
+}
+
+/** A diff LINE comment — neither an asset nor a quote. */
+export function isLineComment(comment: ReviewComment): comment is DiffComment {
+  return !isAssetComment(comment) && !isQuoteComment(comment)
+}
+
+/** How much of a reply a quote comment keeps — bounded for `EXCERPT_MAX`'s reason. */
+export const QUOTE_EXCERPT_MAX = 1000
+
+/** The passage as a quote comment stores it. */
+export function quoteExcerpt(excerpt: string): string {
+  return capExcerpt(excerpt, QUOTE_EXCERPT_MAX)
+}
+
+/** Is this passage already held as a bare quote (Add to chat, no note)? Compared as stored, so a
+ *  passage past the cap still matches its own earlier quote. */
+export function holdsBareQuote(comments: readonly ReviewComment[], excerpt: string): boolean {
+  const stored = quoteExcerpt(excerpt)
+  return comments.some((c) => isQuoteComment(c) && c.body === '' && c.excerpt === stored)
 }
 
 /** How much of an element's markup an asset comment keeps — see `EXCERPT_MAX` for why bounded. */
@@ -90,6 +128,27 @@ function parseAssetComment(c: Record<string, unknown>): AssetComment | null {
   }
 }
 
+/**
+ * Entries of a `kind` this cockpit does not know — written by a NEWER cockpit (another tab, another
+ * browser). They are not shown and not sent, but every save carries them back, so an older tab
+ * never deletes another's comments. A cockpit from before this rule (before `quote`) still drops
+ * them; the build-skew banner is what asks that tab to reload.
+ */
+export function foreignEntries(text: string): unknown[] {
+  if (text === '') return []
+  try {
+    const raw: unknown = JSON.parse(text)
+    if (!Array.isArray(raw)) return []
+    return raw.filter((item) => {
+      if (item === null || typeof item !== 'object') return false
+      const kind = (item as { kind?: unknown }).kind
+      return typeof kind === 'string' && kind !== 'asset' && kind !== 'quote'
+    })
+  } catch {
+    return []
+  }
+}
+
 /** Defensive: the stored text is whatever the wire carried. Anything malformed is dropped. */
 export function parseDiffComments(text: string): ReviewComment[] {
   if (text === '') return []
@@ -107,6 +166,12 @@ export function parseDiffComments(text: string): ReviewComment[] {
     if (c.kind === 'asset') {
       const asset = parseAssetComment(c)
       if (asset) out.push(asset)
+      continue
+    }
+    if (c.kind === 'quote') {
+      if (typeof c.id === 'string' && typeof c.excerpt === 'string' && c.excerpt !== '' && typeof c.body === 'string') {
+        out.push({ kind: 'quote', id: c.id, excerpt: c.excerpt, body: c.body })
+      }
       continue
     }
     if (
@@ -154,20 +219,35 @@ export function sortDiffComments(comments: readonly DiffComment[]): DiffComment[
   )
 }
 
-/** Line comments in reading order, then asset comments by asset — each asset's in the order they
- *  were left, which is also the number its marker wears in the page. */
+/** Reply quotes first, in the order they were left (the conversation leads), then line comments
+ *  in reading order, then asset comments by asset — each asset's in the order they were left,
+ *  which is also the number its marker wears in the page. */
 export function sortReviewComments(comments: readonly ReviewComment[]): ReviewComment[] {
-  const lines = sortDiffComments(comments.filter((c): c is DiffComment => !isAssetComment(c)))
+  const quotes = comments.filter(isQuoteComment)
+  const lines = sortDiffComments(comments.filter(isLineComment))
   const assets = comments.filter(isAssetComment)
   const order = [...new Set(assets.map((c) => c.asset))].sort((a, b) => a.localeCompare(b))
-  return [...lines, ...order.flatMap((name) => assets.filter((c) => c.asset === name))]
+  return [...quotes, ...lines, ...order.flatMap((name) => assets.filter((c) => c.asset === name))]
 }
 
 /** The line that opens the review block — what `parseReviewMessage` finds it by. */
 export const REVIEW_HEADING = 'Review comments on the diff:'
 export const REVIEW_ASSETS_HEADING = 'Review comments on assets:'
 export const REVIEW_MIXED_HEADING = 'Review comments on the diff and assets:'
-const REVIEW_HEADINGS = [REVIEW_HEADING, REVIEW_ASSETS_HEADING, REVIEW_MIXED_HEADING]
+/** Only reply quotes. Any mix that includes them uses the generic heading. */
+export const REVIEW_REPLY_HEADING = 'Comments on your reply:'
+export const REVIEW_GENERIC_HEADING = 'Review comments:'
+const REVIEW_HEADINGS = [REVIEW_HEADING, REVIEW_ASSETS_HEADING, REVIEW_MIXED_HEADING, REVIEW_REPLY_HEADING, REVIEW_GENERIC_HEADING]
+
+/** A reply quote's item header — no file, so it is its own line rather than `ITEM_HEADER`'s shape. */
+const QUOTE_ITEM_HEADER = '- On this passage of your reply:'
+
+function reviewHeading(comments: readonly ReviewComment[]): string {
+  const quotes = comments.filter(isQuoteComment).length
+  const assets = comments.filter(isAssetComment).length
+  if (quotes > 0) return quotes === comments.length ? REVIEW_REPLY_HEADING : REVIEW_GENERIC_HEADING
+  return assets === 0 ? REVIEW_HEADING : assets === comments.length ? REVIEW_ASSETS_HEADING : REVIEW_MIXED_HEADING
+}
 
 /** What an asset comment's item header says after the file name — `parseReviewMessage` reads it back. */
 const ASSET_ITEM = /^\(HTML asset\) element `([^`]+)`(?: — "(.*)")?$/
@@ -185,9 +265,13 @@ function assetWhere(comment: AssetComment): string {
  */
 export function formatDiffComments(comments: readonly ReviewComment[]): string {
   if (comments.length === 0) return ''
-  const assets = comments.filter(isAssetComment).length
-  const heading = assets === 0 ? REVIEW_HEADING : assets === comments.length ? REVIEW_ASSETS_HEADING : REVIEW_MIXED_HEADING
+  const heading = reviewHeading(comments)
   const blocks = sortReviewComments(comments).map((comment) => {
+    if (isQuoteComment(comment)) {
+      // Add to chat leaves no note: the passage alone is the context.
+      const note = comment.body.trim() === '' ? '' : `\n\n${indent(comment.body)}`
+      return `${QUOTE_ITEM_HEADER}\n\n${indent(fence(comment.excerpt))}${note}`
+    }
     if (isAssetComment(comment)) {
       // The asset's file name and the element's selector: what the agent needs to find it again.
       return `- ${assetWhere(comment)}:\n\n${indent(fence(comment.excerpt))}\n\n${indent(comment.body)}`
@@ -217,9 +301,12 @@ export interface ReviewItem {
   body: string
   /** An asset element comment: `path` is the asset's name, `selector` the element. */
   asset?: { selector: string }
+  /** A comment on a passage of the agent's reply: `path` and `label` are empty, `excerpt` the passage. */
+  quote?: true
 }
 
 const ITEM_HEADER = /^- `([^`]+)` (.+):$/
+const isItemHeader = (line: string) => line === QUOTE_ITEM_HEADER || ITEM_HEADER.test(line)
 
 /**
  * Read a review block back out of a sent message, so the transcript can render it as comment
@@ -241,8 +328,9 @@ export function parseReviewMessage(text: string): { lead: string; items: ReviewI
   const items: ReviewItem[] = []
   let index = 0
   while (index < lines.length) {
-    const header = ITEM_HEADER.exec(lines[index] ?? '')
-    if (!header) {
+    const quote = lines[index] === QUOTE_ITEM_HEADER
+    const header = quote ? null : ITEM_HEADER.exec(lines[index] ?? '')
+    if (!header && !quote) {
       if ((lines[index] ?? '').trim() === '') {
         index++
         continue
@@ -251,11 +339,15 @@ export function parseReviewMessage(text: string): { lead: string; items: ReviewI
     }
     index++
     const content: string[] = []
-    while (index < lines.length && !ITEM_HEADER.test(lines[index] ?? '')) {
+    while (index < lines.length && !isItemHeader(lines[index] ?? '')) {
       content.push((lines[index] ?? '').replace(/^ {2}/, ''))
       index++
     }
-    items.push(readItem(header[1]!, header[2]!, content))
+    if (header) items.push(readItem(header[1]!, header[2]!, content))
+    else {
+      const { excerpt, body } = readContent(content)
+      items.push({ path: '', label: '', side: 'new', excerpt, body, quote: true })
+    }
   }
   return items.length > 0 ? { lead, items } : undefined
 }
@@ -267,6 +359,21 @@ function readItem(headerPath: string, label: string, content: string[]): ReviewI
   // Old side when the label leads with it (`removed line 11 – line 14`) or notes it
   // (`line 3 (removed line)`). Two plain checks rather than one half-anchored regex.
   const side: 'old' | 'new' = label.startsWith('removed ') || label.includes('(removed line') ? 'old' : 'new'
+  const { excerpt, body } = readContent(content)
+  const asset = ASSET_ITEM.exec(label)
+  return {
+    path: asset ? headerPath : (renamed ?? headerPath),
+    label,
+    ...(asset ? { asset: { selector: asset[1]! } } : {}),
+    ...(first ? { line: Number(first[1]) } : {}),
+    side,
+    excerpt,
+    body,
+  }
+}
+
+/** An item's body: the fenced (or older `> quoted`) excerpt, then the note. */
+function readContent(content: string[]): { excerpt: string; body: string } {
   let rest = content
   while (rest[0]?.trim() === '') rest = rest.slice(1)
   let excerpt = ''
@@ -283,16 +390,7 @@ function readItem(headerPath: string, label: string, content: string[]): ReviewI
     }
     excerpt = quoted.join('\n')
   }
-  const asset = ASSET_ITEM.exec(label)
-  return {
-    path: asset ? headerPath : (renamed ?? headerPath),
-    label,
-    ...(asset ? { asset: { selector: asset[1]! } } : {}),
-    ...(first ? { line: Number(first[1]) } : {}),
-    side,
-    excerpt,
-    body: rest.join('\n').trim(),
-  }
+  return { excerpt, body: rest.join('\n').trim() }
 }
 
 /**
@@ -381,7 +479,7 @@ export const MESSAGE_TEXT_MAX = 100_000
 export function messageWithReview(text: string, comments: readonly ReviewComment[]): string {
   const message = withDiffComments(text, comments)
   if (message.length > MESSAGE_TEXT_MAX) {
-    const noun = comments.every((c) => !isAssetComment(c)) ? 'diff comment' : 'comment'
+    const noun = comments.every(isLineComment) ? 'diff comment' : 'comment'
     throw new Error(
       `Too long with the ${comments.length === 1 ? noun : `${comments.length} ${noun}s`} attached — shorten the message or remove some comments.`,
     )
@@ -403,12 +501,14 @@ export interface DiffComments {
   comments: DiffComment[]
   /** The comments pinned to elements of HTML assets — what the Assets tab draws. */
   assetComments: AssetComment[]
-  /** Both kinds, as stored — what the composer shows as chips and a send carries. */
+  /** Every kind, as stored — what the composer shows as chips and a send carries. */
   all: ReviewComment[]
   /** `false` when the comment could not be kept (the list would outgrow the draft cap). */
   add: (comment: DiffNewLineComment) => boolean
   /** The new comment's id, or `undefined` when it could not be kept. */
   addAsset: (comment: NewAssetComment) => string | undefined
+  /** A passage of the agent's reply, with a note (Reply) or without (Add to chat); `false` when it could not be kept. */
+  addQuote: (comment: NewQuoteComment) => boolean
   update: (id: string, body: string) => boolean
   remove: (id: string) => void
   clear: () => void
@@ -450,12 +550,22 @@ interface CommentsStore {
   base: Map<string, ReviewComment[]>
   /** Per run: saves queued or in flight. A listing that arrives meanwhile is left to them. */
   pending: Map<string, number>
+  /** Per run: the server's entries of a kind this cockpit does not know — re-saved untouched. */
+  foreign: Map<string, unknown[]>
 }
 const stores = new WeakMap<object, CommentsStore>()
 function storeFor(client: object): CommentsStore {
   let store = stores.get(client)
   if (!store) {
-    store = { lists: new Map(), listeners: new Map(), chains: new Map(), removed: new Map(), base: new Map(), pending: new Map() }
+    store = {
+      lists: new Map(),
+      listeners: new Map(),
+      chains: new Map(),
+      removed: new Map(),
+      base: new Map(),
+      pending: new Map(),
+      foreign: new Map(),
+    }
     stores.set(client, store)
   }
   return store
@@ -472,6 +582,10 @@ export function useDiffComments(runId: string): DiffComments {
     () => parseDiffComments(typeof storedText === 'string' ? storedText : ''),
     [storedText],
   )
+  // Whatever a newer cockpit stored beside these, kept for every save of this run.
+  useEffect(() => {
+    if (drafts.isSuccess) store.foreign.set(runId, foreignEntries(typeof storedText === 'string' ? storedText : ''))
+  }, [drafts.isSuccess, runId, storedText, store])
 
   const subscribe = useCallback(
     (listener: () => void) => {
@@ -523,7 +637,7 @@ export function useDiffComments(runId: string): DiffComments {
   }, [queryClient, runId])
 
   const all = live ?? (drafts.isSuccess ? serverComments : NO_COMMENTS)
-  const comments = useMemo(() => all.filter((c): c is DiffComment => !isAssetComment(c)), [all])
+  const comments = useMemo(() => all.filter(isLineComment), [all])
   const assetComments = useMemo(() => all.filter(isAssetComment), [all])
 
   /** The list as it stands NOW — never a render's snapshot, which a send outlives. */
@@ -538,7 +652,7 @@ export function useDiffComments(runId: string): DiffComments {
     (next: ReviewComment[]) => {
       store.lists.set(runId, next)
       store.listeners.get(runId)?.forEach((listener) => listener())
-      const text = serialize(next)
+      const text = serialize(next, store.foreign.get(runId))
       queryClient.setQueryData<RunDraftsResponse>(queryKeys.runs.drafts(runId), (listing) => {
         const surfaces = { ...(listing?.surfaces ?? {}) }
         if (text === '') delete surfaces[DIFF_COMMENTS_SURFACE]
@@ -554,7 +668,7 @@ export function useDiffComments(runId: string): DiffComments {
    *  `dropped` are the ids this change removes, remembered so no later merge restores them. */
   const write = useCallback(
     (next: ReviewComment[], dropped: readonly string[] = []): boolean => {
-      if (serialize(next).length > DRAFT_TEXT_MAX) {
+      if (serialize(next, store.foreign.get(runId)).length > DRAFT_TEXT_MAX) {
         toast('Too many comments to keep as a draft — send the ones you have first.', { tone: 'danger' })
         return false
       }
@@ -578,12 +692,13 @@ export function useDiffComments(runId: string): DiffComments {
             const listing = await getRunDrafts(runId)
             const text = listing.surfaces?.[DIFF_COMMENTS_SURFACE]?.text
             const server = parseDiffComments(typeof text === 'string' ? text : '')
+            store.foreign.set(runId, foreignEntries(typeof text === 'string' ? text : ''))
             merged = mergeComments(local, server, store.base.get(runId) ?? [], store.removed.get(runId))
           } catch {
             // Unreadable: save what this window has — no worse than before the merge existed.
           }
           if (merged !== local) publish(merged)
-          const text = serialize(merged)
+          const text = serialize(merged, store.foreign.get(runId))
           if (text.length > DRAFT_TEXT_MAX) return // the other window's comments pushed it over; keep what's stored
           await putRunDraft(runId, DIFF_COMMENTS_SURFACE, { text, images: [] })
           store.base.set(runId, merged)
@@ -628,6 +743,19 @@ export function useDiffComments(runId: string): DiffComments {
       ])
       return kept ? id : undefined
     },
+    [current, write],
+  )
+  const addQuote = useCallback(
+    (comment: NewQuoteComment) =>
+      write([
+        ...current(),
+        {
+          kind: 'quote',
+          id: newId(),
+          excerpt: quoteExcerpt(comment.excerpt),
+          body: comment.body.slice(0, COMMENT_MAX),
+        },
+      ]),
     [current, write],
   )
   const update = useCallback(
@@ -675,6 +803,7 @@ export function useDiffComments(runId: string): DiffComments {
     all,
     add,
     addAsset,
+    addQuote,
     update,
     remove,
     clear,
@@ -682,8 +811,9 @@ export function useDiffComments(runId: string): DiffComments {
   }
 }
 
-function serialize(comments: readonly ReviewComment[]): string {
-  return comments.length === 0 ? '' : JSON.stringify(comments)
+function serialize(comments: readonly ReviewComment[], foreign: readonly unknown[] = []): string {
+  const entries = [...comments, ...foreign]
+  return entries.length === 0 ? '' : JSON.stringify(entries)
 }
 
 /**
