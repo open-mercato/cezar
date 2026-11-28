@@ -15,7 +15,7 @@ final class PushNotifier {
     private let book: DeviceBookStore
     private let lock = NSLock()
     /// The last answer of `getNotificationSettings`; nil until the first.
-    private var cachedAllowed: Bool?
+    private var cachedStatus: UNAuthorizationStatus?
 
     /// `servers`: the saved list, so a forgotten server's signal posts nothing.
     init(center: UNUserNotificationCenter = .current(), servers: @escaping () -> [ServerRecord], book: DeviceBookStore) {
@@ -36,7 +36,7 @@ final class PushNotifier {
     /// Re-reads the setting: at app foreground, since the user may change it in Settings.
     func refresh(_ done: (() -> Void)? = nil) {
         center.getNotificationSettings { [weak self] settings in
-            self?.store(Self.allows(settings.authorizationStatus))
+            self?.store(settings.authorizationStatus)
             done?()
         }
     }
@@ -45,9 +45,9 @@ final class PushNotifier {
     /// main thread it never waits, and answers false until the first refresh lands.
     func allowed() -> Bool {
         lock.lock()
-        let known = cachedAllowed
+        let known = cachedStatus
         lock.unlock()
-        if let known { return known }
+        if let known { return Self.allows(known) }
         if Thread.isMainThread {
             refresh()
             return false
@@ -57,7 +57,18 @@ final class PushNotifier {
         _ = done.wait(timeout: .now() + 2)
         lock.lock()
         defer { lock.unlock() }
-        return cachedAllowed ?? false
+        return cachedStatus.map(Self.allows) ?? false
+    }
+
+    /// Your cezars' `notifications`: `allowed`, `denied` or `unknown`, from the last refresh.
+    func permission() -> String {
+        lock.lock()
+        defer { lock.unlock() }
+        switch cachedStatus {
+        case .some(.denied): return "denied"
+        case .some(let status) where Self.allows(status): return "allowed"
+        default: return "unknown"
+        }
     }
 
     /// One per cezar, replacing the last, like the relay's collapse key. `managerId` rides `userInfo` only.
@@ -91,16 +102,28 @@ final class PushNotifier {
 
     /// The saved list's names, then the sum, as the app comes to the front.
     func refreshBadge() {
-        let servers = servers()
-        showBadge(book.update { book -> Int in
-            book.sync(servers)
-            return book.badge
-        })
+        settle()
     }
 
-    private func store(_ value: Bool) {
+    /// The badge from the book, and a computer whose count is 0 loses its delivered notifications
+    /// (spec 2026-11-20-phone-notifications-inbox, B3).
+    func settle() {
+        let servers = servers()
+        let (badge, settled) = book.update { book -> (Int, Set<String>) in
+            book.sync(servers)
+            return (book.badge, book.settled)
+        }
+        showBadge(badge)
+        guard !settled.isEmpty else { return }
+        center.getDeliveredNotifications { [center] delivered in
+            let ids = DeviceBook.toRemove(delivered.map { ($0.request.identifier, $0.request.content.userInfo[PushTap.extra] as? String) }, settled: settled)
+            if !ids.isEmpty { center.removeDeliveredNotifications(withIdentifiers: ids) }
+        }
+    }
+
+    private func store(_ value: UNAuthorizationStatus) {
         lock.lock()
-        cachedAllowed = value
+        cachedStatus = value
         lock.unlock()
     }
 

@@ -9,6 +9,7 @@ import {
   deriveAttention,
   isIdleClosed,
   isNeedsYouStatus,
+  signInAccountKey,
   runClosure,
   wantsAttention,
   type Attention,
@@ -360,4 +361,19 @@ it('shows a pending fallback as switching agent without asking for attention', (
   const record = run({ status: 'queued', fallbackEpisode: { pending: true, attempted: ['claude:default'] } })
   expect(deriveAttention(record)).toEqual({ bucket: 'running', tone: 'violet', pulse: true, label: 'switching agent' })
   expect(wantsAttention(record)).toBe(false)
+})
+
+describe('parked on an expired login (spec 2026-11-18-inline-account-reconnect)', () => {
+  const parked = run({ status: 'waiting', parked: { kind: 'auth', provider: 'claude', profileId: 'work', at: '2026-07-14T10:00:00.000Z' } })
+
+  it('needs you for a sign-in: amber, still', () => {
+    expect(deriveAttention(parked)).toEqual({ bucket: 'waiting', tone: 'pending', pulse: false, label: 'sign-in needed' })
+    expect(wantsAttention(parked)).toBe(true)
+  })
+
+  it('names its account only while it waits', () => {
+    expect(signInAccountKey(parked)).toBe('claude:work')
+    expect(signInAccountKey({ ...parked, status: 'running' })).toBeUndefined()
+    expect(signInAccountKey(run({ status: 'waiting' }))).toBeUndefined()
+  })
 })

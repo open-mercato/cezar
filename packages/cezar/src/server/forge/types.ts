@@ -258,6 +258,8 @@ export interface DraftPrInput {
   handoffText: string;
   /** Open it as a draft. Absent = draft — what every caller got before this flag existed. */
   draft?: boolean;
+  /** Push the task branch to its existing PR without trying to create a second PR. */
+  updateExisting?: boolean;
 }
 
 /** Purpose-specific creation feed; independent of open lists and relevance search. */

@@ -12,4 +12,9 @@ extension DeviceBook {
         }
         entries = next
     }
+
+    /// A probe's reading: online stamps the last-seen time, told counts replace the last ones.
+    mutating func noted(_ id: String, _ reading: DeviceSwitch.Reading, at now: Int64) {
+        noted(id, online: reading.status == .online, waiting: reading.attention?.waiting, failed: reading.attention?.failed, at: now)
+    }
 }

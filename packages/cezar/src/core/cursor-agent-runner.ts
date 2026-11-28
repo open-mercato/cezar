@@ -10,6 +10,7 @@
  */
 
 import { spawn as nodeSpawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
+import { installHintCommand } from './agent-install.ts';
 import { existsSync, realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { fileURLToPath } from 'node:url';
@@ -130,7 +131,7 @@ function wrapSpawnError(err: unknown, bin: string): Error {
   const code = (err as NodeJS.ErrnoException | undefined)?.code;
   if (code === 'ENOENT') {
     return new Error(
-      `\`${bin}\` not found on PATH — install the Cursor CLI (curl https://cursor.com/install -fsS | bash) and run \`agent login\` (or set CEZ_CURSOR_AGENT_BIN)`,
+      `\`${bin}\` not found on PATH — install the Cursor CLI (${installHintCommand('cursor')}) and run \`agent login\` (or set CEZ_CURSOR_AGENT_BIN)`,
     );
   }
   return err instanceof Error ? err : new Error(String(err));

@@ -7,6 +7,7 @@ import { PassThrough } from 'node:stream';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { AgentEvent } from './agent-runner.js';
+import type { UiEvent } from './ui-events.ts';
 import { KILL_GRACE_MS } from './claude-cli-runner.js';
 import { CodexAppServerRunner, codexThreadOverrides, userInputAnswers } from './codex-app-server-runner.js';
 import { recordOwnSignal, resetOwnSignalsForTests } from './process-signals.ts';
@@ -225,27 +226,34 @@ describe('resuming a thread another Codex process still holds', () => {
   );
   const resume = async (locked: string) => {
     const events: AgentEvent[] = [];
+    const uiEvents: UiEvent[] = [];
     const session = new CodexAppServerRunner({ bin: mockBin, timeoutMs: 0, resumeLockRetryMs: [5, 5] }).startSession(
       { userPrompt: 'continue', cwd: process.cwd(), sessionId: 'th_old', resume: true, env: { MOCK_CODEX_RESUME_LOCKED: locked } },
       (event) => events.push(event),
-      { autoEndAfterFirstTurn: true },
+      { autoEndAfterFirstTurn: true, onUiEvent: (event) => uiEvents.push(event) },
     );
     const result = await session.result;
-    return { events, result };
+    return { events, uiEvents, result };
   };
 
   it('resumes the same thread once the other writer lets go', async () => {
-    const { events, result } = await resume('2');
+    const { events, uiEvents, result } = await resume('2');
     expect(result.sessionId).toBe('th_old');
     expect(events).toContainEqual({ type: 'session', sessionId: 'th_old' });
+    expect(uiEvents[0]).toEqual({
+      type: 'session.started', backend: 'codex', sessionId: 'th_old', model: 'gpt-mock-resumed',
+    });
     expect(events.some((e) => e.type === 'error')).toBe(false);
     expect(result.text).toBe('Checking the working tree.');
   }, 15_000);
 
   it('continues in a fork of the thread when the lock is never released', async () => {
-    const { events, result } = await resume('always');
+    const { events, uiEvents, result } = await resume('always');
     expect(result.sessionId).toBe('fork_of_th_old');
     expect(events).toContainEqual({ type: 'session', sessionId: 'fork_of_th_old' });
+    expect(uiEvents[0]).toEqual({
+      type: 'session.started', backend: 'codex', sessionId: 'fork_of_th_old', model: 'gpt-mock-forked',
+    });
     expect(events.some((e) => e.type === 'note' && e.message.includes('continuing in a fork'))).toBe(true);
     expect(events.some((e) => e.type === 'error')).toBe(false);
     expect(result.text).toBe('Checking the working tree.');
@@ -779,6 +787,66 @@ describe('SIGTERM→SIGKILL escalation for an app-server that survives SIGTERM',
       expect(fake.signals).toEqual(['SIGTERM', 'SIGKILL']);
     });
   });
+
+  it('settles a hard-stopped session whose stdout a descendant keeps open after exit (#1929)', async () => {
+    const fake = signallableChild();
+    const stdout = fake.child.stdout as PassThrough;
+    spawnHook.override = () => fake.child;
+    let firstTurn: () => void = () => {};
+    const started = new Promise<void>((resolve) => { firstTurn = resolve; });
+    fake.child.stdin.on('data', (chunk: Buffer) => {
+      const request = JSON.parse(chunk.toString()) as { id?: number; method: string };
+      if (request.id === undefined) return;
+      const result = request.method === 'thread/start'
+        ? { thread: { id: 'thread-1' } }
+        : request.method === 'turn/start' ? { turn: { id: 'turn-1' } } : {};
+      stdout.write(`${JSON.stringify({ id: request.id, result })}\n`);
+      if (request.method === 'turn/start') firstTurn();
+    });
+    const session = new CodexAppServerRunner({ bin: 'codex', timeoutMs: 0 }).startSession({
+      userPrompt: 'do it', cwd: process.cwd(),
+    });
+    let exited = false;
+    void session.processExited?.then(() => { exited = true; });
+    try {
+      await started;
+      session.hardStop?.();
+      fake.exit(143); // the app-server is gone; stdout stays open, as if a grandchild held it
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(exited).toBe(true);
+      expect(stdout.readableEnded).toBe(false);
+
+      await expect(session.result).resolves.toMatchObject({ sessionId: 'thread-1' });
+      expect(stdout.destroyed).toBe(true);
+    } finally {
+      fake.child.stdin.destroy();
+      fake.child.stderr.destroy();
+      spawnHook.override = null;
+    }
+  }, 15_000);
+
+  it('settles a session hard-stopped mid-handshake whose stdout stays open after exit (#1929)', async () => {
+    const fake = signallableChild();
+    const stdout = fake.child.stdout as PassThrough;
+    spawnHook.override = () => fake.child;
+    let sawInitialize: () => void = () => {};
+    const initializing = new Promise<void>((resolve) => { sawInitialize = resolve; });
+    fake.child.stdin.on('data', () => sawInitialize()); // never answers: the handshake stays in flight
+    const session = new CodexAppServerRunner({ bin: 'codex', timeoutMs: 0 }).startSession({
+      userPrompt: 'do it', cwd: process.cwd(),
+    });
+    try {
+      await initializing;
+      session.hardStop?.();
+      fake.exit(143);
+      await expect(session.result).resolves.toBeDefined();
+      expect(stdout.destroyed).toBe(true);
+    } finally {
+      fake.child.stdin.destroy();
+      fake.child.stderr.destroy();
+      spawnHook.override = null;
+    }
+  }, 15_000);
 });
 
 describe('the artifacts directory under the Codex sandbox (spec 2026-10-22-html-artifacts)', () => {

@@ -6,6 +6,7 @@ import {
   toolDisplay,
   type PlanEntry,
   type PlanStatus,
+  type QuestionClosed,
   type StopReason,
   type UiAskQuestion,
   type UiItem,
@@ -44,6 +45,8 @@ export interface ThreadNote {
   text: string
   /** `info`: an event the user should notice without alarm — another agent taking a task over. */
   tone: 'dim' | 'danger' | 'info'
+  action?: 'install-skills'
+  skillNames?: string[]
 }
 
 /** An image the run persisted (v1 `image` line: served from `/api/runs/:id/images/…`). */
@@ -56,10 +59,8 @@ export interface ThreadImage {
 
 /**
  * A structured AskUser question the agent posed via `CEZ:ASK` (#473, v2
- * `ask.requested`). The cockpit renders it as clickable option chips. Resolution
- * is client-side: the next `user-message` for the run flips `resolved` and
- * records the reply as `answer`, so a reloaded thread reconstructs the same
- * resolved/pending state from the persisted stream.
+ * `ask.requested`). The cockpit renders it as clickable option chips. It closes on the
+ * server's `ask.closed` (Questions inbox spec), so a reloaded thread draws the same state.
  */
 export interface ThreadAsk {
   kind: 'ask'
@@ -67,6 +68,8 @@ export interface ThreadAsk {
   questions: UiAskQuestion[]
   resolved: boolean
   answer?: string
+  /** Why it closed, from `ask.closed`. Absent on a recording made before that event existed. */
+  closed?: Pick<QuestionClosed, 'reason' | 'detail' | 'replacedBy' | 'answer' | 'answeredIn'> & { at?: string }
   /** A workflow gate/question rather than the agent (spec 2026-09-30-workflow-node-editor). */
   fromWorkflow?: boolean
 }
@@ -79,6 +82,11 @@ export interface ThreadProviderAuthRequired {
   authFailureId: string
   /** The named agent account the rejection came from; absent for the default login. */
   profileId?: string
+  /** Absent = the live reconnect card. `older`: a later rejection on the same account draws it;
+   *  `reconnected`: the account came back and the run resumed (spec 2026-11-18-inline-account-reconnect). */
+  state?: 'older' | 'reconnected'
+  /** When the run resumed after the reconnect. */
+  reconnectedAt?: string
 }
 
 /** Offered after an agent error saying its CLI is too old ("1.18.0 or newer is required"). */
@@ -124,6 +132,9 @@ export interface ThreadState {
   /** Wall clock of the newest stamped event — any kind, deltas included. The live Working…
    *  indicator reads it as "last activity", so a quiet session is told apart from a busy one. */
   lastEventAt?: string
+  /** The newest `session.started.model` — the actual model of a run recorded before
+   *  `RunRecord.actualModel` existed. */
+  sessionModel?: string
 }
 
 export interface ThreadReduceOptions {
@@ -133,6 +144,10 @@ export interface ThreadReduceOptions {
   activeTurn?: boolean
   /** The run's runner, naming an outdated-CLI error raised before any `session.started`. */
   runner?: string
+  /** The run record's `asks` (`[]` for a record without any). An ask it does not track and the
+   *  stream never closes (a pre-inbox card, a graph gate, a native ask) keeps the old rule: the
+   *  next user message closes it. Absent (record not loaded): no ask is read as legacy. */
+  trackedAsks?: ReadonlyArray<{ requestId: string }>
 }
 
 /** What the strip under the thread says. Pure so the mapping is table-testable. */
@@ -178,7 +193,10 @@ export function threadFilePaths(state: ThreadState): string[] {
   return deduped
 }
 
-const FAILURE_PREFIX = /^(?:continue failed|run stopped|step (?:"[^"]+"|\S+) failed)(?: — |: )/
+const FAILURE_PREFIX = /^(?:continue failed|run failed|run stopped|step (?:"[^"]+"|\S+) failed)(?: — |: )/
+
+/** `CodexToolPolicyError`'s refusal: it is decided before the model starts, so every step repeats it. */
+const PRE_TURN_REFUSAL = /no model turn was started/
 
 /** Engine failure summaries wrap the provider text; compare the detail, not its wrapper. */
 function failureText(text: string): string {
@@ -277,6 +295,9 @@ function providerId(value: unknown): ThreadProviderAuthRequired['provider'] | un
   const parsed = runnerSchema.safeParse(value)
   return parsed.success ? parsed.data : undefined
 }
+
+const CLOSE_REASONS: ReadonlySet<string> = new Set<QuestionClosed['reason']>(['answered', 'dismissed', 'replaced', 'retracted', 'expired', 'ended'])
+const isCloseReason = (value: string | undefined): value is QuestionClosed['reason'] => value !== undefined && CLOSE_REASONS.has(value)
 
 const isAskQuestion = (value: unknown): value is UiAskQuestion =>
   isRecord(value) && typeof value.header === 'string' && Array.isArray(value.options)
@@ -396,19 +417,35 @@ function planFromTodos(input: unknown): PlanEntry[] | undefined {
   return entries
 }
 
+const NO_ASKS: ReadonlyArray<{ requestId: string }> = []
+/** `trackedAsks` for `reduceThread`: undefined until the record loads, then its `asks` (or none). */
+export const trackedAsks = (run: { asks?: ReadonlyArray<{ requestId: string }> | undefined } | undefined) =>
+  run === undefined ? undefined : run.asks ?? NO_ASKS
+
 export function reduceThread(events: RunEvent[], options: ThreadReduceOptions = {}): ThreadState {
   const turns: DraftTurn[] = []
   /** stepId:itemId → live item. Runner sessions restart ids at `item_1`, while every current
    *  persisted event is stamped with its workflow step. Old recordings without a step id keep
    *  the historical bare-id lookup semantics. */
   const itemsById = new Map<string, { turn: DraftTurn; entry: DraftEntry }>()
+  // One live reconnect card per account: later rejections and reconnects restyle earlier ones.
+  const authEntries: ThreadProviderAuthRequired[] = []
+  const sameAccount = (entry: ThreadProviderAuthRequired, provider: string, profileId: string | undefined) =>
+    entry.provider === provider && (entry.profileId ?? 'default') === (profileId ?? 'default')
   let sessionEnded: ThreadState['sessionEnded']
   let turnSeq = 0
   /** The latest unresolved AskUser card (#473). The next `user-message` resolves
    *  it client-side (only one ask is ever pending — the agent asks once, then
    *  parks `waiting` until the user answers). */
   let pendingAsk: ThreadAsk | undefined
+  const asksById = new Map<string, ThreadAsk>()
+  // Decided per ask: a pre-inbox card closed on the next reply; a tracked one stays open, flagged.
+  const tracked = options.trackedAsks === undefined ? undefined : new Set(options.trackedAsks.map((ask) => ask.requestId))
+  const legacyAsks = new WeakSet<ThreadAsk>()
+  // Graph gates and native asks are never tracked nor closed server-side, whatever closed before them.
+  const serverClosed = new Set(events.flatMap((event) => event.type === 'ask.closed' && typeof event.requestId === 'string' ? [event.requestId] : []))
   let lastEventAt: string | undefined
+  let sessionModel: string | undefined
 
   const newTurn = (sourceSeq?: number): DraftTurn => {
     turnSeq += 1
@@ -499,9 +536,8 @@ export function reduceThread(events: RunEvent[], options: ThreadReduceOptions = 
       // ---- turn boundaries ------------------------------------------------------------
       case 'user-message': {
         const text = str(event.text) ?? ''
-        // Client-side resolution of the pending AskUser card (#473): the reply
-        // that follows an ask closes it and records the answer.
-        if (pendingAsk && !pendingAsk.resolved) {
+        // Legacy recordings only: the reply that followed an ask closed it (#473).
+        if (pendingAsk && !pendingAsk.resolved && legacyAsks.has(pendingAsk)) {
           pendingAsk.resolved = true
           if (text !== '') pendingAsk.answer = text
           pendingAsk = undefined
@@ -650,11 +686,17 @@ export function reduceThread(events: RunEvent[], options: ThreadReduceOptions = 
         // it does not render as the dimmest line in the thread (#936). Events
         // written before that field exists carry no `tone` and stay dim.
         const tone = event.tone === 'danger' ? 'danger' : event.tone === 'info' ? 'info' : 'dim'
+        const installSkills = event.type === 'note' && event.action === 'install-skills'
+        const names = installSkills && Array.isArray(event.skillNames)
+          ? event.skillNames.filter((name): name is string => typeof name === 'string') : undefined
         currentTurn().entries.push({
           origin: 'meta',
           ...(event.type === 'lifecycle' && FAILURE_PREFIX.test(text)
             ? { failure: { message: failureText(text), stepId: event.stepId, summary: true } } : {}),
-          entry: { kind: 'note', id: `v1:${event.seq}`, text, tone },
+          entry: {
+            kind: 'note', id: `v1:${event.seq}`, text, tone,
+            ...(installSkills ? { action: 'install-skills', ...(names?.length ? { skillNames: names } : {}) } : {}),
+          },
         })
         break
       }
@@ -683,6 +725,7 @@ export function reduceThread(events: RunEvent[], options: ThreadReduceOptions = 
       }
       case 'session.started': {
         sessionBackend = providerId(event.backend) ?? sessionBackend
+        sessionModel = str(event.model)?.trim() || sessionModel
         const turn = turns.at(-1)
         if (turn) errorTwins.delete(turn)
         break
@@ -730,16 +773,31 @@ export function reduceThread(events: RunEvent[], options: ThreadReduceOptions = 
         const authFailureId = str(event.authFailureId)
         if (provider === undefined || authFailureId === undefined || authFailureId.length < 1 || authFailureId.length > 128) break
         const profileId = str(event.profileId)
-        currentTurn().entries.push({
-          origin: 'meta',
-          entry: {
-            kind: 'provider-auth-required',
-            id: `v1:${event.seq}`,
-            provider,
-            authFailureId,
-            ...(profileId !== undefined && profileId.length <= 128 ? { profileId } : {}),
-          },
-        })
+        const entry: ThreadProviderAuthRequired = {
+          kind: 'provider-auth-required',
+          id: `v1:${event.seq}`,
+          provider,
+          authFailureId,
+          ...(profileId !== undefined && profileId.length <= 128 ? { profileId } : {}),
+        }
+        for (const earlier of authEntries) {
+          if (earlier.state === undefined && sameAccount(earlier, provider, entry.profileId)) earlier.state = 'older'
+        }
+        authEntries.push(entry)
+        currentTurn().entries.push({ origin: 'meta', entry })
+        break
+      }
+      case 'account-reconnected': {
+        // The run was resumed after its account signed in again: its cards become quiet lines.
+        const provider = providerId(event.provider)
+        if (provider === undefined) break
+        const profileId = str(event.profileId)
+        const at = stamp(event.ts)
+        for (const earlier of authEntries) {
+          if (earlier.state === 'reconnected' || !sameAccount(earlier, provider, profileId)) continue
+          earlier.state = 'reconnected'
+          if (at !== undefined) earlier.reconnectedAt = at
+        }
         break
       }
       case 'image': {
@@ -789,6 +847,29 @@ export function reduceThread(events: RunEvent[], options: ThreadReduceOptions = 
         }
         currentTurn().entries.push({ origin: 'meta', entry: ask })
         pendingAsk = ask
+        asksById.set(requestId, ask)
+        if (tracked !== undefined && !tracked.has(requestId) && !serverClosed.has(requestId)) legacyAsks.add(ask)
+        break
+      }
+      case 'ask.closed': {
+        // The server closed the card: answered (on the card or its linked copy), dismissed,
+        // replaced, withdrawn, expired or ended. The card redraws in its quiet closed state.
+        const requestId = str(event.requestId)
+        const reason = str(event.reason)
+        const ask = requestId === undefined ? undefined : asksById.get(requestId)
+        if (!ask || !isCloseReason(reason)) break
+        const answer = str(event.answer)
+        ask.resolved = true
+        ask.closed = {
+          reason,
+          ...(str(event.detail) !== undefined ? { detail: str(event.detail) } : {}),
+          ...(str(event.replacedBy) !== undefined ? { replacedBy: str(event.replacedBy) } : {}),
+          ...(answer !== undefined ? { answer } : {}),
+          ...(str(event.answeredIn) !== undefined ? { answeredIn: str(event.answeredIn) } : {}),
+          ...(stamp(event.ts) !== undefined ? { at: stamp(event.ts) } : {}),
+        }
+        if (reason === 'answered' && answer !== undefined && answer !== '') ask.answer = answer
+        if (pendingAsk === ask) pendingAsk = undefined
         break
       }
 
@@ -833,6 +914,12 @@ export function reduceThread(events: RunEvent[], options: ThreadReduceOptions = 
     draft.entries = draft.entries.filter(({ failure }) => !failure?.summary || !failures.some((source) =>
       source.message === failure.message && (failure.stepId === undefined || source.stepId === failure.stepId),
     ))
+    // Steps refused before any model turn say it once, not once per step (#2330 printed it 4×).
+    draft.entries = draft.entries.filter((entry, index, entries) => {
+      const previous = entries[index - 1]?.failure
+      return !entry.failure || entry.failure.summary || !PRE_TURN_REFUSAL.test(entry.failure.message)
+        || !previous || previous.summary || previous.message !== entry.failure.message
+    })
     if (!draft.v2Items) continue
     const v2Texts = new Set<string>()
     for (const { origin, entry } of draft.entries) {
@@ -872,6 +959,7 @@ export function reduceThread(events: RunEvent[], options: ThreadReduceOptions = 
     }),
     ...(sessionEnded !== undefined ? { sessionEnded } : {}),
     ...(lastEventAt !== undefined ? { lastEventAt } : {}),
+    ...(sessionModel !== undefined ? { sessionModel } : {}),
   }
 }
 

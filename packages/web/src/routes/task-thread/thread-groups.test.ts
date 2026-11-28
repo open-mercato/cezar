@@ -6,14 +6,13 @@ import type { ToolStatus, UiToolItem } from '@open-mercato/cezar-api-client'
 import subagentTask from '../../../../cezar/src/core/__fixtures__/claude/subagent-task.expected.json'
 import thinkingEditWriteTodo from '../../../../cezar/src/core/__fixtures__/claude/thinking-edit-write-todo.expected.json'
 import {
-  contextGroupLabel,
+  activitySummary,
   groupThreadItems,
+  noteGroupSummary,
   splitToolTitle,
-  streakLabel,
-  STREAK_TAIL,
   type ThreadBlock,
 } from './thread-groups'
-import { reduceThread, type ThreadEntry } from './thread-state'
+import { reduceThread, type ThreadEntry, type ThreadNote } from './thread-state'
 
 /** Golden fixtures are `UiEvent[]` — stamp the wire's seq/ts on them, as the store does. */
 const asRunEvents = (events: object[]): RunEvent[] =>
@@ -30,114 +29,163 @@ const tool = (id: string, toolKind: UiToolItem['toolKind'], status: ToolStatus, 
   ...extra,
 })
 
-const note = (id: string): ThreadEntry => ({ kind: 'note', id, text: `note ${id}`, tone: 'dim' })
+const note = (id: string): ThreadNote => ({ kind: 'note', id, text: `note ${id}`, tone: 'dim' })
+const msg = (id: string): ThreadEntry => ({ kind: 'message', id, role: 'assistant', text: `prose ${id}` })
 
 const shape = (blocks: ThreadBlock[]) => blocks.map((b) => b.kind)
 
-describe('groupThreadItems — context groups', () => {
-  it('collapses ≥2 consecutive completed read/search tools into one labeled group', () => {
+describe('groupThreadItems — activity groups', () => {
+  it('collapses ≥2 consecutive tool calls of any kind into one summarized row', () => {
     const blocks = groupThreadItems([
+      msg('m1'),
       tool('a', 'read', 'completed'),
       tool('b', 'read', 'completed'),
       tool('c', 'search', 'completed'),
+      tool('run', 'execute', 'completed', { output: 'ok' }),
+      tool('e', 'edit', 'completed'),
+      msg('m2'),
     ])
-    expect(shape(blocks)).toEqual(['context-group'])
-    const group = blocks[0]!
-    if (group.kind !== 'context-group') throw new Error('expected a context group')
-    expect(group.tools.map((t) => t.id)).toEqual(['a', 'b', 'c'])
-    expect(group.files).toBe(2)
-    expect(group.searches).toBe(1)
-    expect(group.label).toBe('Explored 2 files · 1 search')
+    expect(shape(blocks)).toEqual(['entry', 'activity', 'entry'])
+    const group = blocks[1]!
+    if (group.kind !== 'activity') throw new Error('expected an activity group')
+    expect(group.tools.map((t) => t.id)).toEqual(['a', 'b', 'c', 'run', 'e'])
+    expect(group.summary).toBe('Read 2 files, searched once, ran 1 command, edited 1 file')
+    expect(group.current).toBeUndefined()
+    expect(group.failed).toBe(0)
   })
 
-  it('a single read stays an individual card — grouping needs at least two', () => {
-    const blocks = groupThreadItems([tool('a', 'read', 'completed'), note('n1')])
+  it('a single tool call stays an individual card — grouping needs at least two', () => {
+    const blocks = groupThreadItems([tool('a', 'read', 'completed'), msg('m1')])
     expect(shape(blocks)).toEqual(['tool-card', 'entry'])
   })
 
-  it('only read/search kinds group; execute/edit stay visible as cards between groups', () => {
+  it('names the newest running call as the current one, and counts failures', () => {
     const blocks = groupThreadItems([
-      tool('a', 'read', 'completed'),
+      tool('a', 'execute', 'failed'),
       tool('b', 'read', 'completed'),
-      tool('run', 'execute', 'completed', { output: 'ok' }),
-      tool('c', 'search', 'completed'),
-      tool('d', 'search', 'completed'),
+      tool('c', 'execute', 'running'),
     ])
-    expect(shape(blocks)).toEqual(['context-group', 'tool-card', 'context-group'])
-  })
-
-  it('only COMPLETED tools group — a running read breaks the run and renders as its own card', () => {
-    const blocks = groupThreadItems([
-      tool('a', 'read', 'completed'),
-      tool('b', 'read', 'running'),
-      tool('c', 'read', 'completed'),
-    ])
-    expect(shape(blocks)).toEqual(['tool-card', 'tool-card', 'tool-card'])
+    expect(shape(blocks)).toEqual(['activity'])
+    const group = blocks[0]!
+    if (group.kind !== 'activity') throw new Error('expected an activity group')
+    expect(group.current?.id).toBe('c')
+    expect(group.failed).toBe(1)
+    expect(group.id).toBe('activity:a')
   })
 
   it('a non-tool entry breaks consecutiveness', () => {
     const blocks = groupThreadItems([
       tool('a', 'read', 'completed'),
-      note('n1'),
+      msg('m1'),
       tool('b', 'read', 'completed'),
     ])
     expect(shape(blocks)).toEqual(['tool-card', 'entry', 'tool-card'])
   })
-})
 
-describe('groupThreadItems — tool streaks (legacy fold, kept)', () => {
-  it(`folds completed tool cards beyond the last ${STREAK_TAIL} under a streak block`, () => {
+  it('reasoning BETWEEN tools folds into the group; a trailing thought stays on screen', () => {
     const blocks = groupThreadItems([
-      tool('r1', 'execute', 'completed', { output: '1' }),
-      tool('r2', 'execute', 'completed', { output: '2' }),
-      tool('r3', 'edit', 'completed'),
-      tool('r4', 'execute', 'completed', { output: '4' }),
-      tool('r5', 'execute', 'completed', { output: '5' }),
+      tool('a', 'read', 'completed'),
+      { kind: 'reasoning', id: 'r1', text: 'Now the store.' },
+      tool('b', 'read', 'completed'),
+      { kind: 'reasoning', id: 'r2', text: 'Done exploring.' },
     ])
-    expect(shape(blocks)).toEqual(['streak', 'tool-card', 'tool-card', 'tool-card'])
-    const streak = blocks[0]!
-    if (streak.kind !== 'streak') throw new Error('expected a streak')
-    expect(streak.count).toBe(2)
-    expect(streak.blocks.map((b) => b.id)).toEqual(['r1', 'r2'])
-    expect(blocks.slice(1).map((b) => b.id)).toEqual(['r3', 'r4', 'r5'])
+    expect(shape(blocks)).toEqual(['activity', 'entry'])
+    const group = blocks[0]!
+    if (group.kind !== 'activity') throw new Error('expected an activity group')
+    expect(group.blocks.map((b) => b.id)).toEqual(['a', 'r1', 'b'])
+    expect(blocks[1]!.id).toBe('r2')
   })
 
-  it('exactly the tail count of cards → no fold', () => {
-    const blocks = groupThreadItems([
-      tool('r1', 'execute', 'completed'),
-      tool('r2', 'execute', 'completed'),
-      tool('r3', 'execute', 'completed'),
-    ])
-    expect(shape(blocks)).toEqual(['tool-card', 'tool-card', 'tool-card'])
-  })
-
-  it('a running card is never folded away — it breaks the streak, like any non-tool entry', () => {
-    const blocks = groupThreadItems([
-      tool('r1', 'execute', 'completed'),
-      tool('r2', 'execute', 'completed'),
-      tool('now', 'execute', 'running'),
-      tool('r3', 'execute', 'completed'),
-      tool('r4', 'execute', 'completed'),
-    ])
-    // No run of >3 foldable blocks exists on either side of the running card.
-    expect(shape(blocks)).toEqual(['tool-card', 'tool-card', 'tool-card', 'tool-card', 'tool-card'])
-  })
-
-  it('context groups fold into streaks too, and count their member calls', () => {
+  it('a tool that adopted sub-agent children stays its own card and breaks the run', () => {
     const blocks = groupThreadItems([
       tool('a', 'read', 'completed'),
       tool('b', 'read', 'completed'),
-      tool('r1', 'execute', 'completed'),
-      tool('r2', 'execute', 'completed'),
-      tool('r3', 'execute', 'completed'),
-      tool('r4', 'execute', 'completed'),
+      tool('task', 'task', 'completed', { name: 'Task', title: 'Task: audit' }),
+      tool('kid', 'execute', 'completed', { parentItemId: 'task' }),
+      tool('c', 'read', 'completed'),
     ])
-    // group(a,b) + r1 fold; r2..r4 stay as the visible tail.
-    expect(shape(blocks)).toEqual(['streak', 'tool-card', 'tool-card', 'tool-card'])
-    const streak = blocks[0]!
-    if (streak.kind !== 'streak') throw new Error('expected a streak')
-    expect(streak.count).toBe(3) // 2 grouped reads + 1 command
-    expect(shape(streak.blocks)).toEqual(['context-group', 'tool-card'])
+    expect(shape(blocks)).toEqual(['activity', 'tool-card', 'tool-card'])
+    expect(blocks[1]).toMatchObject({ kind: 'tool-card', id: 'task', children: [expect.objectContaining({ id: 'kid' })] })
+  })
+})
+
+describe('activitySummary', () => {
+  it('counts distinct files, in the order the kinds first appear', () => {
+    expect(activitySummary([
+      tool('cmd', 'execute', 'completed'),
+      tool('x', 'read', 'completed'),
+      tool('x2', 'read', 'completed', { title: 'Read /repo/x.ts' }),
+      tool('s1', 'search', 'completed'),
+      tool('s2', 'search', 'completed'),
+      tool('s3', 'search', 'completed'),
+    ])).toBe('Ran 1 command, read 1 file, searched 3 times')
+  })
+
+  it.each([
+    [[tool('s', 'search', 'completed'), tool('t', 'search', 'completed')], 'Searched twice'],
+    [[tool('f', 'fetch', 'completed'), tool('g', 'fetch', 'completed')], 'Fetched 2 pages'],
+    [[tool('k', 'skill', 'completed', { title: 'Skill: docs' })], 'Used skill docs'],
+    [[tool('o', 'other', 'completed'), tool('p', 'other', 'completed')], 'Used 2 tools'],
+    [
+      [
+        tool('d', 'delete', 'completed', { title: 'Delete /a' }),
+        tool('e', 'edit', 'completed', { diffs: [{ path: '/b', oldText: null, newText: 'x' }] }),
+      ],
+      'Deleted 1 file, edited 1 file',
+    ],
+  ])('case %# → %s', (tools, summary) => {
+    expect(activitySummary(tools)).toBe(summary)
+  })
+})
+
+describe('groupThreadItems — note groups', () => {
+  const setup = [
+    'run started — workflow "implement-and-e2e" (runner: claude)',
+    'worktree on — using an isolated task worktree (default)',
+    'local "main" diverged from "origin/main" — forking from "origin/main"; local-only commits are not in this task',
+    'worktree ready — branch cez/571c15ae (base origin/main)',
+    '$ npm ci --prefer-offline --no-audit',
+    "skills installed in the task's workspace: docs",
+  ].map((text, index): ThreadNote => ({ kind: 'note', id: `n${index}`, text, tone: 'dim' }))
+
+  it('folds the setup notes into one summary row and keeps the warnings visible', () => {
+    const blocks = groupThreadItems([...setup, msg('m1')])
+    expect(shape(blocks)).toEqual(['note-group', 'entry'])
+    const group = blocks[0]!
+    if (group.kind !== 'note-group') throw new Error('expected a note group')
+    expect(group.summary).toBe('Set up: worktree cez/571c15ae from origin/main · installed deps · skills docs · runner Claude')
+    expect(group.notes).toHaveLength(6)
+    expect(group.warnings.map((n) => n.id)).toEqual(['n2'])
+  })
+
+  it('treats a model-naming fallback and an info note as warnings inside the group', () => {
+    const naming: ThreadNote = { kind: 'note', id: 'nm', text: 'model naming unavailable — codex: no login', tone: 'dim' }
+    const manager: ThreadNote = { kind: 'note', id: 'mg', text: 'Agent chosen by manager X: claude', tone: 'info' }
+    const blocks = groupThreadItems([manager, naming, setup[0]!])
+    const group = blocks[0]!
+    if (group.kind !== 'note-group') throw new Error('expected a note group')
+    expect(group.warnings.map((n) => n.id)).toEqual(['mg', 'nm'])
+    expect(group.summary).toBe('Set up: runner Claude')
+  })
+
+  it('a non-setup run of notes joins its texts', () => {
+    expect(noteGroupSummary([note('a'), note('b')])).toBe('note a · note b')
+  })
+
+  it('danger notes, failure summaries and action notes never fold', () => {
+    const blocks = groupThreadItems([
+      note('a'),
+      { kind: 'note', id: 'd', text: 'boom', tone: 'danger' },
+      note('b'),
+      { kind: 'note', id: 'f', text: 'run stopped — the session closed', tone: 'dim' },
+      note('c'),
+      { kind: 'note', id: 's', text: 'skills missing', tone: 'dim', action: 'install-skills' },
+    ])
+    expect(shape(blocks)).toEqual(['entry', 'entry', 'entry', 'entry', 'entry', 'entry'])
+  })
+
+  it('a single note stays a plain line', () => {
+    expect(shape(groupThreadItems([note('a'), msg('m')]))).toEqual(['entry', 'entry'])
   })
 })
 
@@ -166,15 +214,17 @@ describe('groupThreadItems — sub-agent nesting (golden subagent-task fixture)'
     expect(blocks[0]).toMatchObject({ kind: 'entry', id: 'm1' })
   })
 
-  it('the golden edit/write/todo turn: edit and write stay visible, the TodoWrite card does not', () => {
+  it('the golden edit/write/todo turn: edit and write fold into one activity row, the TodoWrite card is gone', () => {
     const { turns } = reduceThread(asRunEvents(thinkingEditWriteTodo))
     // The reducer still carries the plan tool item (5 entries) — grouping hides it (#382):
     // the plan dock is its surface, so the thread shows only the edit/write cards.
     expect(turns[0]!.items.filter((i) => i.kind === 'tool')).toHaveLength(3)
     const blocks = groupThreadItems(turns[0]!.items)
-    expect(shape(blocks)).toEqual(['entry', 'entry', 'tool-card', 'tool-card'])
-    const cards = blocks.filter((b) => b.kind === 'tool-card')
-    expect(cards.map((b) => (b.kind === 'tool-card' ? b.item.toolKind : ''))).toEqual(['edit', 'edit'])
+    expect(shape(blocks)).toEqual(['entry', 'entry', 'activity'])
+    const group = blocks[2]!
+    if (group.kind !== 'activity') throw new Error('expected an activity group')
+    expect(group.tools.map((item) => item.toolKind)).toEqual(['edit', 'edit'])
+    expect(group.summary).toBe('Edited 2 files')
   })
 
   it('plan-kind tools are dropped everywhere — top level and inside children lists', () => {
@@ -189,28 +239,6 @@ describe('groupThreadItems — sub-agent nesting (golden subagent-task fixture)'
     if (card.kind !== 'tool-card') throw new Error('expected a tool card')
     expect(card.item.id).toBe('parent')
     expect(card.children.map((child) => child.id)).toEqual(['nested-bash'])
-  })
-})
-
-describe('contextGroupLabel', () => {
-  it.each([
-    [2, 1, 'Explored 2 files · 1 search'],
-    [1, 0, 'Explored 1 file'],
-    [4, 0, 'Explored 4 files'],
-    [0, 2, 'Explored 2 searches'],
-    [0, 1, 'Explored 1 search'],
-    [1, 3, 'Explored 1 file · 3 searches'],
-  ])('(%i files, %i searches) → %s', (files, searches, label) => {
-    expect(contextGroupLabel(files, searches)).toBe(label)
-  })
-})
-
-describe('streakLabel', () => {
-  it.each([
-    [1, '1 earlier tool call'],
-    [4, '4 earlier tool calls'],
-  ])('%i → %s', (count, label) => {
-    expect(streakLabel(count)).toBe(label)
   })
 })
 

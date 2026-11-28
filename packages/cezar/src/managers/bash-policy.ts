@@ -7,6 +7,10 @@
 import { existsSync } from 'node:fs';
 import { dirname, extname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { tokenizePlainShell as tokenizeManagerBash } from '../core/plain-shell.ts';
+import type { BrokeredShellPlan } from '../core/agent-runner.ts';
+
+export { tokenizeManagerBash };
 
 export type BashVerdict = { ok: true } | { ok: false; reason: string };
 
@@ -59,62 +63,6 @@ const COUNT = /^\d{1,7}$/;
 const refuse = (reason: string): BashVerdict => ({ ok: false, reason });
 const OK: BashVerdict = { ok: true };
 
-/**
- * Words and `|` separators, or a reason. Only plain words, single quotes and double quotes without
- * expansion: every other shell metacharacter — `;`, `&`, `$`, backticks, redirects, subshells,
- * globs, unquoted newlines — refuses the whole command rather than being interpreted.
- */
-export function tokenizeManagerBash(command: string): string[][] | string {
-  const segments: string[][] = [[]];
-  let word: string | undefined;
-  const end = () => {
-    if (word !== undefined) segments[segments.length - 1]!.push(word);
-    word = undefined;
-  };
-  for (let i = 0; i < command.length; i++) {
-    const ch = command[i]!;
-    if (ch === ' ' || ch === '\t') {
-      end();
-    } else if (ch === "'") {
-      const close = command.indexOf("'", i + 1);
-      if (close < 0) return 'an unterminated quote';
-      // Quoted newlines are literal: a multi-line objective is one word.
-      word = (word ?? '') + command.slice(i + 1, close);
-      i = close;
-    } else if (ch === '"') {
-      let body = '';
-      let j = i + 1;
-      for (; j < command.length && command[j] !== '"'; j++) {
-        const c = command[j]!;
-        if (c === '$' || c === '`') return `\`${c}\` (expansion)`;
-        if (c === '\\') {
-          const next = command[j + 1];
-          if (next !== '"' && next !== '\\') return 'a backslash escape';
-          body += next;
-          j++;
-        } else {
-          body += c;
-        }
-      }
-      if (j >= command.length) return 'an unterminated quote';
-      word = (word ?? '') + body;
-      i = j;
-    } else if (ch === '|') {
-      if (command[i + 1] === '|') return '`||`';
-      end();
-      if (segments[segments.length - 1]!.length === 0) return 'an empty pipe stage';
-      segments.push([]);
-    } else if (/[A-Za-z0-9_.,:/=@%+\-]/.test(ch)) {
-      word = (word ?? '') + ch;
-    } else {
-      return ch === '\n' || ch === '\r' ? 'a newline' : `\`${ch}\``;
-    }
-  }
-  end();
-  if (segments[segments.length - 1]!.length === 0) return 'an empty pipe stage';
-  return segments;
-}
-
 /** Whether a manager may run this shell command, and why not. Pure: no shell, no I/O. `allowed`
  *  are the user's own read-only patterns (`managerBashPatternIssue` vets them). */
 export function isManagerBashAllowed(command: string, allowed: readonly string[] = []): BashVerdict {
@@ -140,7 +88,7 @@ export function isManagerBashAllowed(command: string, allowed: readonly string[]
 
 /** `<command> <<'EOF'` + literal body + `EOF`: a quoted delimiter expands nothing, so the body is
  *  data. Anything after the closing line would be a second command and refuses. */
-function splitHeredoc(command: string): { head: string } | string | undefined {
+function splitHeredoc(command: string): { head: string; body: string } | string | undefined {
   const match = /^([^\n]*?)[ \t]*<<[ \t]*(['"])([A-Za-z_]\w{0,31})\2[ \t]*\n([\s\S]*)$/.exec(command);
   if (!match) return undefined;
   const [, head, , delimiter, rest] = match;
@@ -148,7 +96,7 @@ function splitHeredoc(command: string): { head: string } | string | undefined {
   const close = lines.indexOf(delimiter!);
   if (close < 0) return 'an unterminated heredoc';
   if (lines.slice(close + 1).some((line) => line.trim() !== '')) return 'a command after a heredoc';
-  return { head: head! };
+  return { head: head!, body: lines.slice(0, close).map((line) => `${line}\n`).join('') };
 }
 
 const words = (argv: string[], count: number): string => argv.slice(0, count).join(' ');
@@ -381,6 +329,22 @@ export function managerBashPromptSection(allowed: readonly string[] = [], option
   never: ${MANAGER_BASH_DENIED.join(', ')}, gh api writes, --web, or any other program; a refused command is shown to the user
   ${options.textInFiles ? MANAGER_TEXT_IN_FILES : "long or multi-line text: put it in single quotes, or end the command with --stdin <<'EOF', the text, and EOF on its own line"}`;
 }
+
+/** The same policy as a plan Codex's broker runs (#2330): the argv pipeline it vetted and a heredoc
+ *  body as stdin. Nothing goes through a shell, so nothing is interpreted after this check. */
+export function managerShellPlan(command: string, allowed: readonly string[] = []): BrokeredShellPlan {
+  const verdict = isManagerBashAllowed(command, allowed);
+  if (!verdict.ok) return verdict;
+  const trimmed = command.trim();
+  const heredoc = splitHeredoc(trimmed);
+  if (typeof heredoc === 'string') return { ok: false, reason: `refused shell syntax: ${heredoc}` };
+  const pipeline = tokenizeManagerBash(heredoc?.head ?? trimmed);
+  if (typeof pipeline === 'string') return { ok: false, reason: `refused shell syntax: ${pipeline}` };
+  return { ok: true, pipeline, ...(heredoc ? { stdin: heredoc.body } : {}) };
+}
+
+/** What a Codex manager's Bash tool is for, in its tool description. */
+export const MANAGER_SHELL_DESCRIPTION = 'a `cez-manager` command, or a read-only `gh` command (pr/issue/run/release view|list, pr diff|checks|status, repo view, search, `gh api` GET) optionally piped into jq, grep, head, tail, wc, sort, uniq or cut. A `cez-manager` command may take a quoted heredoc (<<\'EOF\') for long text.';
 
 /** Claude Code's Bash sandbox lets `cez-manager` out only for a plain command (#2258): a heredoc,
  *  `?`, `*`, `[`, `~` or a newline keeps it sandboxed, and the call fails. */

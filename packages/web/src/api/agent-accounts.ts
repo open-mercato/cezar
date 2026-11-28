@@ -27,7 +27,8 @@ export interface AgentAccountChoices {
 export function useAgentAccounts(): AgentAccountChoices {
   const profiles = useAgentProfiles()
   const repo = useRepo()
-  const accounts = (profiles.data?.profiles ?? []).map((profile) => ({
+  // A pending account (added from the cockpit, never signed in) is not offered yet.
+  const accounts = (profiles.data?.profiles ?? []).filter((profile) => !profile.pending).map((profile) => ({
     provider: profile.provider as Runner,
     id: profile.id,
     label: profile.label,

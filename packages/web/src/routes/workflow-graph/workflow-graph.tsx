@@ -47,6 +47,7 @@ import {
 } from '@/api/client'
 import { queryKeys, useSkills, useWorkflowNodes, useWorkflows } from '@/api/queries'
 import { RUNNER_IDS, type WorkflowGraph, type WorkflowGraphNode } from '@open-mercato/cezar-api-client'
+import { resolveNodeId } from './node-id'
 import { CenteredState } from '@/components/centered-state'
 import {
   AlertDialog,
@@ -75,6 +76,7 @@ import { Textarea } from '@/components/ui/textarea'
 import { toast } from '@/components/ui/toaster'
 import { useNavigate } from '@/lib/project-router'
 import { cn } from '@/lib/utils'
+import { NODE_OUTPUTS } from '@/lib/workflow-node-outputs'
 import {
   advance,
   autoLayout,
@@ -1391,34 +1393,11 @@ function MinutesField({
   )
 }
 
-const OUTPUTS: Record<GraphNodeType, string[]> = {
-  start: [],
-  end: [],
-  loop: ['iteration', 'max'],
-  agent: ['summary', 'verdict', 'costUsd'],
-  check: ['exitCode', 'output'],
-  'gate.human': ['comment'],
-  'ask-user': ['answer'],
-  dispatch: ['runId', 'status', 'summary'],
-  'git.commit': ['sha'],
-  'github.draft-pr': ['url', 'number'],
-  'github.wait-ci': ['status'],
-  'github.pr-comment': [],
-  fork: ['runIds'],
-  join: ['succeeded', 'failed'],
-  workflow: ['runId', 'status', 'summary'],
-  if: ['result', 'value'],
-  'git.push': [],
-  'git.sync-base': ['conflicts'],
-  'github.pr-update': [],
-  'github.issue-comment': ['issue'],
-  'notify.webhook': ['status'],
-}
 
 /** A node's template outputs — a fork's agent reports as a subtask (`runId`, `status`, `summary`). */
 function outputsOf(node: WorkflowGraphNode, branches?: ReadonlySet<string>): string[] {
   if (node.type === 'agent' && branches?.has(node.id)) return ['runId', 'status', 'summary']
-  return OUTPUTS[node.type]
+  return NODE_OUTPUTS[node.type]
 }
 
 function Inspector({
@@ -1458,13 +1437,20 @@ function Inspector({
           value={draftId}
           onChange={(e) => setDraftId(e.target.value)}
           onBlur={() => {
-            const id = draftId.trim()
-            if (!id || id === node.id) return setDraftId(node.id)
-            if (!/^[A-Za-z0-9][A-Za-z0-9_-]*$/.test(id) || graph.nodes.some((n) => n.id === id)) {
-              toast(`“${id}” is taken or not a valid id (letters, digits, - and _).`, { tone: 'danger' })
+            const r = resolveNodeId(draftId, node.id, graph.nodes.map((n) => n.id))
+            if (!r.ok) {
+              if (r.reason !== 'empty') {
+                toast(
+                  r.reason === 'taken'
+                    ? `Another node already uses the id “${r.id}”.`
+                    : `“${draftId.trim()}” has no usable characters — ids use letters, digits, - and _.`,
+                  { tone: 'danger' },
+                )
+              }
               return setDraftId(node.id)
             }
-            onChange({ ...node, id })
+            if (r.id === node.id) return setDraftId(node.id)
+            onChange({ ...node, id: r.id })
           }}
           className="h-8"
         />

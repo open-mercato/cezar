@@ -41,7 +41,7 @@ import {
   settingsSectionPath,
 } from './routes/settings/settings-shell'
 import { TasksOverviewRoute } from './routes/tasks-overview'
-import { NowRoute } from './routes/now/now'
+import { NowRoute, nowScopeFromState } from './routes/now/now'
 import { GlobalTasksRoute } from './routes/global-tasks'
 
 // Dashboard charts, drag controls and exports are paid for only on this route.
@@ -125,8 +125,16 @@ const managerNew = preloadableRoute('manager', () =>
 const managerChat = preloadableRoute('manager', () =>
   import('./routes/manager/manager-chat').then((m) => m.ManagerChatRoute),
 )
+/** Now in Manager mode: every manager's items, a filter for one (spec 2026-11-23-needs-you-triage). */
+const ManagerNowRoute = lazyRoute('manager', () =>
+  import('./routes/manager/manager-now').then((m) => ({ default: m.ManagerNowRoute })),
+)
 const ManagerApprovalsRoute = lazyRoute('manager', () =>
   import('./routes/manager/manager-approvals').then((m) => ({ default: m.ManagerApprovalsRoute })),
+)
+/** Workspace-level, with or without managers (spec 2026-11-17-questions-inbox). */
+const QuestionsRoute = lazyRoute('questions', () =>
+  import('./routes/questions/questions-route').then((m) => ({ default: m.QuestionsRoute })),
 )
 const ManagerIndexRoute = managerIndex.Route
 const ManagerNewRoute = managerNew.Route
@@ -308,12 +316,11 @@ function LegacyPathRedirect() {
     // its project is still worth waiting for.
     if (projects.data === undefined && !projects.isError) return <ScopeResolving />
 
-    const restored = locationToRestore(
-      readStoredLastLocation(),
-      projects.data,
-      resolvedBoot,
-    )
-    if (restored !== null) return <Navigate to={restored} replace />
+    // A Now scope handoff (the bottom bar) asks for Now itself, not the last page this browser was on.
+    const restored = nowScopeFromState(location.state) === undefined
+      ? locationToRestore(readStoredLastLocation(), projects.data, resolvedBoot)
+      : null
+    if (restored !== null) return <Navigate to={restored} replace state={location.state} />
 
     // Nothing remembered. The boot folder is the landing project only while the registry lists
     // it: since `/api/v1/projects` stopped listing an unregistered boot folder once the user has
@@ -322,7 +329,7 @@ function LegacyPathRedirect() {
     // The most recently opened registered project is what the sidebar leads with, so it is what
     // a bare launch opens. `/p/<bootProject>/` and every legacy deep link below still resolve.
     const landing = bareRootLanding(projects.data, boot)
-    if (landing !== boot) return <Navigate to={`/p/${encodeURIComponent(landing)}/`} replace />
+    if (landing !== boot) return <Navigate to={`/p/${encodeURIComponent(landing)}/`} replace state={location.state} />
   }
 
   // A bare `/p` (or `/p/`) names no project — send it to the boot project's home rather than
@@ -332,6 +339,8 @@ function LegacyPathRedirect() {
     <Navigate
       to={`/p/${encodeURIComponent(boot)}${path}${location.search}${location.hash}`}
       replace
+      // A handoff in state (the bottom bar's Now scope) survives the hop into the project.
+      state={location.state}
     />
   )
 }
@@ -396,7 +405,10 @@ const PAGE_TITLE_ROUTES = [
   { pattern: '/tasks', pageLabel: 'Tasks' },
   { pattern: '/dashboard', pageLabel: 'Dashboard' },
   { pattern: '/manager/new', pageLabel: 'New manager' },
+  { pattern: '/manager/now', pageLabel: 'Now' },
   { pattern: '/manager/approvals', pageLabel: 'Approvals' },
+  { pattern: '/manager/questions', pageLabel: 'Questions' },
+  { pattern: '/questions', pageLabel: 'Questions' },
   { pattern: '/manager/*', pageLabel: 'Manager' },
   { pattern: '/new', pageLabel: 'New task' },
   { pattern: '/compare/:groupId', pageLabel: 'Compare' },
@@ -425,6 +437,16 @@ export function pageTitleContext(pathname: string): PageTitleContext {
     matchPath({ path: pattern, end: true }, projectPath),
   )
   return { pageLabel: route?.pageLabel ?? null, taskId: null }
+}
+
+/** One Questions page, two URLs: `/manager/questions` with managers on, `/questions` without (§ F). */
+function QuestionsGate({ managersRoute }: { managersRoute: boolean }) {
+  const health = useHealth()
+  if (health.data) {
+    const managers = health.data.capabilities.managers === true
+    if (managers !== managersRoute) return <Navigate to={managers ? '/manager/questions' : '/questions'} replace />
+  }
+  return <Suspense fallback={<ScreenLoading label="Loading questions…" />}><QuestionsRoute /></Suspense>
 }
 
 /** `CEZ_MANAGERS=0`: a pasted `/manager` link lands on the cockpit instead of a page of 409s. The
@@ -799,7 +821,10 @@ export const AppRoutes = memo(function AppRoutes() {
       {/* Managers are global (spec 2026-10-31-managers): no project owns one. */}
       <Route path="/manager" element={<ManagersGate fallback={<ManagerIndexLoading />}><MobileManagerEntry /></ManagersGate>} />
       <Route path="/manager/new" element={<ManagersGate fallback={<ScreenLoading label="Loading setup…" />}><ManagerNewRoute /></ManagersGate>} />
+      <Route path="/manager/now" element={<ManagersGate fallback={<ScreenLoading label="Loading Now…" />}><ManagerNowRoute /></ManagersGate>} />
       <Route path="/manager/approvals" element={<ManagersGate fallback={<ScreenLoading label="Loading approvals…" />}><ManagerApprovalsRoute /></ManagersGate>} />
+      <Route path="/manager/questions" element={<QuestionsGate managersRoute />} />
+      <Route path="/questions" element={<QuestionsGate managersRoute={false} />} />
       <Route path="/manager/:id" element={<ManagersGate fallback={<ManagerChatLoading />}><ManagerChatRoute /></ManagersGate>} />
 
       {/* Global settings (multi-project spec, step 3.5) — the one cockpit area that is NOT

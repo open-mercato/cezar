@@ -1,19 +1,25 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { ArchiveIcon, ArrowRightIcon, ListChecksIcon, PlusIcon, SearchIcon } from 'lucide-react'
 import * as React from 'react'
+import { useLocation, useNavigate as useRouterNavigate } from 'react-router'
 
 import { archiveFinished, continueRun } from '@/api/client'
 import { queryKeys, useHealth, useReferenceProjectId, useRepo, useRuns } from '@/api/queries'
-import type { RunRecord } from '@open-mercato/cezar-api-client'
+import type { AttentionItem, AttentionOverride, AttentionSettled, RunRecord } from '@open-mercato/cezar-api-client'
+import { useAttention } from '@/api/attention'
+import { useManagers } from '@/api/managers'
+import { Segmented } from '@/components/segmented'
 import { CenteredState } from '@/components/centered-state'
 import { DiffStatLabel } from '@/components/diff-stat'
 import { FirstRun, SetupPill, WelcomeBack } from '@/components/first-run'
 import { TaskReferenceChip } from '@/components/reference-conflict-action'
 import { ReferenceStatusProvider } from '@/components/reference-status'
+import { SignInRow } from '@/components/reconnect/reconnect-row'
 import { ScheduledTasks } from '@/components/scheduled-tasks'
 import { StatusDot } from '@/components/status-dot'
 import { StatusDescription, StatusMark } from '@/components/status-mark'
 import { Button } from '@/components/ui/button'
+import { IconTooltip } from '@/components/ui/icon-tooltip'
 import { toast } from '@/components/ui/toaster'
 import { UnreadMarker } from '@/components/unread-marker'
 import { deriveAttention } from '@/lib/attention'
@@ -29,19 +35,54 @@ import { useAutomationsGate, useAutomationsQuery } from '@/routes/automations/us
 import { useExistingProviderAvailability } from '@/routes/task-thread/active-provider'
 import { resumeAfterIdleTeardown } from '@/routes/task-thread/ask-answer'
 import { runActionFlags } from '@/routes/task-thread/run-actions'
+import { ManagerProjectsContext } from '@/routes/manager/manager-reference'
+import { taskPath } from '@/routes/manager/manager-session-card'
+import type { ManagerReferenceProject } from '@/lib/managers'
 
 import {
   FINISHED_TODAY_CAP,
   NEEDS_YOU_ACTION_LABEL,
   finishedTodayRows,
   needsYouRows,
+  signInGroups,
   runningRows,
   todayLabel,
   type NeedsYouRow,
   type RunningRow,
 } from './now-model'
+import { AttentionRow, type AttentionActions } from './now-attention'
+import { useNeedsYouActions } from './use-needs-you-actions'
+import { DismissButton, ProbablyDoneGroup, SettledReason, SwipeRow, TriageMenu, useRowMenu, type TriageActions } from './now-triage'
+import {
+  SNOOZE_LABEL,
+  KIND_RANK,
+  KIND_TIER,
+  REASON_RANK,
+  REASON_TIER,
+  isHidden,
+  isRunHidden,
+  orderNeedsYou,
+  itemForRun,
+  itemTarget,
+  shortLabel,
+  snoozeUntil,
+  taskRowTarget,
+  type SnoozeChoice,
+  type TriageTarget,
+} from './now-triage-model'
+import {
+  READABLE,
+  attentionGroups,
+  projectManagerItems,
+  readNowScope,
+  saveNowScope,
+  type NowScope,
+} from './now-attention-model'
 
 const NO_RUNS: RunRecord[] = []
+const NO_KEYS: ReadonlySet<string> = new Set()
+const NO_PROJECTS: readonly ManagerReferenceProject[] = []
+const NO_MANAGERS: readonly { id: string; notify?: boolean | undefined }[] = []
 const AGE_TICK_MS = 30_000
 
 /**
@@ -64,7 +105,36 @@ export function NowView({
   setupPill,
   welcomeBack,
   managersAvailable = false,
+  attention,
+  scope = 'project',
+  onScope,
+  managerConnected,
+  projectLabel,
+  attentionActions,
+  onMarkAllRead,
+  triage,
+  projectId,
+  pendingQuestions = NO_KEYS,
+  referenceProjects = NO_PROJECTS,
 }: {
+  /** The projects on this computer: a card's `[[pr:<project>/N]]` paints as a chip only for one of them. */
+  referenceProjects?: readonly ManagerReferenceProject[]
+  /** The attention list (spec 2026-11-20-phone-notifications-inbox); absent keeps Now's own rows only. */
+  attention?: { items: AttentionItem[]; total: number; overrides?: AttentionOverride[]; olderAfterDays?: number } | undefined
+  /** Dismiss, snooze and the ⋯ menu (spec 2026-11-23-needs-you-triage). */
+  triage?: TriageActions
+  /** This project, for matching its runs to their attention items. */
+  projectId?: string | undefined
+  /** Questions waiting out their undo window before their card closes. */
+  pendingQuestions?: ReadonlySet<string>
+  scope?: NowScope
+  onScope?: (scope: NowScope) => void
+  /** This project's view takes the items of the managers connected to it. */
+  managerConnected?: (managerId: string) => boolean
+  projectLabel?: (projectId: string) => string
+  attentionActions?: AttentionActions
+  /** Marks every message, review and failure shown read; decisions stay. */
+  onMarkAllRead?: (items: AttentionItem[]) => void
   /** Manager owns task creation on mobile when available, as on the Tasks page (#2272). */
   managersAvailable?: boolean
   /** Undefined while `/api/runs` has not answered: the header renders, the body waits. */
@@ -91,12 +161,48 @@ export function NowView({
   const at = now ?? clock
   const all = runs ?? NO_RUNS
   const needsYou = React.useMemo(() => needsYouRows(all), [all])
+  const signIn = React.useMemo(() => signInGroups(all), [all])
   const running = React.useMemo(() => runningRows(all), [all])
   const finished = React.useMemo(() => finishedTodayRows(all, at), [all, at])
   const positions = React.useMemo(() => queuePositions(all), [all])
   const hasTasks = React.useMemo(() => all.some((run) => !run.archived), [all])
   const navigate = useNavigate()
   const [query, setQuery] = React.useState('')
+  // Dismissed items are already out of the server's list; a question in its undo window is not yet.
+  const visibleItems = React.useMemo(
+    () => attention?.items.filter((item) => !isHidden(itemTarget(item), attention.overrides, pendingQuestions)),
+    [attention, pendingQuestions],
+  )
+  const managerRows = React.useMemo(
+    () => (visibleItems ? projectManagerItems(visibleItems, managerConnected ?? (() => false)) : []),
+    [visibleItems, managerConnected],
+  )
+  // Now's own task rows borrow the server's verdict, key and question by run.
+  const taskRows = React.useMemo(() => needsYou.flatMap((row) => {
+    const item = itemForRun(attention?.items, projectId, row.run.id)
+    const target = taskRowTarget(item, projectId, row.run, row.since, shortLabel(runTitle(row.run)))
+    if (isHidden(target, attention?.overrides, pendingQuestions) || isRunHidden(projectId, row.run.id, row.since, attention?.overrides)) return []
+    return [{ row, target, settled: item?.settled }]
+  }), [needsYou, attention, projectId, pendingQuestions])
+  const groups = React.useMemo(
+    () => (visibleItems && scope === 'all' ? attentionGroups(visibleItems.filter((item) => !item.settled), projectLabel ?? ((id) => id)) : []),
+    [visibleItems, scope, projectLabel],
+  )
+  const showAll = attention !== undefined && scope === 'all'
+  const liveManagerRows = managerRows.filter((item) => !item.settled)
+  const liveTaskRows = taskRows.filter((entry) => !entry.settled)
+  const doneItems = showAll ? (visibleItems ?? []).filter((item) => item.settled) : managerRows.filter((item) => item.settled)
+  const doneTaskRows = showAll ? [] : taskRows.filter((entry) => entry.settled)
+  const doneCount = doneItems.length + doneTaskRows.length
+  const runsById = React.useMemo(() => new Map(all.map((run) => [run.id, run])), [all])
+  const runOf = (item: AttentionItem) => (item.projectId !== undefined && item.projectId === projectId && item.runId ? runsById.get(item.runId) : undefined)
+  // All counts what the Now badge and the phone's icon count: a failed task shows, uncounted.
+  const needsCount = showAll ? attention.total : liveTaskRows.length + liveManagerRows.length
+  const shownCount = showAll ? groups.reduce((sum, group) => sum + group.items.length, 0) : needsCount
+  const readable = showAll ? (visibleItems ?? []).filter((item) => READABLE.has(item.kind) && !item.settled) : []
+  let hinted = false
+  // The phone's swipe peek plays on the first row only.
+  const hintOnce = () => (hinted ? false : (hinted = true))
 
   return (
     <LiveNowProvider intervalMs={AGE_TICK_MS} now={now}>
@@ -158,10 +264,92 @@ export function NowView({
                   {setupPill}
                 </div>
               ) : null}
-              <Section slot="needs-you" title="Needs you" count={needsYou.length} empty="Nothing needs you right now.">
-                {needsYou.map((row) => (
-                  <NeedsYouRowView key={row.run.id} row={row} onRetry={onRetry} />
-                ))}
+              {signIn.length > 0 ? (
+                <Section slot="sign-in" title="Sign-in needed" count={signIn.length} empty="">
+                  <ul data-slot="sign-in-list" className="overflow-hidden rounded-xl border border-border bg-card">
+                    {signIn.map((group, index) => (
+                      <SignInRow
+                        key={`${group.provider}:${group.profileId}`}
+                        provider={group.provider}
+                        profileId={group.profileId}
+                        first={index === 0}
+                        blocks={group.runs.map((run) => `“${runTitle(run)}”`)}
+                      />
+                    ))}
+                  </ul>
+                </Section>
+              ) : null}
+              <Section
+                slot="needs-you"
+                title="Needs you"
+                count={needsCount}
+                shown={shownCount + doneCount}
+                empty={showAll ? 'Nothing needs you on this computer.' : 'Nothing needs you right now.'}
+                actions={attention && onScope ? (
+                  <div className="flex items-center gap-2">
+                    {readable.length > 0 && onMarkAllRead ? (
+                      <Button type="button" variant="ghost" size="sm" data-slot="now-mark-all-read" onClick={() => onMarkAllRead(readable)}>
+                        Mark all read
+                      </Button>
+                    ) : null}
+                    <Segmented
+                      slot="now-scope"
+                      label="Show what needs you in"
+                      value={scope}
+                      onChange={onScope}
+                      options={[
+                        { value: 'project', label: 'This project' },
+                        { value: 'all', label: `All ${attention.total}` },
+                      ]}
+                    />
+                  </div>
+                ) : undefined}
+              >
+                <ManagerProjectsContext.Provider value={referenceProjects}>
+                {showAll && attentionActions ? (
+                  groups.map((group) => (
+                    <div key={group.key} data-slot="now-attention-group" className="flex flex-col gap-1.5">
+                      <h3 className="px-1 pt-1 text-label font-medium text-muted-foreground">{group.label}</h3>
+                      {group.items.map((item) => <AttentionRow key={item.key} item={item} actions={attentionActions} triage={triage} run={runOf(item)} hint={hintOnce()} />)}
+                    </div>
+                  ))
+                ) : (
+                  <>
+                    {orderNeedsYou(
+                      [
+                        ...(attentionActions ? liveManagerRows.map((item) => ({ tier: KIND_TIER[item.kind], rank: KIND_RANK[item.kind], since: item.since, item })) : []),
+                        ...liveTaskRows.map((entry) => ({ tier: REASON_TIER[entry.row.reason], rank: REASON_RANK[entry.row.reason], since: entry.row.since, entry })),
+                      ],
+                      attention?.olderAfterDays ?? 0,
+                      at,
+                    ).map((slot) => 'item' in slot ? (
+                      <AttentionRow key={slot.item.key} item={slot.item} actions={attentionActions!} triage={triage} hint={hintOnce()} />
+                    ) : (
+                      <NeedsYouRowView key={slot.entry.row.run.id} row={slot.entry.row} onRetry={onRetry} projectId={projectId} target={slot.entry.target} triage={triage} hint={hintOnce()} />
+                    ))}
+                  </>
+                )}
+                {triage ? (
+                  <ProbablyDoneGroup
+                    count={doneCount}
+                    onDismissAll={() => triage.dismissAll([...doneItems.map((item) => itemTarget(item, shortLabel(item.title))), ...doneTaskRows.map((entry) => entry.target)])}
+                  >
+                    {attentionActions ? doneItems.map((item) => (
+                      <AttentionRow
+                        key={item.key}
+                        item={item}
+                        actions={attentionActions}
+                        triage={triage}
+                        run={runOf(item)}
+                        {...(showAll && item.projectId ? { source: projectLabel?.(item.projectId) ?? item.projectId } : {})}
+                      />
+                    )) : null}
+                    {doneTaskRows.map(({ row, target, settled }) => (
+                      <NeedsYouRowView key={row.run.id} row={row} onRetry={onRetry} projectId={projectId} target={target} triage={triage} settled={settled} />
+                    ))}
+                  </ProbablyDoneGroup>
+                ) : null}
+                </ManagerProjectsContext.Provider>
               </Section>
               <Section slot="running" title="Running" count={running.length} empty="Nothing is running.">
                 {running.map((row) => (
@@ -175,10 +363,12 @@ export function NowView({
                 empty="Nothing finished today."
                 actions={
                   finished.length > 0 ? (
-                    <Button type="button" variant="ghost" size="sm" data-slot="archive-finished" onClick={onArchiveFinished}>
-                      <ArchiveIcon className="size-3.5" aria-hidden="true" />
-                      Archive all finished
-                    </Button>
+                    <IconTooltip label="Archive every finished task and free its worktree (branches kept; Continue restores one)">
+                      <Button type="button" variant="ghost" size="sm" data-slot="archive-finished" onClick={onArchiveFinished}>
+                        <ArchiveIcon className="size-3.5" aria-hidden="true" />
+                        Archive all finished
+                      </Button>
+                    </IconTooltip>
                   ) : null
                 }
               >
@@ -217,6 +407,7 @@ function Section({
   slot,
   title,
   count,
+  shown = count,
   empty,
   actions,
   children,
@@ -224,14 +415,16 @@ function Section({
   slot: string
   title: string
   count: number
+  /** Rows on screen, when the count leaves some out (an uncounted failed task). */
+  shown?: number
   empty: string
   actions?: React.ReactNode
   children: React.ReactNode
 }) {
   return (
     <section data-slot={`now-${slot}`} data-count={count} aria-labelledby={`now-${slot}-heading`} className="flex flex-col">
-      <div className="mb-2 flex items-center gap-2">
-        <h2 id={`now-${slot}-heading`} className="eyebrow flex items-center gap-2 text-soft-foreground">
+      <div className="mb-2 flex flex-wrap items-center gap-2">
+        <h2 id={`now-${slot}-heading`} className="eyebrow flex items-center gap-2 whitespace-nowrap text-soft-foreground">
           {title}
           <span className="rounded-full bg-muted px-1.5 font-mono text-micro font-medium tracking-normal text-foreground tabular-nums normal-case">
             {count}
@@ -240,7 +433,7 @@ function Section({
         <div className="flex-1" />
         {actions}
       </div>
-      {count === 0 ? (
+      {shown === 0 ? (
         <p data-slot="now-empty" className="px-1 py-2 text-label text-soft-foreground">
           {empty}
         </p>
@@ -278,24 +471,51 @@ function NoTasks() {
 const ROW_CLASS =
   'grid grid-cols-[10px_minmax(0,1fr)] items-start gap-x-3 gap-y-1 rounded-[10px] border border-border bg-card px-3.5 py-3 md:grid-cols-[16px_minmax(0,1fr)_auto_auto] md:items-center md:gap-x-3.5'
 
-function NeedsYouRowView({ row, onRetry }: { row: NeedsYouRow; onRetry: (run: RunRecord) => Promise<unknown> }) {
+function NeedsYouRowView({
+  row,
+  onRetry,
+  projectId,
+  target,
+  triage,
+  settled,
+  hint = false,
+}: {
+  row: NeedsYouRow
+  onRetry: (run: RunRecord) => Promise<unknown>
+  /** This project, for the row's shareable link. */
+  projectId?: string | undefined
+  target?: TriageTarget
+  triage?: TriageActions | undefined
+  /** In Probably done: why. */
+  settled?: AttentionSettled | undefined
+  hint?: boolean
+}) {
   const { run } = row
   const reference = taskReference(run)
   const cost = formatCost(run.costUsd)
   const to = `/tasks/${run.id}`
-  return (
+  const menu = useRowMenu()
+  const triaged = triage && target ? { triage, target } : undefined
+  const article = (
     <article
       data-slot="now-row"
       data-run-id={run.id}
       data-reason={row.reason}
-      className={cn(ROW_CLASS, row.reason === 'failed' ? 'border-danger/45' : 'border-info/50')}
+      data-settled={settled ? settled.why : undefined}
+      onContextMenu={triaged ? menu.onContextMenu : undefined}
+      className={cn(
+        ROW_CLASS,
+        'group/row',
+        settled ? 'border-border bg-card/60' : row.reason === 'failed' ? 'border-danger/45' : 'border-info/50',
+      )}
     >
-      <StatusDot tone={row.tone} pulse={row.pulse} className="mt-1.5 md:mt-0" aria-label={row.label} />
+      <StatusDot tone={settled ? 'neutral' : row.tone} pulse={settled ? false : row.pulse} className="mt-1.5 md:mt-0" aria-label={row.label} />
       <div className="min-w-0">
-        <Link to={to} className="block truncate text-ui font-medium text-foreground">
+        <Link to={to} className={cn('block truncate text-ui font-medium', settled ? 'text-muted-foreground' : 'text-foreground')}>
           {runTitle(run)}
         </Link>
         <div data-slot="now-why" className="mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-label text-muted-foreground">
+          {settled ? <SettledReason settled={settled} /> : null}
           <span>
             {row.label} · <RelativeAge at={row.since} />
           </span>
@@ -314,11 +534,33 @@ function NeedsYouRowView({ row, onRetry }: { row: NeedsYouRow; onRetry: (run: Ru
       >
         {cost || '—'}
       </span>
-      <div className="col-start-2 flex md:col-start-auto">
-        <RowAction row={row} onRetry={onRetry} />
+      <div className="col-start-2 flex items-center gap-1 md:col-start-auto">
+        {settled && triaged ? (
+          <Button type="button" size="sm" variant="ghost" data-slot="now-keep" onClick={() => triaged.triage.keep(triaged.target)}>
+            Still needs me
+          </Button>
+        ) : (
+          <RowAction row={row} onRetry={onRetry} />
+        )}
+        {triaged ? (
+          <>
+            <DismissButton target={triaged.target} actions={triaged.triage} />
+            <TriageMenu
+              target={triaged.target}
+              actions={triaged.triage}
+              href={row.action === 'answer' ? `/tasks/${run.id}#ask` : to}
+              {...(projectId ? { copyHref: taskPath(projectId, run.id) } : {})}
+              run={run}
+              settled={settled}
+              open={menu.open}
+              onOpenChange={menu.setOpen}
+            />
+          </>
+        ) : null}
       </div>
     </article>
   )
+  return triaged ? <SwipeRow target={triaged.target} actions={triaged.triage} hint={hint}>{article}</SwipeRow> : article
 }
 
 /** The ONE action per reason — a link where the resolution is a screen, a button where it is a call. */
@@ -467,6 +709,12 @@ function FinishedRowView({ run }: { run: RunRecord }) {
   )
 }
 
+/** `{ nowScope }` in a navigation's state, from the bottom bar's quick actions. */
+export function nowScopeFromState(state: unknown): NowScope | undefined {
+  const value = (state as { nowScope?: unknown } | null)?.nowScope
+  return value === 'all' || value === 'project' ? value : undefined
+}
+
 /**
  * Now wired to live data: `useRuns()` (kept fresh by the global SSE stream — no polling of its
  * own), the project's name from the registry, the archive-finished mutation the table uses, and
@@ -487,7 +735,7 @@ export function NowRoute() {
   }, [activeProjectId, health.data])
   const queryClient = useQueryClient()
   const invalidate = () => queryClient.invalidateQueries({ queryKey: queryKeys.runs.all })
-  const archive = useMutation({ mutationFn: archiveFinished, onSuccess: invalidate })
+  const archive = useMutation({ mutationFn: () => archiveFinished(), onSuccess: invalidate })
   // An empty Continue is the footer's one-click retry; the idle-teardown retry window is the
   // ask card's (ask-answer.ts) — a stale row can hit `run is still active` a beat too early.
   const retry = useMutation({
@@ -514,9 +762,54 @@ export function NowRoute() {
           ),
     [runs.data, projectId],
   )
+  // Variant D (spec 2026-11-20-phone-notifications-inbox): Needs you reads the attention list.
+  const attention = useAttention()
+  const managersOn = health.data?.capabilities?.managers === true
+  const managers = useManagers(managersOn)
+  const [scope, setScope] = React.useState<NowScope>(readNowScope)
+  // The bottom bar's "Needs you — all projects" quick action hands the scope over in history state,
+  // once: it is cleared from the entry so Back or a reload keeps the user's later choice.
+  const location = useLocation()
+  // The router's own navigate: `location.pathname` is already project-prefixed.
+  const navigate = useRouterNavigate()
+  const askedScope = nowScopeFromState(location.state)
+  React.useEffect(() => {
+    if (askedScope === undefined) return
+    setScope(askedScope)
+    saveNowScope(askedScope)
+    const rest: Record<string, unknown> = { ...(location.state as Record<string, unknown>) }
+    delete rest.nowScope
+    void navigate({ pathname: location.pathname, search: location.search, hash: location.hash }, { replace: true, state: Object.keys(rest).length > 0 ? rest : null })
+  }, [askedScope, location, navigate])
+  const here = activeProjectId ?? health.data?.bootProject
+  const managerConnected = React.useCallback(
+    (managerId: string) => here !== undefined && (managers.data?.managers.find((manager) => manager.id === managerId)?.connectedProjectIds.includes(here) ?? false),
+    [managers.data, here],
+  )
+  const projectLabel = React.useCallback(
+    (id: string) => health.data?.projects?.find((project) => project.id === id)?.name ?? id,
+    [health.data],
+  )
+  const { attentionActions, triage, pendingQuestions, referenceProjects, stopDialog } = useNeedsYouActions()
+  const onMarkAllRead = React.useCallback((items: AttentionItem[]) => {
+    void Promise.allSettled(items.map((item) => attentionActions.markRead(item))).then((results) => {
+      if (results.some((result) => result.status === 'rejected')) toast('Some items could not be marked read', { tone: 'danger' })
+    })
+  }, [attentionActions])
   return (
     <ReferenceStatusProvider projectId={projectId} requests={referenceRequests}>
       <NowView
+        attention={attention.data ? { items: attention.data.items, total: attention.data.counts.total, overrides: attention.data.overrides, olderAfterDays: attention.data.olderAfterDays } : undefined}
+        triage={triage}
+        projectId={here}
+        pendingQuestions={pendingQuestions}
+        referenceProjects={referenceProjects}
+        scope={scope}
+        onScope={(next) => { setScope(next); saveNowScope(next) }}
+        managerConnected={managerConnected}
+        projectLabel={projectLabel}
+        attentionActions={attentionActions}
+        onMarkAllRead={onMarkAllRead}
         runs={runs.data}
         projectName={projectName}
         onArchiveFinished={() => archive.mutate()}
@@ -529,6 +822,7 @@ export function NowRoute() {
         managersAvailable={health.data?.capabilities?.managers === true}
 
       />
+      {stopDialog}
     </ReferenceStatusProvider>
   )
 }

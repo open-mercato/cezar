@@ -7,7 +7,10 @@
 
 import { execFileSync, spawnSync } from 'node:child_process';
 import { createInterface } from 'node:readline';
-import { appendFileSync, readFileSync, writeFileSync } from 'node:fs';
+import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { dirname, join } from 'node:path';
+import { homedir } from 'node:os';
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 // The cosmetic pauses between events exist for the demo cockpit; CEZ_MOCK_PACE scales them
@@ -35,7 +38,64 @@ function streamedBlocks(obj) {
   });
 }
 
+// The model a real CLI reports in `init` and `result.modelUsage`: an alias (or no --model at
+// all, "auto") resolves to a full id, so the cockpit's "auto → <model>" badge is testable.
+const MOCK_MODEL = (() => {
+  const at = process.argv.indexOf('--model');
+  const requested = at >= 0 ? process.argv[at + 1] ?? '' : '';
+  const alias = { '': 'opus', default: 'opus', opus: 'opus', sonnet: 'sonnet', haiku: 'haiku' }[requested];
+  return alias ? `claude-${alias}-5-5` : requested;
+})();
+
+// Like the real CLI, `total_cost_usd` is the session's running total, carried over `--resume`.
+const MOCK_SESSION = (() => {
+  for (const flag of ['--session-id', '--resume']) {
+    const at = process.argv.indexOf(flag);
+    if (at >= 0 && process.argv[at + 1]) return process.argv[at + 1];
+  }
+  return undefined;
+})();
+const mockCostFile = MOCK_SESSION && process.env.CEZ_HOME && /^[A-Za-z0-9-]+$/.test(MOCK_SESSION)
+  ? join(process.env.CEZ_HOME, 'mock-claude-costs', `${MOCK_SESSION}.json`)
+  : undefined;
+const mockTotals = (() => {
+  try {
+    const saved = mockCostFile ? JSON.parse(readFileSync(mockCostFile, 'utf8')) : {};
+    return { total: Number(saved.total) || 0, input: Number(saved.input) || 0, output: Number(saved.output) || 0 };
+  } catch {
+    return { total: 0, input: 0, output: 0 };
+  }
+})();
+function runningCost(obj) {
+  if (obj?.type !== 'result' || typeof obj.total_cost_usd !== 'number') return obj;
+  mockTotals.total += obj.total_cost_usd;
+  mockTotals.input += obj.usage?.input_tokens ?? 0;
+  mockTotals.output += obj.usage?.output_tokens ?? 0;
+  if (mockCostFile) {
+    try {
+      mkdirSync(dirname(mockCostFile), { recursive: true });
+      writeFileSync(mockCostFile, JSON.stringify(mockTotals));
+    } catch {
+      // a read-only home: the total stays per process
+    }
+  }
+  return { ...obj, total_cost_usd: mockTotals.total };
+}
+
 function emit(obj) {
+  obj = runningCost(obj);
+  if (obj?.type === 'result' && !obj.is_error && !obj.modelUsage && !process.env.CEZ_MANAGER_ID) {
+    const usage = obj.usage ?? {};
+    obj = {
+      ...obj,
+      modelUsage: {
+        // Session running totals, like the real CLI's.
+        [MOCK_MODEL]: typeof obj.total_cost_usd === 'number'
+          ? { inputTokens: mockTotals.input, outputTokens: mockTotals.output, costUSD: mockTotals.total }
+          : { inputTokens: usage.input_tokens ?? 0, outputTokens: usage.output_tokens ?? 0, costUSD: 0 },
+      },
+    };
+  }
   const blocks = streamedBlocks(obj);
   const envelope = { session_id: obj?.session_id, parent_tool_use_id: obj?.parent_tool_use_id ?? null };
   for (const block of blocks) {
@@ -86,22 +146,30 @@ emit(process.env.CEZ_MANAGER_ID
       mcp_servers: [{ name: 'claude.ai Google Calendar', status: MOCK_CONNECTOR_STATUS }],
       tools: ['Bash', 'Read', 'Grep', 'Glob', ...(MOCK_CONNECTOR_STATUS === 'connected' ? MOCK_CONNECTOR_TOOLS : [])],
     }
-  : { type: 'system', subtype: 'init' });
+  : { type: 'system', subtype: 'init', model: MOCK_MODEL });
 
-// Plan usage windows, so the dry-run header shows its live gauges (real wire shape). Sent once,
-// on the first ordinary turn: a `mock:limit` session must report only its terminal limit.
-let planWindowsSent = false;
+// Plan usage windows, so the dry-run header shows its live gauges (real wire shape), and the
+// plan-usage ledger sees a rising account (spec 2026-11-19-plan-usage). Every ordinary turn
+// reads the shared mock account: a stable 5-hour window, +2% per turn across all mock processes.
+// A `mock:limit` session returns before this and reports only its terminal limit.
 function emitPlanWindows() {
-  if (planWindowsSent) return;
-  planWindowsSent = true;
-  const nowSec = Math.floor(Date.now() / 1000);
+  const now = Date.now();
+  const fiveHours = 5 * 3600_000;
+  const start = Math.floor(now / fiveHours) * fiveHours;
+  // The cezar home, never the shared temp dir: a predictable world-writable path is a planting target.
+  const stateDir = join(process.env.CEZ_HOME || join(homedir(), '.cezar'), 'mock');
+  const stateFile = join(stateDir, `plan-${start}.json`);
+  let used = 0.15;
+  try { used = JSON.parse(readFileSync(stateFile, 'utf8')).used; } catch { /* first turn of this window */ }
+  used = Math.min(0.99, Math.round((used + 0.02) * 100) / 100);
+  try { mkdirSync(stateDir, { recursive: true, mode: 0o700 }); writeFileSync(stateFile, JSON.stringify({ used }), { mode: 0o600 }); } catch { /* read-only tmp: a flat reading */ }
   emit({
     type: 'rate_limit_event',
     rate_limit_info: {
       status: 'allowed',
       unifiedWindows: {
-        five_hour: { utilization: 0.17, resetsAt: nowSec + 2 * 3600 + 19 * 60 },
-        seven_day: { utilization: 0.2, resetsAt: nowSec + 3 * 86400 },
+        five_hour: { utilization: used, resetsAt: Math.floor((start + fiveHours) / 1000) },
+        seven_day: { utilization: Math.min(0.99, used / 4 + 0.1), resetsAt: Math.floor((Math.floor(now / 604_800_000) + 1) * 604_800) },
       },
     },
   });
@@ -188,9 +256,33 @@ function writeHandoffAndTodo() {
 
 // Spec 2026-10-31-managers: a scripted manager turn that really calls `cez-manager`, so cards and
 // proposals are the ones the routes produced. Deterministic: first task, first ready pull request.
+/** True the first time this message fails on auth in this cezar home; later replays succeed.
+ *  Without `CEZ_HOME` (no sandboxed home to write to) it fails every time, as before. */
+function firstAuthFailure(text) {
+  const home = process.env.CEZ_HOME;
+  if (!home) return true;
+  const dir = join(home, 'mock-auth-once');
+  const marker = join(dir, createHash('sha256').update(text).digest('hex').slice(0, 16));
+  try {
+    mkdirSync(dir, { recursive: true, mode: 0o700 });
+    // Exclusive create: the existence check and the write are one step.
+    writeFileSync(marker, '', { flag: 'wx', mode: 0o600 });
+    return true;
+  } catch (error) {
+    return error?.code !== 'EEXIST';
+  }
+}
+
 async function managerTurn(userText) {
   const kind = /\[cez-manager:(chat|watch|job|followup)\]/.exec(userText)?.[1] ?? 'chat';
   const said = userText.slice(userText.lastIndexOf(`[cez-manager:${kind}]`));
+  // `mock:auth-error` fails a manager turn the way a revoked login does, once per message: the turn a
+  // reconnect replays then answers (spec 2026-11-18-inline-account-reconnect).
+  if (said.includes('mock:auth-error') && firstAuthFailure(said)) {
+    emit({ type: 'result', subtype: 'success', is_error: true, result: 'Failed to authenticate. API Error: 401 OAuth access token has been revoked.', usage: { input_tokens: 0, output_tokens: 0 }, total_cost_usd: 0 });
+    return;
+  }
+  emitPlanWindows();
   const tool = (args) => {
     const id = `toolu_manager_${turn}_${args.join('_').replace(/\W+/g, '_').slice(0, 40)}`;
     emit({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'tool_use', id, name: 'Bash', input: { command: `cez-manager ${args.join(' ')}` } }], usage: { input_tokens: 90, output_tokens: 30 } } });
@@ -273,6 +365,29 @@ async function managerTurn(userText) {
     lines.push('I need two decisions.', `CEZ:ASK ${JSON.stringify({ questions: [
       { header: 'Shell', question: 'Which mobile shell should we use?', options: [{ label: 'Capacitor (recommended)', description: 'Wraps the existing cockpit.' }, { label: 'Tauri 2', description: 'Shares the desktop stack.' }] },
       { header: 'Default', question: 'Does a phone browser open on Manager?', options: [{ label: 'No (recommended)' }, { label: 'Yes' }] },
+    ] })}`);
+  }
+  // A card naming pull requests: its markers paint as chips inside the question and the options.
+  const repo = projects[0]?.projectId;
+  if (/\bdependabot\b/i.test(said) && repo) {
+    const pr = (number) => `[[pr:${repo}/${number}]]`;
+    // Its source task declares a PR and an issue (`mock:refs`), so the Source block shows chips too.
+    const source = /\[\[task:[^\]]+\]\]/.exec(tool(['task', 'create', '--project', repo, '--title', 'Assess the bumps', 'Assess the bumps mock:refs']) ?? '')?.[0];
+    lines.push(`Two Dependabot bumps are open.${source ? ` I looked at them in ${source}.` : ''}`, `CEZ:ASK ${JSON.stringify({ questions: [
+      { header: 'Dependabot', question: `Should I start assessment tasks for ${pr(2897)} and ${pr(2896)}?`, options: [
+        { label: 'Assess both (recommended)', description: `One read-only task each for ${pr(2897)} and ${pr(2896)}.` },
+        { label: `Only ${pr(2897)}`, description: 'The frontend bump; the other waits.' },
+        { label: 'Neither' },
+      ] },
+    ] })}`);
+  }
+  // A card that names its PRs as `project/N` and a bare number: the first is a chip, the second stays words.
+  if (/\bsupersede\b/i.test(said) && repo) {
+    lines.push('One PR may supersede another.', `CEZ:ASK ${JSON.stringify({ questions: [
+      { header: '2902 + 2894', question: `Should I assess ${repo}/2902 and check whether it makes 2894 unnecessary?`, options: [
+        { label: 'Assess it (recommended)', description: `One read-only task for [[pr:${repo}/2902]].` },
+        { label: 'Leave both' },
+      ] },
     ] })}`);
   }
   return say(lines.join('\n\n'));
@@ -513,7 +628,9 @@ async function respond(userText, imageCount) {
   // Mirrors the real Claude Code 2.1.148 revoked-token envelope: the CLI puts
   // the credential failure in an `is_error` result even though its subtype is
   // `success`, rather than emitting a dedicated error frame.
-  if (userText.includes('mock:auth-error')) {
+  // A reconnect's continuation answers (spec 2026-11-18-inline-account-reconnect): it quotes the
+  // original task text, so the trigger alone would re-park the task forever.
+  if (userText.includes('mock:auth-error') && !userText.includes('Your sign-in was renewed')) {
     emit({
       type: 'result',
       subtype: 'success',

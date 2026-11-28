@@ -1,7 +1,10 @@
 import { CheckIcon, PencilLineIcon } from 'lucide-react'
+import { useContext } from 'react'
 
 import { StaticChip } from '@/components/chip'
 import type { UiAskQuestion } from '@open-mercato/cezar-api-client'
+
+import { AskTextContext } from './ask-text'
 
 /** What "Need more info" sends; the CEZ:ASK instructions (`handoff.ts`) tell the agent to
  *  explain the question and ask it again. */
@@ -60,6 +63,7 @@ export function AskAnswerSummary({ questions, lines, slot }: {
   lines: readonly AskAnswerLine[]
   slot: string
 }) {
+  const text = useContext(AskTextContext)
   return (
     <dl data-slot={slot} className="flex flex-col gap-2">
       {lines.map(({ header, value }, index) => {
@@ -77,10 +81,11 @@ export function AskAnswerSummary({ questions, lines, slot }: {
                     <li key={option.label} className="flex min-w-0 max-w-full">
                       <StaticChip
                         active={picked}
-                        title={option.description}
+                        title={option.description === undefined ? undefined : text.plain(option.description)}
                         icon={picked ? <CheckIcon aria-hidden="true" className="size-3 shrink-0 text-success" /> : undefined}
                       >
-                        {option.label}
+                        {/* A chip inside a chip reads as two: the label's references stay words here. */}
+                        {text.plain(option.label)}
                         {picked ? <span className="sr-only"> (chosen)</span> : null}
                       </StaticChip>
                     </li>
@@ -104,7 +109,7 @@ export function AskAnswerSummary({ questions, lines, slot }: {
               </ul>
               {chosen.map((option) => (
                 <p key={option.label} data-slot="ask-answer-description" className="mt-1 break-words text-meta text-muted-foreground">
-                  {option.description}
+                  {text.render(option.description!)}
                 </p>
               ))}
             </dd>

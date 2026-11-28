@@ -659,3 +659,11 @@ describe('trunk-based projects (spec 2026-10-20-trunk-based-projects)', () => {
     expect(looksLikeQuestion('1on1 with Bjorn — I owe him the deck by Friday')).toBe(false)
   })
 })
+
+describe('buildCreateRunBody — task tags (spec 2026-11-23-task-tags § 7.2)', () => {
+  const base = { task: 't', source: null, model: '', runner: 'claude' as const, defaultRunner: 'claude' as const, images: [], variants: 1 }
+  it('sends tag ids as refs, and nothing when there are none', () => {
+    expect(buildCreateRunBody({ ...base, tagIds: ['tt-aaaaaaaa01'] }).tags).toEqual([{ id: 'tt-aaaaaaaa01' }])
+    expect(JSON.parse(JSON.stringify(buildCreateRunBody({ ...base, tagIds: [] })))).not.toHaveProperty('tags')
+  })
+})

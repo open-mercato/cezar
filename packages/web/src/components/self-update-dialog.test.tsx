@@ -19,6 +19,9 @@ vi.mock('@/api/client', async (original) => ({
   cancelScheduledSelfUpdate,
 }))
 
+/** `n` tasks a restart would interrupt. */
+const working = (n: number) => [`${n} task${n === 1 ? '' : 's'}`]
+
 const status: SelfUpdateStatus = {
   version: '0.12.0',
   installKind: 'managed',
@@ -41,6 +44,7 @@ const status: SelfUpdateStatus = {
   job: null,
   scheduled: null,
   activeRuns: 0,
+  restartBlockers: [],
 }
 
 const development: SelfUpdateDevelopment = {
@@ -178,9 +182,9 @@ describe('SelfUpdateDialog', () => {
 
     it('waits for the button when tasks are running, with the warning on screen', async () => {
       applySelfUpdate.mockClear()
-      renderDialog({ activeRuns: 2 }, { autoApply: '0.12.1' })
+      renderDialog({ activeRuns: 2, restartBlockers: working(2) }, { autoApply: '0.12.1' })
       const dialog = await screen.findByRole('dialog')
-      expect(dialog.textContent).toContain('2 tasks are running')
+      expect(dialog.textContent).toContain('Still working: 2 tasks.')
       await new Promise((resolve) => setTimeout(resolve, 20))
       expect(applySelfUpdate).not.toHaveBeenCalled()
     })
@@ -199,10 +203,10 @@ describe('SelfUpdateDialog', () => {
     it('explains itself in a tooltip', async () => {
       // Radix's tooltip arrow measures itself with a ResizeObserver; jsdom has no layout observer.
       vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} })
-      renderDialog({ ...release, updateAvailable: '0.12.1', activeRuns: 3 })
+      renderDialog({ ...release, updateAvailable: '0.12.1', activeRuns: 3, restartBlockers: working(3) })
       fireEvent.focus(await screen.findByRole('button', { name: 'Update when idle' }))
       const tooltip = await screen.findByRole('tooltip')
-      expect(tooltip.textContent).toContain('Waits until no task is running or queued, then installs v0.12.1 and restarts')
+      expect(tooltip.textContent).toContain('Waits until no task or manager is working, then installs v0.12.1 and restarts')
     })
 
     it('schedules the update instead of restarting now', async () => {
@@ -211,10 +215,10 @@ describe('SelfUpdateDialog', () => {
         ...status,
         ...release,
         updateAvailable: '0.12.1',
-        activeRuns: 3,
+        activeRuns: 3, restartBlockers: working(3),
         scheduled: { target: '0.12.1', requestedAt: '2026-10-18T20:00:00.000Z' },
       })
-      renderDialog({ ...release, updateAvailable: '0.12.1', activeRuns: 3 })
+      renderDialog({ ...release, updateAvailable: '0.12.1', activeRuns: 3, restartBlockers: working(3) })
       fireEvent.click(await screen.findByRole('button', { name: 'Update when idle' }))
       await waitFor(() => expect(scheduleSelfUpdate).toHaveBeenCalledWith('0.12.1'))
       const notice = await waitFor(() => {
@@ -222,7 +226,7 @@ describe('SelfUpdateDialog', () => {
         expect(node).toBeTruthy()
         return node!
       })
-      expect(notice.textContent).toContain('cezar switches to v0.12.1 as soon as no task is running')
+      expect(notice.textContent).toContain('cezar switches to v0.12.1 as soon as nothing is working. Waiting for 3 tasks')
       expect(screen.queryByRole('button', { name: 'Update when idle' })).toBeNull()
       expect(applySelfUpdate).not.toHaveBeenCalled()
     })
@@ -231,7 +235,7 @@ describe('SelfUpdateDialog', () => {
       renderDialog({
         ...release,
         updateAvailable: '0.12.1',
-        activeRuns: 3,
+        activeRuns: 3, restartBlockers: working(3),
         job: { status: 'failed', target: '0.12.1', startedAt: '2026-10-18T19:00:00.000Z', finishedAt: '2026-10-18T19:00:05.000Z', log: ['failed: offline'], error: 'offline' },
         scheduled: { target: '0.12.1', requestedAt: '2026-10-18T20:00:00.000Z' },
       })
@@ -243,7 +247,7 @@ describe('SelfUpdateDialog', () => {
     it('is offered next to the version picker', async () => {
       scheduleSelfUpdate.mockClear()
       scheduleSelfUpdate.mockReturnValue(new Promise(() => {}))
-      renderDialog({ ...release, activeRuns: 2 })
+      renderDialog({ ...release, activeRuns: 2, restartBlockers: working(2) })
       await screen.findByRole('dialog')
       fireEvent.click(screen.getByRole('combobox', { name: 'Version' }))
       fireEvent.click(await screen.findByRole('option', { name: /v0\.11\.1/ }))
@@ -255,8 +259,8 @@ describe('SelfUpdateDialog', () => {
       scheduleSelfUpdate.mockClear()
       scheduleSelfUpdate.mockReturnValue(new Promise(() => {}))
       // Settles at once with nothing scheduled, so the button stays usable for the second pick.
-      scheduleSelfUpdate.mockResolvedValue({ ...status, channel: 'development', activeRuns: 2 })
-      renderDialog({ channel: 'development', activeRuns: 2 })
+      scheduleSelfUpdate.mockResolvedValue({ ...status, channel: 'development', activeRuns: 2, restartBlockers: working(2) })
+      renderDialog({ channel: 'development', activeRuns: 2, restartBlockers: working(2) })
       const rows = within(await screen.findByRole('listbox', { name: 'Worktrees' })).getAllByRole('option')
       fireEvent.click(rows[2]!)
       fireEvent.click(screen.getByRole('button', { name: 'When idle' }))
@@ -276,11 +280,11 @@ describe('SelfUpdateDialog', () => {
     })
 
     it('cancels a scheduled update', async () => {
-      cancelScheduledSelfUpdate.mockResolvedValue({ ...status, ...release, updateAvailable: '0.12.1', activeRuns: 3 })
+      cancelScheduledSelfUpdate.mockResolvedValue({ ...status, ...release, updateAvailable: '0.12.1', activeRuns: 3, restartBlockers: working(3) })
       renderDialog({
         ...release,
         updateAvailable: '0.12.1',
-        activeRuns: 3,
+        activeRuns: 3, restartBlockers: working(3),
         scheduled: { target: '0.12.1', requestedAt: '2026-10-18T20:00:00.000Z' },
       })
       fireEvent.click(await screen.findByRole('button', { name: 'Cancel' }))

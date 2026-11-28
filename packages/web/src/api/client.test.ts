@@ -12,6 +12,7 @@ import {
   deleteRun,
   deleteAutomation,
   finishRun,
+  getAgentSetup,
   getGithub,
   getGithubChecks,
   getGithubRefStatus,
@@ -143,6 +144,7 @@ describe('request shapes', () => {
       body: { authFailureId: 'incident-1' },
     },
     { name: 'getRunnerModels', call: () => getRunnerModels('codex'), path: '/api/v1/models?runner=codex', method: 'GET' },
+    { name: 'getRunnerModels(refresh)', call: () => getRunnerModels('codex', { refresh: true }), path: '/api/v1/models?runner=codex&refresh=1', method: 'GET' },
     { name: 'getRunnerModels(claude)', call: () => getRunnerModels('claude'), path: '/api/v1/models?runner=claude', method: 'GET' },
     { name: 'getRunnerModels(opencode)', call: () => getRunnerModels('opencode'), path: '/api/v1/models?runner=opencode', method: 'GET' },
     { name: 'getRunnerModels(cursor)', call: () => getRunnerModels('cursor'), path: '/api/v1/models?runner=cursor', method: 'GET' },
@@ -401,7 +403,7 @@ describe('workspace branding logo client', () => {
       browseRoot: '~/source', projectsDir: '~/projects', skillsAutoUpdate: null,
       effectiveSkillsAutoUpdate: true,
       composerDefaults: { autonomous: null, worktree: null, inheritedAutonomous: 'source-dependent', inheritedWorktree: true },
-      resources: { maxParallel: 2, maxMonitoringSessions: 2, idleTimeoutMinutes: 15, monitoringWakeIntervalMinutes: 5, autoResumeOnUsageLimit: true, memoryLimitMb: null, worktreeRetentionDefault: 10 },
+      resources: { maxParallel: 2, maxMonitoringSessions: 2, idleTimeoutMinutes: 15, monitoringWakeIntervalMinutes: 5, autoResumeOnUsageLimit: true, memoryLimitMb: null, worktreeRetentionDefault: 10, worktreeIdleDaysDefault: 7, archivedTaskDeleteDaysDefault: 90, diskGuard: { minFreePercent: 10, minFreeGb: 5, maxWorktreesGb: 20 }, },
       agentDefaults: {},
     })
     const config = await getWorkspaceConfig()
@@ -465,7 +467,7 @@ describe('response parsing', () => {
       monitoringWakeIntervalMinutes: 5,
       autoResumeOnUsageLimit: true,
       memoryLimitMb: null,
-      worktreeRetentionDefault: 10,
+      worktreeRetentionDefault: 10, worktreeIdleDaysDefault: 7, archivedTaskDeleteDaysDefault: 90, diskGuard: { minFreePercent: 10, minFreeGb: 5, maxWorktreesGb: 20 },
       ...resources,
     },
     agentDefaults: {},
@@ -888,5 +890,19 @@ describe('whether cezar still answers plain requests', () => {
     fetchMock.mockRejectedValueOnce(new TypeError('Load failed'))
     await expect(getHealth()).rejects.toBeInstanceOf(ApiError)
     expect(connectionStatus.answering()).toBe(false)
+  })
+})
+
+describe('getAgentSetup (spec 2026-11-25-agent-cli-install-and-update)', () => {
+  const STATE = { available: true, reason: null, interactive: true, session: null, agents: [] }
+
+  it('asks for the newest releases only with x-cezar-latest: 1', async () => {
+    reply(STATE)
+    await getAgentSetup({ latest: true })
+    expect(lastCall().path).toContain('/api/v1/providers/setup')
+    expect(lastCall().headers.get('x-cezar-latest')).toBe('1')
+    reply(STATE)
+    await getAgentSetup()
+    expect(lastCall().headers.get('x-cezar-latest')).toBeNull()
   })
 })

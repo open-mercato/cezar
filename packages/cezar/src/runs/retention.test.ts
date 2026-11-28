@@ -1,9 +1,9 @@
-import { existsSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import type { RunRecord, RunStatus } from './store.ts';
-import { isReclaimable, selectReclaimableWorktrees, reclaimWorktrees } from './retention.ts';
+import { enforceWorktreeRetention, freePrCheckoutsOf, isReclaimable, rematerializeReclaimedWorktree, selectReclaimableWorktrees, reclaimIdlePrCheckouts, reclaimSelectedWorktrees, reclaimWorktrees } from './retention.ts';
 
 /**
  * The pure retention selector (#483). It only reads a handful of fields, so the
@@ -134,6 +134,140 @@ describe('reclamation lifecycle gate', () => {
       expect(existsSync(join(root, 'newest'))).toBe(true);
       expect(update).toHaveBeenCalledTimes(1);
       expect(records.find(record => record.id === 'gated')?.worktreeReclaimedAt).toBeUndefined();
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+});
+
+describe('reclaimIdlePrCheckouts', () => {
+  it('reclaims tree/ for idle runs older than days (in-place included) while keeping diff/meta and protecting active or recent runs', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'cez-pr-retention-'));
+    try {
+      const nowMs = Date.parse('2026-07-15T00:00:00Z');
+      const old = '2026-07-01T00:00:00Z';
+      const fresh = '2026-07-12T00:00:00Z';
+      const records: RunRecord[] = [
+        run({ id: 'idle-done', status: 'done', finishedAt: old }),
+        run({ id: 'idle-inplace', status: 'review', worktreePath: null, finishedAt: old }),
+        run({ id: 'recent', status: 'done', finishedAt: fresh }),
+        run({ id: 'pinned', status: 'done', finishedAt: old, pinned: true }),
+        run({ id: 'live', status: 'waiting', finishedAt: old }),
+        run({ id: 'running', status: 'running', createdAt: old }),
+        Object.assign(run({ id: 'waking', status: 'waiting', finishedAt: old }), { monitoringWakeAt: '2026-07-15T01:00:00Z' }),
+        Object.assign(run({ id: 'resuming', status: 'waiting', finishedAt: old }), { autoResumeAt: '2026-07-15T01:00:00Z' }),
+        run({ id: 'claimed', status: 'done', worktreePath: root, finishedAt: old }),
+      ];
+      for (const r of records) {
+        mkdirSync(join(root, r.id, 'tree'), { recursive: true });
+        writeFileSync(join(root, r.id, 'tree', 'a.txt'), 'pr\n');
+        writeFileSync(join(root, r.id, 'pr-7.diff'), 'diff\n');
+      }
+      const store = { listRuns: () => records, updateRun: vi.fn(), prCheckoutDir: (id: string) => join(root, id) };
+      // A Continue claims its run before reading it; its export must survive the pass.
+      await rematerializeReclaimedWorktree(root, { getRun: (id) => records.find((r) => r.id === id), updateRun: vi.fn() }, 'claimed');
+      expect(reclaimIdlePrCheckouts(store, 0, { isLive: (id) => id === 'live', nowMs: () => nowMs })).toEqual([]);
+      expect(reclaimIdlePrCheckouts(store, 7, { isLive: (id) => id === 'live', nowMs: () => nowMs })).toEqual(['idle-done', 'idle-inplace']);
+      for (const id of ['idle-done', 'idle-inplace']) {
+        expect(existsSync(join(root, id, 'tree'))).toBe(false);
+        expect(existsSync(join(root, id, 'pr-7.diff'))).toBe(true);
+      }
+      for (const id of ['recent', 'pinned', 'live', 'running', 'waking', 'resuming', 'claimed']) {
+        expect(existsSync(join(root, id, 'tree'))).toBe(true);
+      }
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
+  /** A run's PR export as the checkout leaves it: a tree, and read-only diff and metadata. */
+  function exportFor(root: string, id: string) {
+    mkdirSync(join(root, id, 'tree'), { recursive: true });
+    writeFileSync(join(root, id, 'tree', 'a.txt'), 'pr\n');
+    for (const f of ['pr-7.diff', 'pr-7.json']) rmSync(join(root, id, f), { force: true });
+    writeFileSync(join(root, id, 'pr-7.diff'), 'diff\n', { mode: 0o444 });
+    writeFileSync(join(root, id, 'pr-7.json'), JSON.stringify({ number: 7, checkedOut: true, tree: join(root, id, 'tree') }), { mode: 0o444 });
+  }
+
+  it("says so in pr-N.json once the tree is gone, and keeps it read-only", () => {
+    const root = mkdtempSync(join(tmpdir(), 'cez-pr-retention-'));
+    try {
+      exportFor(root, 'r1');
+      // The user's copy in the artifacts, as the checkout leaves it.
+      const artifacts = join(root, 'artifacts', 'r1');
+      mkdirSync(artifacts, { recursive: true });
+      writeFileSync(join(artifacts, 'pr-7.json'), readFileSync(join(root, 'r1', 'pr-7.json')), { mode: 0o444 });
+      const store = {
+        listRuns: () => [run({ id: 'r1', status: 'done', finishedAt: '2026-07-01T00:00:00Z' })], updateRun: vi.fn(),
+        prCheckoutDir: (id: string) => join(root, id), artifactsDir: (id: string) => join(root, 'artifacts', id),
+      };
+      expect(reclaimIdlePrCheckouts(store, 7, { isLive: () => false, nowMs: () => Date.parse('2026-07-15T00:00:00Z') })).toEqual(['r1']);
+      const meta = JSON.parse(readFileSync(join(root, 'r1', 'pr-7.json'), 'utf8'));
+      expect(meta).toMatchObject({ number: 7, checkedOut: false });
+      expect(meta.tree).toBeUndefined();
+      expect(typeof meta.treeReclaimedAt).toBe('string');
+      expect(statSync(join(root, 'r1', 'pr-7.json')).mode & 0o222).toBe(0);
+      // ...and the copy Assets shows says the same, still read-only.
+      const copy = JSON.parse(readFileSync(join(artifacts, 'pr-7.json'), 'utf8'));
+      expect(copy).toMatchObject({ number: 7, checkedOut: false, treeReclaimedAt: meta.treeReclaimedAt });
+      expect(copy.tree).toBeUndefined();
+      expect(statSync(join(artifacts, 'pr-7.json')).mode & 0o222).toBe(0);
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
+  it('never writes through a symlink planted at the artifacts copy of pr-N.json', () => {
+    const root = mkdtempSync(join(tmpdir(), 'cez-pr-retention-'));
+    try {
+      exportFor(root, 'r1');
+      const victim = join(root, 'victim.json');
+      writeFileSync(victim, JSON.stringify({ secret: true }));
+      const artifacts = join(root, 'artifacts', 'r1');
+      mkdirSync(artifacts, { recursive: true });
+      symlinkSync(victim, join(artifacts, 'pr-7.json'));
+      const store = {
+        listRuns: () => [run({ id: 'r1', status: 'done', finishedAt: '2026-07-01T00:00:00Z' })], updateRun: vi.fn(),
+        prCheckoutDir: (id: string) => join(root, id), artifactsDir: (id: string) => join(root, 'artifacts', id),
+      };
+      expect(reclaimIdlePrCheckouts(store, 7, { isLive: () => false, nowMs: () => Date.parse('2026-07-15T00:00:00Z') })).toEqual(['r1']);
+      expect(readFileSync(victim, 'utf8')).toBe(JSON.stringify({ secret: true }));
+      expect(lstatSync(join(artifacts, 'pr-7.json')).isSymbolicLink()).toBe(false);
+      expect(statSync(join(artifacts, 'pr-7.json')).mode & 0o222).toBe(0);
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
+  it('frees an archived or manually reclaimed run whatever its age, but never a live or pinned one', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'cez-pr-retention-'));
+    try {
+      const fresh = new Date().toISOString();
+      const records: RunRecord[] = [
+        run({ id: 'picked', status: 'done', worktreePath: null, finishedAt: fresh }),
+        run({ id: 'live', status: 'done', worktreePath: null, finishedAt: fresh }),
+        run({ id: 'pinned', status: 'done', worktreePath: null, finishedAt: fresh, pinned: true }),
+        run({ id: 'other', status: 'done', worktreePath: null, finishedAt: fresh }),
+      ];
+      for (const r of records) exportFor(root, r.id);
+      const store = { listRuns: () => records, updateRun: vi.fn(), prCheckoutDir: (id: string) => join(root, id) };
+      const isLive = (id: string) => id === 'live';
+      expect(freePrCheckoutsOf(store, ['picked', 'live', 'pinned'], isLive)).toEqual(['picked']);
+      exportFor(root, 'picked');
+      // "Reclaim now" for chosen runs and archive both go through reclaimSelectedWorktrees.
+      await reclaimSelectedWorktrees(root, store, ['picked'], { isLive });
+      expect(existsSync(join(root, 'picked', 'tree'))).toBe(false);
+      for (const id of ['live', 'pinned', 'other']) expect(existsSync(join(root, id, 'tree'))).toBe(true);
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
+  it('runs inside enforceWorktreeRetention: the idle pass and the archive pass both free exports', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'cez-pr-retention-'));
+    try {
+      const records: RunRecord[] = [
+        // Idle past the default 7 days.
+        run({ id: 'idle', status: 'done', worktreePath: null, finishedAt: '2020-01-01T00:00:00Z' }),
+        Object.assign(run({ id: 'archived', status: 'done', worktreePath: null, finishedAt: new Date().toISOString() }), { archived: true }),
+        run({ id: 'recent', status: 'done', worktreePath: null, finishedAt: new Date().toISOString() }),
+      ];
+      for (const r of records) exportFor(root, r.id);
+      const store = { listRuns: () => records, updateRun: vi.fn(), prCheckoutDir: (id: string) => join(root, id) };
+      await enforceWorktreeRetention(root, store, { isLive: () => false });
+      expect(existsSync(join(root, 'idle', 'tree'))).toBe(false);
+      expect(existsSync(join(root, 'archived', 'tree'))).toBe(false);
+      expect(existsSync(join(root, 'recent', 'tree'))).toBe(true);
     } finally { rmSync(root, { recursive: true, force: true }); }
   });
 });

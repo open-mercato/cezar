@@ -6,14 +6,51 @@ import { webhookAttentionRequestSchema, webhookCompletionReasonSchema } from './
 import { worktreeLifecycleProjectionSchema } from './worktree-lifecycle.ts';
 import { runnerSchema } from './health.ts';
 import { runSubjectSchema } from './artifacts.ts';
+import { runParkedSchema } from './agent-login.ts';
 import { referenceStatusSchema } from './github.ts';
 // The chain shapes belong to the workflows family; the run record embeds one, so this file
 // consumes them rather than redeclaring. One-way on purpose — see the header of `./workflows.ts`.
 import { workflowDefSchema, workflowStepDefSchema } from './workflows.ts';
+import { taskAskRecordSchema } from './questions.ts';
+import { RUN_TAGS_MAX, runTagSchema, taskTagRefSchema } from './task-tags.ts';
 
 /** `GET /runs` query: `full=1` keeps each run's `workflowDef` (about 1.3 MB per run), which the list omits by default. */
 export const runsListQuerySchema = z.object({ full: z.enum(['1']).optional() });
 export type RunsListQuery = z.infer<typeof runsListQuerySchema>;
+
+const workflowAgentBaseSchema = z.object({
+  runner: runnerSchema,
+  agentProfile: z.string().optional(),
+  model: z.string().optional(),
+  reasoningEffort: z.string().optional(),
+});
+const workflowAgentOverrideSchema = z.object({
+  runner: runnerSchema,
+  agentProfile: z.string(),
+  // Omission keeps the original step selection. Null uses the new runner's default.
+  model: z.string().nullable().optional(),
+  reasoningEffort: z.string().nullable().optional(),
+});
+const workflowAgentSwitchSchema = z.object({
+  original: workflowAgentBaseSchema,
+  // Each slot represents the runner pinned in the workflow, or the absence of a pin.
+  overrides: z.partialRecord(z.union([runnerSchema, z.literal('unpinned')]), workflowAgentOverrideSchema),
+});
+export type WorkflowAgentSwitch = z.infer<typeof workflowAgentSwitchSchema>;
+
+export const runAgentSwitchSchema = z.object({
+  summary: z.string(),
+  /** Apply the selected agent to the unfinished workflow's agent steps. */
+  workflow: z.literal(true).optional(),
+  workflowSelection: workflowAgentSwitchSchema.optional(),
+  /** Run a fresh repair turn before resuming the walk at this failed check. */
+  checkRepair: z.object({ checkId: z.string(), stepId: z.string() }).optional(),
+  /** Fresh continuation to reconstruct if the server restarts before it launches. */
+  continuationStepId: z.string().optional(),
+  /** Its instruction, secrets redacted (like a step's `freshPrompt`): only a switch revived after a
+   *  restart reads it and sees [REDACTED]; the live switch keeps the verbatim text in memory. */
+  continuationInput: z.object({ prompt: z.string(), attachmentUrls: z.array(z.string()) }).optional(),
+});
 
 /** `GET /workspace/events` query: `slim=1` opts into the slim `run` frame (`workspaceRunEventSchema`). */
 export const workspaceEventsQuerySchema = z.object({ slim: z.enum(['1']).optional() });
@@ -53,6 +90,8 @@ export const runPrRefSchema = z.object({
   at: z.string(),
 });
 export type RunPrRef = z.infer<typeof runPrRefSchema>;
+/** Which of a task's PR associations speaks for it, best first: one it created, then one it declared. */
+export const RUN_PR_REF_RANK: Record<RunPrRef['origin'], number> = { created: 0, marker: 1, legacy: 2, derived: 3 };
 
 export const runStatusSchema = z.enum([
   'queued',
@@ -87,6 +126,23 @@ export type StepStatus = z.infer<typeof stepStatusSchema>;
 
 const usageCounterSchema = z.number().finite().nonnegative();
 
+/** Effective grants captured at launch, including nested/synthetic steps. Optional on old records. */
+export const stepToolPolicySchema = z.object({
+  allowedTools: z.array(z.string()),
+  bashAllowlist: z.array(z.string()).optional(),
+  enforceReadOnly: z.boolean().optional(),
+});
+export type StepToolPolicy = z.infer<typeof stepToolPolicySchema>;
+
+/** One model's share of a step's turns, as the agent reported it (`turn.completed.models`). */
+export const modelUsageSchema = z.object({
+  model: z.string(),
+  inputTokens: z.number().optional(),
+  outputTokens: z.number().optional(),
+  costUsd: z.number().optional(),
+});
+export type ModelUsage = z.infer<typeof modelUsageSchema>;
+
 /** One step of a run's chain. */
 export const stepStateSchema = z.object({
   id: z.string(),
@@ -118,11 +174,22 @@ export const stepStateSchema = z.object({
    *  that created it, so resume and Continue read this rather than the project's current
    *  selection. Absent on records written before accounts existed. */
   profileId: z.string().optional(),
+  /** A Continue opened in a new session with no prior conversation; absent otherwise. */
+  freshContext: z.literal(true).optional(),
+  /** A queued fresh Continue's instruction until its session opens. */
+  freshPrompt: z.string().optional(),
+  toolPolicy: stepToolPolicySchema.optional(),
   /** Canonical provider/model identity resolved for this step; absent for auto-model steps and
    *  records written before per-step attribution existed. */
   modelIdentity: z.string().optional(),
   /** Raw model this turn was spawned with ('' = deliberately auto); absent on older records. */
   model: z.string().optional(),
+  /** The model the agent reported actually running (latest main one) — what "auto" or an alias
+   *  resolved to. Absent when the backend never reports it and on older records. */
+  actualModel: z.string().optional(),
+  /** Every model this step's turns used, first-seen order, with shares when the backend
+   *  reports them (claude's `modelUsage`). Absent when unreported. */
+  modelsUsed: z.array(modelUsageSchema).optional(),
   costUsd: z.number().optional(),
 });
 export type StepState = z.infer<typeof stepStateSchema>;
@@ -202,10 +269,19 @@ export const runRecordSchema = z.object({
   reasoningEffort: reasoningEffortSchema.optional(),
   /** Normalized provider/model identity used for attribution and reproducible replay. */
   modelIdentity: z.string().optional(),
+  /** The latest main model any step reported actually running; absent until one does. */
+  actualModel: z.string().optional(),
+  /** Every model the run's steps reported, first-seen order (a model switch keeps the earlier). */
+  modelsUsed: z.array(z.string()).optional(),
   runner: runnerSchema.optional(),
   /** The composer's per-task agent account (spec 2026-07-29-agent-profiles), applying to steps
    *  on `runner`. Absent = the run follows the project's own selection. */
   agentProfile: z.string().optional(),
+  /** Task tags: id plus a display snapshot (spec 2026-11-23-task-tags D4). Omitted, never `[]`,
+   *  when the run has none. */
+  tags: z.array(runTagSchema).max(RUN_TAGS_MAX).optional(),
+  /** Set while the run waits on an expired agent login (spec 2026-11-18-inline-account-reconnect). */
+  parked: runParkedSchema.optional(),
   /** Enabled policy captured at task creation; manual Continue does not refresh it. */
   fallbackPolicy: z.object({
     enabled: z.boolean(),
@@ -213,6 +289,10 @@ export const runRecordSchema = z.object({
     revision: z.number().int().nonnegative(),
     incarnation: z.string().nullable(),
     revocation: z.string().nullable(),
+    /** `manager`: the starting manager's allowed task accounts, whose settings are the consent. */
+    source: z.literal('manager').optional(),
+    /** The manager whose current list a `manager` policy is checked against at fallback time. */
+    managerId: z.string().optional(),
   }).optional(),
   /** Echo of the extra system prompt the run used (POST override or config default). */
   systemPrompt: z.string().optional(),
@@ -300,6 +380,10 @@ export const runRecordSchema = z.object({
   status: runStatusSchema,
   attentionRequest: webhookAttentionRequestSchema.optional(),
   completionReason: webhookCompletionReasonSchema.optional(),
+  /** The run's `CEZ:ASK` questions, newest last, at most `TASK_ASKS_MAX` (Questions inbox spec). */
+  asks: z.array(taskAskRecordSchema).optional(),
+  /** Notes for the next Continue: a question the user skipped while the session was closed. */
+  askNotes: z.array(z.string()).optional(),
   /** `monitoring` while `status === 'running'` and the agent is working on downstream work.
    *  Absent on old runs; cleared on resume/end. */
   activity: runActivitySchema.optional(),
@@ -326,6 +410,8 @@ export const runRecordSchema = z.object({
   /** What the pending resume waits out: a usage limit's reset, or a transient provider failure's
    *  retry backoff. Absent on records written before it existed — read as `usage_limit`. */
   autoResumeReason: z.enum(['usage_limit', 'transient']).optional(),
+  /** The resumed session observed the usage window open; its account hold is released (#2525). */
+  autoResumeWindowOpen: z.boolean().optional(),
   /** ISO-8601 instant the run's session ended (inactivity, a crash, a restart) while a `CEZ:ASK`
    *  question was still unanswered. Present only on a `failed` run; the cockpit keeps such a run
    *  under "needs you" until the answer reopens it. Absent on records written before it existed. */
@@ -339,6 +425,7 @@ export const runRecordSchema = z.object({
   /** Why a `cancelled` run was stopped, and who stopped it, when the canceller said so. */
   cancelReason: z.string().optional(),
   cancelledBy: z.string().optional(),
+  agentSwitch: runAgentSwitchSchema.optional(),
   /** ISO-8601 instant the current wait on the user began. Kept past the session while
    *  `awaitingAnswerSince` holds the same question open; a manager's attention key is built on it. */
   waitingSince: z.string().optional(),
@@ -541,11 +628,17 @@ export const runIndexEntrySchema = z.object({
   awaitingAnswerSince: z.string().optional(),
   /** The inactivity timer closed the run's session: housekeeping on `waiting`, a quiet "idle" on legacy `failed`. */
   idleClosedAt: z.string().optional(),
+  /** The run waits on an expired agent login, so a cross-project row can say "needs sign-in"
+   *  (spec 2026-11-18-inline-account-reconnect). */
+  parked: runParkedSchema.optional(),
   /** The workflow the run executes — the global Tasks page shows it in a column and groups by
    *  it. Always present on the record (`RunRecord.workflow`), so required here; the display
    *  refinement `workflowLabel` applies needs `steps[]`, which this row deliberately omits, so
    *  a `(planned)` chain reads as itself here rather than as its first agent's name. */
   workflow: z.string(),
+  /** Task tags, so the global page and the palette filter without the fat record (spec
+   *  2026-11-23-task-tags). */
+  tags: z.array(runTagSchema).max(RUN_TAGS_MAX).optional(),
   /** The task's branch, when it has one — a column on the global page, and the one field that
    *  makes a cross-project row identifiable at a glance without opening it. */
   branch: z.string().optional(),
@@ -597,6 +690,9 @@ export const runIndexEntrySchema = z.object({
   /** What the run has cost so far. Absent means nothing was recorded, which is NOT `$0` — the
    *  cockpit prints an em dash rather than claiming a measurement that never happened. */
   costUsd: z.number().optional(),
+  /** The requested model and the one the agent reported running — the row's hover line. */
+  model: z.string().optional(),
+  actualModel: z.string().optional(),
   /** The persisted high-water marks a FINISHED run leaves behind. `usage` below stops existing
    *  the moment the process tree does, so without these a finished row could say nothing at all
    *  about what it took to run. */
@@ -847,6 +943,12 @@ export const gitStatusResponseSchema = z.object({
   behind: z.number().nullable(),
   /** Commits the branch has that same base lacks — what a PR would propose; null alike. */
   ahead: z.number().nullable(),
+  /** The remote whose `<remote>/<base>` those counts read (the resolved PR target, #1383); absent
+   *  when they read a local branch. A land pushes here so `ahead` can reach 0. */
+  baseRemote: z.string().optional(),
+  /** Present with `baseRemote`: whether the local base branch tracks that remote — where
+   *  `landInPlace` pushes. A worktree land is offered only when the two agree. */
+  baseTracked: z.boolean().optional(),
 });
 export type GitStatusResponse = z.infer<typeof gitStatusResponseSchema>;
 
@@ -1258,6 +1360,9 @@ export const createRunInputBaseSchema = z
     /** Agent account for this task (spec 2026-07-29-agent-profiles). Omit to follow the
      *  project's own selection; an id that no longer exists is a 400, not a silent default. */
     agentProfile: z.string().max(64).optional(),
+    /** Task tags (spec 2026-11-23-task-tags): resolved before the run is created, so a bad ref is a
+     *  400 and nothing starts. Every ×N variant gets the same tags. */
+    tags: z.array(taskTagRefSchema).max(RUN_TAGS_MAX).optional(),
     /** 1–3. Above 1 the response is `{ runs }` rather than a single record. */
     variants: z.number().int().min(1).max(3).optional(),
     /** false → run in the repo working tree instead of an isolated worktree (read-only skills).
@@ -1301,6 +1406,18 @@ export const createRunInputBaseSchema = z
     /** The manager starting this task (spec 2026-10-31-managers): provenance for `task cancel`'s
      *  own-tasks rule and the manager's `startedBy`. Never an authorization by itself. */
     startedByManager: z.object({ id: z.string().min(1).max(64), name: z.string().min(1).max(80) }).optional(),
+    /** How the starting manager chose the agent: a timeline note, and the manager's other allowed
+     *  accounts a usage limit falls back to. Honored only with `startedByManager`. */
+    managerAgent: z.object({
+      note: z.string().min(1).max(500),
+      /** Chosen by the manager's roles: the queue may move it to an account that frees up. */
+      routed: z.literal(true).optional(),
+      fallback: z.array(z.object({
+        provider: runnerSchema,
+        profileId: z.string().min(1).max(64),
+        model: z.string().min(1).max(200).optional(),
+      })).max(10).optional(),
+    }).optional(),
   });
 
 /** A task may be attachments alone (a pasted screenshot is a brief), but never nothing at all. */
@@ -1336,6 +1453,8 @@ export const messageInputSchema = z
     images: attachmentListSchema.default([]),
     /** One per message, reused by its retries: a key that already landed is not delivered again. */
     idempotencyKey: z.string().uuid().optional(),
+    /** Sent from an ask card: answers that card. Absent (typed in the composer): open cards stay open, flagged. */
+    askRequestId: z.string().min(1).max(200).optional(),
   })
   .refine((m) => m.text.trim().length > 0 || m.images.length > 0, {
     message: 'message needs text or at least one attachment',
@@ -1359,8 +1478,23 @@ export const continueInputSchema = z.object({
   agentProfile: z.string().max(64).optional(),
   /** One per Continue, reused by its retries: a key that already landed is not continued again. */
   idempotencyKey: z.string().uuid().optional(),
+  /** Sent from an ask card: answers that card (Questions inbox spec), as on `messageInputSchema`. */
+  askRequestId: z.string().min(1).max(200).optional(),
+  /** Open a new agent session with no prior conversation; same task, worktree, branch and PR. */
+  freshContext: z.boolean().optional(),
 });
 export type ContinueInput = z.input<typeof continueInputSchema>;
+
+export const switchRunAgentInputSchema = z.object({
+  runner: runnerSchema,
+  agentProfile: z.string().min(1).max(64).optional(),
+  model: z.string().max(200).optional(),
+  reasoningEffort: reasoningEffortSchema.optional(),
+  changedBy: z.string().trim().min(1).max(200),
+});
+export type SwitchRunAgentInput = z.infer<typeof switchRunAgentInputSchema>;
+export const switchRunAgentResponseSchema = z.object({ summary: z.string() });
+export type SwitchRunAgentResponse = z.infer<typeof switchRunAgentResponseSchema>;
 
 /**
  * `PATCH /runs/:id` (#389). `title` is trimmed server-side, 1–300 chars, and the edit sets both

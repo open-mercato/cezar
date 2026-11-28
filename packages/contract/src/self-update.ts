@@ -89,11 +89,16 @@ export const selfUpdateStatusSchema = z.object({
   installed: z.array(installedVersionSchema),
   available: z.array(availableVersionSchema),
   job: selfUpdateJobSchema.nullable(),
-  /** "Update when idle": the version this process installs and restarts into as soon as no task
-   *  is running or queued. In memory only — a restart for any other reason forgets it. */
+  /** "Update when idle": the version this process installs and restarts into as soon as nothing
+   *  is working (`restartBlockers` is empty). New tasks and timed manager turns are held while it
+   *  is pending. In memory only — a restart for any other reason forgets it. */
   scheduled: selfUpdateScheduledSchema.nullable(),
   /** Runs in flight across the workspace — a restart interrupts them (boot recovery re-queues). */
   activeRuns: z.number().int().min(0),
+  /** What a restart would interrupt right now, one phrase per kind (`2 tasks (Fix login, Docs)`,
+   *  `1 manager (Ops)`, `1 agent setup (codex install)`); empty means idle. "When idle" waits for
+   *  all of it. Plain strings: the typed API is at the compiler's declaration-length limit. */
+  restartBlockers: z.array(z.string()),
 });
 export type SelfUpdateStatus = z.infer<typeof selfUpdateStatusSchema>;
 

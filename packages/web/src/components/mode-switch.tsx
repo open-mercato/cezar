@@ -13,24 +13,24 @@ export interface ModeSwitchProps {
   projectsTo: string
   /** Where Manager leads: the chat or list this tab left (`managerHref`). */
   managerTo: string
-  /** Tasks need you in the active project — the Now badge's count, dotted on the Projects half. */
-  projectsAttention: boolean
   managerAttention: ManagerAttention | null
   onNavigate?: (() => void) | undefined
 }
 
-/** Screen-reader words for each half's dot, read as part of its name. */
-const PROJECTS_DOT_TEXT = ', tasks need you'
+/** Screen-reader words for the Manager half's dot, read as part of its name. */
 const MANAGER_DOT_TEXT: Record<ManagerAttention, string> = { 'needs-you': ', a manager needs you', unread: ', a manager has news' }
 
 const SEGMENT =
   'relative flex h-7 min-w-0 items-center justify-center gap-1.5 rounded-[7px] px-2 text-ui font-medium text-muted-foreground outline-none transition-colors hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50 max-md:h-9'
 const SEGMENT_ACTIVE = 'bg-card font-semibold text-foreground shadow-xs'
 
-/** What each half shows: the dot only ever sits on the half you are NOT on. */
-function halves({ managerMode, projectsTo, managerTo, projectsAttention, managerAttention }: ModeSwitchProps) {
+/**
+ * What each half shows. Only Manager carries a dot, and only while you are not on it: projects
+ * nearly always have something waiting, and surfacing that is the manager's job.
+ */
+function halves({ managerMode, projectsTo, managerTo, managerAttention }: ModeSwitchProps) {
   return {
-    projects: { to: projectsTo, active: !managerMode, dot: managerMode && projectsAttention ? 'bg-info' : null, dotText: PROJECTS_DOT_TEXT },
+    projects: { to: projectsTo, active: !managerMode },
     manager: {
       to: managerTo,
       active: managerMode,
@@ -59,7 +59,6 @@ export function ModeSwitch(props: ModeSwitchProps) {
       >
         <FoldersIcon className="size-3.5 shrink-0" aria-hidden="true" />
         Projects
-        {projects.dot ? <Dot tone={projects.dot} text={projects.dotText} /> : null}
       </Link>
       <Link
         to={manager.to}
@@ -91,7 +90,7 @@ function Dot({ tone, text }: { tone: string; text: string }) {
 const RAIL_ITEM =
   'relative flex size-8 shrink-0 items-center justify-center rounded-md text-muted-foreground outline-none transition-colors hover:bg-muted hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50'
 
-/** The folded rail's switch: the two halves stacked as icons, each carrying its dot. */
+/** The folded rail's switch: the two halves stacked as icons, Manager carrying its dot. */
 export function ModeRailSwitch(props: ModeSwitchProps) {
   const { projects, manager } = halves(props)
   const { managerMode } = props
@@ -101,12 +100,11 @@ export function ModeRailSwitch(props: ModeSwitchProps) {
         <Link
           to={projects.to}
           data-mode="projects"
-          aria-label={`Projects${projects.dot ? projects.dotText : ''}`}
+          aria-label="Projects"
           aria-current={projects.active ? 'page' : undefined}
           className={cn(RAIL_ITEM, projects.active && 'bg-muted text-foreground')}
         >
           <FoldersIcon className="size-4" aria-hidden="true" />
-          {projects.dot ? <span data-slot="mode-switch-dot" aria-hidden="true" className={cn('absolute top-1 right-1 size-1.5 rounded-full', projects.dot)} /> : null}
         </Link>
       </IconTooltip>
       <IconTooltip label="Manager" side="right">

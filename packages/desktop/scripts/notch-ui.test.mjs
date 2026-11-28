@@ -12,7 +12,9 @@ const read = (relative) => readFileSync(path.resolve(here, relative), 'utf8')
 const layout = JSON.parse(read('../ui/notch/layout.json'))
 const centre = layout.window.width / 2
 const notched = { width: 200, height: 37, top: 0, centre }
-const floating = { width: 0, height: 32, top: 31, centre }
+// macOS 26's menu bar on an external display is 30pt; the shell insets the pills 2pt inside it.
+const menuBar = 30
+const floating = { width: 0, height: menuBar - 4, top: 2, centre }
 const compact = { expanded: false, rows: 1, textWidth: 100, minis: 0, overflow: 0 }
 const inside = (rect) =>
   rect.x >= 0 && rect.y >= 0 && rect.x + rect.width <= layout.window.width && rect.y + rect.height <= layout.window.height
@@ -36,6 +38,35 @@ describe('faces', () => {
     expect(avatarParts(9).shape).toBe(PERSONAS[0].shape)
     expect(avatarParts(9).fill).toBe(COLORS[1])
     expect(avatarParts(63).shape).toBe(PERSONAS[0].shape)
+  })
+
+  it('bundles the cockpit\'s own portrait for every mascot, and the shell knows the same set', () => {
+    const contract = read('../../contract/src/managers.ts')
+    const mascots = [...contract.match(/managerMascotSchema = z\.enum\(\[([^\]]+)\]/)[1].matchAll(/'([a-z]+)'/g)].map((match) => match[1])
+    expect(mascots.length).toBeGreaterThan(0)
+    const shell = read('../src-tauri/src/notch_model.rs').match(/pub const MASCOTS: \[&str; \d+\] = \[([^\]]+)\]/)[1]
+    expect([...shell.matchAll(/"([a-z]+)"/g)].map((match) => match[1])).toEqual(mascots)
+    const bytes = (relative) => readFileSync(path.resolve(here, relative))
+    for (const mascot of mascots) {
+      expect(bytes(`../ui/notch/mascots/${mascot}.webp`).equals(bytes(`../../web/src/assets/mascots/${mascot}/portrait-96.webp`)), mascot).toBe(true)
+    }
+  })
+
+  it('never draws a persona\'s eyes or cross over a mascot portrait', () => {
+    const mascot = read('../ui/notch/notch.js').match(/function buildMascot[\s\S]*?\n}/)[0]
+    expect(mascot).not.toMatch(/eyes\(|cross\(|avatarParts/)
+    expect(read('../ui/notch/index.html')).toContain("img-src 'self';")
+  })
+
+  it('animates a mascot portrait in every moving state, not a static image', () => {
+    const css = read('../ui/notch/notch.css')
+    for (const face of ['idle', 'working', 'needs-you']) {
+      expect(css).toMatch(new RegExp(`\\.face\\[data-mascot\\]\\[data-face='${face}'\\] \\.portrait \\{\\s*animation: \\w+`))
+    }
+    // The body carries the bob, bounce and shudder for persona and portrait alike.
+    for (const face of ['working', 'needs-you', 'error']) {
+      expect(css).toMatch(new RegExp(`\\.face\\[data-face='${face}'\\] \\.body \\{\\s*animation: \\w+`))
+    }
   })
 
   it('moves no face under Reduce Motion', () => {
@@ -80,6 +111,22 @@ describe('shapes', () => {
       expect(inside(pill2)).toBe(true)
       expect(inside(computeShapes(layout, housing, { ...widest, expanded: true, rows: 40 }).island)).toBe(true)
     }
+  })
+
+  it('keeps every collapsed floating shape inside the menu bar, so it never covers the app below', () => {
+    const widest = { ...compact, textWidth: 900, minis: 4, overflow: 9 }
+    for (const pill2 of ['right', 'below']) {
+      const shapes = computeShapes({ ...layout, pill2: { ...layout.pill2, placement: pill2 } }, floating, widest)
+      for (const rect of [shapes.island, shapes.pill2]) {
+        expect(rect.y).toBeGreaterThan(0)
+        expect(rect.y + rect.height).toBeLessThan(menuBar)
+      }
+    }
+  })
+
+  it('opens the list from the pill, not from below the menu bar', () => {
+    const { island } = computeShapes(layout, floating, { ...compact, expanded: true, rows: 2 })
+    expect(island.y).toBe(floating.top)
   })
 
   it('follows the shell off the panel\'s middle on a narrow screen', () => {

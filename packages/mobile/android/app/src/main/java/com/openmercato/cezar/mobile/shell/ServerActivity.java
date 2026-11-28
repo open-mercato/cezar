@@ -20,6 +20,7 @@ import android.os.Message;
 import android.os.SystemClock;
 import android.util.Log;
 import android.view.Gravity;
+import android.view.HapticFeedbackConstants;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.WindowInsets;
@@ -48,6 +49,7 @@ import androidx.activity.result.contract.ActivityResultContracts;
 import androidx.appcompat.app.AlertDialog;
 import androidx.appcompat.app.AppCompatActivity;
 import com.openmercato.cezar.mobile.push.PushNotifier;
+import com.openmercato.cezar.mobile.shell.push.BadgeRefresh;
 import com.openmercato.cezar.mobile.shell.push.ForegroundServers;
 import com.openmercato.cezar.mobile.shell.push.GraceClose;
 import com.openmercato.cezar.mobile.shell.push.PushCoordinator;
@@ -131,6 +133,12 @@ public final class ServerActivity extends AppCompatActivity implements AppLock.H
     /** Bumped by every start and Retry, so a late paint answer from an earlier document is dropped. */
     private int startGeneration;
     private long paintAskedAt = -1;
+    private String lastPage;
+    /** A blank cockpit is loaded once more from cezar itself, past both caches, before the panel shows. */
+    private boolean recoveredBlank;
+    private ResumeCheck resume;
+    private String resumeState;
+    private final Runnable resumeTick = this::resumeTick;
     private boolean begun;
     private String startUrl;
     private final Runnable startTick = this::startTick;
@@ -489,7 +497,7 @@ public final class ServerActivity extends AppCompatActivity implements AppLock.H
         ShellServices.push(this).markAsked();
         new AlertDialog.Builder(this)
                 .setTitle("Get notified?")
-                .setMessage("Cezar can tell this phone when it needs you. The notification says only that, and you can turn it off on the Devices list.")
+                .setMessage("Cezar can tell this phone when it needs you. The notification says only that, and you can turn it off in Your cezars.")
                 .setPositiveButton("Turn on", (dialog, which) -> {
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS);
                     else turnPushOn();
@@ -564,7 +572,7 @@ public final class ServerActivity extends AppCompatActivity implements AppLock.H
         });
         bannerView.addView(bannerRetry);
         bannerServers = new Button(this);
-        bannerServers.setText("Devices");
+        bannerServers.setText("Cezars");
         bannerServers.setOnClickListener(view -> openSwitcher());
         bannerView.addView(bannerServers);
         frame.addView(bannerView, new FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.WRAP_CONTENT, Gravity.TOP));
@@ -578,6 +586,8 @@ public final class ServerActivity extends AppCompatActivity implements AppLock.H
     protected void onStart() {
         super.onStart();
         started = true;
+        BadgeRefresh badges = ShellServices.badges();
+        if (badges != null) badges.pageStarted(serverId);
         // The lock answers before anything connects or loads (spec QR3); its shield is over all of this.
         AppLock.get(this).whenUnlocked(this::startUnlocked);
     }
@@ -585,6 +595,11 @@ public final class ServerActivity extends AppCompatActivity implements AppLock.H
     private void startUnlocked() {
         if (!started || isDestroyed() || leaving) return;
         if (!begun) begin();
+        else if (cover != null) {
+            // The cover's checks stop off screen (onStop); they pick up where they were.
+            main.removeCallbacks(startTick);
+            main.post(startTick);
+        } else checkResumed();
         if (com.openmercato.cezar.mobile.BuildConfig.DEBUG && getIntent().getBooleanExtra(EXTRA_DEBUG_SWITCHER, false)) {
             getIntent().removeExtra(EXTRA_DEBUG_SWITCHER);
             main.postDelayed(this::openSwitcher, 1500);
@@ -602,6 +617,11 @@ public final class ServerActivity extends AppCompatActivity implements AppLock.H
     protected void onStop() {
         super.onStop();
         started = false;
+        if (resume != null) resume.stop();
+        main.removeCallbacks(resumeTick);
+        main.removeCallbacks(startTick);
+        BadgeRefresh badges = ShellServices.badges();
+        if (badges != null) badges.pageStopped(serverId);
         // "Offline since" counts from the last moment this page was up and connected.
         if (!leaving && currentState().status == DeviceSwitch.Status.CONNECTED) sawCurrent();
         // Off screen, no link stays warm for a switch nobody can tap.
@@ -638,8 +658,28 @@ public final class ServerActivity extends AppCompatActivity implements AppLock.H
     private void retryStart() {
         if (cover == null || isDestroyed() || leaving) return;
         startLog.step("retry");
+        restart(true);
+    }
+
+    /**
+     * The cover back over the page and a new start. {@code fresh}: past the bundle cache and the
+     * webview's HTTP cache, which is what a cockpit naming files the server no longer has needs.
+     */
+    private void restart(boolean fresh) {
+        if (isDestroyed() || leaving) return;
+        if (resume != null) resume.stop();
+        main.removeCallbacks(resumeTick);
+        if (cover == null) addCover();
+        if (fresh) {
+            if (link != null && serverId != null) {
+                com.openmercato.cezar.mobile.shell.relay.BundleCache bundle = relayConnections.bundle(serverId);
+                if (bundle != null) bundle.clear();
+            }
+            if (webView != null) webView.clearCache(true);
+        }
         startGeneration++;
         paintAskedAt = -1;
+        lastPage = null;
         startStatus = null;
         long now = SystemClock.uptimeMillis();
         watchdog.start(now);
@@ -648,11 +688,38 @@ public final class ServerActivity extends AppCompatActivity implements AppLock.H
             if (link.status().kind != RelayStatus.Kind.READY) link.retryNow();
         }
         cover.status(watchdog.decide(now).text);
-        if (webView != null) webView.loadUrl(startUrl);
+        // The route the user was on, as iOS keeps it; the start URL when the page is not this server's.
+        String current = webView != null ? webView.getUrl() : null;
+        if (webView != null) webView.loadUrl(current != null && origin.sameOrigin(current) ? current : startUrl);
         else if (proxy == null) addWebView(startUrl);
         else setGateCookieThenLoad(startUrl);
         main.removeCallbacks(startTick);
         main.post(startTick);
+    }
+
+    /** After a resume the page must still be there (ResumeCheck); asked once a second until it is. */
+    private void checkResumed() {
+        if (cover != null || webView == null || leaving) return;
+        if (resume == null) resume = new ResumeCheck(link != null);
+        resume.start(SystemClock.uptimeMillis());
+        resumeState = null;
+        main.removeCallbacks(resumeTick);
+        main.postDelayed(resumeTick, 1000);
+    }
+
+    private void resumeTick() {
+        if (resume == null || !resume.running() || cover != null || !started || isDestroyed() || leaving || webView == null) return;
+        switch (resume.answer(resumeState, SystemClock.uptimeMillis())) {
+            case RESTART:
+                startLog.step("page did not come back after resume (" + (resumeState == null ? "no answer" : resumeState) + "), reloads");
+                restart(false);
+                return;
+            case WAIT:
+                webView.evaluateJavascript(PageCheck.SCRIPT, answer -> resumeState = PageCheck.state(answer));
+                main.postDelayed(resumeTick, 1000);
+                return;
+            default:
+        }
     }
 
     /**
@@ -668,16 +735,32 @@ public final class ServerActivity extends AppCompatActivity implements AppLock.H
             case REVEAL:
                 removeCover();
                 return;
+            case BLANK:
+                if (!recoveredBlank) {
+                    recoveredBlank = true;
+                    startLog.step("cockpit blank after load, reloads past the caches");
+                    restart(true);
+                    return;
+                }
+                // fall through: the second blank is the panel's
             case PROBLEM:
-                startLog.step("problem: " + decision.text);
-                cover.problem(decision.text);
+                if (!cover.showingProblem()) {
+                    startLog.step("problem: " + decision.text);
+                    cover.problem(decision.text);
+                }
+                // A page that draws after all (or a slow sign-in page) still takes the panel's place.
+                if (PageCheck.healthy(lastPage, link != null)) {
+                    removeCover();
+                    return;
+                }
+                main.postDelayed(startTick, 1000);
                 return;
             default:
                 if (!decision.text.equals(startStatus)) {
                     startStatus = decision.text;
                     cover.status(decision.text);
                 }
-                main.postDelayed(startTick, FirstPaint.POLL_MS);
+                main.postDelayed(startTick, StartupWatchdog.POLL_MS);
         }
     }
 
@@ -685,10 +768,11 @@ public final class ServerActivity extends AppCompatActivity implements AppLock.H
         if (webView == null || (paintAskedAt >= 0 && now - paintAskedAt < 1000)) return;
         paintAskedAt = now;
         int generation = startGeneration;
-        webView.evaluateJavascript(FirstPaint.SCRIPT, answer -> {
+        webView.evaluateJavascript(PageCheck.SCRIPT, answer -> {
             paintAskedAt = -1;
             if (generation != startGeneration || cover == null) return;
-            if ("true".equals(answer)) watchdog.painted();
+            lastPage = PageCheck.state(answer);
+            watchdog.page(lastPage);
         });
     }
 
@@ -696,6 +780,7 @@ public final class ServerActivity extends AppCompatActivity implements AppLock.H
         if (cover == null) return;
         View gone = cover;
         cover = null;
+        recoveredBlank = false;
         main.removeCallbacks(startTick);
         long sinceStart = SystemClock.uptimeMillis() - android.os.Process.getStartUptimeMillis();
         startLog.step("shown, " + sinceStart + " ms after process start");
@@ -929,6 +1014,10 @@ public final class ServerActivity extends AppCompatActivity implements AppLock.H
                     startLog.step("page asked to reconnect");
                     if (link != null) link.start("page");
                     return true;
+                case HAPTIC:
+                    // A long-press quick action: one tap of feedback, no load, no UI, no history.
+                    view.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS);
+                    return true;
                 case EXTERNAL:
                     openExternally(url);
                     return true;
@@ -950,7 +1039,7 @@ public final class ServerActivity extends AppCompatActivity implements AppLock.H
             mainFrameUrl = url;
             if (cover != null && url != null && url.startsWith("http")) {
                 startLog.step("first byte");
-                watchdog.firstByte(SystemClock.uptimeMillis());
+                watchdog.committed(SystemClock.uptimeMillis());
             }
         }
 
@@ -1027,9 +1116,20 @@ public final class ServerActivity extends AppCompatActivity implements AppLock.H
         @Override
         public boolean onRenderProcessGone(WebView view, RenderProcessGoneDetail detail) {
             String url = origin.sameOrigin(view.getUrl()) ? view.getUrl() : getIntent().getStringExtra(EXTRA_URL);
+            startLog.step("renderer gone, reloads");
             frame.removeView(view);
             view.destroy();
+            webView = null;
+            // Under the cover, with its deadlines: a reload into a page that cannot draw must not be black.
+            if (cover == null) addCover();
+            startGeneration++;
+            paintAskedAt = -1;
+            lastPage = null;
+            watchdog.start(SystemClock.uptimeMillis());
+            if (link != null) watchdog.relayStatus(link.status().kind, SystemClock.uptimeMillis());
             addWebView(url);
+            main.removeCallbacks(startTick);
+            main.post(startTick);
             return true;
         }
     }

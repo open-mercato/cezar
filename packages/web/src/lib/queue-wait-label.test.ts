@@ -21,3 +21,7 @@ it('keeps the account-resume wording and passes no reason through', () => {
 it('uses the server zone carried with a reset reason at both default call sites', () => {
   expect(queueWaitLabel({ ...reason, timeZone: 'Europe/Warsaw' })).toBe('Waiting for usage limit reset · 18:30 · Europe/Warsaw')
 })
+
+it('names the wait for a free account (spec 2026-11-25-manager-task-routing)', () => {
+  expect(queueWaitLabel({ kind: 'account-busy' })).toBe('Waiting for a free account: every account its manager may use is busy')
+})

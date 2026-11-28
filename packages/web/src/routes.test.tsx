@@ -14,6 +14,7 @@ import { AppearanceProvider } from './components/appearance-provider'
 import { ListViewProvider } from './components/list-view'
 import { ThemeProvider } from './components/theme-provider'
 import { LAST_LOCATION_STORAGE_KEY } from './lib/last-location'
+import { NOW_SCOPE_KEY } from './routes/now/now-attention-model'
 import { AppRoutes, pageTitleContext, preloadManagerRoutes } from './routes'
 import { resetDraft } from './routes/new-task-draft'
 
@@ -111,7 +112,7 @@ function ProjectNavigationProbe() {
  *  replacing the shared harness. The remembered location is NOT seeded here — it is per-browser
  *  now, so `rememberLocation` writes it to localStorage instead. */
 function renderAt(
-  entry: string,
+  entry: string | { pathname: string; state: unknown },
   {
     seed = true,
     health = HEALTH,
@@ -196,6 +197,8 @@ describe('pageTitleContext', () => {
     ['/manager/m-1', 'Manager'],
     ['/manager/new', 'New manager'],
     ['/manager/approvals', 'Approvals'],
+    ['/manager/questions', 'Questions'],
+    ['/questions', 'Questions'],
   ])('labels %s as %s', (pathname, pageLabel) => {
     expect(pageTitleContext(pathname)).toEqual({ pageLabel, taskId: null })
   })
@@ -755,6 +758,20 @@ describe('legacy flat URLs redirect to the boot project', () => {
     expect(currentPathname()).toBe(`/p/${BOOT}/definitely-not-a-route`)
   })
 
+  it('carries navigation state through the hop into the boot project (the bottom bar\'s Now scope)', async () => {
+    renderAt({ pathname: '/', state: { nowScope: 'all' } })
+    expect(currentPathname()).toBe(`/p/${BOOT}/`)
+    await waitFor(() => expect(localStorage.getItem(NOW_SCOPE_KEY)).toBe('all'))
+  })
+
+  it('a Now scope handoff to / opens Now, not the remembered last page', async () => {
+    rememberLocation({ projectId: 'other', pathname: '/p/other/tasks/run-1/changes' })
+    renderAt({ pathname: '/', state: { nowScope: 'all' } })
+    await waitFor(() => expect(routeName()).toBe('now'))
+    expect(currentPathname()).toMatch(/^\/p\/[^/]+\/$/)
+    await waitFor(() => expect(localStorage.getItem(NOW_SCOPE_KEY)).toBe('all'))
+  })
+
   it('a bare /p names no project and lands on the boot project home', () => {
     renderAt('/p')
     expect(routeName()).toBe('now')
@@ -985,6 +1002,29 @@ describe('the Manager routes', () => {
     renderAt('/settings/global/manager', { health: off })
     expect(currentPathname()).toMatch(/^\/settings\/global\/(?!manager)/)
     expect(routeName()).not.toBe('not-found')
+  })
+})
+
+describe('the Questions routes (spec 2026-11-17-questions-inbox)', () => {
+  const MANAGERS_ON = { ...HEALTH, capabilities: { ...HEALTH.capabilities, managers: true } }
+  const MANAGERS_OFF = { ...HEALTH, capabilities: { ...HEALTH.capabilities, managers: false } }
+
+  it('lives at /manager/questions with managers on; /questions follows it there', async () => {
+    renderAt('/manager/questions', { health: MANAGERS_ON, managers: [] })
+    expect(await screen.findByRole('heading', { name: 'Questions', level: 1 })).toBeTruthy()
+    expect(currentPathname()).toBe('/manager/questions')
+    cleanup()
+    renderAt('/questions', { health: MANAGERS_ON, managers: [] })
+    await waitFor(() => expect(currentPathname()).toBe('/manager/questions'))
+  })
+
+  it('lives at /questions with managers off; /manager/questions follows it there', async () => {
+    renderAt('/questions', { health: MANAGERS_OFF })
+    expect(await screen.findByRole('heading', { name: 'Questions', level: 1 })).toBeTruthy()
+    expect(currentPathname()).toBe('/questions')
+    cleanup()
+    renderAt('/manager/questions', { health: MANAGERS_OFF })
+    await waitFor(() => expect(currentPathname()).toBe('/questions'))
   })
 })
 

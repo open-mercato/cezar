@@ -1,6 +1,6 @@
 import { useHealth } from '@/api/queries'
 import { MachineCard } from './machine-card'
-import { ManagerSection } from './manager-section'
+import { ManagerActivitySection, ManagerSection } from './manager-section'
 import { ResourcesCards } from './resources-section'
 
 /**
@@ -17,7 +17,7 @@ export function BehaviourSection() {
       <MachineCard />
       {/* Anchors on the wrappers, not the cards: an old link must land while the data loads. */}
       <div id="resources" className="scroll-mt-16"><ResourcesCards /></div>
-      {managers ? <div id="manager" className="scroll-mt-16"><ManagerSection /></div> : null}
+      {managers ? <div id="manager" className="flex scroll-mt-16 flex-col gap-5"><ManagerActivitySection /><ManagerSection /></div> : null}
     </div>
   )
 }

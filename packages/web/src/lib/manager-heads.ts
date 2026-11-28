@@ -1,4 +1,4 @@
-import type { ManagerSummary } from '@open-mercato/cezar-api-client'
+import type { AttentionItem, ManagerSummary } from '@open-mercato/cezar-api-client'
 
 import { managerRowPreview } from './managers'
 
@@ -17,6 +17,24 @@ export function headKind(manager: HeadCounts): HeadKind | null {
   if (manager.unread > 0 && manager.pendingActions > 0) return 'approval'
   if (manager.unread > 0 && manager.pendingQuestions > 0) return 'question'
   return manager.important > 0 ? 'news' : null
+}
+
+/**
+ * The approvals and questions still waiting, as Now lists them (spec 2026-11-23-needs-you-triage): not
+ * dismissed, snoozed or probably done; a muted manager's stay, uncounted only in the badges. From the
+ * attention list when the cockpit has it, else the managers route's own `needsYou`, else the raw counts.
+ */
+export function withLiveCounts(managers: readonly ManagerSummary[], items: readonly AttentionItem[] | undefined): ManagerSummary[] {
+  return managers.map((manager) => {
+    // Not `counted`: a muted manager's cards stay listed, as the mute toast says.
+    const live = items?.filter((item) => item.managerId === manager.id && !item.settled)
+    const counts = live
+      ? { approvals: live.filter((item) => item.kind === 'approval').length, questions: live.filter((item) => item.kind === 'question').length }
+      : manager.needsYou
+    if (!counts) return manager
+    if (counts.approvals === manager.pendingActions && counts.questions === manager.pendingQuestions) return manager
+    return { ...manager, pendingActions: counts.approvals, pendingQuestions: counts.questions }
+  })
 }
 
 /** What "something new" means: the same sum the browser notification rises on. */
@@ -113,6 +131,8 @@ export function restingHeads(managers: readonly ManagerSummary[], later: HeadMem
   return managers
     .flatMap((manager) => {
       const kind = headKind(manager)
+      // An inactive manager surfaces only for an approval: its questions and news wait (spec 2026-11-19-manager-deactivate).
+      if (manager.inactive && kind !== 'approval') return []
       return kind && !laterHidden(later, manager) ? [{ manager, kind }] : []
     })
     .sort((a, b) => at(a.manager) - at(b.manager))

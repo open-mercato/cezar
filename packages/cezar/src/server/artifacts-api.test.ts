@@ -7,7 +7,8 @@ import { runArtifactsEventSchema, runArtifactsResponseSchema } from '@open-merca
 import { MAX_ARTIFACT_BYTES } from '../runs/artifacts.ts';
 import { artifactsDir, RunStore } from '../runs/store.ts';
 import type { RunManager } from '../workflows/run.ts';
-import { artifactCsp, artifactsBaseUrl, artifactsFrame, openArtifact } from './artifacts.ts';
+import { artifactCsp, artifactPickerOrigins, artifactPickerTag, artifactsBaseUrl, artifactsFrame, openArtifact, sameFileInside } from './artifacts.ts';
+import { artifactPickerScript } from './preview/picker-script.ts';
 import { apiRequest } from './loopback-request.testkit.ts';
 import { createApp } from './server.ts';
 
@@ -282,6 +283,53 @@ describe('GET /runs/:id/artifacts[/:name]', () => {
     expect(runArtifactsResponseSchema.parse(await (await get('')).json()).versions).toBeUndefined();
   });
 
+  // `?picker=1`: the Assets view's element picker, appended to HTML only, headers untouched.
+  describe('?picker=1', () => {
+    const HEADERS = ['content-type', 'content-security-policy', 'x-content-type-options', 'referrer-policy', 'cross-origin-resource-policy', 'cache-control', 'content-disposition'];
+
+    it('appends the picker after the page, bound to the http and https origins, with the same headers', async () => {
+      const page = '<!doctype html><title>R</title><p>hi</p>';
+      writeFileSync(join(dir, 'report.html'), page);
+      const plain = await get('/report.html');
+      const picked = await get('/report.html?picker=1');
+      expect(picked.status).toBe(200);
+      const body = await picked.text();
+      expect(body.startsWith(page)).toBe(true);
+      expect(body.slice(page.length)).toBe(artifactPickerTag(['http://localhost', 'https://localhost']));
+      expect(body).toContain('"parentOrigins":["http://localhost","https://localhost"]');
+      expect(body.match(/<script>/g)).toHaveLength(1);
+      for (const header of HEADERS) expect(picked.headers.get(header), header).toBe(plain.headers.get(header));
+    });
+
+    it('works with ?v=<n> and on the nested route', async () => {
+      mkdirSync(join(dir, '.versions/1'), { recursive: true });
+      writeFileSync(join(dir, 'impact.html'), '<p>v2</p>');
+      writeFileSync(join(dir, '.versions/1/impact.html'), '<p>v1</p>');
+      mkdirSync(join(dir, 'pages'));
+      writeFileSync(join(dir, 'pages/a.html'), '<p>a</p>');
+      const old = await (await get('/impact.html?v=1&picker=1')).text();
+      expect(old.startsWith('<p>v1</p>\n<script>')).toBe(true);
+      const nested = await (await get('/pages/a.html?picker=1')).text();
+      expect(nested.startsWith('<p>a</p>\n<script>')).toBe(true);
+    });
+
+    it('leaves the bytes alone without picker=1, and for every non-html kind', async () => {
+      writeFileSync(join(dir, 'report.html'), '<p>hi</p>');
+      writeFileSync(join(dir, 'notes.md'), '# n\n');
+      writeFileSync(join(dir, 'review.json'), '{}');
+      expect(await (await get('/report.html')).text()).toBe('<p>hi</p>');
+      expect(await (await get('/notes.md?picker=1')).text()).toBe('# n\n');
+      const json = await get('/review.json?picker=1');
+      expect(await json.text()).toBe('{}');
+      expect(json.headers.get('content-type')).toBe('application/json; charset=utf-8');
+    });
+
+    it('400s any other picker value', async () => {
+      writeFileSync(join(dir, 'report.html'), '<p>hi</p>');
+      expect((await get('/report.html?picker=true')).status).toBe(400);
+    });
+  });
+
   it('answers an empty listing when the directory does not exist yet', async () => {
     rmSync(dir, { recursive: true, force: true });
     const body = runArtifactsResponseSchema.parse(await (await get('')).json());
@@ -321,5 +369,64 @@ describe('the artifacts SSE frame', () => {
     expect(runArtifactsEventSchema.parse(JSON.parse(data))).toEqual({ type: 'artifacts', runId, ...listing });
     store.flush();
     rmSync(repoRoot, { recursive: true, force: true });
+  });
+});
+
+describe('sameFileInside — win32 dev mismatch (#2359)', () => {
+  let root: string;
+  beforeEach(() => {
+    root = mkdtempSync(join(tmpdir(), 'cez-sfi-'));
+    mkdirSync(join(root, 'shots'));
+    writeFileSync(join(root, 'shots', 'a.png'), 'x');
+  });
+  afterEach(() => rmSync(root, { recursive: true, force: true }));
+
+  const file = () => join(root, 'shots', 'a.png');
+  // win32: path stat() reports dev 0, the handle's fstat the volume serial.
+  const winStat = async () => ({ dev: 0, ino: 7, size: 1 });
+
+  it('accepts a nested file on win32 despite dev 0 vs the volume serial', async () => {
+    expect(await sameFileInside(root, file(), { dev: 3263, ino: 7, size: 1 }, 'win32', winStat)).toBe(true);
+  });
+
+  it('still refuses a swapped file on win32 (ino or size differs)', async () => {
+    expect(await sameFileInside(root, file(), { dev: 3263, ino: 8, size: 1 }, 'win32', winStat)).toBe(false);
+    expect(await sameFileInside(root, file(), { dev: 3263, ino: 7, size: 2 }, 'win32', winStat)).toBe(false);
+  });
+
+  it('keeps the containment guard on win32', async () => {
+    mkdirSync(join(root, 'a', 'b'), { recursive: true });
+    writeFileSync(join(root, 'a', 'b', 'c.png'), 'x');
+    expect(await sameFileInside(root, join(root, 'a', 'b', 'c.png'), { dev: 1, ino: 7, size: 1 }, 'win32', winStat)).toBe(false);
+  });
+
+  it('keeps comparing dev on POSIX', async () => {
+    expect(await sameFileInside(root, file(), { dev: 3263, ino: 7, size: 1 }, 'linux', winStat)).toBe(false);
+    expect(await sameFileInside(root, file(), { dev: 0, ino: 7, size: 1 }, 'linux', winStat)).toBe(true);
+  });
+});
+
+describe('the artifact picker script', () => {
+  it('carries no </ that could end its inline element, and is the picker without the location reporter', () => {
+    const tag = artifactPickerTag(['http://h:1', 'https://h:1']);
+    const inner = tag.slice(tag.indexOf('<script>') + '<script>'.length, tag.lastIndexOf('</script>'));
+    expect(inner).not.toContain('</');
+    expect(inner.toLowerCase()).not.toContain('</script');
+    const script = artifactPickerScript(['http://h:1']);
+    expect(script).not.toContain('__cezarLocation');
+    expect(script).toContain('"upstreamOrigin":""');
+  });
+
+  it('escapes a </ in the origins too', () => {
+    expect(artifactPickerTag(['http://x</script><b>'])).not.toContain('</script><b>');
+  });
+
+  it('derives both schemes from the request authority, and nothing for a non-http URL', () => {
+    expect(artifactPickerOrigins('https://example.test:8443/api/v1/runs/r/artifacts/a.html?picker=1')).toEqual([
+      'http://example.test:8443',
+      'https://example.test:8443',
+    ]);
+    expect(artifactPickerOrigins('not a url')).toBeUndefined();
+    expect(artifactPickerOrigins('file:///tmp/a.html')).toBeUndefined();
   });
 });

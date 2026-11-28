@@ -155,7 +155,7 @@ const CONFIG: ConfigResponse = {
   modelsLocked: false,
   maxParallel: 2,
   memoryLimitMb: null,
-  worktreeRetention: 10,
+  worktreeRetention: 10, worktreeIdleDays: 7, worktreeIdleDaysOwn: false, archivedTaskDeleteDays: 90, archivedTaskDeleteDaysOwn: false,
   liveTitleUpdates: null,
   reviewGate: null,
   profile: null, taskWorkspace: null, landing: null, landingBlocked: null, requiredChecks: [], defaultSkill: null, askSkill: null, teamSkills: true, bypassPermissions: false, bypassPermissionsBlocked: null,
@@ -184,7 +184,7 @@ const WORKSPACE_CONFIG: WorkspaceConfigResponse = {
     monitoringWakeIntervalMinutes: null,
     autoResumeOnUsageLimit: true,
     memoryLimitMb: null,
-    worktreeRetentionDefault: 10,
+    worktreeRetentionDefault: 10, worktreeIdleDaysDefault: 7, archivedTaskDeleteDaysDefault: 90, diskGuard: { minFreePercent: 10, minFreeGb: 5, maxWorktreesGb: 20 },
   },
 }
 
@@ -2626,6 +2626,24 @@ it('keeps the start-time menu in Options → Start, one labelled Start button, a
   fireEvent.click(document.querySelector('[data-slot="schedule-summary"]') as HTMLElement)
   await waitFor(() => expect(optionsPanel()).not.toBeNull())
   await screen.findByLabelText('After usage limit resets')
+})
+
+// #2434 review: a deferred start drops its tags in phase 1, so the composer says so up front.
+it('notes that a scheduled start drops the draft tags', async () => {
+  serve({
+    health: { ...HEALTH, capabilities: { ...HEALTH.capabilities, automations: true } },
+    deferredPreview: async () => new Response(JSON.stringify({ available: true, notBefore: '2099-01-01T09:00:00Z', timeZone: 'UTC', previewRevision: 'r' }), { status: 200, headers: { 'content-type': 'application/json' } }),
+  })
+  writeDraft({ ...readDraft(), tags: [{ id: 'tt-batch000001', name: 'batch', color: 'blue' }] })
+  renderNewTask()
+  await pillReady()
+  const note = () => document.querySelector('[data-slot="composer-tags-scheduled"]')
+  expect(note()).toBeNull()
+  fireEvent.change(textarea(), { target: { value: 'Later' } })
+  await openScheduleMenu()
+  await waitFor(() => expect((screen.getByLabelText('After usage limit resets') as HTMLInputElement).disabled).toBe(false))
+  fireEvent.click(screen.getByLabelText('After usage limit resets'))
+  await waitFor(() => expect(note()?.textContent).toBe('Scheduled tasks start untagged'))
 })
 
 it('gates scheduling while unchecked, checking, unavailable and changed, including keyboard submit', async () => {

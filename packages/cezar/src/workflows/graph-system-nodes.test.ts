@@ -124,12 +124,47 @@ describe('graph system nodes', () => {
     expect(readFileSync(join(repoRoot, 'gate.txt'), 'utf8')).toBe('approved: Approve\n');
   }, 30_000);
 
-  it('any other answer rejects, and the reply becomes the comment', async () => {
+  it.each(['Reject — tests are flaky', 'Request changes', "Don't open a PR"])('%s takes the reject path and supplies the comment', async (reply) => {
     const id = manager.startRun(def(GATE), { task: 'x', worktree: false }).id;
     await until(id, parkedAt('gate'));
-    manager.sendMessage(id, [{ type: 'text', text: 'Reject — tests are flaky' }]);
+    manager.sendMessage(id, [{ type: 'text', text: `Approval: ${reply}` }]);
     await until(id, terminal);
-    expect(readFileSync(join(repoRoot, 'gate.txt'), 'utf8')).toBe('rejected: Reject — tests are flaky\n');
+    expect(readFileSync(join(repoRoot, 'gate.txt'), 'utf8')).toBe(`rejected: ${reply}\n`);
+  }, 30_000);
+
+  it('takes the reject path when the apply turn declines the reply', async () => {
+    const id = manager.startRun(def(GATE), { task: 'x', worktree: true }).id;
+    await until(id, parkedAt('gate'));
+    const reply = 'Leave it for tomorrow. mock:verdict=declined';
+    expect(manager.sendMessage(id, [{ type: 'text', text: reply }])).toBe(true);
+    const final = await until(id, terminal);
+    expect(final.steps.find((s) => s.id === 'yes')?.status).toBe('pending');
+    expect(final.steps.find((s) => s.id === 'no')?.status).toBe('done');
+  }, 30_000);
+
+  it('applies a typed reply with no worker session on Codex instead of refusing its tool grant (#2330)', async () => {
+    const id = manager.startRun(def(GATE), { task: 'x', worktree: true, runner: 'codex' }).id;
+    await until(id, parkedAt('gate'));
+    expect(manager.sendMessage(id, [{ type: 'text', text: 'Leave it for tomorrow. mock:verdict=declined' }])).toBe(true);
+    const final = await until(id, terminal);
+    expect(final.steps.find((s) => s.id === 'gate')?.error ?? '').not.toMatch(/tool|restrict/i);
+    expect(final.steps.find((s) => s.id === 'no')?.status).toBe('done');
+  }, 30_000);
+
+  it('asks again when instructions cannot be applied, then resumes the same gate on approval', async () => {
+    const id = manager.startRun(def(GATE), { task: 'x', worktree: true }).id;
+    const original = (await until(id, parkedAt('gate'))).attentionRequest?.requestId;
+    expect(manager.sendMessage(id, [{ type: 'text', text: 'Rebase first. mock:verdict=blocked' }])).toBe(true);
+    const parked = await until(id, (r) => terminal(r) || (parkedAt('gate')(r) && r.attentionRequest?.requestId !== original));
+    expect(parked.status).toBe('waiting');
+    expect(parked.error).toBeUndefined();
+    expect(parked.attentionRequest?.questions[0]?.question).toContain('the agent reported a blocker');
+    expect(parked.steps.find((s) => s.id === 'yes')?.status).toBe('pending');
+
+    expect(manager.sendMessage(id, [{ type: 'text', text: 'Approval: Approve' }])).toBe(true);
+    const final = await until(id, terminal);
+    expect(final.status).toMatch(/^(done|review)$/);
+    expect(final.steps.find((s) => s.id === 'yes')?.status).toBe('done');
   }, 30_000);
 
   it('dispatched gate Finish reports success with webhooks unset', async () => {

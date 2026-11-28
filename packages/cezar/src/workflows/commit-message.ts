@@ -6,6 +6,8 @@ import { parseStructured } from '../planner.ts';
 import { autoNamingActive, NAMER_TIMEOUT_MS } from '../runs/auto-name.ts';
 import { resolveNamerModel } from '../runs/namer-model.ts';
 import { resolveProfileEnvForRoot } from '../workspace/agent-profiles.ts';
+import { INTERNAL_CONSUMERS, trackOneShot } from '../usage-ledger/recorder.ts';
+import { oneShotAccountRef } from '../usage-ledger/identity.ts';
 import type { StagedChange } from './landing.ts';
 
 /**
@@ -76,23 +78,32 @@ export async function generateCommitMessage(
     const choice = await resolveNamerModel(config.defaultRunner, config);
     if (!choice) return { reason: `no cheap model known for ${config.defaultRunner}` };
     const runner = createRunner(config.defaultRunner);
-    const { env } = await resolveProfileEnvForRoot(repoRoot, config.defaultRunner);
+    const { env, profile } = await resolveProfileEnvForRoot(repoRoot, config.defaultRunner);
+    const planAccount = await oneShotAccountRef(config.defaultRunner, profile);
     const prompt = buildCommitMessagePrompt(staged, intent, await recentSubjects(repoRoot));
     // Two tries: the second says what was wrong with the first.
     for (let attempt = 0; attempt < 2; attempt++) {
       const userPrompt = attempt === 0
         ? prompt
         : `${prompt}\n\nYour previous answer was rejected (${reason}). Answer with only {"subject": "<imperative summary, at most 72 characters>"}.`;
-      const result = await runner.run({
+      const tracked = trackOneShot(config.defaultRunner, planAccount, INTERNAL_CONSUMERS.commit);
+      let result: Awaited<ReturnType<typeof runner.run>> | undefined;
+      try {
+      result = await runner.run({
         systemPrompt: COMMIT_MESSAGE_SYSTEM_PROMPT,
         userPrompt,
         cwd: repoRoot,
+        // Parsed answer: global instructions shape its content, never its format.
+        globalInstructions: 'format-bound',
         allowedTools: [],
         model: choice.model,
         ...(choice.reasoningEffort ? { reasoningEffort: choice.reasoningEffort } : {}),
         timeoutMs: NAMER_TIMEOUT_MS,
         env: { ...env, CEZ_MOCK_ARGS_FILE: '' },
-      });
+      }, tracked.onEvent);
+      } finally {
+        tracked.done(result);
+      }
       const subject = cleanSubject(result.text);
       if (subject) return { subject };
       reason = result.text.trim() ? `unusable answer: ${result.text.trim().slice(0, 120)}` : 'empty answer';

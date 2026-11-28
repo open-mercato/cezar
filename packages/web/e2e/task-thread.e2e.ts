@@ -508,8 +508,9 @@ describe('task thread', () => {
       // The wide fixture table/code scroll inside their own boxes, not the page.
       expect(
         browser.evaluate(`(() => {
-          const main = document.querySelector('[data-slot="main"]')
-          return main.scrollWidth <= main.clientWidth
+          // The workspace nests a second [data-slot="main"] (the column scroller) — check every one (#1382).
+          const mains = [...document.querySelectorAll('[data-slot="main"]')]
+          return mains.length > 0 && mains.every((m) => m.scrollWidth <= m.clientWidth)
         })()`),
       ).toBe(true)
       expect(browser.evaluate(`document.querySelector('[data-slot="mobile-top-bar"] > div').getBoundingClientRect().height`)).toBe(44)

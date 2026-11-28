@@ -79,6 +79,15 @@ describe('Claude terminal usage limits', () => {
     }] });
     expect(usageWindowsObservationSchema.parse(observation)).toEqual(observation);
   });
+  it('records Claude\'s monthly credits block weeks out, with its padded reset (#2517)', () => {
+    // 2026-10-14 → Nov 1, 01:00 Warsaw (UTC+1) is 00:00Z, plus the truncated minute.
+    const observation = normalizeClaudeTerminalUsageLimit(frame("You're out of usage credits · resets Nov 1 at 1am (Europe/Warsaw)"), now);
+    expect(observation?.windows).toEqual([expect.objectContaining({
+      id: 'terminal-limit', kind: 'other', durationMinutes: null, status: 'blocked', resetsAt: Date.parse('2026-11-01T00:01:00Z'),
+    })]);
+    // Other prose with a parsed reset still does not count as an account-wide block.
+    expect(normalizeClaudeTerminalUsageLimit(frame("You've hit your weekly limit · resets Oct 16, 9am (UTC)"), now)).toBeNull();
+  });
   it('reads canonical markers from terminal errors arrays and emits only the latest block', () => {
     const observation = normalizeClaudeTerminalUsageLimit({ type: 'result', is_error: true,
       result: `Claude AI usage limit reached|${resetAt / 1000}`,

@@ -87,6 +87,7 @@ export type AttentionInput = Pick<
   | 'dispatch'
   | 'costUsd'
   | 'worktreeLifecycle'
+  | 'parked'
 >
 
 export type BudgetStop = {
@@ -149,6 +150,12 @@ export function closingStepId(
   return latest?.id ?? lastFailed
 }
 
+/** A run waiting on an expired agent login, as `provider:profileId`; undefined otherwise. Lists
+ *  group these per account so one Reconnect unblocks them all. */
+export function signInAccountKey(run: Pick<RunRecord, 'status' | 'parked'>): string | undefined {
+  return run.status === 'waiting' && run.parked?.kind === 'auth' ? `${run.parked.provider}:${run.parked.profileId}` : undefined
+}
+
 /** The runs a "needs you" list keeps: waiting, in review, or awaiting an answer. */
 export function isNeedsYouStatus(run: Pick<RunRecord, 'status' | 'awaitingAnswerSince' | 'worktreeLifecycle'>): boolean {
   return !!run.worktreeLifecycle?.needsAttention || run.status === 'waiting' || run.status === 'review' || isAwaitingAnswer(run)
@@ -197,6 +204,11 @@ export function deriveAttention(run: AttentionInput): Attention {
   }
   if (run.status === 'failed') {
     return { bucket: 'error', tone: 'danger', pulse: false, label: 'failed' }
+  }
+  // Parked on an expired agent login (spec 2026-11-18-inline-account-reconnect): it needs you, but
+  // for a sign-in, not a reply — amber, like the "Needs sign-in" chip.
+  if (run.status === 'waiting' && run.parked?.kind === 'auth') {
+    return { bucket: 'waiting', tone: 'pending', pulse: false, label: 'sign-in needed' }
   }
   if (run.status === 'waiting') {
     return {

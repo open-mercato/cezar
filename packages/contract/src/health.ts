@@ -110,8 +110,30 @@ export const diskInfoSchema = z.object({
   totalBytes: z.number(),
   level: z.enum(['ok', 'low', 'critical']),
   worktreesBytes: z.number().optional(),
+  /**
+   * The disk guard's warning (spec 2026-11-19-worktree-disk-usage, decision 3): set while a guard
+   * threshold is still crossed after it reclaimed every idle tree it could, e.g. "Disk almost
+   * full — 17.0 GB in task worktrees". Independent of `level`.
+   */
+  guardWarning: z.string().optional(),
 });
 export type DiskInfo = z.infer<typeof diskInfoSchema>;
+
+/** `GET /api/v1/workspace/disk-guard` — the guard's thresholds and its last pass. Every field but
+ *  `thresholds` is absent until the first pass has answered (or where `statfs` cannot). */
+export const diskGuardStatusSchema = z.object({
+  thresholds: z.object({ minFreePercent: z.number(), minFreeGb: z.number(), maxWorktreesGb: z.number() }),
+  checkedAt: z.string().optional(),
+  /** Free and total bytes of the tightest volume holding task worktrees. */
+  freeBytes: z.number().optional(),
+  totalBytes: z.number().optional(),
+  /** Every project's task worktrees, from cached `du` sizes. */
+  worktreesBytes: z.number().optional(),
+  /** The last pass that reclaimed anything. */
+  lastAction: z.object({ at: z.string(), reclaimed: z.number().int().nonnegative(), freedBytes: z.number().optional() }).optional(),
+  warning: z.string().optional(),
+});
+export type DiskGuardStatusResponse = z.infer<typeof diskGuardStatusSchema>;
 
 /**
  * `GET /api/v1/health` — the CORS-open discovery endpoint (BACKWARD_COMPATIBILITY.md §2).

@@ -14,12 +14,15 @@ public final class StartupWatchdog {
     public static final long FIRST_BYTE_MS = 10000;
     /** From the first byte to the page's load event. */
     public static final long LOAD_MS = 15000;
-    /** The paint signal is optional: past this after the load event, the page shows anyway. */
+    /** A page with no {@code #root} (a sign-in page) shows this long after its load event. */
     public static final long PAINT_GRACE_MS = 2000;
+    /** A cockpit whose {@code #root} is still empty this long after its load event is not going to draw. */
+    public static final long BLANK_MS = 6000;
+    public static final long POLL_MS = 100;
     /** Nothing at all may take longer. */
     public static final long MAX_MS = 30000;
 
-    public enum Kind { WAIT, REVEAL, PROBLEM }
+    public enum Kind { WAIT, REVEAL, PROBLEM, BLANK }
 
     public static final class Decision {
         public final Kind kind;
@@ -45,7 +48,8 @@ public final class StartupWatchdog {
     private long readyAt = -1;
     private long firstByteAt = -1;
     private long loadedAt = -1;
-    private boolean painted;
+    /** The last PageCheck answer, null when none came. */
+    private String page;
     private String error;
     private RelayStatus.Kind status = RelayStatus.Kind.IDLE;
     private Decision settled;
@@ -61,7 +65,7 @@ public final class StartupWatchdog {
         startedAt = now;
         readyAt = relay ? -1 : now;
         firstByteAt = loadedAt = -1;
-        painted = false;
+        page = null;
         error = null;
         settled = null;
     }
@@ -80,13 +84,27 @@ public final class StartupWatchdog {
         if (firstByteAt < 0) firstByteAt = now;
     }
 
+    /**
+     * A new main-frame document started. One that replaces a page already loaded under the cover (the
+     * boot guard's reload, the cockpit's stale-build reload) gets its own load and blank deadlines.
+     */
+    public void committed(long now) {
+        if (loadedAt >= 0) {
+            firstByteAt = now;
+            loadedAt = -1;
+            page = null;
+        } else {
+            firstByte(now);
+        }
+    }
+
     public void loaded(long now) {
         firstByte(now);
         if (loadedAt < 0) loadedAt = now;
     }
 
-    public void painted() {
-        painted = true;
+    public void page(String state) {
+        page = state;
     }
 
     /** The main frame failed to load. */
@@ -94,7 +112,7 @@ public final class StartupWatchdog {
         if (error == null) error = reason;
     }
 
-    /** Once REVEAL or PROBLEM, it stays so until the next start. */
+    /** Once anything but WAIT, it stays so until the next start. */
     public Decision decide(long now) {
         if (settled != null) return settled;
         Decision next = evaluate(now);
@@ -106,13 +124,18 @@ public final class StartupWatchdog {
         if (startedAt < 0) return new Decision(Kind.WAIT, connecting());
         // A proxy's 503 page is "painted" too: the failure wins.
         if (error != null) return new Decision(Kind.PROBLEM, error);
-        if (painted) return new Decision(Kind.REVEAL, null);
+        if (PageCheck.PAINTED.equals(page)) return new Decision(Kind.REVEAL, null);
         long elapsed = now - startedAt;
         String terminal = terminalReason(status);
         // A page from the phone's cache can stand without a session; the banner then says why.
         if (terminal != null && firstByteAt < 0) return new Decision(Kind.PROBLEM, terminal);
         if (loadedAt >= 0) {
-            return now - loadedAt >= PAINT_GRACE_MS ? new Decision(Kind.REVEAL, null) : new Decision(Kind.WAIT, LOADING);
+            long since = now - loadedAt;
+            if (PageCheck.healthy(page, relay)) {
+                return since >= PAINT_GRACE_MS ? new Decision(Kind.REVEAL, null) : new Decision(Kind.WAIT, LOADING);
+            }
+            // An empty #root, an error page, or no answer at all: this is the black screen.
+            return since >= BLANK_MS ? new Decision(Kind.BLANK, BLANK_TEXT) : new Decision(Kind.WAIT, LOADING);
         }
         if (firstByteAt >= 0) {
             if (now - firstByteAt >= LOAD_MS || elapsed >= MAX_MS) return new Decision(Kind.PROBLEM, "The cockpit started loading but did not finish.");
@@ -127,6 +150,7 @@ public final class StartupWatchdog {
     }
 
     public static final String LOADING = "Loading cockpit…";
+    public static final String BLANK_TEXT = "The cockpit loaded but did not start. cezar may have been updated.";
 
     private String connecting() {
         return "Connecting to " + serverLabel + "…";

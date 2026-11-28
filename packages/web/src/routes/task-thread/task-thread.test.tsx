@@ -138,10 +138,28 @@ describe('ThreadView', () => {
     ]
     renderView(<ThreadView run={run('done')} thread={reduceThread(authRequired)} />)
 
-    expect(screen.getByRole('alert').textContent).toContain('This run needed Codex authorization')
-    expect(screen.getByRole('link', { name: 'Open provider settings' }).getAttribute('href')).toBe(
-      '/settings/agents#providers',
-    )
+    // The inline reconnect card (spec 2026-11-18-inline-account-reconnect) outlives the run.
+    const card = screen.getByRole('group', { name: /Codex · .* is signed out/ })
+    expect(card.closest('[data-slot="provider-auth-required"]')).not.toBeNull()
+    expect(screen.getByRole('button', { name: /^Reconnect/ })).toBeTruthy()
+    // Not parked, so a reconnect resumes nothing by itself: the card says to Continue.
+    expect(card.textContent).toContain('Reconnect, then Continue the task.')
+    expect(card.textContent).not.toContain('continues from the same session')
+  })
+
+  it('a run parked on an expired login carries the reconnect card in its dock when the transcript has none', () => {
+    const parked = { kind: 'auth' as const, provider: 'claude' as const, profileId: 'default', at: '2026-11-18T10:00:00Z' }
+    renderView(<ThreadView run={run('waiting', { parked })} thread={reduceThread([line(1, 'done')])} />)
+    expect(screen.getByRole('group', { name: /Claude Code · .* is signed out/ })).toBeTruthy()
+    expect(document.querySelector('[data-slot="sign-in-hint"]')).toBeNull()
+  })
+
+  it('a parked run whose transcript already shows the card gets only the dock hint', () => {
+    const parked = { kind: 'auth' as const, provider: 'claude' as const, profileId: 'default', at: '2026-11-18T10:00:00Z' }
+    const events = [line(1, 'provider-auth-required', { provider: 'claude', authFailureId: 'incident-1' })]
+    renderView(<ThreadView run={run('waiting', { parked })} thread={reduceThread(events)} />)
+    expect(screen.getAllByRole('group', { name: /Claude Code · .* is signed out/ })).toHaveLength(1)
+    expect(document.querySelector('[data-slot="sign-in-hint"]')).not.toBeNull()
   })
 
   it('a running run clocks its open turn and last activity on the Working… line; a closed run shows none', () => {
@@ -160,7 +178,7 @@ describe('ThreadView', () => {
       ]
       renderView(<ThreadView run={run('running')} thread={reduceThread(events, { activeTurn: true })} />)
       expect(document.querySelector('[data-slot="working-elapsed"]')?.textContent).toBe('1m 00s')
-      expect(document.querySelector('[data-slot="working-last-activity"]')?.textContent).toContain('(20s ago)')
+      expect(document.querySelector('[data-slot="working-last-activity"]')?.textContent).toContain('last activity 20s ago')
 
       cleanup()
       renderView(<ThreadView run={run('done')} thread={reduceThread(events)} />)
@@ -252,8 +270,11 @@ describe('ThreadView', () => {
     expect(bubble?.textContent).not.toContain('**')
   })
 
-  it('dims lifecycle lines and shows the tool card + folded reasoning', () => {
+  it('folds lifecycle lines into one setup row and shows the tool card + folded reasoning', () => {
     renderView(<ThreadView run={run('waiting')} thread={reduceThread(EVENTS)} />)
+    expect(document.querySelector('[data-slot="note-group-summary"]')?.textContent)
+      .toBe('Set up: worktree cez/r1 from main · runner Claude')
+    fireEvent.click(screen.getByRole('button', { name: /^Set up: / }))
     const notes = [...document.querySelectorAll('[data-slot="note-line"]')]
     expect(notes.map((n) => n.getAttribute('data-tone'))).toEqual(['dim', 'dim'])
     expect(notes[1]!.textContent).toContain('worktree ready')
@@ -833,6 +854,19 @@ describe('ThreadView', () => {
     fireEvent.click(badge)
     const details = await screen.findByRole('dialog')
     expect(details.querySelector('[data-slot="agent-badge-engine-picker"] [data-slot="follow-up-model-pill"]')).not.toBeNull()
+  })
+
+  it('shows a legacy run’s reported model from the current context without its start on the visible page', () => {
+    const session = line(1, 'session.started', { sessionId: 's1', backend: 'claude', model: 'claude-opus-5' })
+    renderView(
+      <ThreadView
+        run={run('done', { runner: 'claude' })}
+        thread={reduceThread(EVENTS.slice(2))}
+        currentThread={reduceThread([session])}
+      />,
+    )
+
+    expect(screen.getByRole('button', { name: 'Agent: claude, model auto → claude-opus-5' })).toBeTruthy()
   })
 
   /** #472 — stacked messages render as their own bubbles, after the task. */
@@ -2141,6 +2175,7 @@ describe('Manager source task arrivals', () => {
     const earlier = answeredCard ? [
       line(8, 'ask.requested', { requestId: 'old-ask', questions }),
       line(9, 'user-message', { text: 'Publish: Hold report' }),
+      line(9.5, 'ask.closed', { requestId: 'old-ask', reason: 'answered', answer: 'Publish: Hold report' }),
     ] : []
     renderSourceTask([...EVENTS, ...earlier, line(10, 'text', { text: 'Please review the updated report before I publish it.' })])
     expect(screen.queryByRole('button', { name: 'Publish report' })).toBeNull()

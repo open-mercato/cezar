@@ -1,5 +1,6 @@
 import { ScheduledTasks } from '@/components/scheduled-tasks'
 import { useScheduledTasksGate } from '@/lib/scheduled-tasks-gate'
+import { runModelLine, titleWithModel } from '@/lib/actual-model'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import {
   ArchiveIcon,
@@ -12,6 +13,8 @@ import {
   CpuIcon,
   DollarSignIcon,
   FileDiffIcon,
+  GaugeIcon,
+  InfoIcon,
   GitBranchIcon,
   ListChecksIcon,
   LinkIcon,
@@ -25,7 +28,7 @@ import {
   XIcon,
 } from 'lucide-react'
 import * as React from 'react'
-import { useLocation } from 'react-router'
+import { useLocation, useNavigate as useRouterNavigate } from 'react-router'
 import { Virtualizer } from 'virtua'
 import { Link, useNavigate } from '@/lib/project-router'
 
@@ -33,16 +36,21 @@ import { archiveFinished, archiveProjectRun, markAllRunsSeen, patchRun, setProje
 import { useRunUsage } from '@/api/global-events'
 import { CacheStatusChip } from '@/components/cache-status'
 import { isCezarShell } from '@/lib/phone-app'
-import { queryKeys, useHealth, usePinRun, useReferenceProjectId, useRepo, useRuns, workspaceQueryKeys, writePatchedRunToCaches } from '@/api/queries'
-import type { RunRecord } from '@open-mercato/cezar-api-client'
-import { queryScope } from '@open-mercato/cezar-api-client'
+import { usePlanUsageConsumers } from '@/api/plan-usage'
+import { queryKeys, useConfig, useHealth, usePinRun, useReferenceProjectId, useRepo, useRuns, workspaceQueryKeys, writePatchedRunToCaches } from '@/api/queries'
+import type { PlanUsageConsumerWindow, RunRecord } from '@open-mercato/cezar-api-client'
+import { queryScope, RUN_TAGS_MAX } from '@open-mercato/cezar-api-client'
 import { TaskQuickActions, TaskSelectionCheckbox, TasksSelectionToolbar, useTasksOverviewSelection, type TasksOverviewActionHandler } from './tasks-overview-actions'
+import { planLimitCell, planWindowsByRun, PlanLimitCellView } from './tasks-plan-limit'
 import { CenteredState } from '@/components/centered-state'
 import { FirstRun } from '@/components/first-run'
 import { DiffStatLabel } from '@/components/diff-stat'
 import { DirectionalUsage } from '@/components/directional-usage'
 import { TitleEditInput, useTitleEditor } from '@/components/editable-title'
 import { FacetFilter } from '@/components/facet-filter'
+import { useOptionalTaskTags } from '@/api/task-tags'
+import { RunTagChips } from '@/components/run-tags'
+import { NO_TASK_TAG, resolveRunTags, type ResolvedRunTag } from '@/lib/task-tags'
 import { useListView } from '@/components/list-view'
 import { Pill } from '@/components/pill'
 import { PinToggle } from '@/components/pin-toggle'
@@ -52,6 +60,7 @@ import { Segmented } from '@/components/segmented'
 import { StatusDescription, StatusMark } from '@/components/status-mark'
 import { SubtaskToggle } from '@/components/subtask-toggle'
 import { Button } from '@/components/ui/button'
+import { IconTooltip } from '@/components/ui/icon-tooltip'
 import {
   DropdownMenu,
   DropdownMenuCheckboxItem,
@@ -131,6 +140,7 @@ import { cn } from '@/lib/utils'
 import { useAutomationsGate, useAutomationsQuery } from '@/routes/automations/use-automations'
 
 const NO_RUNS: RunRecord[] = []
+const NO_PLAN_WINDOWS: PlanUsageConsumerWindow[] = []
 const DEFAULT_EXPANDED_COLUMNS = normalizeExpandedColumns(undefined)
 const noToggle = (): void => undefined
 const AGE_TICK_MS = 30_000
@@ -170,9 +180,16 @@ export function TasksOverview({
   hasScheduledTasks = !!scheduledTasks,
   firstRun,
   initialQuery = '',
+  initialStatuses,
   cacheStatus,
   managersAvailable = false,
+  planUsage,
+  defaultRunner,
 }: {
+  /** Plan-limit consumers (one query for the list); undefined until it answers or while folded. */
+  planUsage?: PlanUsageConsumerWindow[]
+  /** The project's default runner, for rows that did not pick one ("not reported" vs "not measured yet"). */
+  defaultRunner?: string
   /** Manager owns task creation on mobile/app navigation when available. */
   managersAvailable?: boolean
   /** Undefined while `/api/runs` has not answered: the header renders, the body stays empty —
@@ -180,6 +197,8 @@ export function TasksOverview({
   runs: RunRecord[] | undefined
   /** The search Now hands over (`/tasks?q=`); the box stays session-local after that. */
   initialQuery?: string
+  /** The Status facet a link pre-selects (`/tasks?status=running`, the bottom bar's quick actions). */
+  initialStatuses?: readonly string[]
   scheduledTasks?: React.ReactNode
   hasScheduledTasks?: boolean
   /** First-run onboarding (spec 2026-10-26-first-run-onboarding): replaces the plain
@@ -238,19 +257,23 @@ export function TasksOverview({
     [],
   )
   // The facets are session-local, like the search text; only the origin is remembered.
-  const [filters, setFilters] = React.useState<TaskTableFilters>(NO_TASK_FILTERS)
+  const [filters, setFilters] = React.useState<TaskTableFilters>(() =>
+    initialStatuses?.length ? { ...NO_TASK_FILTERS, statuses: [...initialStatuses] } : NO_TASK_FILTERS)
   // Session-local like the facets; Recent on every fresh visit.
   const [sortBy, setSortBy] = React.useState<SortBy>('recent')
   const all = runs ?? NO_RUNS
   const viewHasRuns = React.useMemo(() => all.some((run) => (view === 'archived') === run.archived), [all, view])
   const automations = React.useMemo(() => automationIndex(all), [all])
+  const tagRegistry = useOptionalTaskTags()
+  const hiddenTags = React.useMemo(() => new Set(tagRegistry?.deletedIds ?? []), [tagRegistry])
   // Origin and facets narrow BEFORE everything else, so the tab counts, the queue-free rows and
   // the compare strips all describe the same list the table shows.
   const narrowed = React.useMemo(
-    () => filterTaskTable(all, origin, filters, automations),
-    [all, origin, filters, automations],
+    () => filterTaskTable(all, origin, filters, automations, hiddenTags),
+    [all, origin, filters, automations, hiddenTags],
   )
   const counts = React.useMemo(() => listCounts(narrowed), [narrowed])
+  const planByRun = React.useMemo(() => (planUsage ? planWindowsByRun(planUsage) : undefined), [planUsage])
   const matching = React.useMemo(() => filterRuns(narrowed, query), [narrowed, query])
   const visible = React.useMemo(() => sortTableRuns(matching, view, sortBy), [matching, view, sortBy])
   // A live search overrides the fold wholesale: `filterRuns` keeps a child whose parent also
@@ -354,17 +377,19 @@ export function TasksOverview({
         ) : null}
         {/* Only when there is something to sweep, like the legacy header's count-gated broom. */}
         {view === 'active' && finished > 0 ? (
-          <Button
-            type="button"
-            variant="ghost"
-            size="sm"
-            data-slot="archive-finished"
-            className="hidden md:inline-flex"
-            onClick={onArchiveFinished}
-          >
-            <ArchiveIcon className="size-3.5" aria-hidden="true" />
-            Archive finished
-          </Button>
+          <IconTooltip label="Archive every finished task and free its worktree (branches kept; Continue restores one)">
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              data-slot="archive-finished"
+              className="hidden md:inline-flex"
+              onClick={onArchiveFinished}
+            >
+              <ArchiveIcon className="size-3.5" aria-hidden="true" />
+              Archive finished
+            </Button>
+          </IconTooltip>
         ) : null}
         <div className="relative hidden w-60 md:block">
           <SearchIcon
@@ -398,6 +423,7 @@ export function TasksOverview({
             onFiltersChange={setFilters}
             automations={automations}
             automationNames={automationNames}
+            hiddenTags={hiddenTags}
             sortBy={sortBy}
             onSortByChange={setSortBy}
             columns={
@@ -429,7 +455,7 @@ export function TasksOverview({
             origin={origin}
             hiddenByOrigin={
               origin !== 'all' &&
-              filterTaskTable(sortRuns(all, view), 'all', filters, automations).length > 0
+              filterTaskTable(sortRuns(all, view), 'all', filters, automations, hiddenTags).length > 0
             }
             onShowAll={() => onOriginChange('all')}
             firstRun={firstRun}
@@ -529,6 +555,8 @@ export function TasksOverview({
                         sortBy={sortBy}
                         columns={columns}
                         expandedColumns={expandedColumns}
+                        planWindows={planByRun ? (planByRun.get(item.node.run.id) ?? NO_PLAN_WINDOWS) : undefined}
+                        defaultRunner={defaultRunner}
                       />
                     ))}
                     <RowSpacer height={tableWindow.padBottom} colSpan={columns.length + (onTaskAction ? 1 : 0)} />
@@ -792,6 +820,7 @@ function TasksFilterBar({
   onFiltersChange,
   automations,
   automationNames,
+  hiddenTags,
   sortBy,
   onSortByChange,
   columns,
@@ -804,6 +833,8 @@ function TasksFilterBar({
   onFiltersChange: (update: (current: TaskTableFilters) => TaskTableFilters) => void
   automations: ReadonlyMap<string, string | undefined>
   automationNames?: ReadonlyMap<string, string>
+  /** Tombstoned task-tag ids (spec 2026-11-23-task-tags). */
+  hiddenTags?: ReadonlySet<string>
   sortBy: SortBy
   onSortByChange: (next: SortBy) => void
   /** The desktop Columns menu, rendered at the bar's end. */
@@ -814,7 +845,15 @@ function TasksFilterBar({
     [runs, view],
   )
   const perOrigin = originCounts(inView, filters, automations)
-  const countsOf = (facet: TaskFacetId) => taskFacetCounts(inView, origin, filters, automations, facet)
+  const countsOf = (facet: TaskFacetId) => taskFacetCounts(inView, origin, filters, automations, facet, hiddenTags)
+  const tagRegistry = useOptionalTaskTags()
+  const tagCounts = countsOf('tags')
+  // Options are the resolved tags present on loaded runs; the facet shows only once one exists.
+  const tagOptions = React.useMemo(() => {
+    const byId = new Map<string, ResolvedRunTag>()
+    for (const run of runs) for (const tag of resolveRunTags(run.tags, tagRegistry)) byId.set(tag.id, tag)
+    return [...byId.values()].sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }))
+  }, [runs, tagRegistry])
   const statusCounts = countsOf('statuses')
   const workflowCounts = countsOf('workflows')
   const automationCounts = countsOf('automations')
@@ -866,6 +905,20 @@ function TasksFilterBar({
         }))}
         emptyLabel="No tasks to filter"
       />
+      {tagOptions.length > 0 ? (
+        <FacetFilter
+          slot="task-tag"
+          label="Tag"
+          selected={filters.tags}
+          onToggle={(value) => toggle('tags', value)}
+          onClear={() => clear('tags')}
+          options={[
+            ...tagOptions.map((tag) => ({ value: tag.id, label: tag.name, count: tagCounts.get(tag.id) ?? 0 })),
+            { value: NO_TASK_TAG, label: 'No tag', count: tagCounts.get(NO_TASK_TAG) ?? 0 },
+          ]}
+          emptyLabel="No tagged tasks"
+        />
+      ) : null}
       {origin !== 'regular' && automationIds.length > 0 ? (
         <FacetFilter
           slot="automation"
@@ -982,8 +1035,10 @@ function TaskColumnHeader({
   }
 
   const action = expanded ? 'Fold' : 'Expand'
+  const hint = expanded ? column.hint : undefined
   return (
     <Th columnId={column.id} right={column.align === 'right'} folded={!expanded}>
+      <span className={cn('flex items-center gap-0.5', hint ? '' : 'contents')}>
       <Tooltip>
         <TooltipTrigger asChild>
           <button
@@ -1014,6 +1069,19 @@ function TaskColumnHeader({
         </TooltipTrigger>
         <TooltipContent side="top">{column.label} · {action} column</TooltipContent>
       </Tooltip>
+      {hint ? (
+        <IconTooltip label={hint} side="top">
+          <span
+            data-slot="column-hint"
+            tabIndex={0}
+            aria-label={`About ${column.label}: ${hint}`}
+            className="inline-flex shrink-0 rounded-sm outline-none hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50"
+          >
+            <InfoIcon className="size-3" aria-hidden="true" />
+          </span>
+        </IconTooltip>
+      ) : null}
+      </span>
     </Th>
   )
 }
@@ -1037,6 +1105,8 @@ function TaskColumnIconView({ icon }: { icon?: TaskColumnIcon }) {
       return <CpuIcon className={className} aria-hidden="true" />
     case 'memory':
       return <MemoryStickIcon className={className} aria-hidden="true" />
+    case 'planLimit':
+      return <GaugeIcon className={className} aria-hidden="true" />
     case 'started':
       return <Clock3Icon className={className} aria-hidden="true" />
     default:
@@ -1148,8 +1218,13 @@ const TableRow = React.memo(function TableRow({
   sortBy,
   columns,
   expandedColumns,
+  planWindows,
+  defaultRunner,
   selectable, selectionMode, selected, onSelect, actionsBusy, onAction,
 }: {
+  /** This run's 5-hour plan windows; undefined while the ledger has not answered. */
+  planWindows?: PlanUsageConsumerWindow[]
+  defaultRunner?: string
   ariaRowIndex?: number
   run: RunRecord
   /** Nesting level under the task that dispatched this one; 0 for a top-level row. */
@@ -1265,6 +1340,8 @@ const TableRow = React.memo(function TableRow({
             scheduled={scheduled}
             reference={reference}
             cost={cost}
+            planWindows={planWindows}
+            defaultRunner={defaultRunner}
             to={to}
             onRename={onRename}
             onTogglePin={onTogglePin}
@@ -1289,11 +1366,15 @@ function TaskTableCell({
   scheduled,
   reference,
   cost,
+  planWindows,
+  defaultRunner,
   to,
   onRename,
   onTogglePin,
   sortBy,
 }: {
+  planWindows?: PlanUsageConsumerWindow[]
+  defaultRunner?: string
   column: TaskColumnDefinition
   expanded: boolean
   run: RunRecord
@@ -1387,11 +1468,20 @@ function TaskTableCell({
       return (
         <td
           data-column-id={column.id}
+          title={runModelLine(run)}
           className={cn(TD_BASE, 'text-right font-mono text-xs text-muted-foreground tabular-nums')}
         >
           {cost || <Dash />}
         </td>
       )
+    case 'planLimit': {
+      const cell = planLimitCell(run, planWindows, defaultRunner)
+      return (
+        <td data-column-id={column.id} title={cell.kind === 'share' ? cell.title : undefined} className={cn(TD_BASE, 'text-right')}>
+          <PlanLimitCellView cell={cell} />
+        </td>
+      )
+    }
     case 'started':
       return (
         <td data-column-id={column.id} className={cn(TD_BASE, 'text-right text-xs text-soft-foreground tabular-nums')}>
@@ -1479,7 +1569,7 @@ function TitleCell({
       ) : null}
       <Link
         to={to}
-        title={title}
+        title={titleWithModel(title, run)}
         aria-describedby={quiet ? statusId : undefined}
         className={cn(
           'min-w-0 truncate text-ui',
@@ -1491,6 +1581,8 @@ function TitleCell({
         {quiet ? <StatusDescription id={statusId} attention={deriveAttention(run)} /> : null}
         {unread ? <UnreadMarker /> : null}
       </Link>
+      {/* One chip plus `+N`: the title keeps the cell's width. */}
+      <RunTagChips tags={run.tags} max={1} className="shrink-0" />
       {/* What a DISPATCHED row is for — `review` or `implement` — so a tester can tell a child
           from a task a person typed without opening it. Null on every root. */}
       {dispatchKindLabel(run) ? (
@@ -1771,6 +1863,8 @@ const TaskCard = React.memo(function TaskCard({
         ) : null}
         {selectable ? <TaskQuickActions run={run} busy={actionsBusy} onAction={onAction} /> : null}
       </div>
+      {/* Tags get the card's last line, all of them: beside the title they left it one word wide. */}
+      <RunTagChips tags={run.tags} max={RUN_TAGS_MAX} className="mt-2 flex flex-wrap" />
     </div>
   )
 })
@@ -1815,6 +1909,26 @@ function BranchSkeleton() {
 }
 
 /**
+ * `?status=` (the bottom bar's quick actions) seeds the Status facet once and leaves the URL, so
+ * clearing the facet stays cleared on Back or a reload. A new seed remounts the table.
+ */
+function useStatusSeed(location: ReturnType<typeof useLocation>): { key: string; statuses: string[] } | null {
+  // The router's own navigate: `location.pathname` is already project-prefixed.
+  const navigate = useRouterNavigate()
+  const param = new URLSearchParams(location.search).get('status')
+  const [seed, setSeed] = React.useState<{ key: string; statuses: string[] } | null>(null)
+  if (param !== null && seed?.key !== location.key) setSeed({ key: location.key, statuses: param.split(',').filter(Boolean) })
+  React.useEffect(() => {
+    if (param === null) return
+    const rest = new URLSearchParams(location.search)
+    rest.delete('status')
+    const query = rest.toString()
+    void navigate({ pathname: location.pathname, search: query ? `?${query}` : '', hash: location.hash }, { replace: true, state: location.state })
+  }, [param, location, navigate])
+  return seed
+}
+
+/**
  * The overview wired to live data: `useRuns()` (kept fresh by the global SSE stream), the shared
  * Active/Archived context (the sidebar's tabs and these are one state), and the archive-finished
  * mutation. The invalidate on success is the authoritative half of the doctrine — the stream will
@@ -1822,7 +1936,10 @@ function BranchSkeleton() {
  */
 export function TasksOverviewRoute() {
   const runs = useRuns()
-  const initialQuery = new URLSearchParams(useLocation().search).get('q') ?? ''
+  const location = useLocation()
+  const search = new URLSearchParams(location.search)
+  const initialQuery = search.get('q') ?? ''
+  const statusSeed = useStatusSeed(location)
   const health = useHealth()
   const metricVisibility = usageMetricVisibility(health.data)
   // Project-scoped, unlike health. Unknown (still loading) counts as git so a fresh task's
@@ -1842,7 +1959,7 @@ export function TasksOverviewRoute() {
     void queryClient.invalidateQueries({ queryKey: [actionScope, 'runs'] })
   }, [actionScope, queryClient])
   const archive = useMutation({
-    mutationFn: archiveFinished,
+    mutationFn: () => archiveFinished(),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.runs.all }),
   })
   // "Mark all read" (#unread-done-items): one call stamps every unread finished run; the
@@ -1877,6 +1994,9 @@ export function TasksOverviewRoute() {
     [pinMutate],
   )
   const taskTableColumns = useTaskTableColumns()
+  // One consumers query for the whole list, asked only while the Plan limit column is open.
+  const planUsage = usePlanUsageConsumers(taskTableColumns.isExpanded('planLimit'))
+  const defaultRunner = useConfig().data?.defaultRunner
   const [origin, setOrigin] = useTaskOrigin()
   // Names for the Automation facet and the Scheduled group. Only asked for while automations are
   // on AND automation rows are on screen or a schedule is known — a project that never ran or
@@ -1922,6 +2042,9 @@ export function TasksOverviewRoute() {
   return (
     <ReferenceStatusProvider projectId={projectId} requests={referenceRequests}>
       <TasksOverview
+        // A new `?status=` while already here (a quick action) re-seeds the facets.
+        key={statusSeed?.key}
+        initialStatuses={statusSeed?.statuses}
         managersAvailable={health.data?.capabilities?.managers === true}
         scheduledTasks={view === 'active' ? <ScheduledTasks enabled={scheduledGate} /> : undefined}
         hasScheduledTasks={view === 'active' && !!automationsQuery.data?.automations.some(a => a.deferredStart)}
@@ -1946,6 +2069,8 @@ export function TasksOverviewRoute() {
         // table does) instead of guessing, so it never shows the welcome page to a plain folder.
         firstRun={view === 'active' ? <FirstRun gitRepo={repo.data ? repo.data.info !== null : repo.isError ? true : undefined} /> : undefined}
         initialQuery={initialQuery}
+        planUsage={planUsage.data?.entries}
+        defaultRunner={defaultRunner}
         cacheStatus={<CacheStatusChip queryKey={queryKeys.runs.list()} isFetching={runs.isFetching} isError={runs.isError} />}
       />
     </ReferenceStatusProvider>
