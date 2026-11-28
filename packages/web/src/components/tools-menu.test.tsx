@@ -202,6 +202,24 @@ describe('ToolsMenu', () => {
     expect(row.querySelector('[data-slot="tool-hint"]')).toBeNull()
   })
 
+  it('shows an installed tool’s deprecation notice, but never its other hints (#2439)', async () => {
+    renderMenu({
+      ...HEALTH,
+      checks: [
+        { name: 'claude', available: true, version: '2.0.44', hint: 'not shown' },
+        { name: 'gemini', available: true, version: '0.60.0', hint: 'auth hint', deprecated: 'use antigravity' },
+      ],
+    })
+    const menu = await openMenu()
+
+    const gemini = rowsIn(menu).find((el) => el.dataset.tool === 'gemini') as HTMLElement
+    expect(gemini.querySelector('[data-slot="tool-deprecated"]')?.textContent).toBe('use antigravity')
+    expect(gemini.textContent).not.toContain('auth hint')
+    const claude = rowsIn(menu).find((el) => el.dataset.tool === 'claude') as HTMLElement
+    expect(claude.querySelector('[data-slot="tool-deprecated"]')).toBeNull()
+    expect(claude.textContent).not.toContain('not shown')
+  })
+
   it('renders a missing tool with the server hint verbatim and a Set up link', async () => {
     renderMenu(HEALTH)
     const menu = await openMenu()

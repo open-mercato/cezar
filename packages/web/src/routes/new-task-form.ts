@@ -59,7 +59,7 @@ export const RUNNERS: readonly RunnerOption[] = [
   { id: 'copilot', label: 'copilot', desc: 'GitHub Copilot CLI (ACP)' },
   { id: 'omp', label: 'omp', desc: 'OMP (RPC)' },
   { id: 'antigravity', label: 'antigravity', desc: 'Google Antigravity CLI (agy)' },
-  { id: 'gemini', label: 'gemini', desc: 'Gemini CLI (ACP)' },
+  { id: 'gemini', label: 'gemini', desc: 'Gemini CLI (ACP) — deprecated, use antigravity' },
   { id: 'kimi', label: 'kimi', desc: 'Kimi Code (ACP)' },
 ]
 

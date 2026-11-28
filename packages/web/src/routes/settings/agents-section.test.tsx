@@ -623,7 +623,7 @@ describe('the agents form', () => {
         'copilotGitHub Copilot CLI (ACP)',
         'ompOMP (RPC)',
         'antigravityGoogle Antigravity CLI (agy)',
-        'geminiGemini CLI (ACP)',
+        'geminiGemini CLI (ACP) — deprecated, use antigravity',
         'kimiKimi Code (ACP)',
       ])
       // The discovered account is the checked row until the repo says otherwise.

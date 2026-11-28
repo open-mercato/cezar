@@ -23,6 +23,10 @@ import type { TokenUsage } from './ui-events.ts';
 export const GEMINI_AUTH_HINT =
   'Gemini CLI needs an API key (aistudio.google.com), Vertex AI, or a Workspace/Code Assist license — personal Google sign-in no longer works for Gemini CLI.';
 
+/** Label/hint only (#2439): the `gemini` runner id keeps working and no saved choice is rewritten. */
+export const GEMINI_DEPRECATION_HINT =
+  'Gemini CLI is deprecated in cezar — prefer the Antigravity (`antigravity`) runner. Existing gemini tasks, workflows and automations still run.';
+
 /** The run-time line for a rejected credential. "authentication failed" is what
  *  `isRuntimeProviderAuthFailure` keys on, so the server raises `provider-auth-required`. */
 export const GEMINI_AUTH_FAILURE_MESSAGE = `Gemini CLI authentication failed — ${GEMINI_AUTH_HINT}`;

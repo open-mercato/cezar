@@ -18,6 +18,8 @@ export const backendCheckSchema = z.object({
   available: z.boolean(),
   version: z.string().optional(),
   hint: z.string().optional(),
+  /** A deprecation notice, shown even when the CLI is installed (#2439). */
+  deprecated: z.string().optional(),
 });
 export type BackendCheck = z.infer<typeof backendCheckSchema>;
 

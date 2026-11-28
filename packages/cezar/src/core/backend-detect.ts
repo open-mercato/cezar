@@ -8,7 +8,7 @@ import { cliVersionFrom } from './provider-auth.ts';
 import { installHintCommand } from './agent-install.ts';
 import { resolveClaudeBin } from './claude-bin.ts';
 import { geminiHasCredentials } from './gemini-credentials.ts';
-import { GEMINI_AUTH_HINT } from './gemini-ui-mapper.ts';
+import { GEMINI_AUTH_HINT, GEMINI_DEPRECATION_HINT } from './gemini-ui-mapper.ts';
 import { resolveKimiExecutable } from './kimi-runner.ts';
 import { ghEnv } from './gh-env.ts';
 import { spawnableCommand } from './windows-shim.ts';
@@ -23,6 +23,8 @@ export interface BackendCheck {
   available: boolean;
   version?: string;
   hint?: string;
+  /** A deprecation notice, shown even when the CLI is installed (#2439). */
+  deprecated?: string;
 }
 
 /**
@@ -307,7 +309,7 @@ async function probeOmp(): Promise<BackendCheck> {
 async function probeGemini(): Promise<BackendCheck> {
   // Dry-run stands the runner up on the bundled ACP mock (`scripts/mock-gemini-acp.mjs`).
   if (process.env.CEZ_DRY_RUN === '1') {
-    return { name: 'gemini', available: true, version: 'mock (CEZ_DRY_RUN=1)' };
+    return { name: 'gemini', available: true, version: 'mock (CEZ_DRY_RUN=1)', hint: GEMINI_DEPRECATION_HINT, deprecated: GEMINI_DEPRECATION_HINT };
   }
   const bin = process.env.CEZ_GEMINI_BIN ?? 'gemini';
   try {
@@ -317,13 +319,15 @@ async function probeGemini(): Promise<BackendCheck> {
       available: true,
       version: stdout.trim(),
       // Individuals need an API key: Google sign-in no longer works for Gemini CLI (spec U11).
-      ...(geminiHasCredentials() ? {} : { hint: GEMINI_AUTH_HINT }),
+      hint: geminiHasCredentials() ? GEMINI_DEPRECATION_HINT : `${GEMINI_DEPRECATION_HINT} ${GEMINI_AUTH_HINT}`,
+      deprecated: GEMINI_DEPRECATION_HINT,
     };
   } catch {
     return {
       name: 'gemini',
       available: false,
-      hint: `optional: install Gemini CLI (${installHintCommand('gemini')}) to use the Gemini runner. ${GEMINI_AUTH_HINT}`,
+      hint: `optional: install Gemini CLI (${installHintCommand('gemini')}) to use the Gemini runner. ${GEMINI_DEPRECATION_HINT} ${GEMINI_AUTH_HINT}`,
+      deprecated: GEMINI_DEPRECATION_HINT,
     };
   }
 }

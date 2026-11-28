@@ -141,7 +141,8 @@ Notable fields (full doc-comments in the source):
   rules cannot widen a deny), Pi through `allowedTools` (no shell), Codex through an isolated home, environment-free native turns and cezar’s read broker,
   OpenCode denied `edit`/`bash` in `OPENCODE_CONFIG_CONTENT` at the top level and in every agent, Cursor `--mode ask` without `--force`, Copilot
   `--deny-tool` with its permission prompts refused, Junie without `brave_mode` with its prompts
-  refused, Gemini `--approval-mode default` with its prompts refused. Kimi, omp and Antigravity
+  refused, Gemini `--approval-mode default` with its prompts refused, Antigravity a PreToolUse hook
+  (`antigravity-tool-guard.ts`) plus `--settings` deny rules for write/command/MCP tools. Kimi and omp
   cannot, so `runner-factory.ts` refuses a read-only run on them. `read-only-env.ts` is the shared floor (no `gh` login, no git credential). A new runner
   that cannot enforce it must fail the run, never ignore the field.
 - `allowedTools?` / `bashAllowlist?` / `additionalDirectories?` — tool access.

@@ -265,7 +265,7 @@ describe('the gemini runner behind the seam (Step 2.5)', () => {
   it('detection answers for the mock under CEZ_DRY_RUN=1', async () => {
     process.env.CEZ_DRY_RUN = '1';
     const gemini = (await detectEnvironment()).find((check) => check.name === 'gemini');
-    expect(gemini).toEqual({ name: 'gemini', available: true, version: 'mock (CEZ_DRY_RUN=1)' });
+    expect(gemini).toMatchObject({ name: 'gemini', available: true, version: 'mock (CEZ_DRY_RUN=1)' });
   });
 });
 
