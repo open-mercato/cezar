@@ -10,6 +10,9 @@
 - ✨ The workflow list reports what each workflow can do outside the machine (`capabilities`: push, open a PR, post to GitHub), so a manager can pick a safe one. *(@patzick)*
 - ✨ A manager can stop and steer the tasks it starts: `cez-manager task cancel <run> --reason "…"` cancels a task and everything it dispatched, keeps the worktree and branch, and the task shows who cancelled it and why. It cancels only its own tasks unless you turn on **Cancel any task** in its settings. `task create --model opus --effort max` (and `task say` on a finished task) picks the model and effort, refusing an unknown one with the valid choices; `task retry` restarts a failed task. Its task list now marks tasks you started yourself and the pull request each task opened, `workflows` marks what each workflow can do, and every `cez-manager` command takes `--help` and names the valid subcommands on a typo. *(@patzick)*
 
+## ⚡ Performance
+- ⚡ Large graph workflows load and start in milliseconds instead of minutes: a ~600-node workflow took about 50 s on every workflow-catalog load and over a minute to start a run, because each edge lookup rescanned every edge and node. *(@msuchy96)*
+
 ## 🐛 Fixes
 - 🐛 Read-only Codex steps run again on Codex 0.170 and newer: `review-pr` and other restricted steps were refused with "the installed Codex protocol has not been verified" because cezar accepted only Codex 0.169.0. A newer Codex now has every native feature turned off for the step, and checked, before the model starts. ChatGPT workspace accounts that set a model policy work too. A refusal that every step repeats is shown once. *(@patzick)*
 - 🐛 A manager whose agent is Codex works again: instead of refusing every message, it runs in Codex's isolated read-only mode, and cezar runs each of its shell commands only after the same check a Claude manager's commands get (`cez-manager` and read-only `gh`, nothing else). Codex is offered again in the manager agent picker. *(@patzick)*
@@ -20,6 +23,7 @@
 ## 👥 Contributors
 
 - @martaradziszewska
+- @msuchy96
 - @patzick
 
 # 0.19.0 (2026-11-08)

@@ -279,6 +279,71 @@ export function parseEdgeFrom(from: string, nodes: readonly GraphNode[]): { node
   return portsOfNode(best).includes(port) ? { node: best.id, port } : null;
 }
 
+/** `parseEdgeFrom` over a node-by-id map: only `from` itself and its prefixes that end right
+ *  before a dot can match, so trying those longest first picks the node the list scan picks. */
+function parseEdgeFromIndexed(from: string, byId: ReadonlyMap<string, GraphNode>): { node: string; port: string } | null {
+  let best = byId.get(from);
+  for (let i = from.lastIndexOf('.'); !best && i >= 0; i = i === 0 ? -1 : from.lastIndexOf('.', i - 1)) {
+    best = byId.get(from.slice(0, i));
+  }
+  if (!best) return null;
+  if (from === best.id) {
+    const port = portsOfNode(best)[0];
+    return port ? { node: best.id, port } : null;
+  }
+  const port = from.slice(best.id.length + 1);
+  return portsOfNode(best).includes(port) ? { node: best.id, port } : null;
+}
+
+interface GraphIndex {
+  /** The first node with each id — what `nodes.find` returns. */
+  byId: ReadonlyMap<string, GraphNode>;
+  /** Every node with each id, in array order — what `nodes.filter` returns. */
+  allById: ReadonlyMap<string, GraphNode[]>;
+  /** `parsed[i]` is `parseEdgeFrom(graph.edges[i].from, graph.nodes)`. */
+  parsed: ({ node: string; port: string } | null)[];
+  /** The first edge wired to `node.port` — what the `edges.find` scan returns. */
+  edgeFrom(node: string, port: string): GraphEdge | undefined;
+  /** Indexes of the edges into `id`, in edge order. */
+  incoming(id: string): readonly number[];
+}
+
+/** One pass over nodes and edges, so a lookup stops rescanning every edge and, per edge, every
+ *  node (a walk cost nodes × edges²). Each map keeps the first match in array order, as the scans
+ *  did. Built per call, never cached: the editor and server may change a graph between calls. */
+function indexGraph(graph: WorkflowGraph): GraphIndex {
+  const byId = new Map<string, GraphNode>();
+  const allById = new Map<string, GraphNode[]>();
+  for (const n of graph.nodes) {
+    if (!byId.has(n.id)) byId.set(n.id, n);
+    const all = allById.get(n.id);
+    if (all) all.push(n);
+    else allById.set(n.id, [n]);
+  }
+  const parsed: GraphIndex['parsed'] = [];
+  const out = new Map<string, Map<string, GraphEdge>>();
+  const incoming = new Map<string, number[]>();
+  graph.edges.forEach((e, i) => {
+    const f = parseEdgeFromIndexed(e.from, byId);
+    parsed.push(f);
+    if (f) {
+      let ports = out.get(f.node);
+      if (!ports) out.set(f.node, (ports = new Map()));
+      if (!ports.has(f.port)) ports.set(f.port, e);
+    }
+    const into = incoming.get(e.to);
+    if (into) into.push(i);
+    else incoming.set(e.to, [i]);
+  });
+  return {
+    byId,
+    allById,
+    parsed,
+    edgeFrom: (node, port) => out.get(node)?.get(port),
+    incoming: (id) => incoming.get(id) ?? [],
+  };
+}
+
 const VERDICT_MARKER_RE = /CEZ:VERDICT[ \t:=]+([A-Za-z0-9][A-Za-z0-9_-]*)\s*$/;
 
 /** The verdict a turn ended with, if it is one the node declared (D17). */
@@ -310,6 +375,7 @@ const NODE_REF_RE = /\{\{\s*nodes\.([A-Za-z0-9_-]+)\.([A-Za-z0-9_]+)\s*\}\}/g;
  */
 export function graphIssues(graph: WorkflowGraph): string[] {
   const issues: string[] = [];
+  const ix = indexGraph(graph);
   const ids = graph.nodes.map((n) => n.id);
   const dup = ids.find((id, i) => ids.indexOf(id) !== i);
   if (dup) issues.push(`duplicate node id "${dup}"`);
@@ -319,32 +385,32 @@ export function graphIssues(graph: WorkflowGraph): string[] {
 
   // The v1 builder refused to save an empty pipeline; a graph with nothing wired past `start`
   // (or no agent/check anywhere on the walk) passes every other check here yet runs nothing.
-  if (starts.length === 1 && graphRailSteps(graph).length === 0) {
+  if (starts.length === 1 && railSteps(graph, ix).length === 0) {
     issues.push('a workflow needs at least one agent or check step reachable from start');
   }
 
   for (const n of graph.nodes) {
     if (n.type === 'if' && n.condition.kind === 'output') {
       const refNode = n.condition.ref.split('.')[0] as string;
-      if (!ids.includes(refNode)) issues.push(`if node "${n.id}" reads unknown node "${refNode}"`);
+      if (!ix.byId.has(refNode)) issues.push(`if node "${n.id}" reads unknown node "${refNode}"`);
     }
     if (n.type !== 'agent') continue;
     if (!n.prompt && !n.skill) issues.push(`agent node "${n.id}" needs a prompt or a skill`);
-    if ((n.review || n.budgetUsd) && !forkOfBranch(graph, n.id)) {
+    if ((n.review || n.budgetUsd) && !forkOfBranchIn(ix, n.id)) {
       issues.push(`agent node "${n.id}": review and budget apply only to an agent right after a fork`);
     }
     if (n.verdicts && new Set(n.verdicts).size !== n.verdicts.length) issues.push(`agent node "${n.id}" repeats a verdict`);
     const target = n.session?.continue;
     if (target !== undefined) {
-      const t = graph.nodes.find((x) => x.id === target);
+      const t = ix.byId.get(target);
       if (!t || t.type !== 'agent') issues.push(`agent node "${n.id}": session.continue must name an agent node (got "${target}")`);
       else if (target === n.id) issues.push(`agent node "${n.id}": session.continue cannot name itself`);
     }
   }
 
   const wired = new Set<string>();
-  for (const e of graph.edges) {
-    const from = parseEdgeFrom(e.from, graph.nodes);
+  for (const [i, e] of graph.edges.entries()) {
+    const from = ix.parsed[i];
     if (!from) {
       issues.push(`edge from "${e.from}": no such node or port`);
       continue;
@@ -352,7 +418,7 @@ export function graphIssues(graph: WorkflowGraph): string[] {
     const key = `${from.node}.${from.port}`;
     if (wired.has(key)) issues.push(`port "${key}" is wired more than once`);
     wired.add(key);
-    const to = graph.nodes.find((n) => n.id === e.to);
+    const to = ix.byId.get(e.to);
     if (!to) issues.push(`edge from "${e.from}": no such target node "${e.to}"`);
     else if (to.type === 'start') issues.push(`edge from "${e.from}": nothing may lead back into the start node "${e.to}"`);
   }
@@ -361,7 +427,7 @@ export function graphIssues(graph: WorkflowGraph): string[] {
   let forkIssue = false;
   for (const n of graph.nodes) {
     if (n.type !== 'fork') continue;
-    const shape = forkShape(graph, n.id);
+    const shape = forkShapeIn(ix, n.id);
     if (typeof shape === 'string') {
       issues.push(shape);
       forkIssue = true;
@@ -376,10 +442,10 @@ export function graphIssues(graph: WorkflowGraph): string[] {
   // go round through one: look for a cycle in the graph with the `repeat` edges removed. A way
   // back through `exhausted` is NOT bounded — past `max` the loop takes it on every visit.
   const next = new Map<string, string[]>();
-  for (const e of graph.edges) {
-    const from = parseEdgeFrom(e.from, graph.nodes);
+  for (const [i, e] of graph.edges.entries()) {
+    const from = ix.parsed[i];
     if (!from) continue;
-    const isLoop = graph.nodes.find((n) => n.id === from.node)?.type === 'loop';
+    const isLoop = ix.byId.get(from.node)?.type === 'loop';
     if (isLoop && from.port === 'repeat') continue;
     next.set(from.node, [...(next.get(from.node) ?? []), e.to]);
   }
@@ -406,7 +472,7 @@ export function graphIssues(graph: WorkflowGraph): string[] {
   // `{{nodes.x.y}}` must name a node that exists.
   for (const n of graph.nodes) {
     for (const m of templatedText(n).join('\n').matchAll(NODE_REF_RE)) {
-      if (!ids.includes(m[1] as string)) issues.push(`node "${n.id}" references unknown node "${m[1]}"`);
+      if (!ix.byId.has(m[1] as string)) issues.push(`node "${n.id}" references unknown node "${m[1]}"`);
     }
   }
   return issues;
@@ -416,9 +482,10 @@ export function graphIssues(graph: WorkflowGraph): string[] {
  *  step-reading path (continuation, skill hints, resume) keep working on a graph workflow. */
 export function graphToSteps(graph: WorkflowGraph): WorkflowStepDef[] {
   const steps: WorkflowStepDef[] = [];
+  const ix = indexGraph(graph);
   // A fork's agents run as child tasks, never as steps of this run.
-  for (const n of walkOrder(graph)) {
-    if (n.type === 'check' || (n.type === 'agent' && !forkOfBranch(graph, n.id))) steps.push(nodeToStep(n));
+  for (const n of walkOrder(graph, ix)) {
+    if (n.type === 'check' || (n.type === 'agent' && !forkOfBranchIn(ix, n.id))) steps.push(nodeToStep(n));
   }
   return steps;
 }
@@ -427,8 +494,12 @@ export function graphToSteps(graph: WorkflowGraph): WorkflowStepDef[] {
  *  cezar runs itself (gates, PRs, CI waits…) ride the rail as `check`-kind rows: they are not
  *  agent sessions, which is the only distinction the rail's `kind` draws. */
 export function graphRailSteps(graph: WorkflowGraph): { id: string; name: string; kind: 'agent' | 'check' }[] {
+  return railSteps(graph, indexGraph(graph));
+}
+
+function railSteps(graph: WorkflowGraph, ix: GraphIndex): { id: string; name: string; kind: 'agent' | 'check' }[] {
   const label = (type: GraphNodeType) => NODE_CATALOG.find((c) => c.type === type)?.label ?? type;
-  return walkOrder(graph)
+  return walkOrder(graph, ix)
     .filter((n) => n.type !== 'start' && n.type !== 'end' && n.type !== 'loop' && n.type !== 'join')
     .map((n) => ({ id: n.id, name: n.name ?? (n.type === 'agent' || n.type === 'check' ? n.id : label(n.type)), kind: n.type === 'agent' ? 'agent' : 'check' }));
 }
@@ -438,17 +509,15 @@ export function graphRailSteps(graph: WorkflowGraph): { id: string; name: string
  *  BFS discovery order from `start`, which does not guarantee `to` comes after `from`, so an
  *  index-range slice of the rail is not reliable here (D-rail-loop-reset). */
 export function loopBodyIds(graph: WorkflowGraph, from: string, to: string): ReadonlySet<string> {
+  const ix = indexGraph(graph);
   const ids = new Set<string>([from]);
   const queue = [from];
   while (queue.length) {
     const id = queue.shift() as string;
     if (id === to) continue;
-    const node = graph.nodes.find((n) => n.id === id);
+    const node = ix.byId.get(id);
     for (const port of node ? portsOfNode(node) : []) {
-      const edge = graph.edges.find((e) => {
-        const f = parseEdgeFrom(e.from, graph.nodes);
-        return f?.node === id && f.port === port;
-      });
+      const edge = ix.edgeFrom(id, port);
       if (edge && !ids.has(edge.to)) {
         ids.add(edge.to);
         queue.push(edge.to);
@@ -488,7 +557,7 @@ export function templatedText(n: GraphNode): string[] {
   }
 }
 
-function walkOrder(graph: WorkflowGraph): GraphNode[] {
+function walkOrder(graph: WorkflowGraph, ix: GraphIndex): GraphNode[] {
   const order: string[] = [];
   const start = graph.nodes.find((n) => n.type === 'start');
   const queue = start ? [start.id] : [];
@@ -496,19 +565,16 @@ function walkOrder(graph: WorkflowGraph): GraphNode[] {
   while (queue.length) {
     const id = queue.shift() as string;
     order.push(id);
-    const node = graph.nodes.find((n) => n.id === id);
+    const node = ix.byId.get(id);
     for (const port of node ? portsOfNode(node) : []) {
-      const edge = graph.edges.find((e) => {
-        const f = parseEdgeFrom(e.from, graph.nodes);
-        return f?.node === id && f.port === port;
-      });
+      const edge = ix.edgeFrom(id, port);
       if (edge && !seen.has(edge.to)) {
         seen.add(edge.to);
         queue.push(edge.to);
       }
     }
   }
-  return order.flatMap((id) => graph.nodes.filter((n) => n.id === id));
+  return order.flatMap((id) => ix.allById.get(id) ?? []);
 }
 
 export function nodeToStep(node: Extract<GraphNode, { type: 'agent' | 'check' }>): WorkflowStepDef {
@@ -595,21 +661,19 @@ export function advance(
   loopCounts: Map<string, number>,
 ): GraphStepResult {
   const transitions: GraphTransition[] = [];
+  const ix = indexGraph(graph);
   let cur = from;
   let curPort = port;
   // Each loop visit bumps a counter bounded by its `max`, so this terminates; the guard only
   // protects against a graph that skipped validation.
   for (let guard = 0; guard < 10_000; guard++) {
-    const edge = graph.edges.find((e) => {
-      const f = parseEdgeFrom(e.from, graph.nodes);
-      return f?.node === cur && f.port === curPort;
-    });
+    const edge = ix.edgeFrom(cur, curPort);
     if (!edge) {
       transitions.push({ from: cur, port: curPort, to: null });
       return { kind: 'end', status: isFailurePort(curPort) ? 'failed' : 'success', transitions };
     }
     transitions.push({ from: cur, port: curPort, to: edge.to });
-    const node = graph.nodes.find((n) => n.id === edge.to);
+    const node = ix.byId.get(edge.to);
     if (!node) return { kind: 'end', status: 'failed', transitions };
     if (node.type === 'end') return { kind: 'end', status: node.status, endNode: node.id, transitions };
     if (node.type === 'loop') {
@@ -693,29 +757,27 @@ export function isTerminalAgent(graph: WorkflowGraph, nodeIdValue: string): bool
   // A verdict node always hands its decision to the graph — it is never the interactive tail.
   const self = graph.nodes.find((n) => n.id === nodeIdValue);
   if (self?.type === 'agent' && self.verdicts?.length) return false;
-  const edge = graph.edges.find((e) => {
-    const f = parseEdgeFrom(e.from, graph.nodes);
-    return f?.node === nodeIdValue && f.port === 'done';
-  });
+  const ix = indexGraph(graph);
+  const edge = ix.edgeFrom(nodeIdValue, 'done');
   if (!edge) return true;
-  const to = graph.nodes.find((n) => n.id === edge.to);
+  const to = ix.byId.get(edge.to);
   return to?.type === 'end' && to.status === 'success';
 }
 
 /** The edge wired to `node.port`, if any. */
 export function edgeFrom(graph: WorkflowGraph, node: string, port: string): GraphEdge | undefined {
-  return graph.edges.find((e) => {
-    const f = parseEdgeFrom(e.from, graph.nodes);
-    return f?.node === node && f.port === port;
-  });
+  return indexGraph(graph).edgeFrom(node, port);
 }
 
 /** The fork an agent node is a branch of — the node right behind it, when that is a fork. */
 export function forkOfBranch(graph: WorkflowGraph, agentId: string): string | undefined {
-  for (const e of graph.edges) {
-    if (e.to !== agentId) continue;
-    const f = parseEdgeFrom(e.from, graph.nodes);
-    if (f && graph.nodes.find((n) => n.id === f.node)?.type === 'fork') return f.node;
+  return forkOfBranchIn(indexGraph(graph), agentId);
+}
+
+function forkOfBranchIn(ix: GraphIndex, agentId: string): string | undefined {
+  for (const i of ix.incoming(agentId)) {
+    const f = ix.parsed[i];
+    if (f && ix.byId.get(f.node)?.type === 'fork') return f.node;
   }
   return undefined;
 }
@@ -732,37 +794,41 @@ export interface ForkShape {
  * shows is exactly what the engine runs: each branch agent is one child task.
  */
 export function forkShape(graph: WorkflowGraph, forkId: string): ForkShape | string {
-  const fork = graph.nodes.find((n) => n.id === forkId);
+  return forkShapeIn(indexGraph(graph), forkId);
+}
+
+function forkShapeIn(ix: GraphIndex, forkId: string): ForkShape | string {
+  const fork = ix.byId.get(forkId);
   if (!fork || fork.type !== 'fork') return `no fork node "${forkId}"`;
   const branches: ForkShape['branches'] = [];
   let join: string | undefined;
   for (const port of portsOfNode(fork)) {
-    const edge = edgeFrom(graph, forkId, port);
+    const edge = ix.edgeFrom(forkId, port);
     if (!edge) return `fork "${forkId}": branch ${port} is not wired to an agent`;
-    const agent = graph.nodes.find((n) => n.id === edge.to);
+    const agent = ix.byId.get(edge.to);
     if (!agent || agent.type !== 'agent') return `fork "${forkId}": branch ${port} must lead to an agent node`;
     if (agent.session || agent.verdicts?.length) {
       return `agent node "${agent.id}" runs as a fork branch — it cannot continue a session or declare verdicts`;
     }
-    if (graph.edges.some((e) => e.to === agent.id && parseEdgeFrom(e.from, graph.nodes)?.node !== forkId)) {
+    if (ix.incoming(agent.id).some((i) => ix.parsed[i]?.node !== forkId)) {
       return `agent node "${agent.id}" is a fork branch — nothing else may lead into it`;
     }
-    const done = edgeFrom(graph, agent.id, 'done');
+    const done = ix.edgeFrom(agent.id, 'done');
     if (!done) return `fork branch "${agent.id}": wire its done port into a join`;
     for (const p of ['done', 'failed']) {
-      const out = edgeFrom(graph, agent.id, p);
+      const out = ix.edgeFrom(agent.id, p);
       if (!out) continue;
-      if (graph.nodes.find((n) => n.id === out.to)?.type !== 'join') return `fork branch "${agent.id}": its ${p} port must lead into a join`;
+      if (ix.byId.get(out.to)?.type !== 'join') return `fork branch "${agent.id}": its ${p} port must lead into a join`;
       if (join && out.to !== join) return `fork "${forkId}": every branch must meet at the same join`;
       join = out.to;
     }
     if (branches.some((b) => b.agent.id === agent.id)) return `fork "${forkId}": two branches lead to the same agent "${agent.id}"`;
     branches.push({ port, agent });
   }
-  const joinNode = graph.nodes.find((n) => n.id === join);
+  const joinNode = join === undefined ? undefined : ix.byId.get(join);
   if (!joinNode || joinNode.type !== 'join') return `fork "${forkId}" needs a join`;
   const ids = new Set(branches.map((b) => b.agent.id));
-  if (graph.edges.some((e) => e.to === joinNode.id && !ids.has(parseEdgeFrom(e.from, graph.nodes)?.node ?? ''))) {
+  if (ix.incoming(joinNode.id).some((i) => !ids.has(ix.parsed[i]?.node ?? ''))) {
     return `join node "${joinNode.id}" must be reached only from fork "${forkId}"'s agents`;
   }
   return { branches, join: joinNode.id, wait: joinNode.wait };
