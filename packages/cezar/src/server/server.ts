@@ -135,6 +135,7 @@ import {
   type GroupVariant,
   type PickVariantResponse,
   type RunIndexEntry,
+  type RunTag,
   type RunsIndexResponse,
   type StarCountPayload,
   designProxyRequestSchema,
@@ -334,6 +335,8 @@ import { branchDiff, branchesCheckedOutElsewhere, localBranchExists, pruneOrphan
 import { configuredReclaimCandidates, enforceWorktreeRetention, isIdleReclaimable, reclaimSelectedWorktrees, selectManualReclaim, storeActivity, worktreesInUse } from '../runs/retention.ts';
 import { inUseRefusal, worktreeInUse, worktreeInUseAfterStop } from '../worktree-in-use.ts';
 import { worktreeLifecycleRoutes, lifecycleError } from './worktree-lifecycle.ts';
+import { runTagsRoutes, taskTagError, taskTagsWorkspaceRoutes } from './task-tags.ts';
+import { resolveTagRefs } from '../workspace/task-tags.ts';
 import { readLifecycleConfigOrDefault, readLifecycleConfigRaw, lifecycleConfigFromRaw, withLifecycleConfigLock, applyLifecycleConfigUpdate, isLifecycleConfigTracked, LifecycleConfigError, TRACKED_CONFIG_ERROR } from '../worktree-lifecycle/config.ts';
 import { atomicLifecycleWrite, LifecycleStoreError } from '../worktree-lifecycle/store.ts';
 import { validateLifecycleCommand } from '../worktree-lifecycle/templates.ts';
@@ -2455,6 +2458,20 @@ export function createAppParts(deps: ServerDeps) {
     }
   };
 
+  /** Every project the task-tag wire can name: the registry plus the unregistered boot project. */
+  const taskTagProjectRoots = async (): Promise<Array<{ id: string; root: string }>> => {
+    const projects = (await loadWorkspaceConfig()).projects;
+    const registry = projects.map((p) => ({ id: p.id, root: p.root }));
+    const bootId = await resolveBootProject(projects).catch(() => undefined);
+    if (bootId !== undefined && !registry.some((p) => p.id === bootId)) {
+      registry.push({ id: bootId, root: await realpath(bootRoot).catch(() => bootRoot) });
+    }
+    // `default` is the reserved boot alias every scoped route accepts; never a display id.
+    const bootRootReal = bootId === undefined ? undefined : registry.find((p) => p.id === bootId)?.root;
+    registry.push({ id: 'default', root: bootRootReal ?? (await realpath(bootRoot).catch(() => bootRoot)) });
+    return registry;
+  };
+
   // ---- chained family: agent providers (workspace-level) ----
   // One watch per account: a second Connect restarts its schedule instead of doubling it.
   const loginWatches = new Map<string, () => void>();
@@ -2891,7 +2908,7 @@ export function createAppParts(deps: ServerDeps) {
 
   const agentProfilesRoutes = new Hono<ProjectApiEnv>()
     .get('/workspace/agent-profiles/fallback-policy', queryZodValidator(getAgentFallbackPolicyQuerySchema), async (c) => {
-      if (!capabilities().localHandoff) return c.json({ error: 'agent fallback is local-only' }, 409);
+      if (!accountsEnabled()) return c.json({ error: 'agent fallback is local-only' }, 409);
       const { projectId } = c.req.valid('query');
       const root = await projectRootFor(projectId);
       if (root === null) return c.json({ error: `unknown project: ${projectId}` }, 404);
@@ -2901,7 +2918,7 @@ export function createAppParts(deps: ServerDeps) {
       return c.json(await getAgentFallbackPolicy(root));
     })
     .put('/workspace/agent-profiles/fallback-policy', jsonZodValidator(putAgentFallbackPolicySchema), async (c) => {
-      if (!capabilities().localHandoff) return c.json({ error: 'agent fallback is local-only' }, 409);
+      if (!accountsEnabled()) return c.json({ error: 'agent fallback is local-only' }, 409);
       const body = c.req.valid('json');
       const root = await projectRootFor(body.projectId);
       if (root === null) return c.json({ error: `unknown project: ${body.projectId}` }, 404);
@@ -4855,7 +4872,9 @@ export function createAppParts(deps: ServerDeps) {
         if (!resolved.preview.available) return c.json({ error: resolved.preview.message }, 400);
         if (resolved.preview.previewRevision !== input.previewRevision || !lease.isValid()) return c.json({ error: 'Settings or reset time changed. Check the preview again.' }, 409);
         if ((input.task.variants ?? 1) > 1 && !await getRepoInfo(project.root)) return c.json({ error: 'Parallel variants need a git repository.' }, 400);
-        const { task, images: _images, todoId: _todoId, variants, ...fields } = input.task;
+        // Task tags stay off automation definitions (spec 2026-11-23-task-tags § 5), so a scheduled
+        // start does not carry them; tag the task once it runs.
+        const { task, images: _images, todoId: _todoId, variants, tags: _tags, ...fields } = input.task;
         const automation = store.create({
           name: task.trim().replace(/\s+/g, ' ').slice(0, 100), kind: 'schedule', enabled: true,
           schedule: resolved.schedule!,
@@ -5436,8 +5455,18 @@ export function createAppParts(deps: ServerDeps) {
         const account = await resolveWorkspaceProfile(runner, input.account);
         if ('error' in account) return c.json({ error: `dispatch refused — ${account.error}` }, 409);
       }
+      let tags: RunTag[] = [];
+      if (input.tags && input.tags.length > 0) {
+        if (!store.getRun(c.req.param('id'))) return c.json({ error: `no such run: ${c.req.param('id')}` }, 409);
+        try {
+          tags = (await resolveTagRefs(input.tags, c.get('project').root)).tags;
+        } catch (error) {
+          return taskTagError(c, error);
+        }
+      }
       const outcome = manager.dispatch(c.req.param('id'), input, {
         automationPaused: (id) => pauseHoldsDispatch(automationStore.get(id)),
+        ...(tags.length > 0 ? { tags } : {}),
       });
       if ('refused' in outcome) return c.json({ error: outcome.refused }, 409);
       return c.json(outcome, 201);
@@ -5676,7 +5705,17 @@ export function createAppParts(deps: ServerDeps) {
       }
       const images = resolveAttachments(parsed.data.images);
       if (typeof images === 'string') return c.json({ error: images }, 400);
+      // Resolved before the run exists, so a bad ref creates nothing (spec 2026-11-23-task-tags § 5).
+      let tags: RunTag[] = [];
+      if (parsed.data.tags && parsed.data.tags.length > 0) {
+        try {
+          tags = (await resolveTagRefs(parsed.data.tags, repoRoot)).tags;
+        } catch (error) {
+          return taskTagError(c, error);
+        }
+      }
       const input = {
+        ...(tags.length > 0 ? { tags } : {}),
         task: parsed.data.task,
         model: parsed.data.model,
         reasoningEffort: parsed.data.reasoningEffort,
@@ -8975,6 +9014,7 @@ export function createAppParts(deps: ServerDeps) {
     .route('/', webhookRoutes)
     .route('/', dispatchRoutes)
     .route('/', runsRoutes)
+    .route('/', runTagsRoutes())
     .route('/', draftRoutes)
     .route('/', layoutRoutes)
     .route('/', groupsRoutes)
@@ -9048,6 +9088,7 @@ export function createAppParts(deps: ServerDeps) {
     ...(run.idleClosedAt !== undefined ? { idleClosedAt: run.idleClosedAt } : {}),
     ...(run.parked !== undefined ? { parked: run.parked } : {}),
     workflow: run.workflow,
+    ...(run.tags !== undefined && run.tags.length > 0 ? { tags: run.tags } : {}),
     ...(run.branch !== undefined ? { branch: run.branch } : {}),
     ...(run.diffStat !== undefined ? { diffStat: run.diffStat } : {}),
     ...(run.dispatch !== undefined
@@ -9938,6 +9979,7 @@ export function createAppParts(deps: ServerDeps) {
     .route('/', agentSetupFamily)
     .route('/', projectsRoutes)
     .route('/', agentProfilesRoutes)
+    .route('/', taskTagsWorkspaceRoutes({ projectRoots: taskTagProjectRoots }))
     .route('/', skillsUpdateRoutes)
     .route('/', selfUpdateRoutes)
     .route('/', starCountRoutes)

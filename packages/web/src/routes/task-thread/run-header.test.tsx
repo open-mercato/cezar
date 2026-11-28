@@ -227,6 +227,35 @@ describe('collapse header — the minimalist view short of full screen', () => {
     expect(localStorage.getItem('cez:run-header-collapsed')).toBeNull()
   })
 
+  it('puts the tag editor last on the wrapping meta line, never in the clipped title row', () => {
+    stubFetch()
+    renderHeader(run('done'))
+    expect(document.querySelector('[data-slot="run-title-row"] [data-slot="run-tags"]')).toBeNull()
+    const meta = document.querySelector('[data-slot="run-meta"]')!
+    expect(meta.lastElementChild?.getAttribute('data-slot')).toBe('run-tags')
+    expect(meta.lastElementChild!.className).not.toContain('overflow-hidden')
+  })
+
+  it('a folded desktop header still shows the tags beside the title', () => {
+    localStorage.setItem('cez:run-header-collapsed', '1')
+    stubFetch()
+    renderHeader(run('done', { tags: [{ id: 'tt-tag00001', name: 'hello' }] }))
+    const chips = document.querySelector('[data-slot="run-title-row"] [data-slot="run-tag-chips"]')!
+    expect(chips.textContent).toContain('hello')
+    expect(chips.className).toContain('max-md:hidden')
+    fireEvent.click(screen.getByRole('button', { name: 'Expand header' }))
+    expect(document.querySelector('[data-slot="run-title-row"] [data-slot="run-tag-chips"]')).toBeNull()
+  })
+
+  it('"Tags…" unfolds a folded header so the picker has its anchor', async () => {
+    localStorage.setItem('cez:run-header-collapsed', '1')
+    stubFetch()
+    renderHeader(run('done'))
+    const menu = await openMenu()
+    fireEvent.click(menu.getByRole('menuitem', { name: /Tags…/ }))
+    await waitFor(() => expect(details().className).not.toContain('md:hidden'))
+  })
+
   it('opens folded when this browser folded it last time', () => {
     localStorage.setItem('cez:run-header-collapsed', '1')
     stubFetch()
@@ -540,7 +569,7 @@ describe('the ⋯ menu is the palette\'s command list', () => {
     const headings = [...document.querySelectorAll('[data-slot="run-actions-menu"] [data-slot="dropdown-menu-label"]')].map((el) => el.textContent)
     expect(headings).toEqual(['Actions', 'Git', 'Task'])
     expect(menuLabels(menu)).toEqual([
-      'Mark unread', 'Pin', 'Rename…', 'Copy take-over command',
+      'Mark unread', 'Pin', 'Rename…', 'Tags…', 'Copy take-over command',
       'Create PR', 'Create draft PR', 'Update branch', 'Remove worktree…',
       'Archive', 'Delete…',
     ])
@@ -2701,7 +2730,8 @@ describe('the facts line reads cleanly on both sides of the breakpoint', () => {
           return !/(^|\s)hidden(\s|$)/.test(className)
         })
         .map((node) => node.textContent?.trim())
-    expect(reads('desktop')).toEqual(['quick-task', '·', '1 of 1 done', '·', 'cez/r1', '·', '+1 −0'])
-    expect(reads('phone')).toEqual(['Needs review', '·', '1 of 1 done', '·', '+1 −0'])
+    // The tag editor closes the line on both breakpoints (its "Tag" add button when untagged).
+    expect(reads('desktop')).toEqual(['quick-task', '·', '1 of 1 done', '·', 'cez/r1', '·', '+1 −0', '·', 'Tag'])
+    expect(reads('phone')).toEqual(['Needs review', '·', '1 of 1 done', '·', '+1 −0', '·', 'Tag'])
   })
 })

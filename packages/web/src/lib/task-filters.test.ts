@@ -83,3 +83,27 @@ describe('counts', () => {
     expect(counts.get('failed')).toBe(1)
   })
 })
+
+describe('the tag facet (spec 2026-11-23-task-tags § 7.5)', () => {
+  const a = run({ tags: [{ id: 'tt-aaaaaaaa01', name: 'a' }] })
+  const ab = run({ tags: [{ id: 'tt-aaaaaaaa01', name: 'a' }, { id: 'tt-bbbbbbbb01', name: 'b' }] })
+  const none = run()
+  const deletedOnly = run({ tags: [{ id: 'tt-deleted0001', name: 'gone' }] })
+  const runs = [a, ab, none, deletedOnly]
+  const autos = automationIndex(runs)
+  const hidden = new Set(['tt-deleted0001'])
+  const ids = (list: RunRecord[]) => list.map((r) => r.id)
+
+  it('ORs selected tags and offers "No tag"', () => {
+    expect(ids(filterTaskTable(runs, 'all', { ...NO_TASK_FILTERS, tags: ['tt-bbbbbbbb01', 'tt-aaaaaaaa01'] }, autos, hidden))).toEqual([a.id, ab.id])
+    expect(ids(filterTaskTable(runs, 'all', { ...NO_TASK_FILTERS, tags: [' no-task-tag'] }, autos, hidden))).toEqual([none.id, deletedOnly.id])
+  })
+
+  it('counts each tag and the untagged bucket', () => {
+    const counts = taskFacetCounts(runs, 'all', NO_TASK_FILTERS, autos, 'tags', hidden)
+    expect(counts.get('tt-aaaaaaaa01')).toBe(2)
+    expect(counts.get('tt-bbbbbbbb01')).toBe(1)
+    expect(counts.get(' no-task-tag')).toBe(2)
+    expect(counts.has('tt-deleted0001')).toBe(false)
+  })
+})

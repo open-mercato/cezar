@@ -39,7 +39,7 @@ import { isCezarShell } from '@/lib/phone-app'
 import { usePlanUsageConsumers } from '@/api/plan-usage'
 import { queryKeys, useConfig, useHealth, usePinRun, useReferenceProjectId, useRepo, useRuns, workspaceQueryKeys, writePatchedRunToCaches } from '@/api/queries'
 import type { PlanUsageConsumerWindow, RunRecord } from '@open-mercato/cezar-api-client'
-import { queryScope } from '@open-mercato/cezar-api-client'
+import { queryScope, RUN_TAGS_MAX } from '@open-mercato/cezar-api-client'
 import { TaskQuickActions, TaskSelectionCheckbox, TasksSelectionToolbar, useTasksOverviewSelection, type TasksOverviewActionHandler } from './tasks-overview-actions'
 import { planLimitCell, planWindowsByRun, PlanLimitCellView } from './tasks-plan-limit'
 import { CenteredState } from '@/components/centered-state'
@@ -48,6 +48,9 @@ import { DiffStatLabel } from '@/components/diff-stat'
 import { DirectionalUsage } from '@/components/directional-usage'
 import { TitleEditInput, useTitleEditor } from '@/components/editable-title'
 import { FacetFilter } from '@/components/facet-filter'
+import { useOptionalTaskTags } from '@/api/task-tags'
+import { RunTagChips } from '@/components/run-tags'
+import { NO_TASK_TAG, resolveRunTags, type ResolvedRunTag } from '@/lib/task-tags'
 import { useListView } from '@/components/list-view'
 import { Pill } from '@/components/pill'
 import { PinToggle } from '@/components/pin-toggle'
@@ -261,11 +264,13 @@ export function TasksOverview({
   const all = runs ?? NO_RUNS
   const viewHasRuns = React.useMemo(() => all.some((run) => (view === 'archived') === run.archived), [all, view])
   const automations = React.useMemo(() => automationIndex(all), [all])
+  const tagRegistry = useOptionalTaskTags()
+  const hiddenTags = React.useMemo(() => new Set(tagRegistry?.deletedIds ?? []), [tagRegistry])
   // Origin and facets narrow BEFORE everything else, so the tab counts, the queue-free rows and
   // the compare strips all describe the same list the table shows.
   const narrowed = React.useMemo(
-    () => filterTaskTable(all, origin, filters, automations),
-    [all, origin, filters, automations],
+    () => filterTaskTable(all, origin, filters, automations, hiddenTags),
+    [all, origin, filters, automations, hiddenTags],
   )
   const counts = React.useMemo(() => listCounts(narrowed), [narrowed])
   const planByRun = React.useMemo(() => (planUsage ? planWindowsByRun(planUsage) : undefined), [planUsage])
@@ -418,6 +423,7 @@ export function TasksOverview({
             onFiltersChange={setFilters}
             automations={automations}
             automationNames={automationNames}
+            hiddenTags={hiddenTags}
             sortBy={sortBy}
             onSortByChange={setSortBy}
             columns={
@@ -449,7 +455,7 @@ export function TasksOverview({
             origin={origin}
             hiddenByOrigin={
               origin !== 'all' &&
-              filterTaskTable(sortRuns(all, view), 'all', filters, automations).length > 0
+              filterTaskTable(sortRuns(all, view), 'all', filters, automations, hiddenTags).length > 0
             }
             onShowAll={() => onOriginChange('all')}
             firstRun={firstRun}
@@ -814,6 +820,7 @@ function TasksFilterBar({
   onFiltersChange,
   automations,
   automationNames,
+  hiddenTags,
   sortBy,
   onSortByChange,
   columns,
@@ -826,6 +833,8 @@ function TasksFilterBar({
   onFiltersChange: (update: (current: TaskTableFilters) => TaskTableFilters) => void
   automations: ReadonlyMap<string, string | undefined>
   automationNames?: ReadonlyMap<string, string>
+  /** Tombstoned task-tag ids (spec 2026-11-23-task-tags). */
+  hiddenTags?: ReadonlySet<string>
   sortBy: SortBy
   onSortByChange: (next: SortBy) => void
   /** The desktop Columns menu, rendered at the bar's end. */
@@ -836,7 +845,15 @@ function TasksFilterBar({
     [runs, view],
   )
   const perOrigin = originCounts(inView, filters, automations)
-  const countsOf = (facet: TaskFacetId) => taskFacetCounts(inView, origin, filters, automations, facet)
+  const countsOf = (facet: TaskFacetId) => taskFacetCounts(inView, origin, filters, automations, facet, hiddenTags)
+  const tagRegistry = useOptionalTaskTags()
+  const tagCounts = countsOf('tags')
+  // Options are the resolved tags present on loaded runs; the facet shows only once one exists.
+  const tagOptions = React.useMemo(() => {
+    const byId = new Map<string, ResolvedRunTag>()
+    for (const run of runs) for (const tag of resolveRunTags(run.tags, tagRegistry)) byId.set(tag.id, tag)
+    return [...byId.values()].sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }))
+  }, [runs, tagRegistry])
   const statusCounts = countsOf('statuses')
   const workflowCounts = countsOf('workflows')
   const automationCounts = countsOf('automations')
@@ -888,6 +905,20 @@ function TasksFilterBar({
         }))}
         emptyLabel="No tasks to filter"
       />
+      {tagOptions.length > 0 ? (
+        <FacetFilter
+          slot="task-tag"
+          label="Tag"
+          selected={filters.tags}
+          onToggle={(value) => toggle('tags', value)}
+          onClear={() => clear('tags')}
+          options={[
+            ...tagOptions.map((tag) => ({ value: tag.id, label: tag.name, count: tagCounts.get(tag.id) ?? 0 })),
+            { value: NO_TASK_TAG, label: 'No tag', count: tagCounts.get(NO_TASK_TAG) ?? 0 },
+          ]}
+          emptyLabel="No tagged tasks"
+        />
+      ) : null}
       {origin !== 'regular' && automationIds.length > 0 ? (
         <FacetFilter
           slot="automation"
@@ -1550,6 +1581,8 @@ function TitleCell({
         {quiet ? <StatusDescription id={statusId} attention={deriveAttention(run)} /> : null}
         {unread ? <UnreadMarker /> : null}
       </Link>
+      {/* One chip plus `+N`: the title keeps the cell's width. */}
+      <RunTagChips tags={run.tags} max={1} className="shrink-0" />
       {/* What a DISPATCHED row is for — `review` or `implement` — so a tester can tell a child
           from a task a person typed without opening it. Null on every root. */}
       {dispatchKindLabel(run) ? (
@@ -1830,6 +1863,8 @@ const TaskCard = React.memo(function TaskCard({
         ) : null}
         {selectable ? <TaskQuickActions run={run} busy={actionsBusy} onAction={onAction} /> : null}
       </div>
+      {/* Tags get the card's last line, all of them: beside the title they left it one word wide. */}
+      <RunTagChips tags={run.tags} max={RUN_TAGS_MAX} className="mt-2 flex flex-wrap" />
     </div>
   )
 })

@@ -207,7 +207,7 @@ continue a task after its current agent exhausts its usage allowance. Add up to 
 provider/account pairs, optionally selecting a model for each. Drag the row handles or use the
 arrow buttons to reorder agents; remove rows with the remove button, then enable the header switch. Handles also support Space to pick up, arrow keys to move,
 Space to drop and Escape to cancel. Adding rows alone leaves fallback off; removing
-the last row turns it off. This setting is available on local cockpits only.
+the last row turns it off. This setting is available on local cockpits, and on a hosted cockpit started with `CEZ_REMOTE_AGENT_ACCOUNTS=1` (agents already signed in on the host).
 
 Fallback continues the same task and checkout. It applies to **Quick task** and sequential
 step-list workflows only while their last step is running, provided that step is an agent step.
@@ -321,6 +321,33 @@ a queue or a routing rule. Removing one changes what you see and nothing else.
 > project — it says so, and names the projects it capped, rather than showing a
 > short list as if it were complete. Older tasks are always in that project's own
 > Tasks page.
+
+### Task tags
+
+Project tags group repositories. **Task tags** group tasks: the eight reviews you
+started this morning, the five tasks on one feature, or your own status markers.
+
+- **Tag while you write the task.** The `+ Tag` chip sits in the composer's main
+  row, after the workflow pill. Type to search; a name that does not exist yet
+  offers `Create "<name>"`, which makes a tag for this project. Tags are not
+  remembered for the next task.
+- **Tag any task, in any state.** Use the tags in the task header or its ⋯ menu
+  (`Tags…`), the tag button in a row's quick actions, or select several rows and
+  press `Tag… (N)` in the selection bar. A queued, running, finished or archived
+  task can be tagged; tagging never touches its session.
+- **Filter by tag.** The project task list shows a tag facet once any task has a
+  tag. All tasks has a **Task tags** row under **Project tags**; a name used in
+  several projects is one chip there. "No tag" finds untagged tasks.
+- **Manage tags** in **Settings → Task tags**: rename, recolor, describe, make a
+  project tag global, or delete. A deleted tag disappears from every task.
+
+Tags live in `~/.cezar/task-tags.json`; each task stores the tag id plus a copy
+of its name, so a rename changes every task at once and a lost registry still
+shows the names. A task carries at most 10 tags. Agents tag tasks with
+`cez task create --tag` and `cez task tag` (see
+[From a shell](#from-a-shell-cez-runs-cez-task-cez-automation-cez-tracker)).
+Like project tags, task tags are a lens: nothing in cezar routes, queues or
+limits by them.
 
 **Old page URLs keep working.** Every unprefixed page path — `/`, `/tasks/<id>`,
 `/settings` — still answers, bound to the project cezar was started in; the
@@ -608,7 +635,7 @@ Useful environment variables:
 | Var | Effect |
 |---|---|
 | `CEZ_DRY_RUN=1` | Run every agent's tasks on its bundled mock instead of the real CLI (`claude`, `codex`, `opencode` and the rest); the Codex and OpenCode health checks and model catalogs use the mock too — the entire cockpit works offline, for demos and development. |
-| `CEZ_REMOTE_AGENT_ACCOUNTS=1` | Allow **Settings → Agent accounts** in a remote/self-hosted cockpit. Enable this only behind an authenticated perimeter: account folders expose absolute host paths and the details view can expose account identity. Remotely added folders are confined to `CEZ_BROWSE_ROOT`, including symlink ancestry. Local desktop actions stay disabled; **Connect** returns the exact login command to run on the host. |
+| `CEZ_REMOTE_AGENT_ACCOUNTS=1` | Allow **Settings → Agent accounts** and **Automatic fallback** (#2332) in a remote/self-hosted cockpit. Enable this only behind an authenticated perimeter: account folders expose absolute host paths and the details view can expose account identity. Remotely added folders are confined to `CEZ_BROWSE_ROOT`, including symlink ancestry. Local desktop actions stay disabled; **Connect** returns the exact login command to run on the host. |
 | `CEZ_USAGE_LOG=0` | Stop recording plan-limit usage. On by default and local only: Claude (Pro/Max) and Codex (ChatGPT) limit readings plus per-turn activity go to `~/.cezar/usage-ledger/` (kept 90 days, no prompts or code) and feed Dashboard → Usage & cost → Plan limits and `cezar usage`. One account can also be opted out in Settings → Agent accounts. |
 | `CEZ_TELEMETRY=0` | Block usage telemetry even after you opted in. Telemetry is opt-in — nothing is sent until you answer yes in the cockpit, Settings → Privacy or `cezar telemetry enable` ([docs/telemetry.md](telemetry.md)). `DO_NOT_TRACK=1` works too. `CEZ_TELEMETRY=1` only lifts the CI / test-runner / `CEZ_DRY_RUN=1` block; it never grants consent. |
 | `CEZ_INSTANCE_ID` | Internal server-install identity set automatically in generated systemd/launchd services; normally leave unset. It is surfaced additively by `/api/v1/health` for install verification. |
@@ -797,7 +824,14 @@ cez runs list                       # this project's tasks, newest first
 cez runs list --status running,review --json
 cez automation list                 # automations, with state and counts
 cez task tree <run id>              # a dispatch tree
+cez task tag <run id> --add "review batch" --remove old   # edit a task's tags
 ```
+
+`cez task create … --tag <name|id>` (repeatable) and `cez task tag [<run id>]
+[--add <name|id>]… [--remove <name|id>]…` work with [task tags](#task-tags): a
+name reuses the tag visible in the task's project or creates a project tag, an
+id (`tt-…`) names one exactly, and `--remove` by name matches the task's current
+tags. `task tag` defaults to `CEZ_TASK_ID` and prints the resulting tag names.
 
 A task started by a Jira/Linear automation also gets `CEZ_TRACKER_CAPABILITY`, a
 per-session secret for `cez tracker read|comment|transition` on its own issue only

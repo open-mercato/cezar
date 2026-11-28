@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { runnerSchema } from './health.ts';
+import { RUN_TAGS_MAX, taskTagRefSchema } from './task-tags.ts';
 
 /**
  * The DISPATCH family of `/api/v1`: a task may dispatch other tasks (spec
@@ -154,6 +155,8 @@ export const dispatchInputSchema = z
     model: z.string().max(200).optional(),
     /** The child's agent account (`default` or a stored id). Absent = the parent's, on the same runner. */
     account: z.string().max(64).optional(),
+    /** Task tags for the child (spec 2026-11-23-task-tags). Never inherited from the parent (D13). */
+    tags: z.array(taskTagRefSchema).max(RUN_TAGS_MAX).optional(),
   })
   .strict();
 export type DispatchInput = z.infer<typeof dispatchInputSchema>;

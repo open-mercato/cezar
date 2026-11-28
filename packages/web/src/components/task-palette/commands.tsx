@@ -14,6 +14,7 @@ import {
   NotebookTextIcon,
   PanelBottomIcon,
   PencilIcon,
+  TagIcon,
   PinIcon,
   SquareTerminalIcon,
   TerminalIcon,
@@ -124,6 +125,8 @@ export interface TaskCommandHandlers {
   pin: (source?: CommandSource) => void
   archive: (source?: CommandSource) => void
   rename: () => void
+  /** Opens the task's tag picker (spec 2026-11-23-task-tags § 7.3); absent where none is mounted. */
+  tags?: () => void
   finish: () => void
   confirmStop: () => void
   confirmDelete: () => void
@@ -228,6 +231,16 @@ function actionCommands({ run, workspace, archivedDeleteDays }: TaskCommandInput
       perform: on.rename,
     },
   )
+  if (on.tags) {
+    commands.push({
+      id: 'tags',
+      group: 'actions',
+      label: 'Tags…',
+      icon: icon(TagIcon),
+      keywords: ['tag', 'label', 'batch'],
+      perform: on.tags,
+    })
+  }
   if (flags.finish && run.status === 'waiting') {
     commands.push({
       id: 'end-session',
