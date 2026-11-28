@@ -12,13 +12,6 @@ export const approxPp = (pp: number) => (pp === 0 ? '—' : `≈ ${formatPlanPp(
 /** A provider reading or an account-level remainder: not an estimate. */
 export const exactPp = (pp: number) => `${formatPlanPp(pp)}%`
 
-/** A consumer's windows of one kind, newest first. Absent = nothing measured, which is not 0%. */
-export function consumerWindows(entries: PlanUsageConsumerWindow[] | undefined, consumerId: string, kind: PlanUsageWindowKind) {
-  return (entries ?? [])
-    .filter((e) => e.consumer.id === consumerId && e.kind === kind)
-    .sort((a, b) => Date.parse(b.resetsAt) - Date.parse(a.resetsAt))
-}
-
 /** A weekly reset is days away: name the day, not just the clock (QA F6). */
 export function resetTime(iso: string, kind: PlanUsageWindowKind): string {
   if (kind === 'five-hour') return clockTime(iso)
