@@ -134,7 +134,8 @@ export class GithubPoller {
       (event) => event === 'pull_request.opened' || event === 'issue.opened',
     );
     const labelEvents = definition.events.filter(
-      (event) => event === 'issue.labeled' || event === 'issue.unlabeled',
+      (event) => event === 'issue.labeled' || event === 'issue.unlabeled'
+        || event === 'pull_request.labeled' || event === 'pull_request.unlabeled',
     );
     const reviewEvents = definition.events.filter(
       (event) => event === 'pull_request.reviewed'
@@ -164,7 +165,12 @@ export class GithubPoller {
       });
     }
     if (labelEvents.length) {
-      sources.push({ family: 'issues', activity: 'updated', opened: false, labels: true, reviews: false });
+      const issueLabels = labelEvents.some((event) => event.startsWith('issue.'));
+      const prLabels = labelEvents.some((event) => event.startsWith('pull_request.'));
+      sources.push({
+        family: issueLabels && prLabels ? 'mixed' : prLabels ? 'prs' : 'issues',
+        activity: 'updated', opened: false, labels: true, reviews: false,
+      });
     }
     if (reviewEvents.length) {
       sources.push({ family: 'prs', activity: 'updated', opened: false, labels: false, reviews: true });
@@ -254,7 +260,7 @@ export class GithubPoller {
             });
           }
         }
-        if (source.labels && !item.pull_request) {
+        if (source.labels) {
           const timeline = await this.timeline(owner, repo, item.number);
           const events = reconstructLabelEvents(owner, repo, item, timeline);
           for (const event of events) {
@@ -523,7 +529,8 @@ export function reconstructLabelEvents(
     if (entry.event === 'labeled') current.delete(entry.label.name);
     else current.add(entry.label.name);
     const labels = entry.event === 'labeled' ? postLabels : [...current];
-    const kind = entry.event === 'labeled' ? 'issue.labeled' : 'issue.unlabeled';
+    const prefix = item.pull_request ? 'pull_request' : 'issue';
+    const kind = entry.event === 'labeled' ? `${prefix}.labeled` as const : `${prefix}.unlabeled` as const;
     const stable = entry.node_id ?? String(entry.id ?? `${entry.created_at}:${entry.label.name.toLowerCase()}`);
     rows.push({
       ...normalizeOpened(owner, repo, item, 'issue.opened'),

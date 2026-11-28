@@ -30,6 +30,8 @@ Automations → New automation → When GitHub changes
 2. Save the rule and check Preview matches.
 3. Enable the rule to process future changes.
 
+Label events fire for issues (`issue.labeled`, `issue.unlabeled`) and for pull requests (`pull_request.labeled`, `pull_request.unlabeled`). Each needs the label whose change fires it (`changedLabels`), and each add or removal starts its own task. A pull-request-only rule can check out the PR head (`checkout: "pr-head"`), for example to rebase when a `rebase` label is added.
+
 > **Good to know**: The feature has been available by default since the interface redesign. `CEZ_AUTOMATIONS=0` disables it. A rule starts working after the user enables it and does not create tasks for earlier matches.
 
 ## Export and import

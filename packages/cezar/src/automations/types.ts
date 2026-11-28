@@ -19,12 +19,16 @@ export const automationEventSchema = z.enum([
   'issue.opened',
   'issue.labeled',
   'issue.unlabeled',
+  'pull_request.labeled',
+  'pull_request.unlabeled',
   'pull_request.reviewed',
   'pull_request.review_requested',
   'pull_request.rereview_requested',
   'pull_request.closed',
   'pull_request.merged',
 ]);
+
+const LABEL_EVENTS: ReadonlySet<string> = new Set(['issue.labeled', 'issue.unlabeled', 'pull_request.labeled', 'pull_request.unlabeled']);
 
 const boundedString = z.string().trim().min(1).max(200);
 const stringList = z.array(boundedString).max(100).optional();
@@ -118,7 +122,7 @@ export const automationDefinitionObjectSchema = z
     enabled: z.boolean().default(false),
     /** A definition written before schedules (spec 2026-09-14) has no `kind`: it is a poll. */
     kind: z.enum(['github', 'schedule', 'tracker']).default('github'),
-    events: z.array(automationEventSchema).min(1).max(9).optional(),
+    events: z.array(automationEventSchema).min(1).max(11).optional(),
     intervalSeconds: z.number().int().min(60).max(86_400).optional(),
     filters: automationFiltersSchema.optional(),
     trackerTrigger: trackerTriggerSchema.optional(),
@@ -199,13 +203,13 @@ export const automationDefinitionObjectSchema = z
       ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['filters'], message: 'a GitHub automation needs its bounded filter' });
     }
     if (
-      definition.events?.some((event) => event === 'issue.labeled' || event === 'issue.unlabeled') &&
+      definition.events?.some((event) => LABEL_EVENTS.has(event)) &&
       !definition.filters?.changedLabels?.length
     ) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: ['filters', 'changedLabels'],
-        message: 'changedLabels is required for issue label events',
+        message: 'changedLabels is required for label events',
       });
     }
   });
