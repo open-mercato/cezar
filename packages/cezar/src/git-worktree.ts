@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process';
 import { existsSync, realpathSync, type Dirent } from 'node:fs';
-import { readdir, readFile, rm, stat } from 'node:fs/promises';
+import { lstat, readdir, readFile, rm, stat, unlink } from 'node:fs/promises';
 import { basename, join, resolve } from 'node:path';
 import { diskFloorRefusal } from './disk-space.ts';
 import { resolveTaskDiffBase } from './git-diff-base.ts';
@@ -432,6 +432,30 @@ export function worktreeSizeBytes(path: string): Promise<number | null> {
   });
 }
 
+/** Unlink a junction without visiting its target. Report whether this path is an ordinary directory. */
+async function detachDirectoryLink(path: string): Promise<boolean> {
+  const entry = await lstat(path).catch((error: NodeJS.ErrnoException) => {
+    if (error.code === 'ENOENT') return undefined;
+    throw error;
+  });
+  if (entry?.isSymbolicLink()) {
+    await unlink(path);
+    return false;
+  }
+  return entry?.isDirectory() ?? false;
+}
+
+async function detachWindowsSkillLinks(worktreePath: string): Promise<void> {
+  if (!await detachDirectoryLink(worktreePath)) return;
+  for (const agentDir of ['.claude', '.agents']) {
+    const parent = join(worktreePath, agentDir);
+    if (!await detachDirectoryLink(parent)) continue;
+    const skills = join(parent, 'skills');
+    if (!await detachDirectoryLink(skills)) continue;
+    for (const name of await readdir(skills)) await detachDirectoryLink(join(skills, name));
+  }
+}
+
 /** Remove a task worktree and its branch. Best effort — never throws. A worktree a running cezar
  *  or node process uses is left alone (`worktree-in-use.ts`); callers already check the dir is gone. */
 export async function removeWorktree(
@@ -440,6 +464,12 @@ export async function removeWorktree(
   branch?: string,
 ): Promise<void> {
   if (existsSync(worktreePath) && await worktreeInUse(worktreePath).catch(() => null)) return;
+  if (process.platform === 'win32') {
+    // Git for Windows can recurse into provisioned skill junctions (#2476).
+    // If a link cannot be detached, leave the worktree registered for retry.
+    const detached = await detachWindowsSkillLinks(worktreePath).then(() => true, () => false);
+    if (!detached) return;
+  }
   await git(repoRoot, ['worktree', 'remove', '--force', worktreePath]);
   await rm(worktreePath, { recursive: true, force: true }).catch(() => undefined);
   await git(repoRoot, ['worktree', 'prune']);
