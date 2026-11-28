@@ -71,7 +71,7 @@ export function ComposerTips({
   const current = visit && ready ? visit[index] : undefined
   const currentId = current?.id
 
-  // Where the control is, relative to the anchor root; re-measured when the row reflows.
+  // Sibling pills can move the target without resizing the root (#1922).
   React.useLayoutEffect(() => {
     if (!current) {
       setAnchor(null)
@@ -88,18 +88,23 @@ export function ComposerTips({
       }
       const base = root.getBoundingClientRect()
       const rect = element.getBoundingClientRect()
-      setAnchor({ top: rect.top - base.top, left: rect.left - base.left, width: rect.width, height: rect.height })
+      const next = { top: rect.top - base.top, left: rect.left - base.left, width: rect.width, height: rect.height }
+      setAnchor((previous) => previous
+        && previous.top === next.top && previous.left === next.left
+        && previous.width === next.width && previous.height === next.height
+        ? previous
+        : next)
       const card = cardRef.current?.getBoundingClientRect()
       setArrowLeft(card ? Math.min(Math.max(rect.left + rect.width / 2 - card.left, 18), Math.max(card.width - 18, 18)) : null)
     }
     measure()
-    window.addEventListener('resize', measure)
-    const observer = root && typeof ResizeObserver !== 'undefined' ? new ResizeObserver(measure) : null
-    if (root) observer?.observe(root)
-    return () => {
-      window.removeEventListener('resize', measure)
-      observer?.disconnect()
+    let frame: number
+    const track = () => {
+      measure()
+      frame = requestAnimationFrame(track)
     }
+    frame = requestAnimationFrame(track)
+    return () => cancelAnimationFrame(frame)
   }, [current, anchorRoot, composer])
 
   const advance = React.useCallback(() => {
