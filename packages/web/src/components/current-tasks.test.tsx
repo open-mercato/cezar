@@ -154,4 +154,34 @@ describe('CurrentTasksContainer', () => {
     const region = await screen.findByRole('region', { name: 'Scheduled tasks' })
     expect(within(region).getByRole('link', { name: /Later/ })).toBeTruthy()
   })
+
+  it("links a non-boot project's PR chip to that project's repo, not the boot one's", async () => {
+    // The shell sidebar sits outside ProjectScopeProvider: on `/p/dentalos/` its scope is null,
+    // and DentalOS PR #159 used to link to the boot repo's /pull/159.
+    resetScheduledTasksGate()
+    vi.stubGlobal('fetch', fetchMock)
+    const projects = [
+      { id: 'cezar', name: 'cezar', root: '/r/cezar', repoUrl: 'https://github.com/o/cezar' },
+      { id: 'dentalos', name: 'DentalOS', root: '/r/DentalOS', repoUrl: 'https://github.com/s/DentalOS' },
+    ]
+    const dental = run({ id: 'dental', title: 'fixing allergy scoring', status: 'review', prNumber: 159, prRefs: [{ number: 159, origin: 'marker', at: '2026-07-14T10:00:00.000Z' }], markerRefs: { pr: 159 } })
+    fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+      const path = String(input)
+      const body = path === '/api/v1/health'
+        ? { version: '1.0.0', bootProject: 'cezar', checks: [], repo: { remote: 'git@github.com:o/cezar.git' }, forge: { kind: 'github' } }
+        : path.endsWith('/projects') ? { bootProject: 'cezar', projects }
+          : path.includes('/p/dentalos/runs') ? [dental] : {}
+      return new Response(JSON.stringify(body), { status: 200 })
+    })
+    render(
+      <QueryClientProvider client={createQueryClient()}>
+        <MemoryRouter initialEntries={['/p/dentalos/workflows']}>
+          <CurrentTasksContainer />
+        </MemoryRouter>
+      </QueryClientProvider>,
+    )
+    await vi.waitFor(() =>
+      expect(document.querySelector('[data-slot="pr-chip"]')?.getAttribute('href')).toBe('https://github.com/s/DentalOS/pull/159'),
+    )
+  })
 })

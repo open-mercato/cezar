@@ -198,8 +198,8 @@ export function CurrentTasksContainer() {
       archiveMutation.mutate({ id: run.id, archived }, { onError: (error: Error) => toast(error.message, { tone: 'danger' }) }),
     [archiveMutation.mutate],
   )
-  const projectId = useReferenceProjectId()
-  const repoBase = useProjectRepoBase()
+  const projectId = useReferenceProjectId(activeProjectId)
+  const repoBase = useProjectRepoBase(activeProjectId)
   const rows = React.useMemo(() => (shown ? currentTasks(shown) : []), [shown])
   // Only the rows on screen ask for their chip status.
   const referenceRequests = React.useMemo(

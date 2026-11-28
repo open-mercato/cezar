@@ -1413,6 +1413,22 @@ describe('useReferenceProjectId', () => {
     const { result } = renderHook(() => useReferenceProjectId(), { wrapper: mounted(null) })
     expect(result.current).toBeUndefined()
   })
+
+  it('takes the project the sidebar lists over the empty shell scope', () => {
+    // The shell chrome renders outside ProjectScopeProvider: on `/p/proj-a/…` its scope is null,
+    // and falling back to the boot project read proj-a's chips under the boot repo's numbers.
+    const { result } = renderHook(() => useReferenceProjectId('proj-a'), {
+      wrapper: mounted(null, { ...HEALTH, bootProject: 'boot-id' }),
+    })
+    expect(result.current).toBe('proj-a')
+  })
+
+  it('keeps the boot fallback when the sidebar names no project', () => {
+    const { result } = renderHook(() => useReferenceProjectId(null), {
+      wrapper: mounted(null, { ...HEALTH, bootProject: 'boot-id' }),
+    })
+    expect(result.current).toBe('boot-id')
+  })
 })
 
 describe('useProjectRepoBase', () => {
@@ -1461,6 +1477,21 @@ describe('useProjectRepoBase', () => {
       wrapper: mounted(null, { ...HEALTH, bootProject: 'boot-id', repo: { remote: 'git@github.com:o/boot.git' } }, []),
     })
     expect(result.current).toBe('https://github.com/o/boot')
+  })
+
+  it("answers the sidebar's active project, not the boot repo, from outside the scope provider", () => {
+    // The reported defect: a DentalOS task's PR #159 linked to the boot repo's /pull/159.
+    const { result } = renderHook(() => useProjectRepoBase('proj-a'), {
+      wrapper: mounted(null, { ...HEALTH, bootProject: 'boot-id', repo: { remote: 'git@github.com:o/boot.git' } }, REGISTRY),
+    })
+    expect(result.current).toBe('https://github.com/o/a')
+  })
+
+  it('never hands an active non-boot project without a remote the boot repo', () => {
+    const { result } = renderHook(() => useProjectRepoBase('proj-b'), {
+      wrapper: mounted(null, { ...HEALTH, bootProject: 'boot-id', repo: { remote: 'git@github.com:o/boot.git' } }, REGISTRY),
+    })
+    expect(result.current).toBeUndefined()
   })
 })
 
