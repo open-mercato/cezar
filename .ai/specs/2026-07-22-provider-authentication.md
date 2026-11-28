@@ -1,5 +1,7 @@
 # Provider authentication discovery and setup
 
+> ⚠️ Superseded by `.ai/specs/2026-11-27-per-agent-provider-configuration.md` (2026-11-27) — sections: Non-goals (the "cezar does not read … provider tokens" line, for keys the user types into cezar only). Current state: see the new spec.
+
 Status: approved in design review · Date: 2026-07-22
 
 ## Summary

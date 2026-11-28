@@ -1,5 +1,7 @@
 # Project secrets: from `check-env` to a generic secret store — options analysis
 
+> ⚠️ Superseded by `.ai/specs/2026-11-27-per-agent-provider-configuration.md` (2026-11-27) — sections: "no agent audience" (one dedicated agent-provider scope is added). Current state: see the new spec.
+
 Status: decided 2026-10-10 (owner: backend D with A as fallback, reworked on PR #1291's branch, workspace scope included) · Base: `main` @ `59ba4ea7` (2026-10-10) · Subject: PR #1291
 (`feat/check-env`, head `715cda88`) · Related: `.ai/specs/2026-10-06-agentic-e2e-checks.md`,
 `.ai/specs/2026-09-18-jira-linear-tracker-browsing.md` (§ Managed project credential storage),
