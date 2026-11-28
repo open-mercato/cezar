@@ -8,7 +8,7 @@ import type {
   ManagerSnapshotTask,
   ManagerTaskReportState,
 } from '@open-mercato/cezar-contract';
-import { taskAskRecordSchema } from '@open-mercato/cezar-contract';
+import { questionSummary, taskAskRecordSchema } from '@open-mercato/cezar-contract';
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { z } from 'zod';
@@ -155,8 +155,10 @@ export function taskDetailRows(runs: RunRecord[], runId: string): { task: Manage
 
 const WORKTREE_RECOVERY = 'Worktree scripts need attention: use Retry, Start task anyway or Cancel in the Worktrees settings';
 
-const waitDetail = (run: RunRecord): string | undefined =>
-  run.attentionRequest?.questions[0]?.question ?? (run.dispatch?.overBudget ? 'Budget reached' : undefined);
+const waitDetail = (run: RunRecord): string | undefined => {
+  const question = run.attentionRequest?.questions[0]?.question;
+  return question !== undefined ? questionSummary(question) : run.dispatch?.overBudget ? 'Budget reached' : undefined;
+};
 
 /** An idle close is housekeeping, not news: a legacy or dispatched-child record that settled `failed`
  *  on it is never reported (spec 2026-11-04-idle-closed-attention-state § Revision). */

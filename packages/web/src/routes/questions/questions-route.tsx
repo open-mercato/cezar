@@ -43,10 +43,12 @@ import { ManagerAskText, ManagerProjectsContext, ManagerReferenceText } from '@/
 import { taskPath } from '@/routes/manager/manager-session-card'
 import { AskForm } from '@/routes/task-thread/ask-card'
 
-import { DismissingNote, StaleNote } from './question-states'
+import { DismissingNote, QuestionDetails, StaleNote } from './question-states'
 import {
   parseQuestionKey,
+  questionSummary,
   QUESTIONS_OLDER_DEFAULT_DAYS,
+  splitQuestionText,
   type ManagerAsk,
   type ManagerListResponse,
   type ManagerSummary,
@@ -653,12 +655,20 @@ function LockedQuestion({ item, children }: { item: QuestionItem; children: Reac
   const origin = item.source.kind === 'manager' ? { id: item.source.managerId, name: item.source.name } : undefined
   return (
     <div className="flex flex-col gap-2">
-      {item.questions.map((question, index) => (
-        <p key={index} className="break-words text-sm text-muted-foreground">
-          <span className="font-medium text-foreground">{question.header}</span>{' '}
-          {origin ? <ManagerReferenceText text={question.question} origin={origin} /> : question.question}
-        </p>
-      ))}
+      {item.questions.map((question, index) => {
+        const words = (text: string) => (origin ? <ManagerReferenceText text={text} origin={origin} /> : text)
+        const { main, details } = splitQuestionText(question.question)
+        return (
+          <div key={index} data-slot="question-locked-text" className="flex flex-col gap-1">
+            {/* The asked words keep their line breaks; their `---` background stays folded (#2477). */}
+            <p className="break-words whitespace-pre-wrap text-sm text-muted-foreground">
+              <span className="font-medium text-foreground">{question.header}</span>{' '}
+              {words(main)}
+            </p>
+            {details !== undefined ? <QuestionDetails>{words(details)}</QuestionDetails> : null}
+          </div>
+        )
+      })}
       {children}
     </div>
   )
@@ -741,7 +751,7 @@ function ClosedRow({ item, now, managerById }: { item: QuestionItem; now: number
           <span className="font-medium text-foreground">{source.kind === 'manager' ? source.name : source.title}</span>
         </span>
         {item.questions.map((question, index) => (
-          <span key={index} className="break-words"><span className="font-medium">{question.header}</span> <s>{words(question.question)}</s></span>
+          <span key={index} className="break-words"><span className="font-medium">{question.header}</span> <s>{words(questionSummary(question.question))}</s></span>
         ))}
         {closed.answer && closed.reason === 'answered' ? <span className="break-words text-foreground">{words(closed.answer)}</span> : null}
         {closed.detail ? <span className="break-words">{closed.detail}</span> : null}

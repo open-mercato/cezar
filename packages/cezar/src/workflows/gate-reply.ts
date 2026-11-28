@@ -3,6 +3,7 @@
  * neither a button nor a plain yes is approval WITH instructions, which the workflow applies
  * before it goes on — never a silent `reject` that ends the run at "stopped".
  */
+import { splitQuestionText } from '@open-mercato/cezar-contract';
 import { edgeFrom, type WorkflowGraph } from './graph.ts';
 
 export const GATE_APPROVE = 'Approve';
@@ -52,6 +53,16 @@ export function classifyGateReply(reply: string, opensPr: boolean): GateDecision
     DRAFT_NEGATION.test(clause) || (FULL_PR.test(clause) && !FULL_NEGATION.test(clause)),
   );
   return { decision: 'approve', instructions: text, ...(fullPr ? { fullPr: true } : {}) };
+}
+
+/**
+ * The gate card's text with cezar's note appended. A message split by a `---` line folds what
+ * follows it under the card's Details (#2477), so the note joins the part above it, kept in view.
+ */
+export function gateCardText(message: string, note: string | undefined): string {
+  if (!note) return message;
+  const { main, details } = splitQuestionText(message);
+  return details === undefined ? `${main}\n\n${note}` : `${main}\n\n${note}\n---\n${details}`;
 }
 
 /** The gate's approve port leads straight to a PR node, so "open a full PR" means something. */

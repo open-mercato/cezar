@@ -73,6 +73,13 @@ describe('buildAttentionList', () => {
     expect(list.items[0]).toMatchObject({ projectId: 'app', runId: 'wait' });
   });
 
+  it('titles a question with its one-line summary, without the text below its --- line (#2477)', () => {
+    const list = buildAttentionList(sources({
+      questions: [question('m:mgr:long', { questions: [{ header: 'Plan', question: 'Approve the plan?\nTwo tables change.\n---\nStep 1: background', options: [] }] })],
+    }));
+    expect(list.items[0]).toMatchObject({ kind: 'question', title: 'Approve the plan? Two tables change.' });
+  });
+
   it('leaves out closed questions, and an inactive manager’s cards and messages', () => {
     const list = buildAttentionList(sources({
       questions: [question('m:mgr:shut', { closed: { reason: 'answered', at: ago(1) } }), question('m:off:q', { source: { kind: 'manager', managerId: 'off', name: 'Off' } })],

@@ -22,6 +22,13 @@ describe('Discord rendering', () => {
       expect(JSON.stringify(result)).not.toContain('instance');
     });
   }
+  it('shows a question as one line, without the text below its --- line (#2477)', () => {
+    const value = event('task.attention_required', true);
+    Object.assign(value.data, { questions: [{ question: 'Approve the plan?\nTwo tables change.\n---\nStep 1: background', options: [{ label: 'Approve' }] }] });
+    const description: string = JSON.parse(renderDiscordMessage(JSON.stringify(value))).embeds[0].description;
+    expect(description.split('\n')[0]).toBe('1. Approve the plan? Two tables change.');
+    expect(description).not.toContain('background');
+  });
   it('neutralizes mentions and markdown, including masked links', () => {
     const value = event('task.finished', true);
     value.task.title = '@everyone <@123> <@&123> *bold* [trusted](https://evil.test)\n# header\n- item';

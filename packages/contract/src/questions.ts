@@ -157,6 +157,35 @@ export const QUESTIONS_OLDER_DEFAULT_DAYS = 7;
 export const QUESTIONS_CLOSED_WINDOW_DAYS = 7;
 export const QUESTIONS_CLOSED_MAX = 50;
 
+/** A question's text split at its first line that is exactly `---` (#2477). */
+export interface QuestionTextParts {
+  /** The words shown as the question. */
+  main: string;
+  /** The words below the `---` line, folded under "Details"; absent when nothing follows it. */
+  details?: string;
+}
+
+/**
+ * Split a question at its first `---` line: the words above it stay the question, the rest folds
+ * under a collapsed "Details" on the cards (#2477). `trimEnd` lets a CRLF's `\r` and trailing blanks
+ * match; an indented `---`, `----` or `***` never does. A rule with nothing after it is dropped; one
+ * with nothing above it leaves the text whole, so the card never shows an empty question.
+ */
+export function splitQuestionText(text: string): QuestionTextParts {
+  const lines = text.split('\n');
+  const marker = lines.findIndex((line) => line.trimEnd() === '---');
+  if (marker === -1) return { main: text };
+  const main = lines.slice(0, marker).join('\n').trimEnd();
+  if (main.trim() === '') return { main: text };
+  const details = lines.slice(marker + 1).join('\n').trim();
+  return details === '' ? { main } : { main, details };
+}
+
+/** A question as one line (closed rows, the Now list, notifications): the part above `---`, its line breaks flattened. */
+export function questionSummary(text: string): string {
+  return splitQuestionText(text).main.replace(/\s*\r?\n\s*/g, ' ').trim();
+}
+
 /** The two parts of a card the replace rule reads; a manager ask and a task's ask record both have them. */
 export interface QuestionCardShape {
   id?: string | undefined;

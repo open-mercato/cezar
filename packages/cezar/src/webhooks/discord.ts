@@ -1,4 +1,4 @@
-import { webhookEventSchema } from '@open-mercato/cezar-contract';
+import { questionSummary, webhookEventSchema } from '@open-mercato/cezar-contract';
 
 const presentation = {
   'task.attention_required': ['Needs your input', 15105570], 'task.review_ready': ['Ready for review', 3447003],
@@ -74,7 +74,7 @@ export function renderDiscordMessage(eventJson: string, ctx: { receiverName?: st
   let description = '';
   if (event.type === 'task.attention_required') {
     for (const [index, question] of (event.data.questions ?? []).entries()) {
-      const line = `${index + 1}. ${escape(question.question)}${(question.options ?? []).map(option =>
+      const line = `${index + 1}. ${escape(questionSummary(question.question))}${(question.options ?? []).map(option =>
         `\n• ${escape(option.label)}${option.description ? ` — ${escape(option.description)}` : ''}`).join('')}`;
       if (description && description.length + line.length + 1 > descriptionLimit) break;
       description += `${description ? '\n' : ''}${clip(line, descriptionLimit)}`;
