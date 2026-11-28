@@ -16,7 +16,7 @@ it('publishes queue reasons when a different project acquires, resumes and clear
     const holder = b.createRun({ title: 'Blocked', steps: [], task: 'Blocked', workflow: 'quick-task', runner: 'claude' });
     const until = new Date(Date.now() + 60_000).toISOString();
     b.updateRun(holder.id, { status: 'failed', autoResumeAt: until });
-    expect(a.getRun(queued.id)?.queueWaitReason).toEqual({ kind: 'usage-reset', until, timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone });
+    expect(a.getRun(queued.id)?.queueWaitReason).toEqual({ kind: 'usage-reset', until, timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone, account: 'claude:default' });
     b.updateRun(holder.id, { status: 'running', autoResumeAt: undefined, autoResumeAttempts: 1 });
     expect(a.getRun(queued.id)?.queueWaitReason).toEqual({ kind: 'account-resume' });
     b.updateRun(holder.id, { status: 'done', autoResumeAttempts: undefined });
@@ -57,7 +57,7 @@ it('uses the configured Codex default for omitted-runner queue reasons and refre
     const holder = b.createRun({ title: 'Blocked', steps: [], task: 'Blocked', workflow: 'quick-task', runner: 'codex' });
     const until = new Date(Date.now() + 60_000).toISOString();
     b.updateRun(holder.id, { status: 'failed', autoResumeAt: until });
-    await vi.waitFor(() => expect(a.getRun(queued.id)?.queueWaitReason).toEqual({ kind: 'usage-reset', until, timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone }));
+    await vi.waitFor(() => expect(a.getRun(queued.id)?.queueWaitReason).toEqual({ kind: 'usage-reset', until, timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone, account: 'codex:default' }));
     b.updateRun(holder.id, { status: 'running', autoResumeAt: undefined, autoResumeAttempts: 1 });
     await vi.waitFor(() => expect(a.getRun(queued.id)?.queueWaitReason).toEqual({ kind: 'account-resume' }));
     b.updateRun(holder.id, { runner: 'claude' });
@@ -82,7 +82,7 @@ it('clears a disposed holder reason while another participant still exhausts cap
     const holder = b.createRun({ title: 'Blocked', steps: [], task: 'Blocked', workflow: 'quick-task', runner: 'codex' });
     const until = new Date(Date.now() + 60_000).toISOString();
     b.updateRun(holder.id, { status: 'failed', autoResumeAt: until });
-    expect(a.getRun(queued.id)?.queueWaitReason).toEqual({ kind: 'usage-reset', until, timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone });
+    expect(a.getRun(queued.id)?.queueWaitReason).toEqual({ kind: 'usage-reset', until, timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone, account: 'codex:default' });
     mb.dispose();
     expect(semaphore.accountHolds().deadline.size).toBe(0);
     expect(a.getRun(queued.id)?.queueWaitReason).toBeUndefined();

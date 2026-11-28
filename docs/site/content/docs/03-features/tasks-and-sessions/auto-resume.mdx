@@ -13,6 +13,13 @@ sources:
   - label: "Specification"
     path: .ai/specs/2026-08-03-auto-resume-after-usage-limit.md
     commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+  - label: "Account switch and Resume now"
+    path: packages/cezar/src/workflows/run.ts
+    line: 4655
+    commit: 2607d3d3a3fa296bfd6d60f6de6349660e00a483
+  - label: "Specification addendum (account switch)"
+    path: .ai/specs/2026-08-03-auto-resume-after-usage-limit.md
+    commit: 2607d3d3a3fa296bfd6d60f6de6349660e00a483
 ---
 The thread shows the scheduled resume time. When that time arrives, Cezar puts the task back in the normal queue.
 
@@ -27,3 +34,11 @@ Settings → Resources → Auto-resume after a usage limit
 3. Let Cezar add the task back to the queue.
 
 > **Good to know**: Automatic resume requires the provider to report when the limit resets. Cezar attempts to resume 30 seconds after that time, with a maximum of 12 attempts.
+
+## If you switch accounts
+
+A usage limit belongs to the login that hit it. Cezar checks which login the agent's folder holds every minute and on restart. When you sign the agent into another account, paused tasks resume without waiting for the old reset time, and tasks waiting on the old login's limit start once one of them reaches the provider.
+
+A resumed task frees the queue as soon as the provider reports its usage window open. Other tasks do not wait for its turn to finish.
+
+> **Good to know**: When Cezar cannot tell that the login changed, use **Resume now** on a task waiting for a usage limit reset. It lifts the account's limit in every project until the account hits a limit again.

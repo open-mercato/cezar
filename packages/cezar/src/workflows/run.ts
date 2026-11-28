@@ -164,7 +164,7 @@ import { extractTaskRefs, refineTaskRefs, titleRefNumber } from '../runs/task-re
 import { parseTaskMarkers, stripTaskMarkers } from '../runs/task-markers.ts';
 import { autoNamingActive, generateRunName, liveTitleUpdatesEnabled, NAMER_TIMEOUT_MS, postValidateTitle } from '../runs/auto-name.ts';
 import { assessedWithoutChanges, diffHasChanges, reviewGateEnabled } from '../runs/review-gate.ts';
-import { resolveAccountId, resolveProfileEnvForRoot } from '../workspace/agent-profiles.ts';
+import { resolveProfileEnvForRoot } from '../workspace/agent-profiles.ts';
 import { recordedProfileFor } from '../server/recorded-profile.ts';
 import { DEFAULT_AGENT_ACCOUNT_ID, defaultAgentAccountStore, loadAgentAccounts, type AgentAccountStore } from '../workspace/agent-accounts.ts';
 import {
@@ -179,6 +179,8 @@ import {
 } from '../workspace/agent-fallback.ts';
 import { DEFAULT_IDLE_TIMEOUT_MINUTES } from '../workspace/config.ts';
 import { WorkspaceSemaphore, type AccountHolds } from '../workspace/semaphore.ts';
+import { onLoginLiftReady, readLoginIdentityAt, recordUsageLimit, refreshLoginIdentities, usageLimitLift, usageLimitLifted } from '../workspace/usage-limit-logins.ts';
+import { accountHeldFor, deriveAccountHolds, resumeInFlight, runAccountKey, type AccountResolution } from './account-holds.ts';
 import { SecretStore } from '../workspace/secrets.ts';
 import { loadWorkspaceConfig, PROJECT_ID_RE } from '../workspace/config.ts';
 import type { ProviderId } from '../core/provider-auth.ts';
@@ -999,85 +1001,9 @@ export function setArchiveReclaimDelayForTests(ms: number): void { ARCHIVE_RECLA
 /** Shared empty holds for the common "nothing is held" pump — avoids allocating per sweep. */
 const NO_HOLDS: AccountHolds = { deadline: new Set(), inFlight: new Set() };
 
-/**
- * May this run start, given what its account is holding?
- *
- * The two kinds of hold bind different work, and getting that wrong has produced a bug in each
- * direction (spec 2026-08-03-auto-resume-after-usage-limit):
- *
- *  - a `deadline` hold means the window is KNOWN shut until an instant, so it blocks everything
- *    on that account — resumes included. Exempting them let four resumes fire at once and
- *    re-limit one after another, which is the stampede wearing a different hat.
- *  - an `inFlight` hold means a resume is testing the window right now and nothing is proven, so
- *    it blocks fresh work but not other resumes. Blocking those deadlocked a live workspace.
- */
-function accountHeldFor(
-  run: Pick<RunRecord, 'runner' | 'agentProfile' | 'status' | 'autoResumeAttempts' | 'autoResumeWindowOpen'>,
-  holds: AccountHolds,
-  fallbackRunner: RunnerId,
-  accounts?: AccountResolution,
-  workflow?: WorkflowDef,
-): boolean {
-  // A workflow with no agent step spends no account budget, so a closed window cannot concern it (#2094).
-  if (workflow && !workflow.steps.some((s) => stepKind(s) === 'agent')) return false;
-  const key = runAccountKey(run, fallbackRunner, accounts);
-  if (holds.deadline.has(key)) return true;
-  return holds.inFlight.has(key) && !resumeInFlight(run);
-}
-
-/**
- * Which agent ACCOUNT a run's work runs on — the thing a provider usage limit actually closes
- * (spec 2026-08-03-auto-resume-after-usage-limit).
- *
- * Backend plus agent account, because those are the two axes a limit is scoped to: a Claude
- * limit must never stall a Codex task, and a second Claude login is a second budget. A record
- * that names no runner has not started yet and will take the configured default, which is what
- * `fallbackRunner` carries; a run that HAS started always carries its resolved runner (execute
- * persists it), and only started runs can be holding.
- */
-export function runAccountKey(
-  run: Pick<RunRecord, 'runner' | 'agentProfile'> & { steps?: RunRecord['steps'] },
-  fallbackRunner: RunnerId,
-  accounts?: AccountResolution,
-): string {
-  const runner = run.runner ?? fallbackRunner;
-  // Without the account store the old literal key stands (#1722 resolves only what it can read).
-  if (!accounts) return `${runner}:${run.agentProfile ?? 'default'}`;
-  // A holding run is keyed on the account its steps recorded; a run asking to start has no
-  // recording yet, so it resolves as the spawn will: its override, else the repo's selection.
-  const explicit = accounts.holding
-    ? recordedProfileFor({ ...run, runner, steps: run.steps ?? [] } as RunRecord, runner)
-    : run.agentProfile;
-  // A named account keeps its own key (a stale id is still its own budget to the user).
-  if (explicit !== undefined) return `${runner}:${explicit}`;
-  return `${runner}:${resolveAccountId(accounts.store, { provider: runner, repoRoot: accounts.repoRoot })}`;
-}
-
-/** What `runAccountKey` needs to resolve an absent `agentProfile` to the account that really runs (#1722). */
-export interface AccountResolution {
-  store: AgentAccountStore;
-  repoRoot: string;
-  /** True when keying a run that holds the account (reads its recorded step), false when it asks to start. */
-  holding?: boolean;
-}
-
-/**
- * Is this run an automatic resume that has not completed a turn yet?
- *
- * Such a run is the work the reopened window is FOR, so the hold must never apply to it — not
- * its own, and not another resume's. Two resumes that hold each other is a deadlock the queue
- * cannot recover from: both sit `queued` with a counter and no deadline, each waiting for the
- * other to prove a window neither will ever get to test. That is the shape a live run produced
- * — two scheduled tasks fired, both went `queued`, and nothing in the workspace moved again.
- *
- * The hold exists to stop NEW work walking into a closed window. A resume is not new work.
- */
-function resumeInFlight(run: Pick<RunRecord, 'status' | 'autoResumeAttempts' | 'autoResumeWindowOpen'>): boolean {
-  // Once the resumed session has observed the window open, nothing is left to test (#2525).
-  return (
-    run.autoResumeAttempts !== undefined && !run.autoResumeWindowOpen && (run.status === 'queued' || run.status === 'running')
-  );
-}
+// The hold's derivation lives in `account-holds.ts`, shared with the semaphore's not-yet-loaded
+// projects; re-exported so existing importers keep their path.
+export { runAccountKey, type AccountResolution } from './account-holds.ts';
 
 const AGENT_FALLBACK_PROMPT =
   'The previous agent on this task ran out of its usage allowance, and cezar handed the task to you. Read the handoff file (CEZ_HANDOFF_FILE) to recover context, inspect the worktree (git status, git log) to see what is already done, then continue the task from where it stopped. Do not redo work that is already committed.';
@@ -1762,6 +1688,9 @@ export class RunManager {
   private readonly holdTimers = new Set<NodeJS.Timeout>();
   private readonly holdDeadlines = new Set<number>();
   private readonly usageHolds = new AgentUsageHolds();
+  /** The login each run's session started under, per account key: what its limit is stamped with,
+   *  since the folder may hold another login by the time the limit arrives (2026-11-23 addendum). */
+  private readonly spawnLogins = new Map<string, Map<string, string | undefined>>();
   /** Runs whose fallback admission is between its synchronous claim and its continuation. */
   private readonly fallbackPending = new Set<string>();
   /** Set by `dispose`; asynchronous fallback work checks this before admission or launch. */
@@ -1823,6 +1752,8 @@ export class RunManager {
   /** Unregister handle for this manager's semaphore membership — released by
    *  dispose() so a torn-down project stops counting against the cap. */
   private readonly offSemaphore: () => void;
+  /** A login read a lift waited on landed: the queues may start (2026-11-23 addendum). */
+  private readonly offLoginLift: () => void;
 
   /** The workspace-registry id of this manager's project — what a dispatched agent's `cez task`
    *  CLI needs to address the right project over the API (spec 2026-09-10-dispatch). */
@@ -1883,6 +1814,7 @@ export class RunManager {
     this.secrets = options.secrets ?? new SecretStore();
     this.semaphore = options.semaphore ?? new WorkspaceSemaphore();
     this.offSemaphore = this.semaphore.register({
+      repoRoot,
       busySlots: () => this.busySlots(),
       pump: () => this.pump(),
       oldestQueuedAt: () => this.oldestQueuedAt(),
@@ -1893,6 +1825,7 @@ export class RunManager {
       activeRuns: () => this.store.listRuns().filter((r) => RESTART_SENSITIVE.has(r.status) && !isIdleParked(r)).length,
       restartBlockers: () => this.restartBlockers(),
     });
+    this.offLoginLift = onLoginLiftReady(() => { if (!this.disposed) void this.semaphore.release(); });
     this.lifecycle = new WorktreeLifecycleCoordinator(repoRoot, store, {
       semaphore: this.semaphore,
       deferCleanup: true,
@@ -1979,6 +1912,7 @@ export class RunManager {
     this.offUsage();
     this.offStoreLifecycle();
     this.offSemaphore();
+    this.offLoginLift();
     clearInterval(this.queueWatchdog);
     clearInterval(this.retentionTimer);
     for (const [runId, state] of this.active) {
@@ -2243,6 +2177,15 @@ export class RunManager {
       }
       trackerContext = trackerPrompt({ binding, ...(context && contextFile ? { context, contextFile } : {}), ...(unavailable ? { unavailable } : {}), commands });
     }
+    if (!options.namingOnly && (backend === 'claude' || backend === 'codex')) {
+      const account = `${backend}:${resolved.profile.id}`;
+      const logins = this.spawnLogins.get(runId) ?? new Map<string, string | undefined>();
+      logins.set(account, await readLoginIdentityAt(account, backend, resolved.profile.path));
+      this.spawnLogins.delete(runId);
+      this.spawnLogins.set(runId, logins);
+      // Bounded: an entry outlives its run only until 256 newer ones have started.
+      if (this.spawnLogins.size > 256) this.spawnLogins.delete(this.spawnLogins.keys().next().value as string);
+    }
     const usageProvider = backend === 'claude' ? 'claude' : boundIdentity ? 'codex' : undefined;
     // The plan-usage ledger reads every Claude/Codex account (design rev 3); the reset store
     // above stays limited to accounts whose identity it can bind.
@@ -2292,6 +2235,8 @@ export class RunManager {
     const w = observation.windows;
     if (!w.some((x) => x.status === 'allowed') || w.some((x) => x.status === 'blocked')) return;
     this.store.updateRun(runId, { autoResumeWindowOpen: true });
+    // Nothing else wakes the queues it held, in this project or any other.
+    void this.semaphore.release();
   }
 
   startRun(
@@ -3052,7 +2997,9 @@ export class RunManager {
     // Re-arm usage-limit resumes (spec 2026-08-03-auto-resume-after-usage-limit): the wait is
     // routinely longer than a cezar session, so the deadline is durable and the timer is rebuilt
     // from it. `pump()` reconciles again on every sweep, so this is the fast path, not the only
-    // one — see `reconcileAutoResumes`.
+    // one — see `reconcileAutoResumes`. The logins are read first: a profile re-logged while cezar
+    // was down must not keep the old login's deadlines (2026-11-23 addendum).
+    await refreshLoginIdentities();
     this.reconcileAutoResumes();
     // A fallback admission the previous process claimed but never finished: no successor reserved
     // and no exhaustion line. Claim it again — `attempted` keeps every agent it had already used.
@@ -4189,6 +4136,8 @@ export class RunManager {
       return;
     }
     const wakeAt = new Date(limit.resetAt.getTime() + AUTO_RESUME_GRACE_MS);
+    // Before the deadline exists: a lift from an earlier limit must never cover this one.
+    this.stampUsageLimit(runId, runAccountKey(run, run.runner ?? 'claude', this.holdingAccounts()), wakeAt.getTime());
     this.armAutoResume(runId, wakeAt.getTime(), 'usage_limit');
     this.store.appendEvent(runId, {
       type: 'lifecycle',
@@ -4307,6 +4256,7 @@ export class RunManager {
       if (limit) {
         const now = Date.now();
         const holds = (run.usageLimitHolds ?? []).filter((hold) => Date.parse(hold.until) > now && hold.account !== originKey);
+        this.stampUsageLimit(run.id, originKey, limit.resetAt.getTime());
         this.store.updateRun(run.id, { usageLimitHolds: [...holds, { account: originKey, until: limit.resetAt.toISOString() }] });
         this.usageHolds.remember({ account: originKey, until: limit.resetAt.toISOString() });
         this.armHoldExpiry(limit.resetAt.getTime());
@@ -4709,6 +4659,24 @@ export class RunManager {
     }
     for (const run of this.store.listRuns()) {
       if (run.status !== 'failed' || !run.autoResumeAt) continue;
+      // A lifted account's deadline binds nobody any more, so the resume it promised fires now.
+      const account = runAccountKey(run, run.runner ?? 'claude', this.holdingAccounts());
+      const lift = run.archived || run.autoResumeReason === 'transient' || Date.parse(run.autoResumeAt) <= Date.now()
+        ? undefined
+        : usageLimitLift(account);
+      if (lift) {
+        const timer = this.autoResumeTimers.get(run.id);
+        if (timer) clearTimeout(timer);
+        this.autoResumeTimers.delete(run.id);
+        this.store.appendEvent(run.id, {
+          type: 'lifecycle',
+          message: lift === 'login'
+            ? 'this account is signed in with another login now — resuming without waiting for the old login\'s usage limit'
+            : 'usage-limit hold lifted with Resume now — resuming now',
+        });
+        this.armAutoResume(run.id, Date.now(), run.autoResumeReason ?? 'usage_limit');
+        continue;
+      }
       if (this.autoResumeTimers.has(run.id)) continue;
       const deadline = Date.parse(run.autoResumeAt);
       // A deadline that is unreadable, belongs to a run that has spent its cap, or belongs to a
@@ -4804,6 +4772,9 @@ export class RunManager {
    * Public so a test can drive the wedge directly instead of waiting out the interval.
    */
   async rescueStalledQueue(now = Date.now()): Promise<void> {
+    // A profile re-logged into another account lifts the old login's holds in every project; this
+    // tick is how cezar notices a sign-in made outside it (2026-11-23 addendum).
+    if (!this.disposed && await refreshLoginIdentities()) await this.semaphore.release();
     // First, the worst shape: a record that says `queued` while the engine holds no job, no
     // continuation and no queue entry for it. `pump()` cannot see such a run — it iterates the
     // queue, and this one is not in it — so nothing will ever start it. Re-adopt it through the
@@ -4829,7 +4800,9 @@ export class RunManager {
     for (const run of this.store.listRuns()) {
       if (run.status !== 'failed' || !run.autoResumeAt) continue;
       const deadline = Date.parse(run.autoResumeAt);
-      if (Number.isFinite(deadline) && deadline > now) return;
+      if (Number.isFinite(deadline) && deadline > now && !usageLimitLifted(runAccountKey(run, run.runner ?? 'claude', this.holdingAccounts()))) return;
+      // A lifted deadline whose resume is armed to fire now: that timer will pump too.
+      if (this.autoResumeTimers.has(run.id)) return;
     }
     if (this.semaphore.accountHolds().inFlight.size === 0) {
       // Not the hold, then — some other wakeup went missing. An ordinary pump is the whole fix,
@@ -4904,7 +4877,7 @@ export class RunManager {
       const key = runAccountKey(run, defaultRunner, this.askingAccounts());
       const until = holds.deadlines?.get(key);
       const reason: RunRecord['queueWaitReason'] = run.status !== 'queued' ? undefined
-        : until !== undefined ? { kind: 'usage-reset', until: new Date(until).toISOString(), timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone }
+        : until !== undefined ? { kind: 'usage-reset', until: new Date(until).toISOString(), timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone, account: key }
         : holds.inFlight.has(key) && !resumeInFlight(run) ? { kind: 'account-resume' }
         // The pump owns this one: it alone knows the task waits for a free account.
         : run.queueWaitReason?.kind === 'account-busy' ? run.queueWaitReason : undefined;
@@ -4990,46 +4963,59 @@ export class RunManager {
     const load = new Map<string, number>();
     for (const run of this.store.listRuns()) {
       if (!this.starting.has(run.id) && (run.status !== 'running' || isIdleParked(run))) continue;
-      const key = runAccountKey(run, run.runner ?? 'claude', this.accountStore && { store: this.accountStore, repoRoot: this.repoRoot, holding: true });
+      const key = runAccountKey(run, run.runner ?? 'claude', this.holdingAccounts());
       load.set(key, (load.get(key) ?? 0) + 1);
     }
     return load;
   }
 
   accountHolds(now = Date.now()): AccountHolds {
-    const deadlines = new Map<string, number>();
-    const deadline = new Set<string>();
-    const inFlight = new Set<string>();
+    const { store, repoRoot } = this.holdingAccounts();
+    const holds = deriveAccountHolds(this.store.listRuns(), { now, accounts: { store, repoRoot }, lift: usageLimitLift });
+    const deadlines = new Map(holds.deadlines);
+    // A fallback's exhausted account stays held until ITS reset, even after its task is gone.
     for (const hold of this.usageHolds.active(now)) {
-      deadline.add(hold.account);
+      if (usageLimitLifted(hold.account)) continue;
       const until = Date.parse(hold.until);
+      holds.deadline.add(hold.account);
       deadlines.set(hold.account, Math.max(deadlines.get(hold.account) ?? 0, until));
       this.armHoldExpiry(until);
     }
-    for (const run of this.store.listRuns()) {
-      // A holding run always carries the runner it actually ran on, so the fallback is unused
-      // here — it is spelled out rather than `!` so a future record shape degrades, not throws.
-      const key = () => runAccountKey(run, run.runner ?? 'claude', this.accountStore && { store: this.accountStore, repoRoot: this.repoRoot, holding: true });
-      // A fallback's exhausted account stays held until ITS reset, whatever the task did since.
-      for (const hold of run.usageLimitHolds ?? []) {
-        const until = Date.parse(hold.until);
-        if (Number.isFinite(until) && until > now) {
-          deadline.add(hold.account);
-          deadlines.set(hold.account, Math.max(deadlines.get(hold.account) ?? 0, until));
-        }
-      }
-      // A transient retry says nothing about the account's window, so it holds nothing.
-      if (run.autoResumeReason === 'transient') continue;
-      if (run.status === 'failed' && run.autoResumeAt) {
-        const at = Date.parse(run.autoResumeAt);
-        if (Number.isFinite(at) && at > now) { deadline.add(key()); deadlines.set(key(), Math.min(at, deadlines.get(key()) ?? Infinity)); }
-      } else if (resumeInFlight(run)) {
-        inFlight.add(key());
-      }
-    }
-    return { deadline, inFlight, deadlines };
+    return { deadline: holds.deadline, inFlight: holds.inFlight, deadlines };
   }
 
+  /** How a HOLDING run resolves to its account — the stamp and the lift must key it as the hold does. */
+  private holdingAccounts(): AccountResolution {
+    return { store: this.accountStore ?? defaultAgentAccountStore(), repoRoot: this.repoRoot, holding: true };
+  }
+
+  /** Record the login `account` was limited under, from the session that met the limit. */
+  private stampUsageLimit(runId: string, account: string, until: number): void {
+    recordUsageLimit(account, this.spawnLogins.get(runId)?.get(account), until);
+  }
+
+
+  /** "Resume now", after `releaseUsageLimit` lifted every hold on `account`: a running resume
+   *  counts as having seen its window open (#2525); a parked one fires on the pump below and tests
+   *  the window first. Answers how many runs it touched, each once (2026-11-23 addendum). */
+  resumeAccountNow(account: string): number {
+    let touched = 0;
+    for (const run of this.store.listRuns()) {
+      const key = runAccountKey(run, run.runner ?? 'claude', this.holdingAccounts());
+      if (key === account && resumeInFlight(run)) {
+        this.store.updateRun(run.id, { autoResumeWindowOpen: true });
+        touched += 1;
+      } else if (
+        (key === account && run.status === 'failed' && run.autoResumeAt !== undefined && run.autoResumeReason !== 'transient')
+        || run.usageLimitHolds?.some((hold) => hold.account === account && Date.parse(hold.until) > Date.now())
+      ) {
+        touched += 1;
+      }
+    }
+    this.onQueueHoldChange();
+    void this.semaphore.release();
+    return touched;
+  }
 
   /**
    * The PER-TASK off switch (`DELETE /api/v1/runs/:id/auto-resume`, and the archive route):
@@ -5042,16 +5028,18 @@ export class RunManager {
   cancelAutoResume(runId: string): boolean {
     const run = this.store.getRun(runId);
     if (!run) return false;
-    const pending = run.autoResumeAt !== undefined || this.autoResumeTimers.has(runId);
+    // A resume already under way holds its account through its counter, with no deadline left.
+    const pending = run.autoResumeAt !== undefined || run.autoResumeAttempts !== undefined
+      || run.autoResumeReason !== undefined || this.autoResumeTimers.has(runId);
     this.clearAutoResume(runId);
     if (pending) {
       this.store.appendEvent(runId, {
         type: 'note',
         message: 'automatic resume cancelled for this task',
       });
-      // This run may have been the last thing holding its account's queue — nothing else will
-      // notice, since the hold is derived and its release is not an event.
-      void this.pump();
+      // This run may have been the last thing holding its account's queue in EVERY project — and
+      // nothing else will notice, since the hold is derived and its release is not an event.
+      void this.semaphore.release();
     }
     return true;
   }

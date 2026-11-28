@@ -16,11 +16,13 @@
 - 🐛 A manager's scheduled checks follow its instructions: a manager set up for something other than watching repositories, such as a self-assessment, no longer raises open pull requests or offers to merge them, and stays silent when nothing serves its goal. A manager with no instructions, or one created from the watch presets, checks as before. *(@martaradziszewska)*
 - 🐛 A session closed for inactivity no longer changes the task: it keeps its state (usually **needs you**), its thread ends on the agent's last message, and writing to it reopens the session. No failure, no "closed · idle" mark, no notification, and managers are not woken or told about it. Dispatched child tasks still settle so their parent gets a report. *(@patzick)*
 - 🐛 `review-council` asks you before opening a draft PR, also when the judge says ship, and a Draft PR node on a branch with no new commits opens nothing and ends the run as a success instead of failing. A saved copy of `review-council` keeps its old graph; the Draft PR change protects it too. *(@patzick)*
+- 🐛 Signing an agent's profile into another account no longer leaves every project's queue held behind the old login's usage limit: the hold lifts for the new login (also after a restart), queued tasks start the moment a resumed task sees its usage window open, cancelling a running resume frees the queue in every project, a project not opened yet still holds an account at boot, and a waiting task offers **Resume now** to lift an account's hold everywhere. *(@pelkamarcin)*
 
 ## 👥 Contributors
 
 - @martaradziszewska
 - @patzick
+- @pelkamarcin
 
 # 0.19.0 (2026-11-08)
 

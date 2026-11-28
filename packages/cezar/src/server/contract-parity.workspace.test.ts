@@ -37,6 +37,8 @@ import type {
   planUsageReportSchema,
   planUsageConsumersResponseSchema,
   planUsageTrackingSchema,
+  resumeAccountHoldsInputSchema,
+  resumeAccountHoldsResponseSchema,
   openProjectInResponseSchema,
   openTargetsResponseSchema,
   providerConnectResponseSchema,
@@ -150,6 +152,8 @@ describe('src/contract projects/workspace schemas match the routes exactly', () 
   type PlanUsage200 = InferResponseType<(typeof client.api.v1.workspace)['plan-usage']['$get'], 200>;
   type PlanUsageConsumers200 = InferResponseType<(typeof client.api.v1.workspace)['plan-usage']['consumers']['$get'], 200>;
   type PlanUsageTracking200 = InferResponseType<(typeof client.api.v1.workspace)['plan-usage']['tracking']['$get'], 200>;
+  type ResumeAccountHolds200 = InferResponseType<(typeof client.api.v1.workspace)['usage-holds']['resume']['$post'], 200>;
+  type ResumeAccountHoldsBody = InferRequestType<(typeof client.api.v1.workspace)['usage-holds']['resume']['$post']>['json'];
   type DiskGuard200 = InferResponseType<(typeof client.api.v1.workspace)['disk-guard']['$get'], 200>;
   type UiState200 = InferResponseType<(typeof client.api.v1)['ui-state']['$get'], 200>;
   type SetUiState200 = InferResponseType<(typeof client.api.v1)['ui-state']['$put'], 200>;
@@ -286,6 +290,8 @@ describe('src/contract projects/workspace schemas match the routes exactly', () 
     Assert<Exact<z.infer<typeof planUsageReportSchema>, PlanUsage200>>,
     Assert<Exact<z.infer<typeof planUsageConsumersResponseSchema>, PlanUsageConsumers200>>,
     Assert<Exact<z.infer<typeof planUsageTrackingSchema>, PlanUsageTracking200>>,
+    Assert<Exact<z.infer<typeof resumeAccountHoldsResponseSchema>, ResumeAccountHolds200>>,
+    Assert<Exact<z.input<typeof resumeAccountHoldsInputSchema>, ResumeAccountHoldsBody>>,
     Assert<Exact<z.infer<typeof diskGuardStatusSchema>, DiskGuard200>>,
     // the two open GUI-pref bags — GET and the merged answer the PUT sends back
     Assert<ExactOpen<z.infer<typeof uiStateSchema>, UiState200>>,

@@ -93,6 +93,7 @@ import { parseUsageLimit } from '../core/usage-limit.ts';
 import type { UiEvent } from '../core/ui-events.ts';
 import { assertCezarHomeWriteIsSandboxed, managersDir } from '../paths.ts';
 import { resolveProfileEnvForRoot } from '../workspace/agent-profiles.ts';
+import { readLoginIdentity, recordUsageLimit, usageLimitLift } from '../workspace/usage-limit-logins.ts';
 import {
   changedSettingFields,
   managerActionLabel,
@@ -2782,7 +2783,8 @@ export class ManagerEngine {
     const now = this.now();
     const deadlines = new Map<string, number>();
     for (const holds of this.chainHolds.values()) {
-      for (const [key, until] of holds) if (until > now) deadlines.set(key, Math.min(until, deadlines.get(key) ?? Infinity));
+      // "Resume now" or a re-login lifts a chain's hold like a task's (2026-08-03 spec, 2026-11-23 addendum).
+      for (const [key, until] of holds) if (until > now && usageLimitLift(key, now) === undefined) deadlines.set(key, Math.min(until, deadlines.get(key) ?? Infinity));
     }
     return { deadlines, deadline: new Set(deadlines.keys()), inFlight: new Set() };
   }
@@ -2831,7 +2833,7 @@ export class ManagerEngine {
   /** Why this row cannot answer now: its own hold, or a workspace hold on its account. */
   private rowHold(id: string, info: RowInfo, now: number): ChainHold | undefined {
     const own = this.deps.store.state(id).chain?.holds[info.key];
-    if (own && msOf(own.until) > now) return own;
+    if (own && msOf(own.until) > now && !(own.reason === 'usage-limit' && own.accountKey && usageLimitLift(own.accountKey, now) !== undefined)) return own;
     if (info.workspaceUntil !== undefined && info.workspaceUntil > now) return { until: new Date(info.workspaceUntil).toISOString(), reason: 'held' };
     return undefined;
   }
@@ -2944,6 +2946,8 @@ export class ManagerEngine {
       attempted.add(row.slot);
       const info = infos[row.slot]!;
       const ran = withRow(manager, row);
+      // The login this turn spawns under: a limit it meets is that login's, not whoever signs in next.
+      const login = await readLoginIdentity(info.accountKey).catch(() => undefined);
       const attempt = await this.drive(id, ran, current, turn, onProgress);
       spent += attempt.costUsd;
       const result = { ...attempt, costUsd: spent };
@@ -2965,6 +2969,8 @@ export class ManagerEngine {
       }
       const reset = resetAt?.getTime() ?? (reason === 'usage-limit' ? parseUsageLimit(cause!, now)?.resetAt.getTime() : undefined);
       const hold = holdFor(reason, this.deps.store.state(id).chain?.holds[info.key], now, reset);
+      // Before the hold is published, so a lift from an earlier limit never covers this one.
+      if (reason === 'usage-limit') recordUsageLimit(info.accountKey, login, msOf(hold.until));
       this.updateChain(id, (chain) => ({ ...chain, holds: { ...chain.holds, [info.key]: { ...hold, ...(reason === 'usage-limit' ? { accountKey: info.accountKey } : {}) } } }));
       const next = nextRow(rows, row.slot, attempted, (candidate) => this.rowHold(id, infos[candidate.slot]!, now));
       if (!next) {

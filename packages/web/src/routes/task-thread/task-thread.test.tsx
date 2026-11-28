@@ -1710,6 +1710,29 @@ describe('ThreadView', () => {
     await waitFor(() => expect(fetchMock.mock.calls.some(([url]) => urlOf(url).endsWith('/promote'))).toBe(true))
   })
 
+  it('a usage-limit hold offers Resume now, which lifts that account (2026-11-23 addendum)', async () => {
+    const urlOf = (input: RequestInfo | URL) => (input instanceof Request ? input.url : String(input))
+    const bodies: string[] = []
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (urlOf(input).endsWith('/workspace/usage-holds/resume')) {
+        bodies.push(input instanceof Request ? await input.text() : String(init?.body ?? ''))
+        return new Response('{"account":"claude:work","released":2}', { status: 200, headers: { 'content-type': 'application/json' } })
+      }
+      return new Response('[]', { status: 200, headers: { 'content-type': 'application/json' } })
+    })
+    const held = { kind: 'usage-reset' as const, until: '2026-11-23T18:00:00.000Z', account: 'claude:work' }
+    const { unmount } = renderView(<ThreadView run={run('queued', { queueWaitReason: held })} thread={reduceThread([])} />)
+    vi.stubGlobal('fetch', fetchMock)
+    fireEvent.click(document.querySelector('[data-slot="resume-account-now"]') as HTMLElement)
+    await waitFor(() => expect(bodies).toHaveLength(1))
+    expect(JSON.parse(bodies[0] ?? '{}')).toEqual({ account: 'claude:work' })
+    unmount()
+
+    // Nothing to lift: a slot wait, or a hold recorded before the reason named its account.
+    renderView(<ThreadView run={run('queued', { queueWaitReason: { kind: 'account-resume' } })} thread={reduceThread([])} />)
+    expect(document.querySelector('[data-slot="resume-account-now"]')).toBeNull()
+  })
+
   it('the first real event replaces the queued placeholder', () => {
     renderView(<ThreadView run={run('queued')} thread={reduceThread([line(1, 'lifecycle', { message: 'cezar restarted — task re-queued' })])} />)
     expect(document.querySelector('[data-slot="queued-state"]')).toBeNull()

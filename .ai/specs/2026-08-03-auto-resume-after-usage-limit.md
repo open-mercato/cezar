@@ -74,8 +74,8 @@ A limit closes an **account**, not a run — so freeing the slot and starting th
 So `pump()` will not start a queued run while any run **on the same agent account** holds a future `autoResumeAt`:
 
 - **Keyed, not global** — `runner:account` (`runAccountKey`), where the account is the RESOLVED one: a run with no `agentProfile` keys on the project selection, else `defaults[runner]`, else `default` (#1722). A Claude limit must not stall Codex tasks, and a second login is a second budget.
-- **Derived, not tracked** — `RunManager.heldAccounts()` reads the durable records (`usageLimitHolder`), so the hold survives a restart, expires by itself, and lifts when a user cancels a resume or archives the task. There is no new state and no config key.
-- **Held until a resume PROVES the window** — a run holds its account while parked on a future deadline *and* while its automatic resume is in flight (`autoResumeAttempts` set, status queued or running). Ending the hold when the resume fires ends it at the moment the account is least proven: every cycle then let a queued task dequeue, walk to the repo-root lease and get handed back, which is what filled one reported transcript with six identical `run started … held in the queue` blocks. The counter is retired by the first completed turn — a settled run, or one that parks for the user — which is the only evidence the limit actually lifted.
+- **Derived, not tracked** — `RunManager.heldAccounts()` reads the durable records (`usageLimitHolder`), so the hold survives a restart, expires by itself, and lifts when a user cancels a resume or archives the task. There is no config key; the only state the 2026-11-23 addendum adds is `~/.cezar/usage-limit-logins.json` (which login each limit belongs to, and "Resume now").
+- **Held until a resume PROVES the window** — a run holds its account while parked on a future deadline *and* while its automatic resume is in flight (`autoResumeAttempts` set, status queued or running). Ending the hold when the resume fires ends it at the moment the account is least proven: every cycle then let a queued task dequeue, walk to the repo-root lease and get handed back, which is what filled one reported transcript with six identical `run started … held in the queue` blocks. The counter is retired by the first completed turn — a settled run, or one that parks for the user. The HOLD ends earlier, once the resumed session observes its usage window open (`autoResumeWindowOpen`, #2525): waiting for the end of a turn that can last hours held every project's queue for nothing.
 - **Two kinds of hold, because they bind different work** (`AccountHolds`, `accountHeldFor`) — and getting this wrong produced a bug in each direction:
   - `deadline` (a run parked on a reset instant that has not arrived) — the window is KNOWN shut, so it blocks everything on that account, **resumes included**. Exempting them let four windows reopen at once, every resume spawn, and each one re-limit: four `scheduled` where two was the answer. The stampede wearing a different hat.
   - `inFlight` (a resume running right now, re-testing the window) — nothing is proven yet, so it blocks fresh work but **not other resumes**. Blocking those deadlocked a live workspace: two resumes fired together, each waiting on the account the other held, both parked `queued` forever with every task behind them.
@@ -173,3 +173,71 @@ The absolute instant is the source of truth (`<time dateTime>`), not a countdown
 - **auth / billing / usage limit without a reset / context too large** → a lifecycle line saying
   what to do; never an `AgentError` report, counted by `task_failed`'s kind.
 
+
+## Addendum (2026-11-23): the hold follows the login
+
+**Reported.** Account A hit its 5-hour limit; the user signed the same Claude profile into account B
+and restarted cezar. Thirteen tasks in three projects stayed queued — `usage-reset`, then
+`account-resume` — behind one resumed run (`autoResumeAttempts: 1`, no deadline) until it finished
+its whole turn, while B was demonstrably working. Restarts re-queued that run with its counter, and
+editing `~/.cezar/usage-windows.json` did nothing (the scheduler never reads it).
+
+**What the hold is load-bearing for** (AGENTS.md § Changing a mechanism that already works): no
+stampede of queued tasks into an account that is still limited — the 517 ms drain in § The queue
+hold. Every change below keeps that: a hold is lifted only on evidence the account serves requests
+(the resumed session observed its window open — #2525's `autoResumeWindowOpen`), on evidence the budget is a different one (another login), or on an explicit
+user click; every doubt keeps the hold binding until its deadline.
+
+1. **Cancelling a running resume releases the queue everywhere.** `cancelAutoResume` treats a
+   counter or reason as pending too (a resume under way has no deadline left), and wakes the whole
+   workspace (`semaphore.release()`), not just its own project. Accepted: queued work on that
+   account then starts without waiting for the cancelled resume to see its window. The cancel is a
+   click on that task, the same tier as Resume now; the run's own session still tests the window,
+   and a re-limit publishes a deadline that holds the rest.
+2. **An open window wakes every queue.** #2525 ends a resume's in-flight hold when its session
+   observes the window open (`RunRecord.autoResumeWindowOpen`: some window `allowed`, none
+   `blocked`), keeping the counter and the 12-resume cap. The flag is a hold input, but nothing
+   pumped on it, so queued work waited for an unrelated wake-up; setting it now calls
+   `semaphore.release()`, which starts the queues it held in every project.
+3. **A re-logged profile lifts the old login's holds.** `~/.cezar/usage-limit-logins.json` keeps,
+   per account key, each login's newest limit (`limits: {fingerprint → until}`; opaque
+   `accountLoginFingerprint` read from `.claude.json` / `auth.json` — local files, no network),
+   stamped synchronously from the login the limited session was spawned under, before the deadline
+   is published. The key's holds lift while the login the folder holds now has no unexpired limit
+   there, so A → B → A holds again while A's limit lasts. A spawn login that is not the folder's
+   current one, or an unreadable one, is filed as unknown (`?`), which blocks every login lift until
+   it expires. A login lift is trusted only on a successful read at most 5 s old
+   (`LOGIN_FRESH_MS`): an older one keeps the hold, asks for a fresh read and wakes the queues when
+   it lands, so an A → B → A switch made outside cezar never starts work on A off a stale read.
+   Logins are also re-read at `recover()` and on the 60 s watchdog tick. Every record change re-reads
+   the file first, so another cezar process's records survive. A lifted deadline does not open the
+   account to fresh work at once: its parked resume fires and the account is held in flight until a
+   resume sees its window open (#2525), as after any limit. A lift with no parked resume behind it
+   (a fallback's `usageLimitHolds`, a manager agent-chain hold) has nothing to probe the account
+   with, so it opens the account at once. Manager agent-chain holds
+   (spec 2026-11-25-manager-agent-chain) record their limit the same way, under the login the
+   manager turn spawned with, and lift the same way.
+4. **Resume now.** `POST /api/v1/workspace/usage-holds/resume {account}` marks the same record
+   `released` until the account's next limit, so it lifts the account in every project — loaded or
+   not — with no context build. Loaded projects mark their running resumes on it
+   `autoResumeWindowOpen`; parked ones fire and hold new work in flight until one sees its window.
+   Nothing is deleted: fallback and manager-chain holds lift through the same record. The cockpit's queued placeholder offers it whenever a
+   `usage-reset` reason names the account (`queueWaitReason.account`); an `account-resume` wait
+   ends by itself once the resume sees the window (#2525). It is the escape hatch for limits stamped before
+   this addendum, or a login cezar cannot read.
+5. **Projects not loaded yet still hold.** The boot project pumps before any other project's
+   context exists. The first `WorkspaceSemaphore.refresh()` (boot) snapshots the runs that can hold
+   from every registered root's `runs.json`, resolving absent profiles through the agent-account
+   store like the project would (#1722), and reports their DEADLINE holds while no
+   manager for that root is registered — never in-flight ones (nothing runs in an unloaded project,
+   so one could only wedge). A timer re-takes the snapshot and wakes every queue when the earliest
+   of them expires; later config writes do not re-read it. Fallback holds
+   need no snapshot: `agent-usage-holds/` is workspace state every loaded manager already reads.
+6. **A restart keeps the open window.** `autoResumeWindowOpen` is durable (#2525), so a restart
+   that re-queues a resume whose session saw the window open (the graph path keeps its counter)
+   holds nothing; one that saw nothing holds until its re-spawned session does. The counter survives,
+   so the cap still bounds the loop. Pinned by a regression test.
+
+Accepted: lifting an account fires all its parked resumes at once, under `maxParallel` — the same
+shape as several windows reopening together today; if the new login is limited too, the first
+re-limit's deadline holds the rest.

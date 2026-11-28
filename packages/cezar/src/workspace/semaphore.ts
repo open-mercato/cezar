@@ -1,7 +1,12 @@
 import { realpathSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { join, resolve } from 'node:path';
+import type { RunRecord } from '../runs/store.ts';
+import { readRunIndexFromDisk } from '../runs/run-index.ts';
+import { deriveAccountHolds } from '../workflows/account-holds.ts';
+import { defaultAgentAccountStore, loadAgentAccounts, type AgentAccountStore } from './agent-accounts.ts';
 import { DEFAULT_IDLE_TIMEOUT_MINUTES, DEFAULT_MONITORING_WAKE_MINUTES, loadWorkspaceConfig } from './config.ts';
 import { RestartGate } from './restart-gate.ts';
+import { usageLimitLift } from './usage-limit-logins.ts';
 
 /**
  * Workspace-wide resource governance (spec 2026-07-20-multi-project-workspace,
@@ -57,6 +62,8 @@ export interface WorkspaceResourceLimits {
    * project has an override", i.e. every project inherits.
    */
   projectLimits?: ReadonlyMap<string, number>;
+  /** Every registered project root. One not loaded yet still holds its accounts (2026-11-23 addendum). */
+  projectRoots?: readonly string[];
 }
 
 /** Realpath-normalize a root the same way the registry does
@@ -89,6 +96,9 @@ export interface AccountHolds {
 
 /** One manager's seam into the shared counter. */
 export interface SemaphoreParticipant {
+  /** The project this participant runs. A registered root with no participant is a project nobody
+   *  has loaded, whose persisted holds the semaphore reports itself. Optional for stubs. */
+  repoRoot?: string;
   refreshQueueReasons?(): void;
   /** Slots this manager currently holds. The #347 exemption lives in the
    *  participant's own accounting: `waiting` runs are already subtracted. */
@@ -160,6 +170,7 @@ async function loadResourceLimits(): Promise<WorkspaceResourceLimits> {
     autoResumeOnUsageLimit: resources.autoResumeOnUsageLimit,
     memoryLimitMb: resources.memoryLimitMb,
     projectLimits,
+    projectRoots: projects.map((project) => project.root),
   };
 }
 
@@ -175,6 +186,16 @@ export interface WorkspaceSemaphoreOptions {
 
 export class WorkspaceSemaphore {
   private readonly participants = new Set<SemaphoreParticipant>();
+  /** Normalized root of every participant that named one — the projects that report for themselves. */
+  private readonly liveRoots = new Map<SemaphoreParticipant, string>();
+  /** Runs that can hold, per registered root, read at `refresh()` (2026-11-23 addendum). */
+  private dormant = new Map<string, RunRecord[]>();
+  private dormantExpiry: ReturnType<typeof setTimeout> | undefined;
+  /** The account store the snapshot resolves absent profiles with, as each project's own runs do (#1722). */
+  private dormantAccounts: AgentAccountStore = defaultAgentAccountStore();
+  /** Taken once, by the first `refresh()` (boot), then only by its own expiry timer: a sync read of
+   *  every unloaded project does not belong on each config write. */
+  private dormantTaken = false;
   private readonly load: () => Promise<WorkspaceResourceLimits>;
   private limits: WorkspaceResourceLimits;
   /** A `release()` sweep is in flight — see `pendingRelease`. */
@@ -201,7 +222,12 @@ export class WorkspaceSemaphore {
    *  `dispose()` must call it so a torn-down project stops counting. */
   register(participant: SemaphoreParticipant): () => void {
     this.participants.add(participant);
+    if (participant.repoRoot !== undefined) this.liveRoots.set(participant, normalizeRootSync(participant.repoRoot));
     return () => {
+      // Once loaded, a project's snapshot from before is stale: its own records spoke for it since.
+      const root = this.liveRoots.get(participant);
+      if (root !== undefined) this.dormant.delete(root);
+      this.liveRoots.delete(participant);
       if (this.participants.delete(participant)) this.notifyAccountHoldsChanged();
     };
   }
@@ -296,14 +322,68 @@ export class WorkspaceSemaphore {
     const deadlines = new Map<string, number>();
     const deadline = new Set<string>();
     const inFlight = new Set<string>();
-    for (const participant of this.participants) {
-      const holds = participant.accountHolds?.();
+    for (const holds of [...[...this.participants].map((participant) => participant.accountHolds?.()), ...this.dormantHolds()]) {
       if (!holds) continue;
       for (const [key, at] of holds.deadlines ?? []) deadlines.set(key, Math.min(at, deadlines.get(key) ?? Infinity));
       for (const key of holds.deadline) deadline.add(key);
       for (const key of holds.inFlight) inFlight.add(key);
     }
     return { deadline, inFlight, deadlines };
+  }
+
+  /** Deadline holds of registered projects not loaded yet — the boot project pumps first (2026-11-23
+   *  addendum). Never in-flight ones: nothing runs there. From the `refresh()` snapshot, no file read. */
+  private dormantHolds(): AccountHolds[] {
+    if (this.dormant.size === 0) return [];
+    const live = new Set(this.liveRoots.values());
+    const holds: AccountHolds[] = [];
+    // With auto-resume off a deadline promises nothing, as `reconcileAutoResumes` retires it on load.
+    const resumes = this.autoResumeOnUsageLimit();
+    for (const [root, snapshot] of this.dormant) {
+      if (live.has(root)) continue;
+      const runs = resumes ? snapshot : snapshot.map((run) => ({ ...run, autoResumeAt: undefined }));
+      holds.push(deriveAccountHolds(runs, {
+        inFlight: false,
+        lift: usageLimitLift,
+        accounts: { store: this.dormantAccounts, repoRoot: root },
+      }));
+    }
+    return holds;
+  }
+
+  /** Re-read what unloaded projects hold, and wake every queue when the earliest of it expires. */
+  private async snapshotDormantHolds(): Promise<void> {
+    this.dormantAccounts = await loadAgentAccounts().catch(() => defaultAgentAccountStore());
+    const roots = this.limits.projectRoots ?? [];
+    const now = Date.now();
+    const dormant = new Map<string, RunRecord[]>();
+    let earliest = Infinity;
+    const live = new Set(this.liveRoots.values());
+    for (const root of new Set(roots.map(normalizeRootSync))) {
+      // A loaded project's own records speak for it; don't pay a sync disk read for them.
+      if (live.has(root)) continue;
+      const holding = readRunIndexFromDisk(join(root, '.ai/cezar')).filter((run) => {
+        const until = [run.status === 'failed' ? run.autoResumeAt : undefined, ...(run.usageLimitHolds ?? []).map((hold) => hold.until)]
+          .map((at) => (at === undefined ? NaN : Date.parse(at)))
+          .filter((at) => at > now);
+        for (const at of until) earliest = Math.min(earliest, at);
+        return until.length > 0;
+      });
+      if (holding.length > 0) dormant.set(root, holding);
+    }
+    this.dormant = dormant;
+    if (this.dormantExpiry) clearTimeout(this.dormantExpiry);
+    this.dormantExpiry = undefined;
+    if (Number.isFinite(earliest)) {
+      // Capped so a far deadline cannot overflow the timer; an early wake just re-snapshots.
+      this.dormantExpiry = setTimeout(() => {
+        void this.snapshotDormantHolds().catch(() => {}).then(() => {
+          this.notifyAccountHoldsChanged();
+          void this.release();
+        });
+      }, Math.min(earliest - now + 1_000, 2 ** 31 - 1));
+      this.dormantExpiry.unref?.();
+    }
   }
 
   /**
@@ -385,6 +465,10 @@ export class WorkspaceSemaphore {
       this.limits = await this.load();
     } catch {
       // keep the last good snapshot
+    }
+    if (!this.dormantTaken) {
+      this.dormantTaken = true;
+      try { await this.snapshotDormantHolds(); } catch { /* holds are best-effort */ }
     }
     this.notifyAccountHoldsChanged();
     // A raised cap is capacity appearing everywhere at once — same sweep.

@@ -91,6 +91,7 @@ import type {
   SetRunDraftInput,
   FinishResponse,
   StartNowResponse,
+  ResumeAccountHoldsResponse,
   LandResponse,
   FsBrowseResponse,
   GithubLoginState,
@@ -1730,6 +1731,15 @@ export async function startRunNow(id: string): Promise<StartNowResponse> {
       param: { projectId: queryScope(), id: encodeURIComponent(id) },
     }),
     runPath(id, '/start-now'),
+  )
+}
+
+/** "Resume now": lift one agent account's usage-limit holds in every project (spec
+ *  2026-08-03-auto-resume-after-usage-limit, 2026-11-23 addendum). Workspace-level, like the hold. */
+export async function resumeAccountHolds(account: string): Promise<ResumeAccountHoldsResponse> {
+  return unwrap(
+    await cez.api.v1.workspace['usage-holds'].resume.$post({ json: { account } }),
+    '/workspace/usage-holds/resume',
   )
 }
 

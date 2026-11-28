@@ -749,3 +749,20 @@ export const openProjectInResponseSchema = z.object({
   path: z.string(),
 });
 export type OpenProjectInResponse = z.infer<typeof openProjectInResponseSchema>;
+
+/**
+ * `POST /api/v1/workspace/usage-holds/resume` — "Resume now" for one agent account (spec
+ * 2026-08-03-auto-resume-after-usage-limit, 2026-11-23 addendum): lifts every usage-limit hold on
+ * `account` (`runner:profileId`, as `queueWaitReason.account` names it) in every project, until
+ * that account's next limit. A malformed key is a 400, one cezar does not know a 404.
+ */
+export const resumeAccountHoldsInputSchema = z.object({
+  account: z.string().regex(/^[a-z][a-z0-9-]{0,31}:[a-z0-9][a-z0-9-]{0,63}$/, 'account must be "runner:profileId"'),
+});
+export type ResumeAccountHoldsInput = z.input<typeof resumeAccountHoldsInputSchema>;
+/** `released`: the runs in loaded projects the lift touched; unloaded projects follow on load. */
+export const resumeAccountHoldsResponseSchema = z.object({
+  account: z.string(),
+  released: z.number().int().min(0),
+});
+export type ResumeAccountHoldsResponse = z.infer<typeof resumeAccountHoldsResponseSchema>;
