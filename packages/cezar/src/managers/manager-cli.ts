@@ -3,13 +3,18 @@
  * client over `/workspace/managers`, addressed like `cez task`: `CEZ_API_URL` plus `CEZ_MANAGER_ID`,
  * both set on every manager turn. The `cez-manager` shim on the turn's PATH lands here.
  */
-import { readFile } from 'node:fs/promises';
+import { readFile, realpath } from 'node:fs/promises';
+import { isAbsolute, join, relative, resolve } from 'node:path';
+import { cezarHomeDir } from '../paths.ts';
 import { parseArgs } from 'node:util';
-import type { ManagerCancelTaskResponse, ManagerCreateTaskResponse, ManagerFollowTaskResponse, ManagerForwarded, ManagerSnapshot, ManagerSnapshotProject, ManagerTaskMessageResponse } from '@open-mercato/cezar-contract';
-import { managerAccessOf, managerTaskEffortSchema, type Manager } from '@open-mercato/cezar-contract';
+import type { ManagerCancelTaskResponse, ManagerCreateTaskResponse, ManagerFollowTaskResponse, ManagerForwarded, ManagerMemoryResponse, ManagerMessage, ManagerSnapshot, ManagerSnapshotProject, ManagerTaskMessageResponse } from '@open-mercato/cezar-contract';
+import { managerAccessOf, managerMemoryKeySchema, managerMemoryKindSchema, managerTaskEffortSchema, MANAGER_MEMORY_LIMITS, type Manager } from '@open-mercato/cezar-contract';
 import { runAutomationCommand } from '../automations/automation-cli.ts';
 import { missingCockpitMessage } from '../cockpit-address.ts';
 import { parseConnectorTool } from './connectors.ts';
+import { MANAGER_COMMANDS, MANAGER_JOB_SUBCOMMANDS, MANAGER_MEMORY_SUBCOMMANDS, MANAGER_TASK_SUBCOMMANDS } from './cli-vocabulary.ts';
+import { recentTasks } from './snapshot.ts';
+import { sameModel } from '../runs/reported-model.ts';
 
 export interface ManagerCliEnv {
   CEZ_API_URL?: string;
@@ -34,11 +39,15 @@ const USAGE = `cez manager — the tools of a cezar manager's agent (CEZ_MANAGER
   cez manager status | attention | tasks | prs   what is going on (add --json for data)
   cez manager task <run> [--project <id>]        one task, its model, PR, last message and children
   cez manager task create --project <id> [--title t] [--workflow w] [--runner r] [--account id] [--model m] [--effort e] [--dispatch] "<objective>"
-  cez manager task say --project <id> <run> [--model m] [--effort e] "<text>"
-                                                 --model/--effort only when it continues a finished task
+  cez manager task say --project <id> <run> [--model m] [--effort e] [--fresh] "<text>"
+                                                 --model/--effort/--fresh only when it continues a finished task;
+                                                 --fresh starts a new session with no prior conversation
+  cez manager task switch --project <id> <run> [--runner r] [--account id] [--model m] [--effort e]
+                                                 change the agent and keep the task's history and worktree
   cez manager task cancel --project <id> <run> [--reason "…"]
                                                  stops it and every task it dispatched; worktree and branch stay
-  cez manager task retry --project <id> <run>    a failed or cancelled task again, as a new task
+  cez manager task retry --project <id> <run> [--runner r] [--account id] [--model m] [--effort e]
+                                                 retry in place with agent flags, or start over without them
   cez manager task follow|unfollow [--project <id>] <run>
                                                  hear when a task you did not start settles or needs the user
       content flags for create and say:
@@ -74,9 +83,13 @@ function fail(message: string): never {
   throw new Error(message);
 }
 
-const COMMANDS = ['status', 'attention', 'tasks', 'prs', 'task', 'workflows', 'merge', 'automation', 'job', 'propose-action', 'rename'] as const;
-const TASK_SUBCOMMANDS = ['create', 'say', 'cancel', 'retry', 'follow', 'unfollow'] as const;
-const JOB_SUBCOMMANDS = ['add', 'list', 'remove'] as const;
+const COMMANDS = MANAGER_COMMANDS;
+const TASK_SUBCOMMANDS = MANAGER_TASK_SUBCOMMANDS;
+const JOB_SUBCOMMANDS = MANAGER_JOB_SUBCOMMANDS;
+const MEMORY_SUBCOMMANDS = MANAGER_MEMORY_SUBCOMMANDS;
+/** `history` prints at most this much: older chat is a lookup, not a reload. */
+const HISTORY_CHARS = 8_000;
+const HISTORY_MESSAGE_CHARS = 800;
 /** A full run id or its first eight hex digits: anything else after `task` is a mistyped subcommand. */
 const RUN_ID_LIKE = /^[0-9a-f]{8}(?:-[0-9a-f-]+)?$/i;
 const EFFORTS = managerTaskEffortSchema.options;
@@ -87,22 +100,24 @@ const CONTENT_HELP = `
   --file <path> | --stdin      append the text of a file, or of stdin
   --allow-placeholder          send text holding a marker such as [transcript here] or PASTE anyway`;
 
-const SNAPSHOT_HELP = (command: string, what: string) => `cez manager ${command} [--project <id>] [--json]
+const SNAPSHOT_HELP = (command: string, what: string) => `cez manager ${command} [--project <id>] [--all] [--json]
 
 ${what}
+Compact by default: finished tasks the user has not opened, and all but the 20 newest finished tasks per project, are counted, not listed, and the output stops at 8000 characters.
   --project <id>   only this project
-  --json           the data, as JSON`;
+  --all            list everything
+  --json           the data, as JSON (always everything)`;
 
 /** `--help` per command; `task create` adds the project's workflow names when it can reach them. */
 const HELP: Record<string, string> = {
-  status: SNAPSHOT_HELP('status', 'What needs attention, every task and every pull request.'),
+  status: SNAPSHOT_HELP('status', 'What needs attention, every task and every pull request, and the agent accounts new tasks may use with their usage-limit state.'),
   attention: SNAPSHOT_HELP('attention', 'What needs attention: waiting, failed, finished and stalled tasks, PRs and automations.'),
   tasks: SNAPSHOT_HELP('tasks', "Every connected project's tasks, the user's own included, with their model, effort and PR."),
   prs: SNAPSHOT_HELP('prs', 'Open pull requests and their status.'),
   task: `cez manager task <run> [--project <id>]
-cez manager task create|say|cancel|retry|follow|unfollow …   (each takes --help)
+cez manager task create|say|switch|cancel|retry|follow|unfollow …   (each takes --help)
 
-One task as JSON: status, startedBy, runner, model, effort, prNumber/prUrl, its last message and its children.
+One task as JSON: status, startedBy, runner, model, actualModel (what the agent reported running), effort, prNumber/prUrl, its last message and its children.
   --project <id>   the task's project; found from the snapshot when omitted`,
   'task create': `cez manager task create --project <id> [flags] "<objective>"
 
@@ -111,25 +126,41 @@ Starts a task.
   --title <t>        its title
   --workflow <w>     a workflow name (default quick-task); see cez manager workflows
   --runner <r>       the agent backend, e.g. claude or codex, from the manager's allowed task accounts
-  --account <id>     the agent account id (default selects the discovered account)
+  --account <id>     the agent account id from those accounts
+                     Omit both to use the manager's settings: its first allowed account with usage capacity,
+                     skipping any that is out of limits (cez manager status lists them). With none free the task
+                     queues until the first one resets. A usage limit hit mid-task moves it to another allowed
+                     account with capacity. The output names the chosen account and why; an explicit --account
+                     that is out of limits prints a warning naming an allowed one with capacity.
   --model <m>        a model id or alias the runner can use, e.g. opus; refused with the valid ones otherwise
   --effort <e>       ${EFFORTS.join(' | ')}; refused when the runner or model has no such level
-  --dispatch         start it as the root of a dispatch tree${CONTENT_HELP}`,
+  --dispatch         start it as the root of a dispatch tree, only for work worth splitting;
+                     ignored in a trunk-based project, whose tasks work in its checkout${CONTENT_HELP}`,
   'task say': `cez manager task say --project <id> <run> [flags] "<text>"
 
 Messages a running task, or continues a finished one with the text.
   --project <id>     the task's project
   --model <m>        continue on this model (a finished task only)
-  --effort <e>       ${EFFORTS.join(' | ')} (a finished task only)${CONTENT_HELP}`,
+  --effort <e>       ${EFFORTS.join(' | ')} (a finished task only)
+  --fresh            continue in a new agent session with no prior conversation (a finished task only):
+                     same task id, worktree, branch and PR, but nothing anchors it on earlier verdicts.
+                     The text is all it is told, so make it self-contained, e.g. the PR and what to check${CONTENT_HELP}`,
+  'task switch': `cez manager task switch --project <id> <run> [--runner r] [--account id] [--model m] [--effort e]
+
+Choose at least one agent flag. Switches a queued task before it starts, interrupts a live agent turn,
+or continues a settled task with its conversation. Keeps the run id, worktree, branch, and history.
+The choice applies to unfinished agent steps that use the replaced runner.
+Only a task this manager started, unless the user allowed "Cancel or switch any task" in its settings.`,
   'task cancel': `cez manager task cancel --project <id> <run> [--reason "…"]
 
 Stops the task and every task it dispatched, and marks them cancelled. Their worktree and branch stay.
-Only a task this manager started, unless the user allowed "Cancel any task" in its settings.
+Only a task this manager started, unless the user allowed "Cancel or switch any task" in its settings.
   --project <id>     the task's project
   --reason "…"       why; kept on the task and shown in the cockpit`,
-  'task retry': `cez manager task retry --project <id> <run>
+  'task retry': `cez manager task retry --project <id> <run> [--runner r] [--account id] [--model m] [--effort e]
 
-Starts a failed or cancelled task again as a new task: the same objective, workflow, runner, model and effort.
+With any agent flag, retry a failed or cancelled task in place using the switch command's permissions.
+With no agent flags, start a new task with the same objective, workflow, runner, model and effort.
   --project <id>     the task's project`,
   'task follow': `cez manager task follow [--project <id>] <run>
 
@@ -175,12 +206,27 @@ Proposes one connector call; the user approves it in the chat and cezar runs exa
   --args '<json>'    the tool's input, a JSON object
   --reason "…"       why, shown on the card`,
   rename: 'cez manager rename "<role>"\n\nA short role the user recognizes this manager by, e.g. "Coding Manager".',
+  memory: `cez manager memory list | set | remove   (each takes --help)
+
+What you carry into every new session: the user's preferences, feedback on how you work, standing decisions and pointers to ongoing work. Never task output or transcripts. ${MANAGER_MEMORY_LIMITS.entries} entries and ${MANAGER_MEMORY_LIMITS.bytes} bytes at most.`,
+  'memory list': 'cez manager memory list [--json]\n\nEvery entry: key, kind, text, why.',
+  'memory set': `cez manager memory set <key> --kind preference|feedback|decision|pointer [--why "…"] "<text>"
+
+Saves one entry; the same key replaces it. <key> is lowercase-with-dashes, e.g. full-prs-not-drafts.
+Text up to ${MANAGER_MEMORY_LIMITS.text} characters, why up to ${MANAGER_MEMORY_LIMITS.why}. A text another key already says, or a full memory, is refused with what to replace.`,
+  'memory remove': 'cez manager memory remove <key>\n\nDrops an entry that no longer holds.',
+  history: `cez manager history [--since 2h|1d|<iso>] [--grep <text>] [--limit <n>]
+
+Earlier messages of this chat, oldest first, ${HISTORY_CHARS} characters at most.
+  --since    only messages after this: a duration (30m, 2h, 1d) or an ISO time
+  --grep     only messages containing this text (case-insensitive)
+  --limit    the newest n messages that match (default 20, at most 200)`,
 };
 
 /** The help key for `args`: `task create` when the subcommand is known, else the command. */
 function helpKey(command: string, rest: string[]): string {
   const sub = rest[0];
-  const subs: readonly string[] = command === 'task' ? TASK_SUBCOMMANDS : command === 'job' ? JOB_SUBCOMMANDS : [];
+  const subs: readonly string[] = command === 'task' ? TASK_SUBCOMMANDS : command === 'job' ? JOB_SUBCOMMANDS : command === 'memory' ? MEMORY_SUBCOMMANDS : [];
   return sub && subs.includes(sub) ? `${command} ${sub}` : command;
 }
 
@@ -205,6 +251,43 @@ function parse<O extends Options>(key: string, args: string[], options: O, allow
     if (/Unexpected argument/.test(message)) fail(`'${key}' takes no arguments besides its flags (${flags}). See: cez manager ${key} --help`);
     fail(`${message.split('. ')[0]}. See: cez manager ${key} --help`);
   }
+}
+
+/** A compact listing's size: past it, the rest is counted, not printed. */
+const OUTPUT_CHARS = 8_000;
+
+/** Lines up to `limit` characters, then one line counting the rest. */
+export function capped(lines: string[], limit: number | undefined): string[] {
+  if (limit === undefined) return lines;
+  const out: string[] = [];
+  let size = 0;
+  for (const [index, line] of lines.entries()) {
+    if (size + line.length + 1 > limit) {
+      out.push(`… ${lines.length - index} more line${lines.length - index === 1 ? '' : 's'}: narrow with --project, or use --all or --json`);
+      break;
+    }
+    out.push(line);
+    size += line.length + 1;
+  }
+  return out;
+}
+
+/** `30m`, `2h`, `1d` before `now`, or an ISO time; undefined when it is neither. */
+export function sinceOf(value: string, now: number): number | undefined {
+  const match = /^(\d+)\s*([mhd])$/.exec(value.trim());
+  if (match) return now - Number(match[1]) * { m: 60_000, h: 3_600_000, d: 86_400_000 }[match[2] as 'm' | 'h' | 'd'];
+  const at = Date.parse(value);
+  return Number.isFinite(at) ? at : undefined;
+}
+
+/** One chat message as `history` prints it; notices and streaming drafts are skipped. */
+function historyLine(message: ManagerMessage): string | undefined {
+  const clip = (text: string) => (text.length > HISTORY_MESSAGE_CHARS ? `${text.slice(0, HISTORY_MESSAGE_CHARS)}…` : text);
+  const at = message.at.slice(0, 16).replace('T', ' ');
+  if (message.kind === 'user') return `${at}  user (message id: ${message.id}): ${clip(message.text)}`;
+  if (message.kind === 'assistant' && message.text && !message.streaming) return `${at}  you: ${clip(message.text)}`;
+  if (message.kind === 'action') return `${at}  card ${message.action.type}: ${message.status}`;
+  return undefined;
 }
 
 function effortOf(value: string | undefined): (typeof EFFORTS)[number] | undefined {
@@ -244,6 +327,12 @@ function workflowLine(workflow: WorkflowRow): string {
   return `${workflow.name}  ${workflow.description?.replace(/\s+/g, ' ').trim() || '-'}  ${tag}`;
 }
 
+/** "opus → claude-opus-5-5", "auto → …" when no model was asked for; one name when the two agree. */
+export function taskModelLabel(requested: string | undefined, actual: string | undefined): string {
+  const asked = requested || 'auto';
+  return actual && !sameModel(asked, actual) ? `${asked} → ${actual}` : asked;
+}
+
 /** A long paste never has to fit a shell argument: Claude Code refuses commands over ~10k characters. */
 const CONTENT_OPTIONS = {
   'attach-last-user-message': { type: 'boolean' },
@@ -268,13 +357,31 @@ interface ContentValues {
 }
 
 /** The typed words, then the file or stdin; and what the server should copy in on its own. */
-async function contentOf(words: string[], values: ContentValues, io: ManagerCliIo): Promise<{ text: string; fromMessage?: string; allowPlaceholder?: true }> {
+/**
+ * A manager turn's `--file` reads only the manager's own workdir (where `files/` lives) and its
+ * attachments: the vetted shell accepts any `cez-manager` call, so this is not a way past the
+ * turn's read roots (`--file ~/.ssh/id_rsa`). Without a manager id there is no turn to confine.
+ */
+export async function readManagerFile(path: string, env: ManagerCliEnv): Promise<string> {
+  const real = await realpath(resolve(path));
+  const id = env.CEZ_MANAGER_ID;
+  if (id) {
+    const base = join(cezarHomeDir(env), 'managers', id);
+    const roots = (await Promise.all(['workdir', 'attachments'].map((dir) => realpath(join(base, dir)).catch(() => undefined))))
+      .filter((root): root is string => root !== undefined);
+    const inside = (root: string) => { const rel = relative(root, real); return rel === '' || (!isAbsolute(rel) && rel !== '..' && !rel.startsWith(`..${'/'}`) && !rel.startsWith('..\\')); };
+    if (!roots.some(inside)) throw new Error('only files in the manager\'s workdir (files/) or its attachments can be read');
+  }
+  return readFile(real, 'utf8');
+}
+
+async function contentOf(words: string[], values: ContentValues, io: ManagerCliIo, env: ManagerCliEnv): Promise<{ text: string; fromMessage?: string; allowPlaceholder?: true }> {
   if (values['attach-last-user-message'] && values['from-message']) fail('use --attach-last-user-message or --from-message, not both');
   if (values.file !== undefined && values.stdin) fail('use --file or --stdin, not both');
   let extra = '';
   if (values.file !== undefined) {
     try {
-      extra = await (io.readFile ?? ((path: string) => readFile(path, 'utf8')))(values.file);
+      extra = await (io.readFile ?? ((path: string) => readManagerFile(path, env)))(values.file);
     } catch (error) {
       fail(`cannot read ${values.file}: ${error instanceof Error ? error.message : String(error)}`);
     }
@@ -386,7 +493,7 @@ export async function runManagerCommand(
       case 'attention':
       case 'tasks':
       case 'prs': {
-        const { values } = parse(command, rest, { json: { type: 'boolean' }, project: { type: 'string' } });
+        const { values } = parse(command, rest, { json: { type: 'boolean' }, project: { type: 'string' }, all: { type: 'boolean' } });
         const data = await snapshot();
         const projects = data.projects.filter((project) => !values.project || project.projectId === values.project);
         if (values.json) {
@@ -396,27 +503,44 @@ export async function runManagerCommand(
           else printJson(projects.flatMap((project) => project.prs.map((pr) => ({ projectId: project.projectId, ...pr }))));
           return 0;
         }
+        // Compact by default (spec 2026-11-21 § 2.4): finished work is history, read on demand.
+        const lines: string[] = [];
         if (command === 'status' || command === 'attention') {
-          if (data.attention.length === 0) io.log('Nothing needs attention.');
-          for (const item of data.attention) io.log(`${item.kind}  ${item.projectId}  ${item.runId ?? (item.number !== undefined ? `#${item.number}` : '')}  ${item.title}${item.detail ? ` — ${item.detail}` : ''}`);
+          const attention = values.all ? data.attention : data.attention.filter((item) => item.kind !== 'task-finished');
+          const hidden = data.attention.length - attention.length;
+          if (attention.length === 0) lines.push(hidden > 0 ? 'Nothing needs attention besides finished tasks.' : 'Nothing needs attention.');
+          for (const item of attention) lines.push(`${item.kind}  ${item.projectId}  ${item.runId ?? (item.number !== undefined ? `#${item.number}` : '')}  ${item.title}${item.detail ? ` — ${item.detail}` : ''}`);
+          if (hidden > 0) lines.push(`(${hidden} finished task${hidden === 1 ? '' : 's'} the user has not opened yet: --all lists them)`);
         }
         if (command === 'status' || command === 'tasks') {
-          for (const project of projects) for (const task of project.tasks) {
-            const facts = [
-              task.startedBy === 'manager' ? `by ${task.startedByManager ?? 'a manager'}` : 'by the user',
-              task.model && `${task.model}${task.effort ? `/${task.effort}` : ''}`,
-              task.prNumber !== undefined && `PR #${task.prNumber}`,
-              task.childCount > 0 && `${task.childCount} dispatched`,
-            ].filter(Boolean).join(', ');
-            io.log(`${project.projectId}  ${task.runId}  ${task.status}  ${task.title}  (${facts})`);
+          for (const project of projects) {
+            const { shown, hidden } = values.all ? { shown: project.tasks, hidden: 0 } : recentTasks(project.tasks);
+            for (const task of shown) {
+              const facts = [
+                task.startedBy === 'manager' ? `by ${task.startedByManager ?? 'a manager'}` : 'by the user',
+                (task.model || task.actualModel) && `${taskModelLabel(task.model, task.actualModel)}${task.effort ? `/${task.effort}` : ''}`,
+                task.prNumber !== undefined && `PR #${task.prNumber}`,
+                task.childCount > 0 && `${task.childCount} dispatched`,
+                task.agentSwitch,
+              ].filter(Boolean).join(', ');
+              lines.push(`${project.projectId}  ${task.runId}  ${task.status}  ${task.title}  (${facts})`);
+            }
+            if (hidden > 0) lines.push(`${project.projectId}: ${hidden} older finished task${hidden === 1 ? '' : 's'} not shown (--all lists them)`);
+          }
+        }
+        if (command === 'status' && data.accounts?.length) {
+          for (const account of data.accounts) {
+            const flags = `--runner ${account.runner}${account.agentProfile ? ` --account ${account.agentProfile}` : ' (automatic account)'}`;
+            lines.push(`account  ${flags}  ${account.label}  ${account.outOfLimitsUntil ? `out of usage limits until ${account.outOfLimitsUntil}` : 'has capacity'}`);
           }
         }
         if (command === 'status' || command === 'prs') {
           for (const project of projects) {
-            if (project.prsUnavailable) io.log(`${project.projectId}: pull requests unavailable — ${project.prsUnavailable}`);
-            for (const pr of project.prs) io.log(`${project.projectId}  #${pr.number}  ${pr.draft ? 'draft' : (pr.status ?? 'open')}  ${pr.title}`);
+            if (project.prsUnavailable) lines.push(`${project.projectId}: pull requests unavailable — ${project.prsUnavailable}`);
+            for (const pr of project.prs) lines.push(`${project.projectId}  #${pr.number}  ${pr.draft ? 'draft' : (pr.status ?? 'open')}  ${pr.title}`);
           }
         }
+        for (const line of capped(lines, values.all ? undefined : OUTPUT_CHARS)) io.log(line);
         return 0;
       }
 
@@ -429,7 +553,7 @@ export async function runManagerCommand(
             ...CONTENT_OPTIONS,
           }, true);
           const effort = effortOf(values.effort);
-          const { text: task, ...content } = await contentOf(positionals, values, io);
+          const { text: task, ...content } = await contentOf(positionals, values, io, env);
           if (!task && !content.fromMessage) fail('an objective is required: cez manager task create --project <id> "<objective>" (or --attach-last-user-message)');
           const project = await projectOf(values.project);
           const created = await call<ManagerCreateTaskResponse>('/tasks', {
@@ -449,21 +573,34 @@ export async function runManagerCommand(
           });
           io.log(`[[task:${created.projectId}/${created.runId}]]`);
           if (created.forwarded) io.log(forwardedLine(created.forwarded));
+          if (created.notice) io.log(created.notice);
+          if (created.agent) {
+            const { agent } = created;
+            io.log(`agent: --runner ${agent.runner}${agent.agentProfile ? ` --account ${agent.agentProfile}` : ' (automatic account)'} — ${agent.label}; ${agent.reason}`);
+            // A warning means another allowed account is free: only this explicit one is waiting.
+            if (agent.queuedUntil) {
+              io.log(created.warning
+                ? `queued: ${agent.label} is out of usage limits; the task starts when it resets at ${agent.queuedUntil}`
+                : `queued: no allowed account has capacity; the task starts when ${agent.label} resets at ${agent.queuedUntil}`);
+            }
+          }
+          if (created.warning) io.log(`warning: ${created.warning}`);
           return 0;
         }
         if (sub === 'say') {
-          const { values, positionals } = parse('task say', taskArgs, { project: { type: 'string' }, model: { type: 'string' }, effort: { type: 'string' }, ...CONTENT_OPTIONS }, true);
+          const { values, positionals } = parse('task say', taskArgs, { project: { type: 'string' }, model: { type: 'string' }, effort: { type: 'string' }, fresh: { type: 'boolean' }, ...CONTENT_OPTIONS }, true);
           const effort = effortOf(values.effort);
           const [runId, ...words] = positionals;
-          const { text, ...content } = runId ? await contentOf(words, values, io) : { text: '' };
+          const { text, ...content } = runId ? await contentOf(words, values, io, env) : { text: '' };
           if (!runId || (!text && !content.fromMessage)) fail('usage: cez manager task say --project <id> <run> "<text>" (or --attach-last-user-message)');
           const project = await projectOf(values.project);
           const sent = await call<ManagerTaskMessageResponse>('/task-message', {
             method: 'POST',
-            body: { projectId: project.projectId, runId, ...(text ? { text } : {}), ...content, ...(values.model ? { model: values.model } : {}), ...(effort ? { effort } : {}) },
+            body: { projectId: project.projectId, runId, ...(text ? { text } : {}), ...content, ...(values.model ? { model: values.model } : {}), ...(effort ? { effort } : {}), ...(values.fresh ? { freshContext: true } : {}) },
           });
-          io.log(`sent to ${runId}`);
+          io.log(values.fresh ? `continued ${runId} in a fresh session` : `sent to ${runId}`);
           if (sent.forwarded) io.log(forwardedLine(sent.forwarded));
+          if (sent.notice) io.log(sent.notice);
           return 0;
         }
         if (sub === 'cancel') {
@@ -479,13 +616,22 @@ export async function runManagerCommand(
             : `${result.runId} is ${result.status}, so there was nothing to stop${children ? `; cancelled${children.slice(1)}` : ''}.`);
           return 0;
         }
-        if (sub === 'retry') {
-          const { values, positionals } = parse('task retry', taskArgs, { project: { type: 'string' } }, true);
+        if (sub === 'switch' || sub === 'retry') {
+          const { values, positionals } = parse(`task ${sub}`, taskArgs, {
+            project: { type: 'string' }, runner: { type: 'string' }, account: { type: 'string' }, model: { type: 'string' }, effort: { type: 'string' },
+          }, true);
           const [runId, ...extra] = positionals;
-          if (!runId || extra.length > 0) fail('usage: cez manager task retry --project <id> <run>');
+          if (!runId || extra.length > 0) fail(`usage: cez manager task ${sub} --project <id> <run> [--runner r] [--account id] [--model m] [--effort e]`);
+          const effort = effortOf(values.effort);
+          const { runner, account, model } = values;
+          if (sub === 'switch' && !(runner || account || model || effort)) fail('choose at least one of --runner, --account, --model or --effort');
+          if (env.CEZ_MANAGER_TURN === 'watch') fail('a watch check is read-only: ask the user instead');
           const projectId = await projectForRun(values.project, runId);
-          const created = await call<ManagerCreateTaskResponse>('/task-retry', { method: 'POST', body: { projectId, runId } });
+          const created = await call<ManagerCreateTaskResponse>(`/task-${sub}`, {
+            method: 'POST', body: { projectId, runId, runner, agentProfile: account, model, effort },
+          });
           io.log(`[[task:${created.projectId}/${created.runId}]]`);
+          if (created.notice) io.log(created.notice);
           return 0;
         }
         if (sub === 'follow' || sub === 'unfollow') {
@@ -602,6 +748,79 @@ export async function runManagerCommand(
           : `unknown subcommand '${sub}' for 'job'. Valid: ${JOB_SUBCOMMANDS.join(', ')}. See: cez manager job --help`);
       }
       // falls through: `fail` never returns
+
+      case 'memory': {
+        const [sub, ...memoryArgs] = rest;
+        if (sub === 'list') {
+          const { values } = parse('memory list', memoryArgs, { json: { type: 'boolean' } });
+          const memory = await call<ManagerMemoryResponse>('/memory');
+          if (values.json) printJson(memory);
+          else if (memory.entries.length === 0) io.log('Memory is empty.');
+          else for (const entry of memory.entries) io.log(`${entry.key}  [${entry.kind}]  ${entry.text}${entry.why ? `  (why: ${entry.why})` : ''}`);
+          return 0;
+        }
+        if (sub === 'set' || sub === 'remove') {
+          if (env.CEZ_MANAGER_TURN === 'watch') fail('a watch check is read-only: ask the user instead');
+        }
+        if (sub === 'set') {
+          const { values, positionals } = parse('memory set', memoryArgs, { kind: { type: 'string' }, why: { type: 'string' } }, true);
+          const [key, ...words] = positionals;
+          const text = words.join(' ').trim();
+          const kind = managerMemoryKindSchema.safeParse(values.kind);
+          if (!key || !text || !kind.success) fail('usage: cez manager memory set <key> --kind preference|feedback|decision|pointer [--why "…"] "<text>"');
+          if (!managerMemoryKeySchema.safeParse(key).success) fail(`'${key}' is not a key: use lowercase letters, digits and dashes, e.g. full-prs-not-drafts`);
+          const memory = await call<ManagerMemoryResponse>(`/memory/${encodeURIComponent(key)}`, {
+            method: 'PUT',
+            body: { kind: kind.data, text, ...(values.why ? { why: values.why } : {}), source: 'manager' },
+          });
+          io.log(`remembered ${key} (${memory.entries.length}/${memory.limits.entries} entries, ${memory.usedBytes}/${memory.limits.bytes} bytes)`);
+          return 0;
+        }
+        if (sub === 'remove') {
+          if (!memoryArgs[0]) fail('usage: cez manager memory remove <key>');
+          await call(`/memory/${encodeURIComponent(memoryArgs[0])}`, { method: 'DELETE' });
+          io.log(`forgot ${memoryArgs[0]}`);
+          return 0;
+        }
+        fail(sub === undefined
+          ? `usage: cez manager memory ${MEMORY_SUBCOMMANDS.join('|')}`
+          : `unknown subcommand '${sub}' for 'memory'. Valid: ${MEMORY_SUBCOMMANDS.join(', ')}. See: cez manager memory --help`);
+      }
+      // falls through: `fail` never returns
+
+      case 'history': {
+        const { values } = parse('history', rest, { since: { type: 'string' }, grep: { type: 'string' }, limit: { type: 'string' } });
+        const limit = values.limit === undefined ? 20 : Number(values.limit);
+        if (!Number.isInteger(limit) || limit < 1 || limit > 200) fail('--limit must be a whole number from 1 to 200');
+        const since = values.since === undefined ? undefined : sinceOf(values.since, Date.now());
+        if (values.since !== undefined && since === undefined) fail(`--since takes a duration such as 30m, 2h or 1d, or an ISO time, not '${values.since}'`);
+        const needle = values.grep?.toLowerCase();
+        const lines: string[] = [];
+        let before: number | undefined;
+        // Newest pages first, until enough matches or the start of the chat.
+        for (let page = 0; page < 20 && lines.length < limit; page++) {
+          const query = new URLSearchParams({ limit: '200', ...(before !== undefined ? { before: String(before) } : {}) });
+          const { messages } = await call<{ messages: ManagerMessage[] }>(`/messages?${query}`);
+          if (messages.length === 0) break;
+          before = Math.min(...messages.map((message) => message.seq));
+          for (const message of [...messages].reverse()) {
+            if (lines.length >= limit) break;
+            if (since !== undefined && Date.parse(message.at) < since) continue;
+            const line = historyLine(message);
+            if (!line || (needle && !line.toLowerCase().includes(needle))) continue;
+            lines.push(line);
+          }
+          if (since !== undefined && messages.every((message) => Date.parse(message.at) < since)) break;
+        }
+        if (lines.length === 0) {
+          io.log('No messages match.');
+          return 0;
+        }
+        let out = lines.reverse().join('\n\n');
+        if (out.length > HISTORY_CHARS) out = `… (older matches cut; narrow with --since or --grep)\n${out.slice(-HISTORY_CHARS)}`;
+        io.log(out);
+        return 0;
+      }
 
       case 'propose-action': {
         const { values } = parseArgs({

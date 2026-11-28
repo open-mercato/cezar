@@ -70,6 +70,16 @@ public final class PushNotifier {
         }
     }
 
+    /** A computer whose count is 0 loses its notification, and a launcher that badges by them loses the count (B3). */
+    public static void settle(Context context) {
+        ShellConnector connector = ShellServices.connector(context);
+        NotificationManagerCompat manager = NotificationManagerCompat.from(context);
+        for (String cezarId : PushText.settled(connector.list(), server -> server.relay == null ? null : server.relay.cezarId,
+                server -> connector.seen(server.id).waiting)) {
+            manager.cancel(cezarId, ID);
+        }
+    }
+
     /** What the other cezars' notifications already add to a summing launcher's badge. */
     private static int othersShown(Context context, String cezarId) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return 0;

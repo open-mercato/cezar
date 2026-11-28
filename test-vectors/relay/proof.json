@@ -62,6 +62,17 @@
       "sig": "i7LnxKzBEsTFUfR8Gp4puaWPdXoV-HQM0DDVIHV1RzqW6psw-DNTkeO4vaVUOjHtB0sp5cSxYd3z6GO1D1drAg",
       "path": "/v1/push",
       "body": "{\"v\":1,\"grant\":\"opaque-grant\",\"kind\":\"attention\",\"count\":3,\"id\":\"jIV5T8SyKxbmMunI6j6XWA\",\"ts\":1793491200}"
+    },
+    {
+      "name": "POST /v1/push",
+      "seed": "4226510a75a9bd4ded0be95d539d3d4b31229139d6f269cb5e08d7b1e7450790",
+      "key": "-3t7tF6F3PdgAgSdOSY8MGTHvjKJFGjIM94j-0yL_OE",
+      "id": "qFATNoaI_4KB2lyOPFPoXg",
+      "time": 1793491200,
+      "proofString": "cezar-relay-post-v1\n/v1/push\n36c7fad4cdeadd4bc81a8dbf280289f35637c6c4df7b4c4111a765f6e5f2e9b1\n-\n1793491200",
+      "sig": "huXKNAy7f7dsZRja_waJarIPVbYl8A-8i7AEurrNlAEid4d1SDUFdgJLuh3pkfa4xBpN57TU5I6lVOtb8nm1AQ",
+      "path": "/v1/push",
+      "body": "{\"v\":1,\"grant\":\"opaque-grant\",\"kind\":\"count\",\"count\":0,\"id\":\"knhk9p7-w9sbgXKy75MN0A\",\"ts\":1793491200}"
     }
   ]
 }

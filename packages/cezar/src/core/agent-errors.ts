@@ -69,7 +69,7 @@ export function isCodexChatGptModelError(message: string): boolean {
 const RESETLESS_LIMIT_RES = [
   /\bwould exceed your account(?:'|’)?s rate limit\b/i, // claude 429
   /\bcredentials for model\b[^\n]{0,80}\bcooling down\b/i, // claude behind a credential-pooling proxy
-  /\bout of credits\b[^\n]{0,40}\badd credits\b/i, // codex workspace
+  /\bout of (?:usage )?credits\b[^\n]{0,40}\badd credits\b/i, // codex workspace; claude's wording
 ] as const;
 
 export function isResetlessLimitMessage(message: string): boolean {

@@ -145,7 +145,7 @@ describe('filterGlobalTasks', () => {
   })
 
   it('has no project facet — picking a project is a link to its own page, not a filter', () => {
-    expect(Object.keys(NO_FILTERS)).toEqual(['query', 'tags', 'statuses', 'workflows', 'managers'])
+    expect(Object.keys(NO_FILTERS)).toEqual(['query', 'tags', 'taskTags', 'statuses', 'workflows', 'managers'])
   })
 
   it('ANDs across facets', () => {
@@ -338,6 +338,7 @@ describe('URL state', () => {
       filters: {
         query: 'checkout',
         tags: ['storefront', 'infra'],
+        taskTags: ['review batch', ' no-task-tag'],
         statuses: ['running', 'review'],
         workflows: ['plan-first'],
         managers: ['mgr-1'],
@@ -489,5 +490,50 @@ describe('sorting', () => {
     expect(urlStateFromSearchParams(params).sortBy).toBe('created')
     // Unknown values degrade to the default rather than a blank page.
     expect(urlStateFromSearchParams(new URLSearchParams('sort=nonsense')).sortBy).toBe('recent')
+  })
+})
+
+describe('task tags on the global page (spec 2026-11-23-task-tags § 7.5)', () => {
+  const projects = [project({ id: 'shop', tags: ['storefront'] }), project({ id: 'api' })]
+  const registry = {
+    tags: [
+      { id: 'tt-shopbatch01', name: 'Batch', projectId: 'shop', createdAt: '', lastUsedAt: '2026-11-01' },
+      { id: 'tt-apibatch001', name: 'batch', projectId: 'api', createdAt: '', lastUsedAt: '2026-11-20', color: 'blue' as const },
+    ],
+    deletedIds: ['tt-deleted0001'],
+  }
+  const tagged = toGlobalTasks(
+    [
+      run({ id: 'a', projectId: 'shop', tags: [{ id: 'tt-shopbatch01', name: 'Batch' }] }),
+      run({ id: 'b', projectId: 'api', tags: [{ id: 'tt-apibatch001', name: 'batch' }] }),
+      run({ id: 'c', projectId: 'api' }),
+      run({ id: 'd', projectId: 'api', tags: [{ id: 'tt-deleted0001', name: 'gone' }] }),
+    ],
+    projects,
+    [],
+    registry,
+  )
+  const ids = (list: readonly { run: { id: string } }[]) => list.map((task) => task.run.id).sort()
+
+  it('one name key selects same-named tags across projects', () => {
+    expect(ids(filterGlobalTasks(tagged, { ...NO_FILTERS, taskTags: ['batch'] }, 'active'))).toEqual(['a', 'b'])
+  })
+
+  it('"No tag" finds untagged tasks, and a tombstoned tag counts as no tag', () => {
+    expect(ids(filterGlobalTasks(tagged, { ...NO_FILTERS, taskTags: [' no-task-tag'] }, 'active'))).toEqual(['c', 'd'])
+  })
+
+  it('the task-tag row and the project-tag row are independent and AND together', () => {
+    expect(ids(filterGlobalTasks(tagged, { ...NO_FILTERS, tags: [UNTAGGED], taskTags: ['batch'] }, 'active'))).toEqual(['b'])
+    // A project tag never matches through the task row (D13).
+    expect(ids(filterGlobalTasks(tagged, { ...NO_FILTERS, taskTags: ['storefront'] }, 'active'))).toEqual([])
+  })
+
+  it('round-trips through the URL under its own keys', () => {
+    const params = urlStateToSearchParams({ ...DEFAULT_URL_STATE, filters: { ...NO_FILTERS, taskTags: ['batch', ' no-task-tag'], tags: [UNTAGGED] } })
+    expect(params.getAll('ttag')).toEqual(['batch'])
+    expect(params.get('notag')).toBe('1')
+    expect(params.get('untagged')).toBe('1')
+    expect(urlStateFromSearchParams(params).filters.taskTags).toEqual(['batch', ' no-task-tag'])
   })
 })

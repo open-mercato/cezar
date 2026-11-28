@@ -129,7 +129,7 @@ function serve({
     modelsLocked: false,
     maxParallel: 2,
     memoryLimitMb: null,
-    worktreeRetention: 10,
+    worktreeRetention: 10, worktreeIdleDays: 7, worktreeIdleDaysOwn: false, archivedTaskDeleteDays: 90, archivedTaskDeleteDaysOwn: false,
     liveTitleUpdates: null,
     reviewGate: null,
     profile: null, taskWorkspace: null, landing: null, landingBlocked: null, requiredChecks: [], defaultSkill: null, askSkill: null, teamSkills: true, bypassPermissions: false, bypassPermissionsBlocked: null,
@@ -454,6 +454,33 @@ describe('the agents form', () => {
       defaultModelsAuto: { claude: true },
     })
     await waitFor(() => expect(modelValue('claude')).toBe(''))
+  })
+
+  it('lets unverified-runnable providers like antigravity pick a default model when status is unknown', async () => {
+    serve({
+      providerStatus: {
+        providers: [
+          { provider: 'claude', status: 'connected', enabled: true },
+          { provider: 'antigravity', status: 'unknown', enabled: true },
+        ],
+      },
+      hostModels: {
+        antigravity: [
+          { id: 'gemini-4-neon-high', label: 'Gemini 4 Neon (High)', description: '' },
+        ],
+      },
+    })
+    renderAt('/settings/agents')
+    await waitFor(() => expect(form()).not.toBeNull())
+
+    const select = modelSelect('antigravity')
+    await waitFor(() => expect(select.hasAttribute('disabled')).toBe(false))
+    await pick(select, 'Gemini 4 Neon (High)')
+    await waitFor(() => expect(puts()).toHaveLength(1))
+    expect(puts()[0]?.body).toEqual({
+      defaultModels: { antigravity: 'gemini-4-neon-high' },
+      defaultModelsAuto: { antigravity: false },
+    })
   })
 
   it('offers each runner the models its own host CLI reports (#794)', async () => {

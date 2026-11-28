@@ -48,7 +48,8 @@ for await (const line of createInterface({ input: process.stdin })) {
   emit({ type: 'result', subtype: 'success', is_error: failing,
     result: failing ? 'Provider failed after doing work' : 'Finished.',
     usage: { input_tokens: 10, output_tokens: 2 },
-    ...(failing ? ${JSON.stringify(cost === undefined ? {} : { total_cost_usd: cost })} : { total_cost_usd: 1 }) });
+    // Like the real CLI, a resumed session's total includes the first turn's 1.
+    ...(failing ? ${JSON.stringify(cost === undefined ? {} : { total_cost_usd: path === 'continue' ? 1 + cost : cost })} : { total_cost_usd: 1 }) });
   break;
 }
 `, { mode: 0o700 });

@@ -7,15 +7,15 @@ import { byNewest } from '../task-assets/assets-model'
 import { cardableArtifacts, ThreadArtifactCards } from '../task-assets/thread-artifact-cards'
 import { groupThreadItems, type ThreadBlock } from './thread-groups'
 import {
+  ActivityGroup,
   AssistantMessage,
-  ContextGroup,
   ImageItem,
+  NoteGroup,
   NoteLine,
   AgentUpdateRequiredCard,
   ProviderAuthRequiredCard,
   ReasoningItem,
   ToolCard,
-  ToolStreak,
   UserBubble,
 } from './thread-items'
 import { ThreadCardCache } from './thread-open-cards'
@@ -436,16 +436,16 @@ const ThreadBlockRenderer = memo(function ThreadBlockRenderer({
           )}
         />
       )
-    case 'context-group':
-      return <ContextGroup group={block} scope={scope} />
-    case 'streak':
+    case 'activity':
       return (
-        <ToolStreak count={block.count}>
+        <ActivityGroup group={block} cacheKey={`${scope}:${block.id}`}>
           {block.blocks.map((inner) => (
             <ThreadBlockRenderer key={inner.id} block={inner} scope={scope} renderAsk={renderAsk} />
           ))}
-        </ToolStreak>
+        </ActivityGroup>
       )
+    case 'note-group':
+      return <NoteGroup group={block} cacheKey={`${scope}:${block.id}`} />
     default:
       return assertNever(block)
   }
@@ -524,7 +524,7 @@ function sameThreadBlockProps(
 function containsAsk(block: ThreadBlock): boolean {
   if (block.kind === 'entry') return block.entry.kind === 'ask'
   if (block.kind === 'tool-card') return block.children.some((entry) => entry.kind === 'ask')
-  if (block.kind === 'context-group') return false
+  if (block.kind === 'note-group') return false
   return block.blocks.some(containsAsk)
 }
 
@@ -539,22 +539,15 @@ function sameThreadBlock(previous: ThreadBlock, next: ThreadBlock): boolean {
         sameToolItem(previous.item, next.item) &&
         sameThreadEntries(previous.children, next.children)
       )
-    case 'context-group':
+    case 'activity':
+      // Members decide: the summary, current call and failure count are derived from them.
       return (
-        previous.kind === 'context-group' &&
-        previous.files === next.files &&
-        previous.searches === next.searches &&
-        previous.label === next.label &&
-        previous.tools.length === next.tools.length &&
-        previous.tools.every((item, index) => sameToolItem(item, next.tools[index]!))
-      )
-    case 'streak':
-      return (
-        previous.kind === 'streak' &&
-        previous.count === next.count &&
+        previous.kind === 'activity' &&
         previous.blocks.length === next.blocks.length &&
         previous.blocks.every((block, index) => sameThreadBlock(block, next.blocks[index]!))
       )
+    case 'note-group':
+      return previous.kind === 'note-group' && sameThreadEntries(previous.notes, next.notes)
     default:
       return false
   }
@@ -574,7 +567,8 @@ function sameThreadEntry(previous: ThreadEntry | undefined, next: ThreadEntry): 
     case 'tool':
       return previous.kind === 'tool' && sameToolItem(previous, next)
     case 'note':
-      return previous.kind === 'note' && sameFields(previous, next, NOTE_COMPARE_FIELDS)
+      return previous.kind === 'note' && sameFields<Omit<ThreadNote, 'skillNames'>>(previous, next, NOTE_COMPARE_FIELDS) &&
+        sameData(previous.skillNames, next.skillNames)
     case 'image':
       return previous.kind === 'image' && sameFields(previous, next, IMAGE_COMPARE_FIELDS)
     case 'ask':
@@ -612,7 +606,8 @@ const NOTE_COMPARE_FIELDS = {
   id: true,
   text: true,
   tone: true,
-} satisfies Record<keyof ThreadNote, true>
+  action: true,
+} satisfies Record<keyof Omit<ThreadNote, 'skillNames'>, true>
 
 const IMAGE_COMPARE_FIELDS = {
   kind: true,
@@ -647,6 +642,8 @@ const PROVIDER_AUTH_COMPARE_FIELDS = {
   provider: true,
   authFailureId: true,
   profileId: true,
+  state: true,
+  reconnectedAt: true,
 } satisfies Record<keyof ThreadProviderAuthRequired, true>
 
 const AGENT_UPDATE_COMPARE_FIELDS = {

@@ -31,6 +31,8 @@ use std::sync::atomic::{AtomicBool, AtomicU16, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+#[cfg(unix)]
+mod cli_command;
 mod disclaim;
 mod node_runtime;
 #[cfg(target_os = "macos")]
@@ -43,7 +45,7 @@ mod telemetry;
 pub use disclaim::disclaim_exec_if_asked;
 
 use telemetry::Failure;
-use tauri::menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu};
+use tauri::menu::{CheckMenuItem, IsMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::{AppHandle, Manager, RunEvent, WebviewUrl, WebviewWindow, WebviewWindowBuilder, WindowEvent};
 use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
 
@@ -51,12 +53,29 @@ use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut,
 const RESTART_EXIT_CODE: i32 = 75;
 const HEALTH_TIMEOUT: Duration = Duration::from_secs(60);
 const LOG_TAIL: usize = 60;
+/// The sidecar's whole output, kept on disk: the failure page's tail is gone with the page.
+const SIDECAR_LOG_FILE: &str = "cockpit.log";
+/// Past this size the log moves to `cockpit.log.1` (one generation kept) and starts afresh.
+const SIDECAR_LOG_MAX_BYTES: u64 = 5 * 1024 * 1024;
 /// The cockpit's conventional port, tried first so `http://localhost:4321` works in a browser
 /// beside the app whenever it can; a busy one falls through to the next few, then to any.
 const PREFERRED_PORTS: std::ops::Range<u16> = 4321..4331;
 const PACKAGE: &str = "@open-mercato/cezar";
-/// System-wide: bring the cockpit forward on its new-task composer from any app.
-const NEW_TASK_SHORTCUT: &str = "CmdOrCtrl+Alt+N";
+/// System-wide: bring the cockpit forward on its new-task composer from any app. Never Ctrl+Alt+key
+/// off macOS: there Ctrl+Alt is AltGr, and a global hotkey on it steals typed characters (Alt+N is
+/// "ń" on a Polish layout) from every app (#2409). Win/Super+Shift+N is unused by the OSes.
+#[cfg(target_os = "macos")]
+const NEW_TASK_SHORTCUT: &str = "Cmd+Alt+N";
+#[cfg(not(target_os = "macos"))]
+const NEW_TASK_SHORTCUT: &str = "Super+Shift+N";
+
+/// True when a chord pairs Ctrl and Alt (AltGr on Windows/Linux) with a key.
+#[cfg(test)]
+fn is_altgr_chord(chord: &str) -> bool {
+    let parts: Vec<String> = chord.split('+').map(|p| p.trim().to_ascii_lowercase()).collect();
+    let has = |names: &[&str]| parts.iter().any(|p| names.contains(&p.as_str()));
+    has(&["ctrl", "control", "cmdorctrl", "commandorcontrol"]) && has(&["alt", "option"])
+}
 
 /// Everything the supervisor thread and the menu handler share.
 struct Shell {
@@ -380,23 +399,21 @@ fn build_menu(app: &AppHandle, shell: &Shell) -> tauri::Result<()> {
     let versions_menu = Submenu::with_id(app, "versions", "Versions", true)?;
     *shell.versions_menu.lock().unwrap() = Some(versions_menu.clone());
     refresh_versions_menu(app, shell);
-    let app_menu = Submenu::with_items(
-        app,
-        "Cezar",
-        true,
-        &[
-            &PredefinedMenuItem::about(app, None, None)?,
-            &PredefinedMenuItem::separator(app)?,
-            &update_item,
-            &versions_menu,
-            &open_item,
-            &PredefinedMenuItem::separator(app)?,
-            &PredefinedMenuItem::hide(app, None)?,
-            &PredefinedMenuItem::hide_others(app, None)?,
-            &PredefinedMenuItem::separator(app)?,
-            &PredefinedMenuItem::quit(app, None)?,
-        ],
-    )?;
+    let about = PredefinedMenuItem::about(app, None, None)?;
+    let separators = [PredefinedMenuItem::separator(app)?, PredefinedMenuItem::separator(app)?, PredefinedMenuItem::separator(app)?];
+    let (hide, hide_others, quit) = (PredefinedMenuItem::hide(app, None)?, PredefinedMenuItem::hide_others(app, None)?, PredefinedMenuItem::quit(app, None)?);
+    let mut items: Vec<&dyn IsMenuItem<tauri::Wry>> = vec![&about, &separators[0], &update_item, &versions_menu, &open_item];
+    // The terminal command (`cli_command.rs`): the bundle's shim linked onto the PATH, like VS Code's `code`.
+    #[cfg(target_os = "macos")]
+    let cli_items = (
+        PredefinedMenuItem::separator(app)?,
+        MenuItem::with_id(app, "install-cli", "Install 'cez' command in PATH…", true, None::<&str>)?,
+        MenuItem::with_id(app, "uninstall-cli", "Uninstall 'cez' command", true, None::<&str>)?,
+    );
+    #[cfg(target_os = "macos")]
+    items.extend([&cli_items.0 as &dyn IsMenuItem<tauri::Wry>, &cli_items.1, &cli_items.2]);
+    items.extend([&separators[1] as &dyn IsMenuItem<tauri::Wry>, &hide, &hide_others, &separators[2], &quit]);
+    let app_menu = Submenu::with_items(app, "Cezar", true, &items)?;
     // Without an Edit menu the webview has no Cmd+C / Cmd+V on macOS.
     let edit_menu = Submenu::with_items(
         app,
@@ -509,6 +526,16 @@ const SIDECAR_STOP_GRACE: Duration = Duration::from_secs(2);
 /// `SIDECAR_STOP_GRACE`. A bare `kill()` is SIGKILL — it skipped all of that. Only macOS links
 /// `libc` (Cargo.toml); elsewhere this keeps the hard kill.
 fn stop_sidecar(child: &mut Child) {
+    stop_sidecar_with(child, |pid| persist_sidecar_line(&stopped_by_app_line(pid)));
+}
+
+fn stop_sidecar_with(child: &mut Child, on_stop: impl FnOnce(u32)) {
+    // If the cockpit already exited (e.g. SIGKILL just before Quit), do not claim the app stopped
+    // it — the next boot should still report the unclean shutdown.
+    if matches!(child.try_wait(), Ok(Some(_))) {
+        return;
+    }
+    on_stop(child.id());
     #[cfg(target_os = "macos")]
     {
         // SAFETY: `kill(2)` on our own child's pid; a pid that already exited is a harmless ESRCH.
@@ -793,6 +820,14 @@ pub fn run() {
                     }
                 });
             }
+            #[cfg(target_os = "macos")]
+            id @ ("install-cli" | "uninstall-cli") => {
+                let Ok(resources) = app.path().resource_dir() else { return };
+                let shim_dir = resources.join("bin");
+                let install = id == "install-cli";
+                // osascript dialogs block until answered: never on the main thread.
+                std::thread::spawn(move || if install { cli_command::install(shim_dir) } else { cli_command::uninstall(shim_dir) });
+            }
             "update-cezar" => {
                 let app = app.clone();
                 let shell = shell_for_menu.clone();
@@ -1002,13 +1037,17 @@ fn supervise(app: AppHandle, shell: Arc<Shell>) {
                 }
             });
         } else {
+            if matches!(child.try_wait(), Ok(Some(status)) if status.code() == Some(0)) && attach_to_running(&window, &shell, &log) {
+                return;
+            }
             let tail = log.lock().unwrap().iter().cloned().collect::<Vec<_>>().join("\n");
             let failure = match child.try_wait() {
                 Ok(Some(status)) => Failure::new("sidecar_exited_at_start", format!("The cockpit process exited with {status} before answering."))
                     .with("exit_code", status.code()),
                 _ => Failure::new("sidecar_health_timeout", format!("No answer within {}s.", HEALTH_TIMEOUT.as_secs())),
             };
-            fail(&window, "cezar did not come up", &format!("No answer on {url} within {}s (pid {pid}).", HEALTH_TIMEOUT.as_secs()), &tail, Some(failure));
+            fail(&window, "cezar did not come up", &with_log_hint(&format!("No answer on {url} within {}s (pid {pid}).", HEALTH_TIMEOUT.as_secs())), &tail, Some(failure));
+            persist_sidecar_line(&stopped_by_app_line(pid));
             let _ = child.kill();
             return;
         }
@@ -1028,6 +1067,9 @@ fn supervise(app: AppHandle, shell: Arc<Shell>) {
             std::thread::sleep(Duration::from_millis(250));
         };
         *shell.child.lock().unwrap() = None;
+        if let Some(status) = status {
+            persist_sidecar_line(&format!("--- cockpit process pid {pid} ended: {status}"));
+        }
 
         let requested = shell.restart_requested.swap(false, Ordering::SeqCst);
         match status.and_then(|s| s.code()) {
@@ -1039,12 +1081,21 @@ fn supervise(app: AppHandle, shell: Arc<Shell>) {
                 splash_reset(&window, "Restarting cezar…", "Switching to the newly installed version.");
                 continue;
             }
+            Some(0) if attach_to_running(&window, &shell, &log) => return,
             Some(code) => {
                 let tail = log.lock().unwrap().iter().cloned().collect::<Vec<_>>().join("\n");
-                fail(&window, "cezar stopped", &stopped_detail(code), &tail, stopped_failure(code));
+                fail(&window, "cezar stopped", &with_log_hint(&stopped_detail(code)), &tail, stopped_failure(code));
                 return;
             }
-            None => return,
+            // No exit code: a signal death (a stop, not silence), or no status at all because the
+            // app is quitting and took the child.
+            None => {
+                if let Some(signal) = status.and_then(exit_signal) {
+                    let tail = log.lock().unwrap().iter().cloned().collect::<Vec<_>>().join("\n");
+                    fail(&window, "cezar stopped", &with_log_hint(&killed_detail(signal)), &tail, Some(killed_failure(signal)));
+                }
+                return;
+            }
         }
     }
 }
@@ -1401,6 +1452,14 @@ fn spawn_sidecar(entry: &Path, port: u16, project: Option<&Path>, log: Arc<Mutex
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    // Its own process group: a group signal from anything the cockpit starts (a task's test
+    // suite run as a check step SIGKILLed the shell's group twice on 2026-11-25) reaches the
+    // cockpit's tree, never this shell, which then shows what happened.
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        command.process_group(0);
+    }
     // cezar starts agents through this binary so macOS privacy prompts name the agent, not the
     // app (`disclaim.rs`). The cockpit server itself stays the app's own.
     if cfg!(target_os = "macos") {
@@ -1408,7 +1467,9 @@ fn spawn_sidecar(entry: &Path, port: u16, project: Option<&Path>, log: Arc<Mutex
             command.env("CEZ_DISCLAIM_EXEC", exe);
         }
     }
+    persist_sidecar_line(&format!("--- starting the cockpit: {} (port {port})", entry.display()));
     let mut child = command.spawn().map_err(|error| format!("could not start node: {error}"))?;
+    persist_sidecar_line(&format!("--- cockpit process pid {}", child.id()));
     for reader in [
         child.stdout.take().map(|out| Box::new(out) as Box<dyn Read + Send>),
         child.stderr.take().map(|err| Box::new(err) as Box<dyn Read + Send>),
@@ -1419,6 +1480,7 @@ fn spawn_sidecar(entry: &Path, port: u16, project: Option<&Path>, log: Arc<Mutex
         let log = log.clone();
         std::thread::spawn(move || {
             for line in BufReader::new(reader).lines().map_while(Result::ok) {
+                persist_sidecar_line(&line);
                 let mut log = log.lock().unwrap();
                 if log.len() >= LOG_TAIL {
                     log.pop_front();
@@ -2248,6 +2310,184 @@ fn stopped_failure(code: i32) -> Option<Failure> {
     (code != 0).then(|| Failure::new("sidecar_exited", stopped_detail(code)).with("exit_code", code))
 }
 
+/// The signal that ended the sidecar, when one did (`code()` is then `None`).
+#[cfg(unix)]
+fn exit_signal(status: std::process::ExitStatus) -> Option<i32> {
+    use std::os::unix::process::ExitStatusExt;
+    status.signal()
+}
+
+#[cfg(not(unix))]
+fn exit_signal(_status: std::process::ExitStatus) -> Option<i32> {
+    None
+}
+
+fn signal_name(signal: i32) -> Option<&'static str> {
+    match signal {
+        1 => Some("SIGHUP"),
+        2 => Some("SIGINT"),
+        3 => Some("SIGQUIT"),
+        6 => Some("SIGABRT"),
+        9 => Some("SIGKILL"),
+        11 => Some("SIGSEGV"),
+        13 => Some("SIGPIPE"),
+        15 => Some("SIGTERM"),
+        _ => None,
+    }
+}
+
+/// A signal death used to return silently and leave a blank window (2026-11-25).
+fn killed_detail(signal: i32) -> String {
+    match signal_name(signal) {
+        Some(name) => format!("The cockpit process was killed by signal {signal} ({name})."),
+        None => format!("The cockpit process was killed by signal {signal}."),
+    }
+}
+
+fn killed_failure(signal: i32) -> Failure {
+    Failure::new("sidecar_killed", killed_detail(signal)).with("signal", signal)
+}
+
+/// Every stop page names the file that still holds the whole output once the page is gone.
+fn with_log_hint(detail: &str) -> String {
+    format!("{detail} Its output is saved in {}.", sidecar_log_path().display())
+}
+
+fn sidecar_log_path() -> PathBuf {
+    cezar_home().join("logs").join(SIDECAR_LOG_FILE)
+}
+
+/// The sidecar's output file, opened on first use; one writer for both pipes and every restart.
+struct SidecarLog {
+    path: PathBuf,
+    max: u64,
+    file: Option<std::fs::File>,
+    written: u64,
+}
+
+impl SidecarLog {
+    fn open(path: PathBuf, max: u64) -> Self {
+        let mut log = SidecarLog { path, max, file: None, written: 0 };
+        log.reopen();
+        log
+    }
+
+    /// Rotates a full file to `<name>.1`, then appends to a fresh one. Never fails: a read-only
+    /// home only loses the file, never the cockpit.
+    fn reopen(&mut self) {
+        self.file = None;
+        if let Some(dir) = self.path.parent() {
+            let _ = std::fs::create_dir_all(dir);
+        }
+        let size = |path: &Path| std::fs::metadata(path).map(|meta| meta.len()).unwrap_or(0);
+        if size(&self.path) >= self.max {
+            let mut rotated = self.path.clone().into_os_string();
+            rotated.push(".1");
+            let _ = std::fs::rename(&self.path, PathBuf::from(rotated));
+        }
+        self.written = size(&self.path);
+        let mut options = std::fs::OpenOptions::new();
+        options.create(true).append(true);
+        // Owner-only, like the rest of `~/.cezar`: it holds task output, paths and stacks.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        self.file = options.open(&self.path).ok();
+    }
+
+    fn line(&mut self, text: &str, now: std::time::SystemTime) {
+        if self.written >= self.max {
+            self.reopen();
+        }
+        if let Some(file) = self.file.as_mut() {
+            let entry = format!("{} {text}\n", utc_timestamp(now));
+            if file.write_all(entry.as_bytes()).is_ok() {
+                self.written += entry.len() as u64;
+            }
+        }
+    }
+}
+
+static SIDECAR_LOG: Mutex<Option<SidecarLog>> = Mutex::new(None);
+
+/// The shell is about to stop this cockpit itself (a quit, a restart): the next cockpit reads it
+/// in `unclean-exit.ts` and does not report the stop as an unclean shutdown.
+fn stopped_by_app_line(pid: u32) -> String {
+    format!("--- cockpit process pid {pid} stopped by the app")
+}
+
+fn persist_sidecar_line(text: &str) {
+    let mut guard = SIDECAR_LOG.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    guard
+        .get_or_insert_with(|| SidecarLog::open(sidecar_log_path(), SIDECAR_LOG_MAX_BYTES))
+        .line(text, std::time::SystemTime::now());
+}
+
+/// `2026-11-25T12:37:33.147Z`, without a date crate.
+fn utc_timestamp(time: std::time::SystemTime) -> String {
+    let since = time.duration_since(std::time::UNIX_EPOCH).unwrap_or_default();
+    let secs = since.as_secs();
+    let (year, month, day) = civil_from_days((secs / 86_400) as i64);
+    let rem = secs % 86_400;
+    format!(
+        "{year:04}-{month:02}-{day:02}T{:02}:{:02}:{:02}.{:03}Z",
+        rem / 3_600,
+        rem % 3_600 / 60,
+        rem % 60,
+        since.subsec_millis()
+    )
+}
+
+/// Howard Hinnant's days-to-civil: days since 1970-01-01 to (year, month, day).
+fn civil_from_days(days: i64) -> (i64, u32, u32) {
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097);
+    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = (doy - (153 * mp + 2) / 5 + 1) as u32;
+    let month = (if mp < 10 { mp + 3 } else { mp - 9 }) as u32;
+    let year = yoe + era * 400 + i64::from(month <= 2);
+    (year, month, day)
+}
+
+/// The URL a sidecar that handed off to an ALREADY-RUNNING cockpit announced before exiting 0
+/// (`cezar-handoff: <url>`, written by the CLI). Only loopback http is ever attached to
+/// (telemetry f3893dd3).
+fn handoff_url(lines: &[String]) -> Option<url::Url> {
+    let raw = lines.iter().rev().find_map(|line| line.trim().strip_prefix("cezar-handoff:"))?.trim();
+    let url = url::Url::parse(raw).ok()?;
+    let loopback = match url.host()? {
+        url::Host::Ipv4(ip) => ip.is_loopback(),
+        url::Host::Ipv6(ip) => ip.is_loopback(),
+        url::Host::Domain(name) => name == "localhost",
+    };
+    (url.scheme() == "http" && loopback && url.port().is_some()).then_some(url)
+}
+
+/// A clean exit after a hand-off is not a stop: the window joins the cockpit that is already up.
+/// The pipe readers may trail the exit by a moment, so the log is polled briefly.
+fn attach_to_running(window: &WebviewWindow, shell: &Shell, log: &Mutex<VecDeque<String>>) -> bool {
+    for _ in 0..10 {
+        let lines = log.lock().unwrap().iter().cloned().collect::<Vec<_>>();
+        if let Some(url) = handoff_url(&lines) {
+            // The marker is only a claim: trust the port (and IPC via is_own_origin) once a cezar answers there.
+            let port = url.port().unwrap_or_default();
+            if health_version(port).is_none() {
+                return false;
+            }
+            shell.port.store(port, Ordering::SeqCst);
+            let _ = window.navigate(url);
+            return true;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    false
+}
+
 /// The page's `report` mode, after adding what only the shell knows: the active cezar and where
 /// Node came from.
 fn report_param(failure: Option<Failure>, log: &str) -> &'static str {
@@ -2310,6 +2550,119 @@ mod tests {
         );
     }
 
+    fn lines(raw: &[&str]) -> Vec<String> {
+        raw.iter().map(|line| line.to_string()).collect()
+    }
+
+    /// Telemetry f3893dd3: exit 0 after "cockpit already running" is a hand-off to attach to.
+    #[test]
+    fn a_handoff_announcement_names_the_cockpit_to_attach_to() {
+        let log = lines(&[
+            "  cockpit already running (pid 1066794) — opened admin-v2",
+            "  cockpit → http://127.0.0.1:4321/p/admin-v2/",
+            "cezar-handoff: http://127.0.0.1:4321/p/admin-v2/",
+        ]);
+        assert_eq!(handoff_url(&log).map(|u| u.to_string()).as_deref(), Some("http://127.0.0.1:4321/p/admin-v2/"));
+        assert!(handoff_url(&lines(&["cezar-handoff: http://localhost:4400/"])).is_some());
+        assert!(handoff_url(&lines(&["cezar-handoff: http://[::1]:4400/"])).is_some());
+    }
+
+    #[test]
+    fn only_loopback_http_with_a_port_is_attached_to() {
+        for bad in [
+            "cezar-handoff: https://127.0.0.1:4321/",
+            "cezar-handoff: http://example.com:4321/",
+            "cezar-handoff: http://127.0.0.1/",
+            "cezar-handoff: file:///etc/passwd",
+            "cezar-handoff: not a url",
+        ] {
+            assert!(handoff_url(&lines(&[bad])).is_none(), "{bad}");
+        }
+        // The human line alone is not a machine contract; a plain stop has no hand-off.
+        assert!(handoff_url(&lines(&["  cockpit → http://127.0.0.1:4321/"])).is_none());
+        assert!(handoff_url(&[]).is_none());
+    }
+
+    #[test]
+    fn a_stop_by_the_app_is_logged_in_the_shape_the_cockpit_reads() {
+        // packages/cezar/src/unclean-exit.ts matches this line exactly.
+        assert_eq!(stopped_by_app_line(87001), "--- cockpit process pid 87001 stopped by the app");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn stop_sidecar_logs_only_when_stopping_a_live_child() {
+        // Already exited before stop_sidecar runs: must not claim the app stopped it.
+        let mut dead = Command::new("sh").args(["-c", "exit 0"]).spawn().unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while Instant::now() < deadline {
+            if matches!(dead.try_wait(), Ok(Some(_))) {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let mut logged_dead = None;
+        stop_sidecar_with(&mut dead, |pid| logged_dead = Some(pid));
+        assert_eq!(logged_dead, None);
+
+        // Live child: logs its pid and terminates it.
+        let mut live = Command::new("sh").args(["-c", "sleep 30"]).spawn().unwrap();
+        let live_pid = live.id();
+        let mut logged_live = None;
+        stop_sidecar_with(&mut live, |pid| logged_live = Some(pid));
+        let _ = live.wait();
+        assert_eq!(logged_live, Some(live_pid));
+    }
+
+    #[test]
+    fn a_signal_death_is_reported_with_its_name() {
+        assert_eq!(killed_detail(9), "The cockpit process was killed by signal 9 (SIGKILL).");
+        assert_eq!(killed_detail(64), "The cockpit process was killed by signal 64.");
+        let failure = killed_failure(9);
+        assert_eq!(failure.code, "sidecar_killed");
+        assert!(with_log_hint("x").ends_with(&format!("saved in {}.", sidecar_log_path().display())));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_killed_child_reports_its_signal_and_an_exited_one_none() {
+        let killed = Command::new("sh").args(["-c", "kill -9 $$"]).status().unwrap();
+        assert_eq!(killed.code(), None);
+        assert_eq!(exit_signal(killed), Some(9));
+        let exited = Command::new("sh").args(["-c", "exit 3"]).status().unwrap();
+        assert_eq!(exit_signal(exited), None);
+    }
+
+    #[test]
+    fn timestamps_are_utc_iso() {
+        let at = |secs: u64, millis: u64| std::time::UNIX_EPOCH + Duration::from_secs(secs) + Duration::from_millis(millis);
+        assert_eq!(utc_timestamp(at(0, 0)), "1970-01-01T00:00:00.000Z");
+        assert_eq!(utc_timestamp(at(1_795_351_053, 147)), "2026-11-22T12:37:33.147Z");
+        assert_eq!(utc_timestamp(at(951_782_400, 0)), "2000-02-29T00:00:00.000Z");
+    }
+
+    #[test]
+    fn the_sidecar_log_appends_and_rotates_one_generation() {
+        let dir = std::env::temp_dir().join(format!("cezar-sidecar-log-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let path = dir.join("logs").join(SIDECAR_LOG_FILE);
+        let now = std::time::UNIX_EPOCH;
+        let mut log = SidecarLog::open(path.clone(), 64);
+        log.line("first line of output", now);
+        log.line("second line, past the cap", now);
+        log.line("third", now);
+        let rotated = std::fs::read_to_string(dir.join("logs").join("cockpit.log.1")).unwrap();
+        assert!(rotated.contains("1970-01-01T00:00:00.000Z first line of output\n"));
+        assert!(rotated.contains("second line, past the cap"));
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "1970-01-01T00:00:00.000Z third\n");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(std::fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o600);
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn a_clean_exit_is_a_stop_not_an_error_report() {
         assert!(stopped_failure(0).is_none());
@@ -2326,6 +2679,17 @@ mod tests {
             "window.dispatchEvent(new CustomEvent('cezar:switch-task', { detail: \"next\" }))"
         );
         assert_eq!(TASK_SWITCH_SHORTCUTS.map(|(_, direction)| direction), ["previous", "next"]);
+    }
+
+    /// #2409: Ctrl+Alt is AltGr off macOS, so the new-task chord must never be one.
+    #[test]
+    fn the_new_task_chord_is_not_altgr() {
+        assert!(!is_altgr_chord(NEW_TASK_SHORTCUT));
+        assert!(is_altgr_chord("CmdOrCtrl+Alt+N"));
+        assert!(is_altgr_chord("Ctrl+Alt+N"));
+        assert!(!is_altgr_chord("Cmd+Alt+N"));
+        assert!(!is_altgr_chord("Super+Shift+N"));
+        assert!(NEW_TASK_SHORTCUT.parse::<Shortcut>().is_ok());
     }
 
     #[test]

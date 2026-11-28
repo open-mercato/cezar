@@ -369,6 +369,16 @@
   --color-device-5: #e05a73;
   --color-device-6: #22b3a0;
   --color-device-ink: #fff;
+  /* Task-tag swatches (spec 2026-11-23-task-tags § 4.1): a closed set, mid-tones that read as a
+   * dot on both themes; the chip's text stays the theme's own ink. */
+  --color-tag-gray: #8b8b8b;
+  --color-tag-red: #e0524f;
+  --color-tag-orange: #e8833a;
+  --color-tag-amber: #d9a520;
+  --color-tag-green: #3fae5f;
+  --color-tag-teal: #22a99a;
+  --color-tag-blue: #3b82d6;
+  --color-tag-violet: #8a6fe0;
   --color-background: var(--background);
   --color-foreground: var(--foreground);
   --color-card: var(--card);
@@ -475,6 +485,14 @@
     font-family: var(--mono);
   }
 
+  /* A long-pressed in-app link showed WebKit's preview card with the phone shell's loopback URL.
+   * External links keep the native menu: their URL is real and Copy Link is useful there. */
+  @media (pointer: coarse) {
+    a[href^="/"] {
+      -webkit-touch-callout: none;
+    }
+  }
+
   /* v3's preflight gave buttons `cursor: pointer`; v4 dropped that rule, so they fall back to the
    * user agent's arrow. In this cockpit anything clickable reads as clickable, so enabled buttons
    * and button-like roles opt back into the pointer. Disabled controls keep the arrow (and their
@@ -543,6 +561,11 @@
 .thread-markdown :is(p, ul, ol, h1, h2, h3, h4, h5, h6) {
   overflow-x: auto;
   overflow-y: hidden;
+}
+/* Prose wraps a long URL, id or inline code instead of scrolling it sideways on a phone; the
+ * scroll above stays a backstop for what cannot wrap. Tables and fences keep their own scroll. */
+.thread-markdown :is(p, li, blockquote, h1, h2, h3, h4, h5, h6) {
+  overflow-wrap: anywhere;
 }
 .thread-markdown :is(h1, h2, h3, h4, h5, h6) {
   margin: 0.9em 0 0.35em;
@@ -779,6 +802,23 @@
   --mascot-symbol: #754e28;
   --mascot-spark: #f5b82c;
   --mascot-shadow: rgba(90, 43, 25, 0.13);
+}
+
+/* Agents' brand marks on the reconnect card (spec 2026-11-18-inline-account-reconnect): intrinsic,
+ * like the mascot, so a mark reads the same in both themes. */
+:root {
+  --runner-mark-ink: #ffffff;
+  --runner-mark-claude: #d97757;
+  --runner-mark-codex: #0f0f0f;
+  --runner-mark-cursor: #3b3b3b;
+  --runner-mark-copilot: #8250df;
+  --runner-mark-opencode: #2563eb;
+  --runner-mark-kimi: #111827;
+  --runner-mark-pi: #0d9488;
+  --runner-mark-gemini: #1a73e8;
+  --runner-mark-antigravity: #ea4335;
+  --runner-mark-junie: #21d789;
+  --runner-mark-omp: #7c3aed;
 }
 
 /* A message reached from "your messages" (spec 2026-11-17-my-message-navigation): the #2218

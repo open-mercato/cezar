@@ -761,6 +761,20 @@ export async function worktreeDiff(
 }
 
 /**
+ * `worktreeDiff` for a task whose tree was reclaimed (spec 2026-11-19-worktree-disk-usage): the
+ * kept branch against its merge-base with the base, read from the main repo without a checkout.
+ */
+export async function branchDiff(repoRoot: string, baseBranch: string, branch: string, cap = DIFF_CAP): Promise<string> {
+  if (!isSafeGitRef(baseBranch) || !isSafeGitRef(branch)) return '(diff failed: refusing option-like ref)';
+  const mergeBase = await git(repoRoot, ['merge-base', baseBranch, branch]);
+  const base = mergeBase.ok && mergeBase.stdout.trim() ? mergeBase.stdout.trim() : baseBranch;
+  const res = await git(repoRoot, ['diff', base, branch]);
+  if (!res.ok) return `(diff failed: ${res.stderr.trim() || 'unknown git error'})`;
+  if (res.stdout.length > cap) return `${res.stdout.slice(0, cap)}\n… (diff truncated)`;
+  return res.stdout;
+}
+
+/**
  * `git diff --stat` version of `worktreeDiff` (spec 010 — the variant
  * comparison columns). Same merge-base anchoring, and it stays whole-branch
  * for a reason of its own: variants are sibling cezar worktrees, each on its

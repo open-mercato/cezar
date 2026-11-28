@@ -1805,6 +1805,9 @@ function reviewerKey(ref: z.infer<typeof reviewerRefSchema>): string | null {
 const ghRefStatusPrSchema = z
   .object({
     state: z.string(),
+    /** When it merged or closed: Needs you settles an item only for a PR that ended after it began. */
+    mergedAt: z.string().nullish(),
+    closedAt: z.string().nullish(),
     isDraft: z.boolean().nullish(),
     reviewDecision: z.string().nullish(),
     /** `MERGEABLE` | `CONFLICTING` | `UNKNOWN` — GitHub computes it in the background, so
@@ -1924,7 +1927,7 @@ function refStatusQuery(numbers: number[], withSuites = true): string {
   const aliases = numbers
     .map(
       (n, i) =>
-        `    r${i}: issueOrPullRequest(number: ${n}) { __typename ... on PullRequest { state isDraft reviewDecision mergeable commits(last: 1) { nodes { commit { committedDate parents(first: 1) { totalCount nodes { committedDate } } statusCheckRollup { state }${suites} } } } reviews(last: 1, states: CHANGES_REQUESTED) { nodes { submittedAt } } reviewRequests(first: 20) { totalCount nodes { requestedReviewer { __typename ... on User { login } ... on Bot { login } ... on Team { slug } } } } timelineItems(last: 20, itemTypes: [REVIEW_REQUESTED_EVENT]) { nodes { ... on ReviewRequestedEvent { createdAt requestedReviewer { __typename ... on User { login } ... on Bot { login } ... on Team { slug } } } } } } ... on Issue { state stateReason } }`,
+        `    r${i}: issueOrPullRequest(number: ${n}) { __typename ... on PullRequest { state mergedAt closedAt isDraft reviewDecision mergeable commits(last: 1) { nodes { commit { committedDate parents(first: 1) { totalCount nodes { committedDate } } statusCheckRollup { state }${suites} } } } reviews(last: 1, states: CHANGES_REQUESTED) { nodes { submittedAt } } reviewRequests(first: 20) { totalCount nodes { requestedReviewer { __typename ... on User { login } ... on Bot { login } ... on Team { slug } } } } timelineItems(last: 20, itemTypes: [REVIEW_REQUESTED_EVENT]) { nodes { ... on ReviewRequestedEvent { createdAt requestedReviewer { __typename ... on User { login } ... on Bot { login } ... on Team { slug } } } } } } ... on Issue { state stateReason } }`,
     )
     .join('\n');
   return `query ($owner: String!, $name: String!) {\n  repository(owner: $owner, name: $name) {\n${aliases}\n  }\n}`;
@@ -2114,6 +2117,8 @@ export interface ResolvedReference {
    *  collapsed into "not conflicting", because it is the difference between an answer and a
    *  question GitHub has not finished answering. */
   mergeable?: Mergeability;
+  /** A merged or closed PR: when it ended (`mergedAt`, else `closedAt`). */
+  endedAt?: string;
 }
 
 /**
@@ -2193,6 +2198,7 @@ export async function fetchRefStatuses(
             // The tri-state, not a boolean: `unknown` has to survive as far as the cache, which
             // is what decides to ask again in seconds rather than in a minute.
             ...(mergeability ? { mergeable: mergeability } : {}),
+            ...((pr.mergedAt ?? pr.closedAt) ? { endedAt: (pr.mergedAt ?? pr.closedAt)! } : {}),
           };
         } else if (node.__typename === 'Issue') {
           const issue = ghRefStatusIssueSchema.parse(node);
@@ -2282,6 +2288,24 @@ export function readCachedRefStatuses(
     const hit = refStatusCache.get(refStatusKey(repoRoot, number));
     if (!hit || !hit.resolved || now - hit.at >= refStatusTtl(hit.resolved, hit.unknownSince, now)) continue;
     out[hit.resolved.kind === 'pr' ? 'prs' : 'issues'][number] = hit.resolved.status;
+  }
+  return out;
+}
+
+/** Pull requests the cache already knows have ended, with when. Like `readCachedRefStatuses`, never asks
+ *  the forge (spec 2026-11-23-needs-you-triage). */
+export function readCachedPrEnds(
+  repoRoot: string,
+  numbers: Iterable<number>,
+): Record<number, { state: 'merged' | 'closed'; endedAt?: string }> {
+  const out: Record<number, { state: 'merged' | 'closed'; endedAt?: string }> = {};
+  const now = Date.now();
+  for (const number of new Set(numbers)) {
+    const hit = refStatusCache.get(refStatusKey(repoRoot, number));
+    const resolved = hit?.resolved;
+    if (!hit || !resolved || resolved.kind !== 'pr' || now - hit.at >= refStatusTtl(resolved, hit.unknownSince, now)) continue;
+    if (resolved.status !== 'merged' && resolved.status !== 'closed') continue;
+    out[number] = { state: resolved.status, ...(resolved.endedAt ? { endedAt: resolved.endedAt } : {}) };
   }
   return out;
 }
@@ -2919,6 +2943,7 @@ export async function createDraftPr(input: DraftPrInput): Promise<DraftPrOutcome
   const { run } = input;
   const worktree = run.worktreePath;
   const branch = run.branch;
+  const existing = input.updateExisting ? run.pullRequestUrl : undefined;
   if (!worktree || !branch) {
     return { ok: false, error: 'this task has no worktree/branch to publish' };
   }
@@ -2942,7 +2967,9 @@ export async function createDraftPr(input: DraftPrInput): Promise<DraftPrOutcome
   // DRY-RUN (CEZ_DRY_RUN=1): no push, no gh — simulate success with a fake PR
   // URL so the whole review → PR flow is testable without GitHub.
   if (process.env.CEZ_DRY_RUN === '1') {
-    return { ok: true, url: 'https://github.com/open-mercato/demo/pull/777', dryRun: true };
+    return existing
+      ? { ok: true, url: existing, dryRun: true, updated: true }
+      : { ok: true, url: 'https://github.com/open-mercato/demo/pull/777', dryRun: true };
   }
 
   // Push to the push remote, open the PR on the base remote the task forked from (#1383).
@@ -2954,8 +2981,9 @@ export async function createDraftPr(input: DraftPrInput): Promise<DraftPrOutcome
   const prBase = run.baseBranch ? splitRemoteRef(run.baseBranch, remotes.names).branch : undefined;
   // Refuse an empty branch BEFORE pushing it (telemetry 16aef26d): gh would only refuse after the
   // push, leaving a branch on the remote with nothing in it. Unknown base → let gh decide.
-  const { ahead } = await baseDivergence(worktree, run.baseBranch);
-  if (ahead === 0) return { ok: false, error: nothingToPropose(branch, prBase) };
+  if (!existing && (await baseDivergence(worktree, run.baseBranch)).ahead === 0) {
+    return { ok: false, error: nothingToPropose(branch, prBase) };
+  }
 
   let push = await execTool(['push', '-u', remotes.push, branch], worktree, 'git', PUSH_TIMEOUT_MS);
   if (!push.ok && /\[rejected\]|non-fast-forward/.test(push.stderr)) {
@@ -2966,6 +2994,7 @@ export async function createDraftPr(input: DraftPrInput): Promise<DraftPrOutcome
   if (!push.ok) {
     return { ok: false, error: `git push failed — ${tail(push.stderr) || 'unknown error'}` };
   }
+  if (existing) return { ok: true, url: existing, dryRun: false, updated: true };
 
   const body = buildPrBody(input.handoffText, run.task);
   // Target the branch the worktree forked from (config `baseBranch`) — without
@@ -3157,14 +3186,14 @@ interface ExecResult {
  *  throws; `CEZ_DRY_RUN=1` answers ok offline. */
 export async function updatePr(
   repoRoot: string,
-  number: number,
+  pr: number | string,
   changes: { ready?: boolean; addLabels?: string[]; reviewers?: string[] },
 ): Promise<{ ok: true } | { ok: false; error: string }> {
   if (process.env.CEZ_DRY_RUN === '1') return { ok: true };
   const fail = (res: ExecResult, what: string) =>
     res.notFound ? 'gh is not installed' : (res.stderr || res.stdout).trim().split('\n')[0] || `${what} failed`;
   if (changes.ready) {
-    const res = await execTool(['pr', 'ready', String(number)], repoRoot, 'gh', 60_000);
+    const res = await execTool(['pr', 'ready', String(pr)], repoRoot, 'gh', 60_000);
     if (!res.ok) return { ok: false, error: fail(res, 'gh pr ready') };
   }
   const edit = [
@@ -3172,7 +3201,7 @@ export async function updatePr(
     ...(changes.reviewers ?? []).flatMap((r) => ['--add-reviewer', r]),
   ];
   if (edit.length) {
-    const res = await execTool(['pr', 'edit', String(number), ...edit], repoRoot, 'gh', 60_000);
+    const res = await execTool(['pr', 'edit', String(pr), ...edit], repoRoot, 'gh', 60_000);
     if (!res.ok) return { ok: false, error: fail(res, 'gh pr edit') };
   }
   return { ok: true };

@@ -1,0 +1,59 @@
+---
+title: "Task tags"
+description: "Label tasks with colored tags, edit them at any time, and filter task lists by them."
+related:
+  links:
+    - features/tasks-and-sessions/dispatch-cli
+    - features/tasks-and-sessions/task-notes
+sources:
+  - label: "Tag registry and run field"
+    path: packages/contract/src/task-tags.ts
+    line: 1
+    commit: a13ec5c0edc556fcca226f6d612d1e48420e227a
+  - label: "Tag routes"
+    path: packages/cezar/src/server/task-tags.ts
+    line: 1
+    commit: a13ec5c0edc556fcca226f6d612d1e48420e227a
+  - label: "CLI"
+    path: packages/cezar/src/dispatch/task-cli.ts
+    line: 37
+    commit: a13ec5c0edc556fcca226f6d612d1e48420e227a
+---
+Task tags are colored labels you put on individual tasks. They help you find tasks later. Tags never change how a task runs.
+
+Task tags differ from project tags. A project tag labels a whole project and lives in Settings → Projects. A task tag labels one task.
+
+## Where to find it
+
+- New task composer → **+ Tag** chip, after the Skill or workflow pill
+- Task header → tag chips and the **+** button, or the ⋯ menu → **Tags…**
+- Project task list → the **Tag** button on a row, or **Tag… (N)** in the selection bar
+- Settings → Task tags
+
+## How to use it
+
+1. Click **+ Tag** in the composer, search, and pick tags. Type a new name to create a tag in the current project. The tags you pick apply to that task only; the composer does not remember them for the next task.
+2. Edit tags on any task, in any state, from its header, the ⋯ menu, the row button, or the selection bar. In the selection bar, **Tag… (N)** adds or removes a tag across every selected task.
+3. Filter by tag. The project task list has a **Tags** facet with a **No tag** option. The All tasks page has a **Task tags** row under **Project tags**. Tags with the same name in different projects appear as one chip there.
+
+Manage the registry in Settings → Task tags. **Add tag** creates a tag before any task uses it, either global or in one project. You can rename a tag, change its color, edit its description, make a project tag global, or delete it. Deleting asks for confirmation, because the tag disappears from every task.
+
+## Scope
+
+A tag is either global or belongs to one project. A project tag appears in that project's picker. A global tag appears in every project's picker. Tags created inline are project tags.
+
+## For agents
+
+Agents can tag tasks from a shell:
+
+```bash title="Terminal"
+cez task create "Fix the login redirect" --tag backend
+cez task tag TASK_ID --add backend --remove stale
+```
+
+> **Good to know**:
+>
+> - A task holds at most 10 tags, and the registry holds at most 500.
+> - Tags live in `~/.cezar/task-tags.json`. Each task stores the tag id plus a snapshot of its name.
+> - Renaming a tag updates every task that carries it. Deleting a tag hides it everywhere.
+> - Tags are personal to your machine and never change scheduling or agent behavior.

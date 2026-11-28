@@ -6,8 +6,9 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import type { RunEvent } from '@open-mercato/cezar-api-client'
 import type { UiToolItem } from '@open-mercato/cezar-api-client'
+import { ProjectScopeProvider } from '@/api/project-scope-context'
 import { createQueryClient } from '@/api/query-client'
-import { workspaceQueryKeys } from '@/api/queries'
+import { queryKeys, workspaceQueryKeys } from '@/api/queries'
 
 import bashAndScreenshot from '../../../../cezar/src/core/__fixtures__/claude/bash-and-screenshot.expected.json'
 import failedAndDenied from '../../../../cezar/src/core/__fixtures__/claude/failed-and-denied.expected.json'
@@ -16,20 +17,21 @@ import thinkingEditWriteTodo from '../../../../cezar/src/core/__fixtures__/claud
 import opencodeToolLifecycle from '../../../../cezar/src/core/__fixtures__/opencode/tool-lifecycle.expected.json'
 import { groupThreadItems } from './thread-groups'
 import {
+  ActivityGroup,
   AgentUpdateRequiredCard,
-  ContextGroup,
   AssistantMessage,
   isNearBottom,
+  NoteGroup,
+  NoteLine,
   OUTPUT_CLAMP_LINES,
   ProviderAuthRequiredCard,
   ReasoningItem,
   THREAD_PROSE_MEASURE,
   ToolCard,
-  ToolStreak,
   UserBubble,
   WorkingIndicator,
 } from './thread-items'
-import { reduceThread } from './thread-state'
+import { reduceThread, type ThreadProviderAuthRequired } from './thread-state'
 import { SessionTranscript } from './session-transcript'
 
 afterEach(() => {
@@ -37,34 +39,67 @@ afterEach(() => {
   Reflect.deleteProperty(navigator, 'clipboard')
 })
 
-describe('ProviderAuthRequiredCard', () => {
-  it.each([
-    ['claude', 'Claude Code'],
-    ['codex', 'Codex'],
-    ['opencode', 'OpenCode'],
-  ] as const)('renders accessible fixed recovery guidance for %s', (provider, label) => {
-    render(
-      <MemoryRouter initialEntries={['/p/acme/tasks/r1']}>
-        <ProviderAuthRequiredCard incident={{
-          kind: 'provider-auth-required',
-          id: 'v1:2',
-          provider,
-          authFailureId: 'incident-1',
-        }} />
-      </MemoryRouter>,
-    )
+describe('NoteLine skill recovery', () => {
+  const note = {
+    kind: 'note', id: 'v1:1', text: 'Shared skill unavailable', tone: 'danger', action: 'install-skills',
+  } as const
 
-    expect(screen.getByRole('alert').textContent).toContain(`This run needed ${label} authorization`)
-    expect(screen.getByRole('alert').textContent).toContain(
-      `Review ${label} settings before retrying.`,
-    )
-    expect(screen.getByRole('alert').textContent).not.toContain(`${label} needs authorization`)
-    const link = screen.getByRole('link', { name: 'Open provider settings' })
-    expect(link.getAttribute('href')).toBe('/p/acme/settings/agents#providers')
-    expect(link.getAttribute('tabindex')).not.toBe('-1')
+  it('refreshes the current project, updates both catalog queries, and reports still-missing skills', async () => {
+    let respond!: (response: Response) => void
+    const fetchMock = vi.fn(() => new Promise<Response>((resolve) => { respond = resolve }))
+    vi.stubGlobal('fetch', fetchMock)
+    try {
+      const client = createQueryClient()
+      const renderNote = (projectId: string) => (
+        <QueryClientProvider client={client}>
+          <ProjectScopeProvider projectId={projectId}>
+            <NoteLine note={{ ...note, skillNames: ['om-review', 'om-engine'] }} />
+          </ProjectScopeProvider>
+        </QueryClientProvider>
+      )
+      const { rerender } = render(renderNote('acme'))
+      const { skills, skillsReady } = queryKeys
+      const catalog = [{ name: 'om-review', source: 'ai', path: '/acme/om-review.md', body: '', missingShared: true }]
+
+      fireEvent.click(screen.getByRole('button', { name: 'Install skills' }))
+      const pending = await screen.findByRole<HTMLButtonElement>('button', { name: 'Refreshing skills…' })
+      expect(pending.disabled).toBe(true)
+      await waitFor(() => expect(fetchMock).toHaveBeenCalledWith('/api/v1/p/acme/skills/refresh', expect.objectContaining({ method: 'POST' })))
+
+      rerender(renderNote('other'))
+      respond(Response.json(catalog))
+      expect((await screen.findByRole('status')).textContent)
+        .toBe('Skills catalog refreshed. The catalog is still missing om-review, om-engine.')
+      expect(client.getQueryData(skills)).toEqual(catalog)
+      expect(client.getQueryData(skillsReady)).toEqual(catalog)
+      expect(client.getQueryData(queryKeys.skills)).toBeUndefined()
+      expect(client.getQueryData(queryKeys.skillsReady)).toBeUndefined()
+    } finally {
+      vi.unstubAllGlobals()
+    }
   })
 
-  it('names the rejected agent account and links to Agent accounts (telemetry 9e4a95db)', () => {
+  it('reports a failed refresh and lets the user retry', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(Response.json({ error: 'Project unavailable' }, { status: 409 }))
+      .mockResolvedValueOnce(Response.json([]))
+    vi.stubGlobal('fetch', fetchMock)
+    try {
+      render(<QueryClientProvider client={createQueryClient()}><NoteLine note={note} /></QueryClientProvider>)
+
+      fireEvent.click(screen.getByRole('button', { name: 'Install skills' }))
+      expect((await screen.findByRole('alert')).textContent).toContain('Could not refresh skills. Project unavailable')
+      fireEvent.click(screen.getByRole('button', { name: 'Install skills' }))
+      expect((await screen.findByRole('status')).textContent).toBe('Skills catalog refreshed.')
+      expect(screen.queryByRole('alert')).toBeNull()
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
+})
+
+describe('ProviderAuthRequiredCard', () => {
+  const renderIncident = (incident: Partial<ThreadProviderAuthRequired> = {}) => {
     // The listing never answers, so the label below can only come from the seeded cache.
     vi.stubGlobal('fetch', vi.fn(() => new Promise(() => {})))
     const client = createQueryClient()
@@ -72,7 +107,7 @@ describe('ProviderAuthRequiredCard', () => {
       { id: 'work', provider: 'codex', label: 'Codex work' },
       { id: 'work', provider: 'claude', label: 'Work login' },
     ] })
-    render(
+    return render(
       <QueryClientProvider client={client}>
         <MemoryRouter initialEntries={['/p/acme/tasks/r1']}>
           <ProviderAuthRequiredCard incident={{
@@ -80,71 +115,100 @@ describe('ProviderAuthRequiredCard', () => {
             id: 'v1:2',
             provider: 'claude',
             authFailureId: 'incident-1',
-            profileId: 'work',
+            ...incident,
           }} />
         </MemoryRouter>
       </QueryClientProvider>,
     )
+  }
+  afterEach(() => vi.unstubAllGlobals())
 
-    expect(screen.getByRole('alert').textContent).toContain('This run needed Claude Code account “Work login” to be signed in')
-    expect(screen.queryByRole('link', { name: 'Open provider settings' })).toBeNull()
-    expect(screen.getByRole('link', { name: 'Open agent accounts' }).getAttribute('href')).toBe('/settings/global/accounts')
-    vi.unstubAllGlobals()
+  it.each([
+    ['claude', 'Claude Code'],
+    ['codex', 'Codex'],
+    ['opencode', 'OpenCode'],
+  ] as const)('draws the reconnect card for the default %s login', (provider, label) => {
+    renderIncident({ provider })
+    const card = screen.getByRole('group', { name: `${label} · Default is signed out` })
+    expect(card.textContent).toContain('Login expired')
+    expect(card.textContent).toContain('continues from the same session')
+    expect(screen.getByRole('button', { name: 'Reconnect Default' })).toBeTruthy()
+  })
+
+  it('names the rejected agent account and keeps Agent accounts one click away (telemetry 9e4a95db)', () => {
+    renderIncident({ profileId: 'work' })
+    expect(screen.getByRole('group', { name: 'Claude Code · Work login is signed out' })).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'More options' }))
+    expect(screen.getByRole('link', { name: 'Open Settings → Agent accounts' }).getAttribute('href')).toBe('/settings/global/accounts')
+  })
+
+  it('collapses an older occurrence and a reconnected one to quiet lines', () => {
+    const older = renderIncident({ profileId: 'work', state: 'older' })
+    expect(screen.queryByRole('group')).toBeNull()
+    expect(screen.getByText(/Claude Code · Work login was signed out here/)).toBeTruthy()
+    older.unmount()
+    renderIncident({ profileId: 'work', state: 'reconnected', reconnectedAt: '2026-11-18T10:51:00Z' })
+    expect(screen.getByText(/Reconnected Claude Code · Work login · resumed/)).toBeTruthy()
   })
 })
 
 describe('AgentUpdateRequiredCard', () => {
-  const renderCard = () =>
+  const entry = (provider: string, update: { command: string; runnable: boolean; sudo: boolean }, method: string | null) => ({
+    provider,
+    loginCommand: null,
+    install: { command: null, runnable: false, sudo: false },
+    update: { command: update.command, runnable: update.runnable, sudo: update.sudo },
+    docsUrl: 'https://example.com/docs',
+    installed: true,
+    version: '1.17.0',
+    method,
+    minVersion: '1.18.0',
+    latestVersion: null,
+    activeRuns: 0,
+  })
+  const serve = (agents: unknown[]) => {
+    const calls: Array<{ url: string; method: string; body?: string }> = []
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      calls.push({ url, method: init?.method ?? 'GET', body: init?.body ? String(init.body) : undefined })
+      const body = url.includes('/providers/setup/sessions')
+        ? { id: 's1', runId: 'agent-setup', provider: 'opencode', action: 'update', command: "'opencode' upgrade", exitCode: null, topic: 't', cols: 80, rows: 24 }
+        : url.includes('/providers/setup')
+          ? { available: true, reason: null, interactive: true, session: null, agents }
+          : { providers: [{ provider: 'opencode', status: 'connected', enabled: true }, { provider: 'codex', status: 'connected', enabled: true }] }
+      return new Response(JSON.stringify(body), { status: url.includes('/sessions') ? 201 : 200, headers: { 'content-type': 'application/json' } })
+    }))
+    return calls
+  }
+  const renderCard = (provider: 'opencode' | 'gemini') =>
     render(
       <QueryClientProvider client={createQueryClient()}>
-        <AgentUpdateRequiredCard incident={{ kind: 'agent-update-required', id: 'v2:3:update', provider: 'opencode' }} />
+        <AgentUpdateRequiredCard incident={{ kind: 'agent-update-required', id: 'v2:3:update', provider }} />
       </QueryClientProvider>,
     )
+  afterEach(() => vi.unstubAllGlobals())
 
-  it('asks the server to open the CLI update', async () => {
-    const fetchMock = vi.fn(async () =>
-      new Response(JSON.stringify({ opened: true, command: "'opencode' upgrade" }), {
-        status: 200,
-        headers: { 'content-type': 'application/json' },
-      }),
-    )
-    vi.stubGlobal('fetch', fetchMock)
-    try {
-      renderCard()
-      expect(screen.getByRole('alert').textContent).toContain('OpenCode needs an update')
-      await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Update OpenCode' })))
-      expect(String((fetchMock.mock.calls[0] as unknown[])[0])).toContain('/providers/opencode/update')
-    } finally {
-      vi.unstubAllGlobals()
-    }
+  it('opens the setup sheet and runs the update for how the CLI was installed', async () => {
+    const calls = serve([entry('opencode', { command: "'opencode' upgrade", runnable: true, sudo: false }, 'npm')])
+    renderCard('opencode')
+    expect(screen.getByRole('alert').textContent).toContain('OpenCode needs an update')
+    await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Update OpenCode' })))
+    expect(await screen.findByText("'opencode' upgrade")).toBeTruthy()
+    expect(screen.getByText('1.18.0 or newer')).toBeTruthy()
+    await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Update' })))
+    await waitFor(() => expect(calls.some((call) => call.method === 'POST' && call.url.includes('/providers/setup/sessions'))).toBe(true))
+    const posted = calls.find((call) => call.method === 'POST')!
+    expect(JSON.parse(posted.body!)).toEqual({ provider: 'opencode', action: 'update' })
   })
 
-  it('shows the command to run when no terminal could be opened', async () => {
-    vi.stubGlobal('fetch', vi.fn(async () =>
-      new Response(JSON.stringify({
-        error: 'No terminal emulator could be opened. Run this command manually.',
-        command: "'opencode' upgrade",
-      }), { status: 409, headers: { 'content-type': 'application/json' } }),
-    ))
-    try {
-      renderCard()
-      await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Update OpenCode' })))
-      const manual = await screen.findByText("'opencode' upgrade")
-      expect(manual.tagName).toBe('CODE')
-      expect(screen.getByText(/No terminal emulator could be opened/)).toBeTruthy()
-    } finally {
-      vi.unstubAllGlobals()
-    }
-  })
-
-  it('offers no button for a CLI that cannot update itself', () => {
-    render(
-      <QueryClientProvider client={createQueryClient()}>
-        <AgentUpdateRequiredCard incident={{ kind: 'agent-update-required', id: 'v2:3:update', provider: 'codex' }} />
-      </QueryClientProvider>,
-    )
-    expect(screen.queryByRole('button')).toBeNull()
-    expect(screen.getByRole('alert').textContent).toContain('the way you installed it')
+  it('shows an update cezar does not run as a command to copy, with no run button (Gemini CLI from npm)', async () => {
+    serve([entry('gemini', { command: 'npm install -g @google/gemini-cli@latest', runnable: false, sudo: false }, 'npm')])
+    renderCard('gemini')
+    await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Update Gemini CLI' })))
+    expect(await screen.findByText('npm install -g @google/gemini-cli@latest')).toBeTruthy()
+    expect(screen.getByText(/does not run this command itself/)).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Update' })).toBeNull()
+    expect(screen.getByRole('button', { name: 'Copy' })).toBeTruthy()
   })
 })
 
@@ -467,29 +531,71 @@ describe('ReasoningItem', () => {
   )
 })
 
-describe('ContextGroup + ToolStreak', () => {
-  it('the group row expands to the individual tool cards', () => {
+describe('ActivityGroup + NoteGroup', () => {
+  const worktree = '/Users/me/repo/.ai/cezar/worktrees/571c15ae-0000-4000-8000-000000000000'
+  const bash = (id: string, command: string, status: UiToolItem['status'] = 'completed'): UiToolItem => ({
+    kind: 'tool', id, name: 'Bash', toolKind: 'execute', title: `Ran ${command}`, status, input: { command },
+  })
+
+  it('the summary row hides the calls until expanded, then shows every card', () => {
     const read = goldenItem(subagentTask, 'toolu_sub_01', 'completed') // the golden Grep
-    const blocks = groupThreadItems([read, { ...read, id: 'toolu_sub_02' }])
-    const group = blocks[0]!
-    if (group.kind !== 'context-group') throw new Error('expected a context group')
-    render(<ContextGroup group={group} />)
-    const button = screen.getByRole('button', { name: 'Explored 2 searches' })
+    const group = groupThreadItems([read, { ...read, id: 'toolu_sub_02' }])[0]!
+    if (group.kind !== 'activity') throw new Error('expected an activity group')
+    render(
+      <ActivityGroup group={group}>
+        {group.tools.map((tool) => <ToolCard key={tool.id} item={tool} />)}
+      </ActivityGroup>,
+    )
+    const button = screen.getByRole('button', { name: 'Searched twice.' })
+    expect(button.getAttribute('aria-expanded')).toBe('false')
     expect(document.querySelectorAll('[data-slot="tool-card"]')).toHaveLength(0)
     fireEvent.click(button)
+    expect(button.getAttribute('aria-expanded')).toBe('true')
     expect(document.querySelectorAll('[data-slot="tool-card"]')).toHaveLength(2)
   })
 
-  it('the streak fold hides its children until toggled', () => {
-    render(
-      <ToolStreak count={4}>
-        <div data-testid="older-card" />
-      </ToolStreak>,
-    )
-    const button = screen.getByRole('button', { name: '4 earlier tool calls' })
-    expect(screen.queryByTestId('older-card')).toBeNull()
+  it('while a call runs, the collapsed row is that one call, shortened, and the group is busy', () => {
+    const group = groupThreadItems([
+      bash('a', 'ls'),
+      bash('b', `cd ${worktree} && npm test -- ${worktree}/packages/web`, 'running'),
+    ])[0]!
+    if (group.kind !== 'activity') throw new Error('expected an activity group')
+    render(<ActivityGroup group={group}>{null}</ActivityGroup>)
+    const current = document.querySelector('[data-slot="activity-current"]')!
+    expect(current.textContent).toBe('Rannpm test -- packages/web')
+    expect(document.querySelector('[data-slot="activity-group"]')?.getAttribute('aria-busy')).toBe('true')
+    expect(screen.getByRole('button', { name: /^Running: Ran npm test -- packages\/web\. Ran 2 commands\.$/ })).toBeTruthy()
+  })
+
+  it('a failed call is counted on the collapsed row', () => {
+    const group = groupThreadItems([bash('a', 'ls', 'failed'), bash('b', 'pwd')])[0]!
+    if (group.kind !== 'activity') throw new Error('expected an activity group')
+    render(<ActivityGroup group={group}>{null}</ActivityGroup>)
+    expect(screen.getByText('1 failed')).toBeTruthy()
+  })
+
+  it('the setup row keeps its warnings visible, and expands to every note', () => {
+    const notes = [
+      'run started — workflow "quick-task" (runner: codex)',
+      'local "main" diverged from "origin/main" — forking from "origin/main"',
+      'worktree ready — branch cez/571c15ae (base origin/main)',
+    ].map((text, index) => ({ kind: 'note' as const, id: `n${index}`, text, tone: 'dim' as const }))
+    const group = groupThreadItems(notes)[0]!
+    if (group.kind !== 'note-group') throw new Error('expected a note group')
+    render(<NoteGroup group={group} />)
+    const button = screen.getByRole('button', { name: /^Set up: worktree cez\/571c15ae from origin\/main · runner Codex, 3 notes$/ })
+    expect(document.querySelectorAll('[data-slot="note-line"]')).toHaveLength(1)
+    expect(document.querySelector('[data-slot="note-group-warnings"]')?.textContent).toContain('diverged')
     fireEvent.click(button)
-    expect(screen.getByTestId('older-card')).toBeTruthy()
+    expect(document.querySelector('[data-slot="note-group-warnings"]')).toBeNull()
+    expect(document.querySelectorAll('[data-slot="note-line"]')).toHaveLength(3)
+  })
+
+  it('a tool card shows the shortened command, with the full one on hover', () => {
+    const command = `cd ${worktree}; grep -rn foo ${worktree}/src`
+    render(<ToolCard item={bash('c', command)} />)
+    const code = screen.getByText('grep -rn foo src')
+    expect(code.getAttribute('title')).toBe(command)
   })
 })
 
@@ -638,12 +744,12 @@ describe('WorkingIndicator — live clock', () => {
     const elapsed = () => document.querySelector('[data-slot="working-elapsed"]')?.textContent
     const last = () => document.querySelector('[data-slot="working-last-activity"]')?.textContent
     expect(elapsed()).toBe('1m 30s')
-    expect(last()).toContain('(12s ago)')
+    expect(last()).toContain('last activity 12s ago')
     act(() => {
       vi.advanceTimersByTime(5000)
     })
     expect(elapsed()).toBe('1m 35s')
-    expect(last()).toContain('(17s ago)')
+    expect(last()).toContain('last activity 17s ago')
   })
 
   it('stays a bare spinner when there are no stamps', () => {

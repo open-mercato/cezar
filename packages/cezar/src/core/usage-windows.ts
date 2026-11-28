@@ -1,5 +1,5 @@
 import type { UsageWindow, UsageWindowsObservation } from '@open-mercato/cezar-contract';
-import { parseUsageLimit } from './usage-limit.ts';
+import { isMonthlyCreditsLimit, parseUsageLimit } from './usage-limit.ts';
 
 const record = (value: unknown): Record<string, unknown> =>
   value !== null && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
@@ -47,6 +47,9 @@ export function normalizeClaudeUsageWindows(message: unknown, observedAt = Date.
   return { provider: 'claude', source: 'claude-stream', observedAt, windows: [...windows.values()].slice(0, 128) };
 }
 
+/** The window a refused Claude turn records: the marker's reset, or the monthly credits one (#2517). */
+export const CLAUDE_TERMINAL_LIMIT_WINDOW_ID = 'terminal-limit';
+
 /** A refused Claude turn can carry an exact account reset without a rate_limit_event. */
 export function normalizeClaudeTerminalUsageLimit(message: unknown, observedAt = Date.now()): UsageWindowsObservation | null {
   const msg = record(message);
@@ -56,13 +59,13 @@ export function normalizeClaudeTerminalUsageLimit(message: unknown, observedAt =
   for (const text of texts) {
     if (typeof text !== 'string') continue;
     const hit = parseUsageLimit(text, observedAt);
-    // Only canonical markers prove an account-wide block. Multiple terminal
-    // errors still emit one observation, using the latest trusted future reset.
-    if (hit?.evidence === 'claude-marker') resetsAt = Math.max(resetsAt, hit.resetAt.getTime());
+    // Only canonical markers and the monthly credits wording prove an account-wide block. Multiple
+    // terminal errors still emit one observation, using the latest trusted future reset.
+    if (hit && (hit.evidence === 'claude-marker' || isMonthlyCreditsLimit(text))) resetsAt = Math.max(resetsAt, hit.resetAt.getTime());
   }
   if (resetsAt <= observedAt) return null;
   return { provider: 'claude', source: 'claude-stream', observedAt, windows: [{
-    id: 'terminal-limit', kind: 'other', applicability: 'all', models: [],
+    id: CLAUDE_TERMINAL_LIMIT_WINDOW_ID, kind: 'other', applicability: 'all', models: [],
     resetsAt, durationMinutes: null, usedPercent: 100,
     status: 'blocked', observedAt,
   }] };

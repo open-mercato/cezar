@@ -19,7 +19,7 @@ export function ArchiveToggle({
 }) {
   const Icon = archived ? ArchiveRestoreIcon : ArchiveIcon
   return (
-    <IconTooltip label={archived ? 'Move back to the active list' : 'Move to the archived list'}>
+    <IconTooltip label={archived ? 'Move back to the active list' : 'Move to the archived list and free its worktree (branch kept)'}>
       <button
         type="button"
         data-slot="archive-toggle"

@@ -11,8 +11,17 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
 
     func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?) -> Bool {
         KeychainReset.afterReinstall()
+        let updated = AppUpdate.changed(build: ShellServices.versionWords)
+        // Before the prewarm and any server view: a start after an update fetches the cockpit anew.
+        if updated {
+            ShellServices.startupLog.begin("app updated, cached cockpits dropped")
+            ShellServices.relay.clearBundles()
+        }
         // Before any server view exists, so no store is still in use (spec M2 item 9).
-        Task { @MainActor in await WebsiteData.removeOwed() }
+        Task { @MainActor in
+            await WebsiteData.removeOwed()
+            if updated { await WebsiteData.clearHttpCaches() }
+        }
         // Before returning, so a tap that cold-launched the app is delivered (APNs and Stage 1 alike).
         let receiver = PushReceiver(servers: { ShellServices.connector.list() }, enabled: { ShellServices.push.enabled($0) },
                                     repost: { ShellServices.notifier.post(cezarId: $0, count: $1) }) {
@@ -38,7 +47,10 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
 
     func applicationDidBecomeActive(_ application: UIApplication) {
         ShellServices.notifier.refresh()
-        DispatchQueue.global(qos: .utility).async { ShellServices.notifier.refreshBadge() }
+        DispatchQueue.global(qos: .utility).async {
+            ShellServices.notifier.refreshBadge()
+            ShellServices.badges.resumed()
+        }
     }
 
     func application(_ application: UIApplication,

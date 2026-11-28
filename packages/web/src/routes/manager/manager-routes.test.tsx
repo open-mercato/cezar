@@ -4,6 +4,7 @@ import { MemoryRouter, Route, Routes, useLocation, useNavigate } from 'react-rou
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest'
 
 import { applyManagerEvent, managerKeys, type ManagerEventName } from '@/api/managers'
+import { planUsageKeys } from '@/api/plan-usage'
 import { __clearRememberedStatusesForTests, queryKeys, workspaceQueryKeys } from '@/api/queries'
 import type { ManagerMessage, ManagerSummary } from '@open-mercato/cezar-api-client'
 import { runnerSchema } from '@open-mercato/cezar-api-client'
@@ -744,6 +745,8 @@ describe('/manager/:id', () => {
     expect(screen.queryByRole('button', { name: 'Model and effort' })).toBeNull()
     fireEvent.click(screen.getByRole('button', { name: 'Manager agent…' }))
     const dialog = await screen.findByRole('dialog', { name: 'Manager agent' })
+    // The chain's #1 row opens on its pickers (spec 2026-11-25-manager-agent-chain).
+    fireEvent.click(dialog.querySelector<HTMLElement>('[data-slot="manager-chain-row"]')!)
     for (const name of ['Model and effort', 'Agent for new tasks', 'Agent account']) {
       expect(dialog.contains(screen.getByRole('button', { name }))).toBe(true)
     }
@@ -1334,6 +1337,7 @@ describe('/manager/:id', () => {
     expect(screen.queryByRole('button', { name: 'Agent account' })).toBeNull()
     fireEvent.click(within(menu).getByRole('button', { name: 'Manager agent…' }))
     const dialog = await screen.findByRole('dialog', { name: 'Manager agent' })
+    fireEvent.click(dialog.querySelector<HTMLElement>('[data-slot="manager-chain-row"]')!)
     for (const name of ['Model and effort', 'Agent account', 'Agent for new tasks']) {
       expect(dialog.contains(screen.getByRole('button', { name }))).toBe(true)
     }
@@ -1782,5 +1786,425 @@ describe('/manager/:id', () => {
     const menu = await waitFor(() => document.querySelector<HTMLElement>('[data-slot="manager-settings-menu"]')!)
     fireEvent.click(within(menu).getByRole('button', { name: 'Check now' }))
     await waitFor(() => expect(posted('/global/check')).toHaveLength(1))
+  })
+
+  describe('new-task routing (spec 2026-11-25-manager-task-routing)', () => {
+    const patches = () => calls.filter((call) => call.method === 'PATCH').map((call) => call.body)
+    const openDialog = async () => {
+      fireEvent.click(await screen.findByRole('button', { name: 'Manager settings' }))
+      fireEvent.click(within(await waitFor(() => document.querySelector<HTMLElement>('[data-slot="manager-settings-menu"]')!)).getByRole('button', { name: 'Manager agent…' }))
+      return screen.findByRole('dialog', { name: 'Manager agent' })
+    }
+
+    it('Automatic shows no roles or routing settings', async () => {
+      seedChat()
+      renderAt('/manager/global')
+      const dialog = await openDialog()
+      expect(dialog.querySelector('[data-slot="manager-task-agent-row"]')).toBeNull()
+      expect(dialog.querySelector('[data-slot="manager-task-backup-when"]')).toBeNull()
+      expect(within(dialog).getByRole('button', { name: 'Agent for new tasks' })).toBeTruthy()
+    })
+
+    it('a role, the busy rule and the mid-task setting each save as one PATCH', async () => {
+      seedChat({ taskAgents: [{ runner: 'claude', agentProfile: 'default' }, { runner: 'codex', agentProfile: 'default' }] })
+      renderAt('/manager/global')
+      const dialog = await openDialog()
+      expect(dialog.querySelectorAll('[data-slot="manager-task-agent-row"]')).toHaveLength(2)
+      fireEvent.click(within(within(dialog).getByRole('radiogroup', { name: 'Role of codex · Default' })).getByRole('radio', { name: 'Backup' }))
+      await waitFor(() => expect(patches()).toContainEqual({
+        taskRunner: null,
+        taskAgents: [{ runner: 'claude', agentProfile: 'default', role: 'main' }, { runner: 'codex', agentProfile: 'default', role: 'backup' }],
+      }))
+      fireEvent.click(within(dialog).getByRole('radio', { name: /Out of limits or busy/ }))
+      await waitFor(() => expect(patches()).toContainEqual(expect.objectContaining({ taskBusyAt: 2 })))
+      fireEvent.click(within(dialog).getByRole('radio', { name: /Wait for the reset/ }))
+      await waitFor(() => expect(patches()).toContainEqual({ taskLimitSwitch: 'wait' }))
+      fireEvent.click(within(dialog).getByRole('button', { name: 'Remove claude · Default' }))
+      await waitFor(() => expect(patches()).toContainEqual({ taskRunner: null, taskAgents: [{ runner: 'codex', agentProfile: 'default' }] }))
+    })
+
+    it('a list without roles says it keeps the original order, and Move up reorders without dragging', async () => {
+      seedChat({ taskAgents: [{ runner: 'claude', agentProfile: 'default' }, { runner: 'codex', agentProfile: 'default' }] })
+      renderAt('/manager/global')
+      const dialog = await openDialog()
+      expect(within(dialog).getByText(/first account with capacity/)).toBeTruthy()
+      expect(within(dialog).queryByText(/share new tasks evenly/)).toBeNull()
+      expect(within(dialog).queryByRole('button', { name: 'Move claude · Default up' })).toBeNull()
+      fireEvent.click(within(dialog).getByRole('button', { name: 'Move codex · Default up' }))
+      await waitFor(() => expect(patches()).toContainEqual({
+        taskRunner: null,
+        taskAgents: [{ runner: 'codex', agentProfile: 'default' }, { runner: 'claude', agentProfile: 'default' }],
+      }))
+    })
+
+    it('lets each task-agent row pick a default model and saves it in taskAgents', async () => {
+      seedChat({ taskAgents: [{ runner: 'antigravity', agentProfile: 'default', role: 'main' }] })
+      renderAt('/manager/global')
+      const dialog = await openDialog()
+      const trigger = within(dialog).getByRole('button', { name: 'Model for antigravity · Default' })
+      expect(trigger.textContent).toContain('auto')
+    })
+  })
+
+  describe('agent chain (spec 2026-11-25-manager-agent-chain)', () => {
+    const ref = (slot: number, runner: string, label: string) => ({ slot, runner, profileId: label.toLowerCase(), label })
+    const patches = () => calls.filter((call) => call.method === 'PATCH').map((call) => call.body)
+
+    it('a manager without backups shows no (i), no reply labels, and one #1 row', async () => {
+      seedChat()
+      renderAt('/manager/global')
+      await screen.findByRole('heading', { name: 'Global Manager' })
+      expect(document.querySelector('[data-slot="manager-active-agent"]')).toBeNull()
+      expect(document.querySelector('[data-slot="manager-reply-agent"]')).toBeNull()
+      fireEvent.click(screen.getByRole('button', { name: 'Manager settings' }))
+      fireEvent.click(within(await waitFor(() => document.querySelector<HTMLElement>('[data-slot="manager-settings-menu"]')!)).getByRole('button', { name: 'Manager agent…' }))
+      const dialog = await screen.findByRole('dialog', { name: 'Manager agent' })
+      expect(dialog.querySelectorAll('[data-slot="manager-chain-row"]')).toHaveLength(1)
+      expect(dialog.querySelector('[data-slot="manager-chain-failback"]')).toBeNull()
+      expect(within(dialog).getByRole('button', { name: 'Add backup agent' })).toBeTruthy()
+    })
+
+    it('#1 that follows the default agent can still pin it, with the same single-field PATCH', async () => {
+      seedChat()
+      renderAt('/manager/global', (client) => {
+        client.setQueryData(workspaceQueryKeys.providerStatus, { providers: ['claude', 'codex'].map((provider) => ({ provider, status: 'connected', enabled: true })) })
+      })
+      fireEvent.click(await screen.findByRole('button', { name: 'Manager settings' }))
+      fireEvent.click(within(await waitFor(() => document.querySelector<HTMLElement>('[data-slot="manager-settings-menu"]')!)).getByRole('button', { name: 'Manager agent…' }))
+      const dialog = await screen.findByRole('dialog', { name: 'Manager agent' })
+      fireEvent.click(dialog.querySelector<HTMLElement>('[data-slot="manager-chain-row"]')!)
+      fireEvent.pointerDown(within(dialog).getByRole('button', { name: 'Manager agent' }))
+      fireEvent.click(await screen.findByRole('menuitemradio', { name: 'claude' }))
+      await waitFor(() => expect(patches()).toContainEqual({ runner: 'claude' }))
+    })
+
+    it('lists the chain, swaps a backup into #1 in one PATCH, and sets failback', async () => {
+      seedChat({ runner: 'claude', model: 'opus', backups: [{ runner: 'codex', model: 'gpt-5.5' }] })
+      renderAt('/manager/global')
+      fireEvent.click(await screen.findByRole('button', { name: 'Manager settings' }))
+      fireEvent.click(within(await waitFor(() => document.querySelector<HTMLElement>('[data-slot="manager-settings-menu"]')!)).getByRole('button', { name: 'Manager agent…' }))
+      const dialog = await screen.findByRole('dialog', { name: 'Manager agent' })
+      const rows = dialog.querySelectorAll<HTMLElement>('[data-slot="manager-chain-row"]')
+      expect(rows).toHaveLength(2)
+      expect(rows[0]!.textContent).toContain('claude')
+      expect(rows[1]!.textContent).toContain('codex')
+      expect(rows[0]!.textContent).toContain('answering')
+      fireEvent.click(rows[1]!)
+      fireEvent.click(within(dialog).getByRole('button', { name: 'Make primary' }))
+      await waitFor(() => expect(patches()).toContainEqual({
+        runner: 'codex', agentProfile: null, model: 'gpt-5.5', effort: null,
+        backups: [{ runner: 'claude', model: 'opus' }],
+      }))
+      fireEvent.pointerDown(within(dialog).getByRole('button', { name: 'When it’s available' }))
+      fireEvent.click(await screen.findByRole('menuitemradio', { name: 'Only when I switch' }))
+      await waitFor(() => expect(patches()).toContainEqual({ failback: 'manual' }))
+    })
+
+    it('a backup answering shows a quiet (i) whose popover explains it and switches back', async () => {
+      seedChat({
+        backups: [{ runner: 'codex' }],
+        runner: 'claude',
+        agentProfile: 'automations',
+        activeAgent: { agent: ref(1, 'codex', 'Work'), reason: 'usage-limit', since: '2026-11-25T16:12:00.000Z', primaryBackAt: '2026-11-25T18:40:00.000Z' },
+      })
+      server.messages = [
+        { id: 'n1', seq: 1, at: '2026-11-25T16:12:00.000Z', kind: 'notice', text: 'switched', agentSwitch: { from: ref(0, 'claude', 'Automations'), to: ref(1, 'codex', 'Work'), reason: 'usage-limit', until: '2026-11-25T18:40:00.000Z' } },
+        assistantMessage(2, { text: 'From the backup', agent: ref(1, 'codex', 'Work') }),
+        assistantMessage(3, { text: 'From #1', agent: ref(0, 'claude', 'Automations') }),
+      ]
+      renderAt('/manager/global', (client) => {
+        client.setQueryData(workspaceQueryKeys.agentProfiles, { profiles: [{ provider: 'claude', id: 'automations', label: 'Automations' }] })
+      })
+      const info = await screen.findByRole('button', { name: 'Answering with backup #2' })
+      expect(info.className).toContain('pointer-coarse:size-11')
+      await screen.findByText('From the backup')
+      expect(document.querySelectorAll('[data-slot="manager-reply-agent"]')).toHaveLength(1)
+      expect(document.querySelector('[data-slot="manager-reply-agent"]')?.textContent).toBe('#2 · codex Work')
+      expect(document.querySelector('[data-slot="manager-agent-switch"]')?.textContent).toContain('#1 · claude Automations is out of usage limits until')
+      fireEvent.click(info)
+      const popover = await waitFor(() => document.querySelector<HTMLElement>('[data-slot="manager-active-agent-popover"]')!)
+      expect(popover.textContent).toContain('#1 claude · Automations is out of usage limits until')
+      fireEvent.click(within(popover).getByRole('button', { name: 'Switch back now' }))
+      await waitFor(() => expect(patches()).toContainEqual({ switchToPrimary: true }))
+    })
+
+    it('replaces the non-Claude "no connectors" pill with an accessible info popover that opens on hover, focus, and tap', async () => {
+      // jsdom lacks PointerEvent, so fireEvent.pointerEnter drops pointerType; polyfill it for this test.
+      const OrigPointerEvent = globalThis.PointerEvent
+      class TestPointerEvent extends MouseEvent {
+        readonly pointerType: string
+        constructor(type: string, init: PointerEventInit = {}) {
+          super(type, init)
+          this.pointerType = init.pointerType ?? ''
+        }
+      }
+      globalThis.PointerEvent = TestPointerEvent as unknown as typeof PointerEvent
+      try {
+        seedChat({
+          runner: 'claude',
+          backups: [{ runner: 'codex' }],
+          connectors: { github: { level: 'read' } },
+        })
+        renderAt('/manager/global')
+        fireEvent.click(await screen.findByRole('button', { name: 'Manager settings' }))
+        fireEvent.click(within(await waitFor(() => document.querySelector<HTMLElement>('[data-slot="manager-settings-menu"]')!)).getByRole('button', { name: 'Manager agent…' }))
+        const dialog = await screen.findByRole('dialog', { name: 'Manager agent' })
+
+        expect(dialog.textContent).not.toContain('no connectors')
+        const items = dialog.querySelectorAll<HTMLElement>('[data-slot="manager-chain"] ol > li')
+        expect(items).toHaveLength(2)
+        expect(items[0]!.querySelector('[data-slot="manager-chain-no-connectors"]')).toBeNull()
+        expect(items[1]!.querySelector('[data-slot="manager-chain-status"]')).toBeNull()
+
+        const info = within(items[1]!).getByRole('button', { name: 'No connectors on this agent' })
+        // Hidden accessible description exposes the explanation to screen readers without reading twice.
+        const describedBy = info.getAttribute('aria-describedby')
+        expect(describedBy).toBeTruthy()
+        const description = document.getElementById(describedBy!)
+        expect(description?.hidden).toBe(true)
+        expect(description?.textContent).toBe('Connectors are Claude-only. While this agent answers, the Manager works without them.')
+        // Dragging belongs to the row button, not the info icon.
+        expect(info.closest('[draggable="true"]')).toBeNull()
+
+        const popover = () => document.querySelector<HTMLElement>('[data-slot="manager-chain-no-connectors-popover"]')
+
+        // Touch pointerenter does not hover-open the popover.
+        fireEvent(info, new TestPointerEvent('pointerover', { bubbles: true, pointerType: 'touch' }))
+        expect(popover()).toBeNull()
+
+        // Tap / Chrome Android sequence (pointerdown -> focus -> click) opens and keeps it open without opening the row editor.
+        fireEvent(info, new TestPointerEvent('pointerdown', { bubbles: true, pointerType: 'touch' }))
+        fireEvent.focus(info)
+        fireEvent.click(info)
+        await waitFor(() => expect(popover()?.textContent).toBe('Connectors are Claude-only. While this agent answers, the Manager works without them.'))
+        expect(dialog.querySelector('[data-slot="manager-chain-editor"]')).toBeNull()
+
+        // Touch pointerleave does not close an open popover.
+        fireEvent(info, new TestPointerEvent('pointerout', { bubbles: true, pointerType: 'touch' }))
+        await new Promise((resolve) => setTimeout(resolve, 130))
+        expect(popover()).not.toBeNull()
+
+        // Escape closes it.
+        fireEvent.keyDown(info, { key: 'Escape' })
+        await waitFor(() => expect(popover()).toBeNull())
+
+        // Hover then click stays open, and mouse pointerleave closes it even when the click focused the button.
+        fireEvent(info, new TestPointerEvent('pointerover', { bubbles: true, pointerType: 'mouse' }))
+        await waitFor(() => expect(popover()).not.toBeNull())
+        fireEvent(info, new TestPointerEvent('pointerdown', { bubbles: true, pointerType: 'mouse' }))
+        info.focus()
+        fireEvent.click(info)
+        expect(popover()).not.toBeNull()
+        fireEvent(info, new TestPointerEvent('pointerout', { bubbles: true, pointerType: 'mouse' }))
+        await waitFor(() => expect(popover()).toBeNull())
+        info.blur()
+
+        // Clicking text inside PopoverContent (tabIndex=-1) does not block hover-close when the pointer leaves.
+        fireEvent(info, new TestPointerEvent('pointerover', { bubbles: true, pointerType: 'mouse' }))
+        const content = await waitFor(() => popover()!)
+        fireEvent(content, new TestPointerEvent('pointerdown', { bubbles: true, pointerType: 'mouse' }))
+        content.focus()
+        fireEvent(content, new TestPointerEvent('pointerout', { bubbles: true, pointerType: 'mouse' }))
+        await waitFor(() => expect(popover()).toBeNull())
+
+        // Safari / Firefox on macOS: pointerdown + click without focus must not poison a subsequent keyboard focus.
+        fireEvent(info, new TestPointerEvent('pointerdown', { bubbles: true, pointerType: 'mouse' }))
+        fireEvent.click(info)
+        await waitFor(() => expect(popover()).not.toBeNull())
+        fireEvent.keyDown(info, { key: 'Escape' })
+        await waitFor(() => expect(popover()).toBeNull())
+
+        // Keyboard focus opens it, pointerleave while focused does not close it, activating the button keeps it open (browsers synthesize click on Enter/Space), and blur closes it.
+        info.focus()
+        fireEvent.focus(info)
+        await waitFor(() => expect(popover()).not.toBeNull())
+        fireEvent(info, new TestPointerEvent('pointerover', { bubbles: true, pointerType: 'mouse' }))
+        fireEvent(info, new TestPointerEvent('pointerout', { bubbles: true, pointerType: 'mouse' }))
+        await new Promise((resolve) => setTimeout(resolve, 130))
+        expect(popover()).not.toBeNull()
+        fireEvent.click(info)
+        expect(popover()).not.toBeNull()
+        info.blur()
+        fireEvent.blur(info)
+        await waitFor(() => expect(popover()).toBeNull())
+
+        // Clicking the row button itself opens the editor (proves the earlier editor-absent check is meaningful).
+        fireEvent.click(items[1]!.querySelector<HTMLElement>('[data-slot="manager-chain-row"]')!)
+        expect(dialog.querySelector('[data-slot="manager-chain-editor"]')).not.toBeNull()
+      } finally {
+        globalThis.PointerEvent = OrigPointerEvent
+      }
+    })
+
+    it('reorders chain rows by dragging the row button', async () => {
+      seedChat({ runner: 'claude', model: 'opus', backups: [{ runner: 'codex', model: 'gpt-5.5' }] })
+      renderAt('/manager/global')
+      fireEvent.click(await screen.findByRole('button', { name: 'Manager settings' }))
+      fireEvent.click(within(await waitFor(() => document.querySelector<HTMLElement>('[data-slot="manager-settings-menu"]')!)).getByRole('button', { name: 'Manager agent…' }))
+      const dialog = await screen.findByRole('dialog', { name: 'Manager agent' })
+      const items = dialog.querySelectorAll<HTMLElement>('[data-slot="manager-chain"] ol > li')
+      const rows = dialog.querySelectorAll<HTMLElement>('[data-slot="manager-chain-row"]')
+      expect(rows).toHaveLength(2)
+      expect(rows[0]!.getAttribute('draggable')).toBe('true')
+      expect(rows[1]!.getAttribute('draggable')).toBe('true')
+
+      fireEvent.dragStart(rows[1]!)
+      fireEvent.dragOver(items[0]!)
+      fireEvent.drop(items[0]!)
+      await waitFor(() => expect(patches()).toContainEqual({
+        runner: 'codex', agentProfile: null, model: 'gpt-5.5', effort: null,
+        backups: [{ runner: 'claude', model: 'opus' }],
+      }))
+    })
+
+    it('shows the no-connectors info icon on an answering non-Claude row and hides it when no grants are enabled', async () => {
+      seedChat({
+        runner: 'claude',
+        backups: [{ runner: 'codex' }],
+        connectors: { github: { level: 'read' } },
+        activeAgent: { agent: ref(1, 'codex', 'Work'), reason: 'usage-limit', since: '2026-11-25T16:12:00.000Z' },
+      })
+      const first = renderAt('/manager/global')
+      fireEvent.click(await screen.findByRole('button', { name: 'Manager settings' }))
+      fireEvent.click(within(await waitFor(() => document.querySelector<HTMLElement>('[data-slot="manager-settings-menu"]')!)).getByRole('button', { name: 'Manager agent…' }))
+      const dialog = await screen.findByRole('dialog', { name: 'Manager agent' })
+      const items = dialog.querySelectorAll<HTMLElement>('[data-slot="manager-chain"] ol > li')
+      expect(items[1]!.textContent).toContain('answering')
+      expect(within(items[1]!).getByRole('button', { name: 'No connectors on this agent' })).toBeTruthy()
+      first.unmount()
+
+      seedChat({
+        runner: 'claude',
+        backups: [{ runner: 'codex' }],
+        connectors: { github: { level: 'off' } },
+      })
+      renderAt('/manager/global')
+      fireEvent.click(await screen.findByRole('button', { name: 'Manager settings' }))
+      fireEvent.click(within(await waitFor(() => document.querySelector<HTMLElement>('[data-slot="manager-settings-menu"]')!)).getByRole('button', { name: 'Manager agent…' }))
+      const secondDialog = await screen.findByRole('dialog', { name: 'Manager agent' })
+      expect(secondDialog.querySelector('[data-slot="manager-chain-no-connectors"]')).toBeNull()
+    })
+  })
+})
+
+describe('an inactive manager\'s chat (spec 2026-11-19-manager-deactivate)', () => {
+  beforeEach(() => {
+    server.managers = [managerFixture({ inactive: { since: '2026-11-18T23:40:00Z' } })]
+  })
+
+  it('shows the banner, a grey avatar, and keeps Check now off', async () => {
+    renderAt('/manager/global')
+    await screen.findByRole('heading', { name: 'Global Manager' })
+    const banner = document.querySelector('[data-slot="manager-inactive-banner"]')!
+    expect(banner.getAttribute('role')).toBe('status')
+    expect(within(banner as HTMLElement).getByRole('button', { name: 'Reactivate…' })).toBeTruthy()
+    expect(document.querySelector('header [data-slot="manager-avatar-inactive"]')).not.toBeNull()
+    expect((document.querySelector('[data-slot="manager-check-now"]') as HTMLButtonElement).disabled).toBe(true)
+    expect(composer().placeholder).toContain('is inactive — write anyway; sending reactivates it')
+  })
+
+  it('asks before a send: a cancel keeps the draft, a confirm sends with reactivate: true', async () => {
+    renderAt('/manager/global')
+    await screen.findByRole('heading', { name: 'Global Manager' })
+    send('wake up')
+    let dialog = await screen.findByRole('alertdialog', { name: /Reactivate Global Manager and send\?/ })
+    expect(within(dialog).queryByRole('checkbox')).toBeNull()
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }))
+    await waitFor(() => expect(composer().value).toBe('wake up'))
+    expect(posted('/global/messages')).toHaveLength(0)
+    send('wake up')
+    dialog = await screen.findByRole('alertdialog')
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Reactivate and send' }))
+    await waitFor(() => expect(posted('/global/messages')[0]?.body).toEqual({ text: 'wake up', reactivate: true, idempotencyKey: SEND_KEY }))
+  })
+
+  it('a cancelled reactivate from a question card puts focus back on the option and says “Not sent”', async () => {
+    server.messages = [assistantMessage(99, { ask: { questions: [{ header: 'Ready', question: 'Publish?', options: [{ label: 'Yes' }, { label: 'No' }] }] } })]
+    renderAt('/manager/global')
+    const no = await screen.findByRole('button', { name: 'No' })
+    no.focus()
+    fireEvent.click(no)
+    const dialog = await screen.findByRole('alertdialog', { name: /Reactivate Global Manager and answer\?/ })
+    fireEvent.keyDown(dialog, { key: 'Escape' })
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull())
+    await waitFor(() => expect(document.activeElement?.textContent).toBe('No'))
+    expect(screen.getByText(/Not sent: Global Manager is still inactive/)).toBeTruthy()
+    expect(posted('/global/messages')).toHaveLength(0)
+  })
+
+  it('/check asks first, then reactivates with Catch me up instead of a check the server would refuse', async () => {
+    renderAt('/manager/global')
+    await screen.findByRole('heading', { name: 'Global Manager' })
+    send('/check')
+    const dialog = await screen.findByRole('alertdialog', { name: /Reactivate Global Manager and check\?/ })
+    expect(dialog.textContent).toContain('A single check runs now: one model call.')
+    expect(dialog.textContent).not.toContain('Your message starts its next turn')
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Reactivate and check' }))
+    await waitFor(() => expect(calls.find((call) => call.method === 'PATCH')?.body).toEqual({ active: true, catchUp: true }))
+    expect(posted('/global/check')).toHaveLength(0)
+    expect(posted('/global/messages')).toHaveLength(0)
+  })
+
+  it('draws the deactivate line as a divider and the reactivate line with its While inactive counts', async () => {
+    server.managers = [managerFixture()]
+    server.messages = [
+      { id: 'n1', seq: 1, at: '2026-11-18T23:40:00Z', kind: 'notice', text: 'Deactivated by you', activity: { change: 'deactivated' } },
+      { id: 'n2', seq: 2, at: '2026-11-19T08:00:00Z', kind: 'notice', text: 'Reactivated by you', activity: { change: 'reactivated', since: '2026-11-18T23:40:00Z', taskUpdates: 2, automationReports: 1, checksSkipped: 5, jobRunsSkipped: 1 } },
+    ]
+    renderAt('/manager/global')
+    const lines = await waitFor(() => {
+      const found = [...document.querySelectorAll('[data-slot="manager-activity-notice"]')]
+      expect(found).toHaveLength(2)
+      return found
+    })
+    expect(lines[0]!.textContent).toContain('Deactivated by you')
+    expect(lines[0]!.querySelector('[data-slot="manager-activity-summary"]')).toBeNull()
+    const summary = lines[1]!.querySelector('[data-slot="manager-activity-summary"]')!.textContent
+    expect(summary).toContain('While inactive')
+    expect(summary).toContain('2 task updates')
+    expect(summary).toContain('1 automation report')
+    expect(summary).toContain('5 checks skipped')
+    expect(summary).toContain('1 job run skipped')
+    expect(summary).toContain('posted by cezar · no model call')
+  })
+
+  it('says the catch-up check is a model call instead of claiming none', async () => {
+    server.managers = [managerFixture()]
+    server.messages = [
+      { id: 'n2', seq: 1, at: '2026-11-19T08:00:00Z', kind: 'notice', text: 'Reactivated by you', activity: { change: 'reactivated', since: '2026-11-18T23:40:00Z', taskUpdates: 0, automationReports: 0, checksSkipped: 5, jobRunsSkipped: 0, catchUp: true } },
+    ]
+    renderAt('/manager/global')
+    const summary = await waitFor(() => document.querySelector('[data-slot="manager-activity-summary"]')!.textContent)
+    expect(summary).toContain('catching up now')
+    expect(summary).toContain('the catch-up check is one model call')
+    expect(summary).not.toContain('no model call')
+  })
+})
+
+describe('plan usage in the chat (spec 2026-11-20-manager-plan-usage-popover, footnote restored 2026-11-22)', () => {
+  it('puts a reply’s footnote on that reply only, joined by its message id, beside the header chip', async () => {
+    server.managers = [managerFixture({ id: 'global', runner: 'claude' })]
+    server.messages = [userMessage(0, 'status?'), assistantMessage(1, { text: 'First answer.' }), assistantMessage(2, { text: 'Second answer.' })]
+    const now = new Date()
+    const entry = {
+      windowId: 'w-now',
+      account: { key: 'claude:default', provider: 'claude' as const, accountId: 'default', label: 'Claude · default' },
+      kind: 'five-hour' as const,
+      startsAt: new Date(now.getTime() - 60 * 60_000).toISOString(),
+      resetsAt: new Date(now.getTime() + 4 * 60 * 60_000).toISOString(),
+      current: true,
+      consumer: {
+        id: 'mgr:global', kind: 'manager' as const, title: 'Global Manager', estimatePp: 0.7, aloneInferredPp: 0.7, sharedEstimatePp: 0,
+        retryWasteEstimatePp: 0, ranTogetherWith: { tasks: 0, managers: 0, internal: 0 }, evidence: 'account-level' as const,
+        messages: [{ messageId: 'm2', part: 'chat' as const, at: now.toISOString(), estimatePp: 0.7, aloneInferredPp: 0.7, sharedEstimatePp: 0 }],
+      },
+    }
+    renderAt('/manager/global', (client) => client.setQueryData(planUsageKeys.consumers, { entries: [entry] }))
+    const second = (await screen.findByText('Second answer.')).closest('[data-slot="manager-assistant"]')!
+    const first = screen.getByText('First answer.').closest('[data-slot="manager-assistant"]')!
+    expect(within(second as HTMLElement).getByRole('button', { name: /^This reply ≈ 0.7% of 5h/ })).toBeTruthy()
+    expect(first.querySelector('[data-slot="manager-reply-usage"]')).toBeNull()
+    expect(document.querySelectorAll('[data-slot="manager-reply-usage"]')).toHaveLength(1)
+    expect(document.querySelector('[data-slot="manager-usage-chip"]')).toBeTruthy()
   })
 })

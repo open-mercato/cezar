@@ -8,11 +8,14 @@ import {
   PencilIcon,
   SquareTerminalIcon,
 } from 'lucide-react'
+import { hasWorkflowGraph } from '@/lib/has-workflow-graph'
 import { ManagerBackLink } from '../manager/manager-back-link'
 import { cloneElement, Fragment, isValidElement, memo, useEffect, useId, useMemo, useReducer, useRef, useState, type ReactNode, type RefObject } from 'react'
+import { RunTagChips, RunTagsEditor } from '@/components/run-tags'
 import { Link, useNavigate } from '@/lib/project-router'
 
 import {
+  useConfig,
   useHealth,
   usePatchRun,
   useProjectRepoBase,
@@ -148,6 +151,7 @@ function RunHeaderView({
   const actions = useRunActions(run, { onMarkedUnread })
   // The ⋯ menu's Rename… opens the title's own editor.
   const beginRename = useRef<() => void>(() => {})
+  const [tagsOpen, setTagsOpen] = useState(false)
 
   // The queue position a parked run shows in its chip ("Queued #2"). Reads the shared runs-list
   // query — already warm from the sidebar quick-list — because position is a property of the
@@ -201,9 +205,14 @@ function RunHeaderView({
               {quietWord ? <QuietStatusWord word={quietWord} title={idleClosedDetail(run)} className="max-md:hidden" /> : null}
               {/* In the title row so a folded header still shows it (main had it here). */}
               <ImpactChip run={run} />
+              {/* A folded desktop header hides the meta line that holds the tag editor: keep the tags in sight. */}
+              {collapsed ? <RunTagChips tags={run.tags} max={3} className="max-md:hidden shrink-0" /> : null}
             </span>
             <span className="ml-auto flex shrink-0 items-center gap-2">
-              <HeaderActions run={run} actions={actions} changesShowing={tab === 'changes'} onRename={() => beginRename.current()} />
+              <HeaderActions run={run} actions={actions} changesShowing={tab === 'changes'} onRename={() => beginRename.current()} onTags={() => {
+                if (collapsed) setCollapsed(false)
+                setTagsOpen(true)
+              }} />
               {/* Desktop: fold the meta row and the step rail away, leaving the title and the
                   tabs — the minimalist view short of full screen. Phones keep every line. */}
               <IconTooltip label={collapsed ? 'Expand header' : 'Collapse header'}>
@@ -252,6 +261,7 @@ function RunHeaderView({
               // here tolerates an absent object. Absent stays fail-closed — the chip degrades to
               // text rather than linking into a disabled view.
               automationsAvailable={health.data?.capabilities?.automations === true}
+              tags={<RunTagsEditor run={run} open={tagsOpen} onOpenChange={setTagsOpen} />}
             />
           </div>
           {/* Status, not metadata: "this run wakes itself up at 14:20" belongs with the chip. */}
@@ -305,6 +315,7 @@ export function statusChipLabel(run: ApiRun, queuePosition?: number): string | n
     case 'review':
       return 'Needs review'
     case 'waiting':
+      if (run.parked?.kind === 'auth') return 'Needs sign-in'
       return budgetStop(run) ? 'Budget reached' : 'Asked'
     case 'queued':
       return run.fallbackEpisode?.pending ? 'Switching agent' : `Queued${queuePosition !== undefined ? ` #${queuePosition}` : ''}`
@@ -372,16 +383,20 @@ function HeaderActions({
   actions,
   changesShowing,
   onRename,
+  onTags,
 }: {
   run: ApiRun
   actions: RunActions
   changesShowing: boolean
   onRename: () => void
+  /** Opens the header's tag picker (spec 2026-11-23-task-tags § 7.3). */
+  onTags: () => void
 }) {
   const git = useRunGitStep(run)
   const canTerminal = useCanOpenTerminal(run)
   const { choices, canResumeHere, open: openIn } = useRunOpenChoices(run, canTerminal)
   const terminalAvailable = useHealth().data?.capabilities?.terminal === true
+  const archivedDeleteDays = useConfig().data?.archivedTaskDeleteDays
   const navigate = useNavigate()
   const { bindings } = useKeybindings()
   const owned = ownedTaskPr(run)
@@ -402,6 +417,7 @@ function HeaderActions({
       terminalAvailable,
       openChoices: choices,
       ...(prUrl ? { prUrl } : {}),
+      ...(archivedDeleteDays !== undefined ? { archivedDeleteDays } : {}),
       taskUrl: '',
     },
     {
@@ -412,6 +428,11 @@ function HeaderActions({
       rename: () => {
         intoRename.current = true
         setTimeout(onRename, 0)
+      },
+      tags: () => {
+        // Like rename: keep the menu's close from pulling focus back off the picker.
+        intoRename.current = true
+        setTimeout(onTags, 0)
       },
       finish: () => actions.finish.mutate(),
       confirmStop: () => actions.setConfirming('cancel'),
@@ -649,7 +670,7 @@ function OpenInMenuForRun({
  *  (`stripGroups`), as links to each view's page. */
 function FallbackTabs({ run, tab, terminalAvailable }: { run: ApiRun; tab: RunTab; terminalAvailable: boolean }) {
   const views = FIXED_VIEW_ORDER.filter(
-    (view) => (view !== 'graph' || Boolean(run.workflowDef)) && (view !== 'terminal' || terminalAvailable),
+    (view) => (view !== 'graph' || hasWorkflowGraph(run)) && (view !== 'terminal' || terminalAvailable),
   )
   const activeView: ViewId | 'notes' = tab === 'preview' ? 'browser' : tab
   const groups = stripGroups(stripTabs(views))
@@ -803,6 +824,7 @@ function MetaRow({
   planTally,
   budget,
   automationsAvailable,
+  tags,
 }: {
   run: ApiRun
   /** The header's resolved references (`useRunReferences`) — its PR chips are painted here. */
@@ -818,6 +840,8 @@ function MetaRow({
    *  `run.automation` provenance forever, so the chip must survive the flag going off — as
    *  plain text, because the route it used to link to is disabled. */
   automationsAvailable: boolean
+  /** The tag editor, last on the line: it wraps with the line instead of being clipped by the title. */
+  tags: ReactNode
 }) {
   // #526: the issue chip may be synthesized from the CEZ:ISSUE marker, and the only repository
   // such a link may name is the one on screen — never the transcript's.
@@ -916,6 +940,8 @@ function MetaRow({
       ),
     )
   }
+
+  parts.push(tags)
 
   return (
     <div

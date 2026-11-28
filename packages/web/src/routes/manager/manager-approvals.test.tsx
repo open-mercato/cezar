@@ -354,7 +354,7 @@ it('also reconciles a summary received during the follow-up manager-list read', 
   expect(await screen.findByText('Job 2')).toBeTruthy()
 })
 
-const sectionNames = () => [...document.querySelectorAll('[data-route="manager-approvals"] > section')].map((section) => section.getAttribute('aria-label'))
+const sectionNames = () => [...document.querySelectorAll('[data-slot="approval-group"]')].map((section) => section.getAttribute('aria-label'))
 const actionIds = () => [...document.querySelectorAll('[data-slot="manager-action"]')].map((card) => card.getAttribute('data-action-id'))
 
 it('keeps a decided card in its slot even when its manager’s activity re-sorts the list', async () => {
@@ -411,6 +411,29 @@ it('lingers a finished card, with its failure reason, for 30 seconds and then sh
   expect(screen.queryByRole('button', { name: 'Clear results' })).toBeNull()
 })
 
+it('holds a finished card while the pointer is over the list or the reader just scrolled, then collapses it', async () => {
+  vi.useFakeTimers({ shouldAdvanceTime: true })
+  managers = [managerFixture({ id: 'shop', name: 'Shop', pendingActions: 1, confirm: { 'merge-pr': false } })]
+  messages = { shop: [actionMessage(2)] }
+  onDecision = () => { messages.shop = [actionMessage(2, { status: 'failed', result: 'Required checks are failing.' })] }
+  renderApprovals()
+  fireEvent.click(await screen.findByRole('button', { name: 'Approve' }))
+  expect(await screen.findByText('Required checks are failing.')).toBeTruthy()
+  const list = document.querySelector<HTMLElement>('[data-slot="approvals-list"]')!
+  fireEvent.pointerEnter(list)
+  await act(async () => { await vi.advanceTimersByTimeAsync(40_000) })
+  expect(screen.getByText('Required checks are failing.')).toBeTruthy()
+  fireEvent.pointerLeave(list)
+  fireEvent.scroll(window)
+  await act(async () => { await vi.advanceTimersByTimeAsync(2_500) })
+  expect(screen.getByText('Required checks are failing.')).toBeTruthy()
+  await act(async () => { await vi.advanceTimersByTimeAsync(600) })
+  expect(document.querySelector('[data-slot="approval-slot"][data-leaving]')).not.toBeNull()
+  await act(async () => { await vi.advanceTimersByTimeAsync(400) })
+  expect(document.querySelector('[data-slot="manager-action"]')).toBeNull()
+  expect(screen.getByRole('heading', { name: 'No pending approvals' })).toBeTruthy()
+})
+
 it('does not bring finished cards back when the reader leaves and returns', async () => {
   managers = [managerFixture({ id: 'shop', name: 'Shop', pendingActions: 2 })]
   messages = { shop: [job(2), job(3)] }
@@ -424,4 +447,16 @@ it('does not bring finished cards back when the reader leaves and returns', asyn
   await screen.findByText('Job 3')
   expect(screen.queryByText('Job 2')).toBeNull()
   expect(screen.queryByText('Dismissed', { selector: '[data-slot="manager-action-outcome"] span' })).toBeNull()
+})
+
+it('keeps an inactive manager\'s approvals answerable and counted, flagged and greyed (spec 2026-11-19-manager-deactivate)', async () => {
+  managers = managers.map((manager) => (manager.id === 'shop' ? { ...manager, inactive: { since: '2026-11-18T23:40:00Z' } } : manager))
+  renderApprovals()
+  const shop = await screen.findByRole('region', { name: 'Shop' })
+  expect(within(shop).getByText('Manager · inactive')).toBeTruthy()
+  expect(within(shop).getByText('Manager inactive — it hears your decision when reactivated')).toBeTruthy()
+  expect(shop.querySelector('[data-slot="manager-avatar-inactive"]')).not.toBeNull()
+  expect(within(screen.getByRole('region', { name: 'Global Manager' })).queryByText(/Manager inactive/)).toBeNull()
+  expect(screen.getByRole('link', { name: 'Approvals, 3 pending approvals' })).toBeTruthy()
+  await within(shop).findByText('Job 2')
 })

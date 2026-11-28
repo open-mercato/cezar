@@ -23,6 +23,9 @@ public class ConnectionPlugin: CAPPlugin, CAPBridgedPlugin {
         CAPPluginMethod(name: "accountResend", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "deviceTerms", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "startupLogCopy", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "probe", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "rename", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "notificationSettings", returnType: CAPPluginReturnPromise),
     ]
 
     /// A QR string from a debug-only route. Release builds have no way to set it.
@@ -168,7 +171,7 @@ public class ConnectionPlugin: CAPPlugin, CAPBridgedPlugin {
         }
     }
 
-    /// The Devices screen's "Copy startup log": steps, timings and relay reason codes, to the clipboard.
+    /// Your cezars' "Copy startup log": steps, timings and relay reason codes, to the clipboard.
     @objc func startupLogCopy(_ call: CAPPluginCall) {
         let text = ShellServices.startupLog.text()
         DispatchQueue.main.async {
@@ -179,7 +182,53 @@ public class ConnectionPlugin: CAPPlugin, CAPBridgedPlugin {
 
     /// Reads and opens nothing, unlike launch: the page calls it each time it returns to the foreground.
     @objc func list(_ call: CAPPluginCall) {
-        run(call) { [self] in listed([:]) }
+        run(call) { [self] in
+            await Self.permissionRead()
+            return listed([:])
+        }
+    }
+
+    /// Each saved cezar's status, once, bounded (spec 2026-11-19-mobile-devices-screen). `current` counts online.
+    @objc func probe(_ call: CAPPluginCall) {
+        let current = call.getString("current").flatMap { $0.isEmpty ? nil : $0 }
+        run(call) { [self] in
+            let servers = connector.list()
+            await withCheckedContinuation { done in ShellServices.cezars.probe(servers, currentId: current) { done.resume() } }
+            await Self.permissionRead()
+            return listed([:])
+        }
+    }
+
+    @objc func rename(_ call: CAPPluginCall) {
+        let id = call.getString("id") ?? ""
+        let label = call.getString("label")
+        run(call) { [self] in
+            switch CezarList.rename(label, known: connector.server(id) != nil) {
+            case .refused(let sentence):
+                return listed(["renameError": sentence])
+            case .saved(let name):
+                connector.rename(id, label: name)
+                // Pushes and the switcher name it from the book.
+                let servers = connector.list()
+                ShellServices.devices.update { $0.sync(servers) }
+                return listed([:])
+            }
+        }
+    }
+
+    /// The App section's Notifications row: iOS's settings page for this app.
+    @objc func notificationSettings(_ call: CAPPluginCall) {
+        run(call) {
+            await MainActor.run {
+                if let url = URL(string: UIApplication.openNotificationSettingsURLString) { UIApplication.shared.open(url) }
+            }
+            return [:]
+        }
+    }
+
+    /// The user may have changed it in Settings since the last read.
+    private static func permissionRead() async {
+        await withCheckedContinuation { done in ShellServices.notifier.refresh { done.resume() } }
     }
 
     /// A relay server's Notifications switch. On asks iOS for permission first (spec R5).
@@ -307,9 +356,14 @@ public class ConnectionPlugin: CAPPlugin, CAPBridgedPlugin {
 
     private func listed(_ fields: [String: Any]) -> [String: Any] {
         var result = fields
-        result["servers"] = connector.list().map { server -> [String: Any] in
-            var row: [String: Any] = ["id": server.id, "label": server.label, "url": server.relay?.origin ?? server.url ?? "",
-                                      "relay": server.relay != nil, "username": server.username ?? ""]
+        let servers = connector.list()
+        let byId = Dictionary(servers.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        // In the switcher's order, with its avatar, status and count.
+        result["servers"] = ShellServices.cezars.rows(servers, now: relayNowMs()).compactMap { cezar -> [String: Any]? in
+            guard let server = byId[cezar.id] else { return nil }
+            var row = CezarList.fields(cezar)
+            row.merge(["id": server.id, "label": server.label, "url": server.relay?.origin ?? server.url ?? "",
+                       "relay": server.relay != nil, "username": server.username ?? ""]) { _, saved in saved }
             // Stage 1 needs only the session, so every relay server has the switch, APNs or not.
             if server.relay != nil { row["push"] = push.enabled(server.id) }
             return row
@@ -318,6 +372,8 @@ public class ConnectionPlugin: CAPPlugin, CAPBridgedPlugin {
         result["pairing"] = true
         result["relayDefault"] = RelayOrigin.defaultOrigin
         result["lock"] = ["enabled": AppLock.shared.enabled, "available": AppLock.shared.available()]
+        result["notifications"] = ShellServices.notifier.permission()
+        result["version"] = ShellServices.versionWords
         return result
     }
 }

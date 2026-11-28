@@ -20,6 +20,8 @@ import {
   createProject,
   getGithubOwners,
   connectProvider,
+  cancelLoginSession,
+  startLoginSession,
   continueRun,
   continueProjectRun,
   createAgentProfile,
@@ -73,6 +75,7 @@ import {
   getImportableSkillsWhenReady,
   getSkills,
   getSkillsWhenReady,
+  refreshSkills,
   getTodos,
   getTrackerAssociation, getTrackerConnection, getProjectSecrets, getWorkspaceSecrets, getE2eStatus,
   getTrackerCandidates,
@@ -120,7 +123,7 @@ import {
   getRepoSync,
   runRepoSyncAction,
 } from './client'
-import { queryScope, REFERENCE_STATUS_MAX, runnerDiscoversModels } from '@open-mercato/cezar-api-client'
+import { queryScope, REFERENCE_STATUS_MAX, runnerDiscoversModels, type ModelDiscoveryRunner } from '@open-mercato/cezar-api-client'
 import { useProjectScope } from './project-scope-context'
 import { isReferenceStatus } from '@/lib/reference-status'
 import { githubRepoBase } from '@/lib/tasks-table'
@@ -149,6 +152,8 @@ import type {
   AgentSetupState,
   AgentProfilesResponse,
   ProviderConnectInput,
+  LoginSession,
+  LoginSessionStartInput,
   ProviderStatusResponse,
   ReferenceStatus,
   RunRecord,
@@ -498,6 +503,11 @@ export const workspaceQueryKeys = {
   /** One account's auth state — a child of `agentProfiles`, so removing an account drops it too. */
   agentAccountStatus: (routeId: string) =>
     ['workspace', 'agent-profiles', 'status', routeId] as const,
+  /** The newest inline login session per account (spec 2026-11-18-inline-account-reconnect), fed
+   *  by the start route and the `agent-login` SSE event. Never carries a pasted code or key. */
+  agentLogin: (provider: string, profileId: string) => ['workspace', 'agent-login', provider, profileId] as const,
+  /** The last `account-reconnected` news per account: what the card and quiet lines say after. */
+  accountReconnected: (provider: string, profileId: string) => ['workspace', 'account-reconnected', provider, profileId] as const,
   skillsUpdateAll: ['workspace', 'skills-update'] as const,
   skillsUpdate: (projectId: string) => ['workspace', 'skills-update', projectId] as const,
   /** cezar's own updater via `GET /api/v1/workspace/self-update` (self-update PoC). */
@@ -541,6 +551,31 @@ export function useRunnerModels(runner: Runner, enabled = true) {
     staleTime: 5 * 60 * 1_000,
     enabled: enabled && runnerDiscoversModels(runner),
   })
+}
+
+/**
+ * Force an on-demand refresh of a runner's discovered host models, bypassing the in-memory cache.
+ */
+export function useRefreshRunnerModels() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (runner: ModelDiscoveryRunner) => getRunnerModels(runner, { refresh: true }),
+    onSuccess: (data, runner) => {
+      queryClient.setQueryData(workspaceQueryKeys.models(runner), data)
+    },
+  })
+}
+
+/** The model pill's "Refresh models…" action — `undefined` for a runner with no host catalog. */
+export function useModelRefreshAction(runner: Runner) {
+  const refresh = useRefreshRunnerModels()
+  if (!runnerDiscoversModels(runner)) return undefined
+  return {
+    label: refresh.isPending ? 'Refreshing models…' : 'Refresh models…',
+    slot: 'model-pill-refresh',
+    disabled: refresh.isPending,
+    onSelect: () => refresh.mutate(runner),
+  }
 }
 
 /**
@@ -608,10 +643,12 @@ export function useRefreshProviderStatus() {
 /** While a setup terminal runs, its exit code is the page's only signal: read it often, in a hidden
  *  tab too, because the server forgets an exited session after a minute. Nothing is kept for a later
  *  visit: a session remembered as running would read as one that vanished. */
-export function useAgentSetup() {
+export function useAgentSetup(options: { latest?: boolean; enabled?: boolean } = {}) {
   return useQuery({
-    queryKey: workspaceQueryKeys.agentSetup,
-    queryFn: ({ signal }) => getAgentSetup({ signal }),
+    // `latest` asks npm for the newest releases (Settings → Agents only), so it is its own entry.
+    queryKey: options.latest ? [...workspaceQueryKeys.agentSetup, 'latest'] : workspaceQueryKeys.agentSetup,
+    queryFn: ({ signal }) => getAgentSetup({ signal, latest: options.latest }),
+    enabled: options.enabled ?? true,
     retry: false,
     gcTime: 0,
     refetchInterval: (state) => {
@@ -633,10 +670,11 @@ export function useInvalidateHealth() {
 export function useStartAgentSetup() {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: ({ provider, action }: { provider: AgentSetupProvider; action: AgentSetupAction }) => startAgentSetup(provider, action),
+    mutationFn: ({ provider, action, force }: { provider: AgentSetupProvider; action: AgentSetupAction; force?: boolean }) => startAgentSetup(provider, action, force),
     retry: false,
     // Written straight in: the polling above starts from this, even if the next read fails.
-    onSuccess: (session) => queryClient.setQueryData<AgentSetupState>(workspaceQueryKeys.agentSetup, (state) => (state?.available ? { ...state, session } : state)),
+    // `joined` is the client's own note on the response, not part of the contract: kept out of the cache.
+    onSuccess: ({ joined: _joined, ...session }) => queryClient.setQueryData<AgentSetupState>(workspaceQueryKeys.agentSetup, (state) => (state?.available ? { ...state, session } : state)),
     onSettled: () => queryClient.invalidateQueries({ queryKey: workspaceQueryKeys.agentSetup }),
   })
 }
@@ -837,8 +875,8 @@ function applyProjectPatch(
  * every project's reference to it server-side, so a projects cache left alone would keep showing
  * a selection that no longer exists.
  */
-function useAgentProfileMutation<TVariables>(
-  mutationFn: (variables: TVariables) => Promise<unknown>,
+function useAgentProfileMutation<TVariables, TData = unknown>(
+  mutationFn: (variables: TVariables) => Promise<TData>,
 ) {
   const queryClient = useQueryClient()
   return useMutation({
@@ -932,6 +970,58 @@ export function useConnectAgentAccount() {
         queryClient.invalidateQueries({ queryKey: workspaceQueryKeys.providerStatus }),
       ])
     },
+  })
+}
+
+/**
+ * Start an inline sign-in for one account (spec 2026-11-18-inline-account-reconnect). The answer
+ * is written to the account's session cache, which the `agent-login` SSE event keeps current.
+ * A pasted code or key is never sent through a mutation: `variables` would sit in the mutation
+ * cache, so `sendLoginSessionInput` is called directly by the card.
+ */
+export function writeLoginSession(queryClient: QueryClient, session: LoginSession): void {
+  const key = workspaceQueryKeys.agentLogin(session.provider, session.profileId)
+  const current = queryClient.getQueryData<LoginSession | null>(key)
+  // A late frame from an older session never overwrites the one the user just started.
+  if (current && current.sessionId !== session.sessionId && isActiveLoginSession(current) && !isActiveLoginSession(session)) return
+  // The start route's answer can land after the SSE frame that moved the same session on.
+  if (current?.sessionId === session.sessionId && session.phase === 'starting' && current.phase !== 'starting') return
+  queryClient.setQueryData(key, session)
+  // A finished success must not greet the account's NEXT expiry; the quiet lines take over from here.
+  if (session.phase === 'connected' || session.phase === 'cancelled') {
+    setTimeout(() => {
+      if (queryClient.getQueryData<LoginSession | null>(key)?.sessionId === session.sessionId) queryClient.setQueryData(key, null)
+    }, session.phase === 'connected' ? LOGIN_SUCCESS_SHOWN_MS : 0)
+  }
+}
+
+/** How long the card's "signed in again" state stays before the surface's quiet line replaces it. */
+export const LOGIN_SUCCESS_SHOWN_MS = 30_000
+
+export function clearLoginSession(queryClient: QueryClient, provider: ProviderId, profileId: string): void {
+  queryClient.setQueryData(workspaceQueryKeys.agentLogin(provider, profileId), null)
+}
+
+export function isActiveLoginSession(session: Pick<LoginSession, 'phase'> | undefined | null): boolean {
+  return !!session && (session.phase === 'starting' || session.phase === 'waiting' || session.phase === 'needs-input' || session.phase === 'verifying')
+}
+
+export function useStartLoginSession() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (input: LoginSessionStartInput) => startLoginSession(input),
+    retry: false,
+    onSuccess: (session) => writeLoginSession(queryClient, session),
+  })
+}
+
+export function useCancelLoginSession() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (session: Pick<LoginSession, 'sessionId' | 'provider' | 'profileId'>) => cancelLoginSession(session.sessionId),
+    retry: false,
+    // Cancelled either way: a session the server already dropped is not one to keep showing.
+    onSettled: (_answer, _error, session) => clearLoginSession(queryClient, session.provider, session.profileId),
   })
 }
 
@@ -1642,6 +1732,24 @@ export function useSkills(enabled = true) {
   }, [queryClient, ready.data, ready.dataUpdatedAt, skillsScope])
 
   return skills
+}
+
+export function useRefreshSkillCatalog() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: async () => {
+      // Capture the requested project's keys before navigation can change the scope.
+      const { skills, skillsReady } = queryKeys
+      const catalog = await refreshSkills()
+      await Promise.all([
+        queryClient.cancelQueries({ queryKey: skills, exact: true }),
+        queryClient.cancelQueries({ queryKey: skillsReady, exact: true }),
+      ])
+      queryClient.setQueryData(skills, catalog)
+      queryClient.setQueryData(skillsReady, catalog)
+      return catalog
+    },
+  })
 }
 
 /** The opt-in catalog for the "Import skills" panel — the default (vendor) repo's full skill

@@ -5,53 +5,23 @@ import { delimiter, join } from 'node:path';
 
 import { agentSetupProviderSchema, type AgentSetupProvider } from '@open-mercato/cezar-contract';
 
+import { planInstall, type InstallEnv } from '../core/agent-install.ts';
+
 /**
- * How each agent is installed (spec 2026-10-26-first-run-onboarding, "Set up an agent here"). The
- * only place the install commands of the first-run page live; a request can never add to them.
+ * The machine half of installing an agent (spec 2026-10-26-first-run-onboarding, "Set up an agent
+ * here"): what this host can install with. The commands live in `core/agent-install.ts`; a request
+ * can never add to them.
  */
 
 export const AGENT_SETUP_PROVIDERS: readonly AgentSetupProvider[] = agentSetupProviderSchema.options;
 
-const NPM_PACKAGE: Partial<Record<AgentSetupProvider, string>> = {
-  claude: '@anthropic-ai/claude-code',
-  codex: '@openai/codex',
-  // Pinned: OpenCode 2.x replaced the server API the runner drives (`unsupportedServerMessage`).
-  opencode: 'opencode-ai@1',
-  copilot: '@github/copilot',
-};
+export type { InstallEnv } from '../core/agent-install.ts';
 
-const SCRIPT: Partial<Record<AgentSetupProvider, { unix: string; windows?: string }>> = {
-  claude: {
-    unix: 'curl -fsSL https://claude.ai/install.sh | bash',
-    windows: 'irm https://claude.ai/install.ps1 | iex',
-  },
-  cursor: { unix: 'curl https://cursor.com/install -fsS | bash' },
-};
-
-export interface InstallEnv {
-  platform: NodeJS.Platform;
-  npm: boolean;
-  /** A global npm install works without sudo. */
-  npmGlobalWritable: boolean;
-  curl: boolean;
-  sudo: boolean;
-}
-
-/**
- * The one command to run here, or null when this machine has nothing that can install it.
- * Without sudo first: npm where its global folder is ours, then the vendor's script, and `sudo npm`
- * only when nothing else is left (the terminal is where the password goes).
- */
+/** The command cezar would RUN here, or null when it would not run one (nothing here can install
+ *  it, or the recipe is copy-only). `planInstall` also answers the line to copy instead. */
 export function installCommand(provider: AgentSetupProvider, env: InstallEnv): string | null {
-  const pkg = NPM_PACKAGE[provider];
-  const script = SCRIPT[provider];
-  const npmInstall = pkg && env.npm ? `npm install -g ${pkg}` : null;
-  // A native `.exe` before npm's `.cmd` shim, which `resolveClaudeBin` deliberately does not accept.
-  if (env.platform === 'win32') return script?.windows ?? npmInstall;
-  if (npmInstall && env.npmGlobalWritable) return npmInstall;
-  if (script && env.curl) return script.unix;
-  if (npmInstall && env.sudo) return `sudo ${npmInstall}`;
-  return npmInstall;
+  const plan = planInstall(provider, env);
+  return plan.runnable ? plan.command : null;
 }
 
 /** The line the PTY's shell runs for a command the user reads. A PowerShell one-liner goes encoded,
@@ -65,10 +35,14 @@ const PROBE_TIMEOUT_MS = 10_000;
 
 function npmGlobalPrefix(platform: NodeJS.Platform): Promise<string | null> {
   return new Promise((resolve) => {
-    execFile('npm', ['prefix', '-g'], { timeout: PROBE_TIMEOUT_MS, shell: platform === 'win32' }, (error, stdout) => {
-      const prefix = stdout?.toString().trim();
-      resolve(error || !prefix ? null : prefix);
-    });
+    try {
+      execFile('npm', ['prefix', '-g'], { timeout: PROBE_TIMEOUT_MS, shell: platform === 'win32' }, (error, stdout) => {
+        const prefix = stdout?.toString().trim();
+        resolve(error || !prefix ? null : prefix);
+      });
+    } catch {
+      resolve(null); // a synchronous spawn throw degrades like a failed probe (#2312)
+    }
   });
 }
 
@@ -105,12 +79,13 @@ function onPath(name: string, path: string): Promise<boolean> {
 
 export async function probeInstallEnv(platform: NodeJS.Platform = process.platform): Promise<InstallEnv> {
   const path = process.env.PATH ?? '';
-  const [prefix, curl, sudo] = await Promise.all([npmGlobalPrefix(platform), onPath('curl', path), onPath('sudo', path)]);
+  const [prefix, curl, sudo, brew] = await Promise.all([npmGlobalPrefix(platform), onPath('curl', path), onPath('sudo', path), onPath('brew', path)]);
   return {
     platform,
     npm: prefix !== null,
     npmGlobalWritable: prefix !== null && (await globalFoldersWritable(prefix, platform)),
     curl,
     sudo,
+    brew,
   };
 }

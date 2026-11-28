@@ -22,7 +22,7 @@ use objc2_app_kit::{
 use objc2_foundation::{NSObject, NSPoint, NSRect, NSSize};
 use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
 
-use crate::notch_geometry::{place, pointer_on_shape, screen_at, Hover, PanelSize, Placement, Rect, ScreenMetrics};
+use crate::notch_geometry::{pills_visible, place, pointer_on_shape, screen_at, Hover, PanelSize, Placement, Rect, ScreenMetrics};
 use crate::notch_model::{parse_list, shape, NotchModel, ERROR_ACTIVE_MINUTES};
 use crate::Shell;
 
@@ -77,6 +77,8 @@ struct View {
     interactive: bool,
     /// The panel is ordered in; the pointer thread runs only then.
     shown: bool,
+    /// The pills are on screen: false while an auto-hidden menu bar is hidden (`pills_visible`).
+    revealed: bool,
     pointer: Option<(f64, f64)>,
 }
 
@@ -267,8 +269,18 @@ fn apply(app: &AppHandle, notch: &Arc<Notch>) {
         let hidden = !notch.view().shown;
         reposition(&window, notch, mtm, hidden);
         push(&window, notch);
+        let revealed = {
+            let mut view = notch.view();
+            let at = NSEvent::mouseLocation();
+            view.revealed = view.placement.is_none_or(|placement| pills_visible(&placement, view.revealed, view.hover.expanded, at.x, at.y));
+            view.revealed
+        };
         if let Some(panel) = panel_of(&window) {
-            panel.orderFrontRegardless();
+            if revealed {
+                panel.orderFrontRegardless();
+            } else {
+                panel.orderOut(None);
+            }
         }
         notch.view().shown = true;
         notch.pointer_wake.notify_all();
@@ -449,6 +461,7 @@ fn pointer_loop(app: AppHandle, notch: Arc<Notch>) {
         }
         let at = NSEvent::mouseLocation();
         let mut interactive = None;
+        let mut reveal = None;
         let expanded;
         let mut pointer = None;
         {
@@ -466,6 +479,11 @@ fn pointer_loop(app: AppHandle, notch: Arc<Notch>) {
             if expanded == Some(false) {
                 view.pointer = None;
             }
+            let revealed = pills_visible(&placement, view.revealed, view.hover.expanded, at.x, at.y);
+            if revealed != view.revealed {
+                view.revealed = revealed;
+                reveal = Some(revealed);
+            }
             if view.hover.expanded && view.pointer != Some((at.x, at.y)) {
                 view.pointer = Some((at.x, at.y));
                 pointer = Some((at.x - placement.origin_x, placement.origin_y + size.height - at.y));
@@ -477,6 +495,18 @@ fn pointer_loop(app: AppHandle, notch: Arc<Notch>) {
             let _ = app.run_on_main_thread(move || {
                 if let Some(panel) = panel_of(&target) {
                     panel.setIgnoresMouseEvents(!on_shape);
+                }
+            });
+        }
+        if let Some(revealed) = reveal {
+            let target = window.clone();
+            let _ = app.run_on_main_thread(move || {
+                if let Some(panel) = panel_of(&target) {
+                    if revealed {
+                        panel.orderFrontRegardless();
+                    } else {
+                        panel.orderOut(None);
+                    }
                 }
             });
         }
@@ -628,7 +658,7 @@ mod tests {
 
     #[test]
     fn the_render_call_carries_the_layout_and_no_raw_text() {
-        let script = render_script(None, &Placement { origin_x: 0.0, origin_y: 0.0, housing: crate::notch_geometry::Housing { width: 200.0, height: 37.0, top: 0.0, centre: 500.0 } });
+        let script = render_script(None, &Placement { origin_x: 0.0, origin_y: 0.0, housing: crate::notch_geometry::Housing { width: 200.0, height: 37.0, top: 0.0, centre: 500.0 }, hidden_bar: None });
         assert!(script.contains("model: null"));
         assert!(script.contains("\"maxRows\""));
     }

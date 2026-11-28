@@ -77,3 +77,25 @@ describe('timestamped process telemetry', () => {
     usage.unregisterRunProcess('a');
   });
 });
+
+describe('synchronous execFile failure (#2312)', () => {
+  it('degrades to no data instead of an unhandled rejection, and recovers', async () => {
+    const rejections: unknown[] = [];
+    const onRejection = (reason: unknown) => rejections.push(reason);
+    process.on('unhandledRejection', onRejection);
+    try {
+      const usage = await import('./process-usage.ts');
+      exec.mockImplementation(() => { throw Object.assign(new Error('spawn UNKNOWN'), { errno: -4094 }); });
+      usage.registerRunProcess('a', 100);
+      await vi.advanceTimersByTimeAsync(4_000);
+      expect(usage.currentUsage('a')).toBeUndefined();
+      answer('100 1 2048 1\n');
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(usage.currentUsage('a')).toEqual({ cpuPct: 1, rssBytes: 2097152, procCount: 1 });
+      expect(rejections).toEqual([]);
+      usage.unregisterRunProcess('a');
+    } finally {
+      process.off('unhandledRejection', onRejection);
+    }
+  });
+});

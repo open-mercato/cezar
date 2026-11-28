@@ -424,6 +424,8 @@ export function buildCreateRunBody(opts: {
   readOnly?: boolean
   /** The project defaults to in-place, so an isolated worktree must be asked for explicitly. */
   inPlaceByDefault?: boolean
+  /** Task tag ids (spec 2026-11-23-task-tags); sent only when there are some. */
+  tagIds?: readonly string[]
 }): CreateRunInput {
   const {
     task,
@@ -446,6 +448,7 @@ export function buildCreateRunBody(opts: {
     dispatch,
     readOnly,
     inPlaceByDefault,
+    tagIds,
   } = opts
   const asking = readOnly === true && variants <= 1 && !dispatch
   const inPlace = worktree === false && variants <= 1 && !dispatch && !asking
@@ -477,6 +480,7 @@ export function buildCreateRunBody(opts: {
     generateFollowups: generateFollowups === false ? false : undefined,
     todoId: todoId || undefined,
     dispatch: dispatch ?? undefined,
+    ...(tagIds && tagIds.length > 0 ? { tags: tagIds.map((id) => ({ id })) } : {}),
   }
 }
 

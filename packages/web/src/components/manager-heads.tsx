@@ -2,6 +2,7 @@ import { ChevronRightIcon } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState, type JSX, type Ref } from 'react'
 import { Link, useLocation } from 'react-router'
 
+import { useAttention } from '@/api/attention'
 import { useManagers } from '@/api/managers'
 import { useHealth, useProjects } from '@/api/queries'
 import { Kbd } from '@/components/kbd'
@@ -15,6 +16,7 @@ import {
   diffArrivals,
   headAnnouncement,
   headCount,
+  withLiveCounts,
   headLine,
   needsYou,
   readHeadMemory,
@@ -107,7 +109,10 @@ export function ManagerHeads(): JSX.Element | null {
   const available = useHealth().data?.capabilities.managers === true
   const enabled = useManagerHeadsEnabled()
   // The list the shell already fetches; the workspace stream keeps it current.
-  const managers = useManagers(false).data?.managers
+  const listed = useManagers(false).data?.managers
+  // Counted as Now counts them: a dismissed or snoozed card no longer raises a head.
+  const items = useAttention(available && enabled).data?.items
+  const managers = useMemo(() => (listed ? withLiveCounts(listed, items) : undefined), [listed, items])
   const active = available && enabled && managers !== undefined && !isManagerPathname(pathname)
   const placement = usePlacement(active)
   if (!active || placement.dialogOpen) return null
@@ -257,7 +262,7 @@ function HeadsOverlay({ managers, bottom, right }: { managers: readonly ManagerS
           style={{ bottom: edgeBottom(bottom) }}
           className="fixed left-1/2 z-20 flex max-w-[calc(100%-32px)] -translate-x-1/2 items-center gap-2 rounded-full border border-border bg-card py-1 pr-2.5 pl-1 text-label whitespace-nowrap shadow-md outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50 md:hidden"
         >
-          <ManagerAvatar avatar={last.manager.avatar} mascot={last.manager.mascot} sizes="24px" className="size-6 rounded-full object-cover" />
+          <ManagerAvatar avatar={last.manager.avatar} mascot={last.manager.mascot} inactive={last.manager.inactive !== undefined} sizes="24px" className="size-6 rounded-full object-cover" />
           <span className="truncate">
             <span className="font-semibold">{last.manager.name}</span> {HEAD_KIND_PHRASE[last.kind]}
           </span>
@@ -293,6 +298,7 @@ function HeadAvatar({ head, large, arriving, onOpen, ref }: {
       <ManagerAvatar
         avatar={manager.avatar}
         mascot={manager.mascot}
+        inactive={manager.inactive !== undefined}
         sizes={large ? '40px' : '32px'}
         className={cn('rounded-full object-cover', large ? 'size-10' : 'size-8')}
       />

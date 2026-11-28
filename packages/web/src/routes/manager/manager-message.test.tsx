@@ -775,3 +775,63 @@ describe('supersededAskIds', () => {
     expect(supersededAskIds([card(1, ['PR 100']), card(2, ['PR 200'])]).size).toBe(0)
   })
 })
+
+describe('ManagerMessageRow — expired login (spec 2026-11-18-inline-account-reconnect)', () => {
+  const failed = (over = {}) => assistantMessage(4, { text: '', error: 'Sign in to Claude Code again', authFailure: { provider: 'claude', profileId: 'default' }, ...over })
+
+  it('draws the reconnect card instead of the red line', () => {
+    renderMessage(failed())
+    expect(screen.getByRole('group', { name: 'Claude Code · Default is signed out' }).textContent).toContain('This turn stopped before answering')
+    expect(document.querySelector('[data-slot="manager-error"]')).toBeNull()
+  })
+
+  it('an older failure on the same account is a quiet line', () => {
+    const client = new QueryClient()
+    render(
+      <QueryClientProvider client={client}>
+        <MemoryRouter><ManagerMessageRow message={failed()} origin={origin} onDecide={vi.fn()} authLive={false} /></MemoryRouter>
+      </QueryClientProvider>,
+    )
+    expect(screen.queryByRole('group')).toBeNull()
+    expect(screen.getByText(/Claude Code · Default was signed out here/)).toBeTruthy()
+  })
+
+  it('a reconnected turn says so quietly', () => {
+    renderMessage(assistantMessage(5, { text: '', error: 'Sign in to Claude Code again', reconnectedAt: '2026-11-18T10:51:00Z' }))
+    expect(screen.getByText(/Reconnected · resumed/)).toBeTruthy()
+    expect(document.querySelector('[data-slot="manager-error"]')).toBeNull()
+  })
+
+  it('a reconnected turn names the account it came back on', () => {
+    renderMessage(assistantMessage(6, { text: '', reconnectedAt: '2026-11-18T10:51:00Z', reconnectedFrom: { provider: 'claude', profileId: 'default' } }))
+    expect(screen.getByText(/Reconnected Claude Code · Default · resumed/)).toBeTruthy()
+  })
+})
+
+describe('the reply footnote (restored 2026-11-22)', () => {
+  const usage = { pp: 0.8, alonePp: 0.8, windows: ['Claude · default · 5-hour limit 10:00–15:00'] }
+  const renderWith = (message: ManagerMessage, planUsage?: typeof usage) => {
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } })
+    client.setQueryData(workspaceQueryKeys.projects, { projects: [], bootProject: 'alpha', projectsDir: '' })
+    return render(
+      <QueryClientProvider client={client}>
+        <MemoryRouter>
+          <ManagerMessageRow message={message} origin={origin} onDecide={vi.fn()} {...(planUsage ? { planUsage } : {})} />
+        </MemoryRouter>
+      </QueryClientProvider>,
+    )
+  }
+
+  it('shows under a finished reply what it cost', () => {
+    renderWith(assistantMessage(3, { text: 'Merged.' }), usage)
+    expect(screen.getByText(/^This reply ≈ 0.8% of 5h/)).toBeTruthy()
+  })
+
+  it('waits for a streaming reply to finish, and shows nothing without a ledger entry', () => {
+    const { container } = renderWith(assistantMessage(4, { text: 'Work', streaming: true }), usage)
+    expect(container.querySelector('[data-slot="manager-reply-usage"]')).toBeNull()
+    cleanup()
+    renderWith(assistantMessage(5, { text: 'Done.' }))
+    expect(document.querySelector('[data-slot="manager-reply-usage"]')).toBeNull()
+  })
+})

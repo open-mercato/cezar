@@ -12,6 +12,7 @@ import { mergeWriteWorkspaceConfig } from '../workspace/config.ts';
 import { WorkspaceSemaphore } from '../workspace/semaphore.ts';
 import { composeDispatchPrompt } from '../dispatch/prompts.ts';
 import { RunManager } from '../workflows/run.ts';
+import * as pullRequests from './pr.ts';
 import { createApp } from './server.ts';
 
 const GLOBAL = 'Do not run the full test suite. Run only focused tests.';
@@ -43,7 +44,8 @@ describe('manager task instruction propagation through the HTTP API and workflow
     vi.stubEnv('CEZ_AUTOMATIONS', '0');
     execFileSync('git', ['init', '-q', '-b', 'main'], { cwd: root, timeout: 10_000 });
     writeFileSync(join(root, 'file.txt'), 'base\n');
-    execFileSync('git', ['add', 'file.txt'], { cwd: root, timeout: 10_000 });
+    writeFileSync(join(root, 'package.json'), JSON.stringify({ scripts: { test: 'node --version' } }));
+    execFileSync('git', ['add', 'file.txt', 'package.json'], { cwd: root, timeout: 10_000 });
     execFileSync('git', ['-c', 'user.name=test', '-c', 'user.email=test@local', 'commit', '-qm', 'base'], { cwd: root, timeout: 10_000 });
     mkdirSync(join(root, '.ai/cezar/workflows'), { recursive: true });
     mkdirSync(join(root, '.ai/skills/instruction-check'), { recursive: true });
@@ -86,17 +88,47 @@ describe('manager task instruction propagation through the HTTP API and workflow
     }
   }, 20_000);
 
-  async function createTask(workflow: string, runner: 'claude' | 'codex') {
+  async function createTask(workflow: string, runner: 'claude' | 'codex', text = 'Fix the module mock:done') {
     const created = await request(BASE, { instructions: 'Help with tasks', projects: 'all', cronMinutes: 0 });
     expect(created.status).toBe(201);
     const manager = await created.json() as { id: string; connectedProjectIds: string[] };
     await engine.update(manager.id, { followUp: false, notify: false });
     const projectId = manager.connectedProjectIds[0];
-    const response = await request(`${BASE}/${manager.id}/tasks`, { projectId, task: 'Fix the module mock:done', workflow, runner });
+    const response = await request(`${BASE}/${manager.id}/tasks`, { projectId, task: text, workflow, runner });
     expect(response.status).toBe(201);
     const task = await response.json() as { runId: string };
     return { ...task, managerId: manager.id, projectId };
   }
+
+  it.each([undefined, 'https://github.com/open-mercato/demo/pull/42'])(
+    'answers the built-in review gate via task say before publishing (existing PR: %s)', async (existing) => {
+    const publish = vi.spyOn(pullRequests, 'createDraftPr');
+    const { managerId, projectId, runId } = await createTask('implement-review-pr', 'claude', 'Fix the module mock:verdict=approve');
+    const record = () => store.getRun(runId);
+    await expect.poll(() => record()?.steps.find((step) => step.id === 'gate')?.status, { timeout: 20_000 }).toBe('waiting');
+    expect(record()?.pullRequestUrl).toBeUndefined();
+    if (existing) store.updateRun(runId, { pullRequestUrl: existing });
+
+    const text = 'Recheck the changelog and open a full PR. mock:verdict=applied';
+    const response = await request(`${BASE}/${managerId}/task-message`, { projectId, runId, text });
+    expect(response.status).toBe(200);
+    await expect.poll(() => record()?.status, { timeout: 20_000 }).toMatch(/^(done|review|failed)$/);
+    expect(record()).toMatchObject({
+      status: expect.stringMatching(/^(done|review)$/),
+      pullRequestUrl: existing ?? 'https://github.com/open-mercato/demo/pull/777',
+    });
+    expect(record()?.error).toBeUndefined();
+    expect(record()?.steps.map((step) => [step.id, step.status])).toContainEqual(['pr', 'done']);
+    expect(specs.at(-1)?.userPrompt).toContain(text);
+    expect(specs.at(-1)?.userPrompt).toContain('ready for review');
+    expect(specs.at(-1)?.resume).toBe(true);
+    expect(publish).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+      draft: false, ...(existing ? { updateExisting: true } : {}),
+    }));
+    expect(publish.mock.invocationCallOrder[0]).toBeGreaterThan(
+      vi.mocked(ClaudeCliRunner.prototype.startSession).mock.invocationCallOrder.at(-1)!,
+    );
+  }, 40_000);
 
   function assertInstructions(spec: AgentRunSpec, global = GLOBAL, project = PROJECT) {
     expect(spec.systemPrompt?.split(GLOBAL)).toHaveLength(2);

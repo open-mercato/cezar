@@ -205,3 +205,11 @@ describe('truncated node text keeps its native title reveal', () => {
     expect(steps.map((s) => s.getAttribute('title'))).toEqual(['Plan the whole migration — done', 'Build — failed'])
   })
 })
+
+describe('the Graph view of a one-step run (#2246)', () => {
+  it('shows the empty state instead of a trivial start → step → end graph', () => {
+    renderGraph(run({ workflowDef: { name: 'quick-task', source: 'built-in', steps: [{ id: 'do', prompt: '{{task}}' }] } }))
+    expect(document.querySelector('.react-flow__node')).toBeNull()
+    expect(screen.getByText('No workflow graph')).toBeTruthy()
+  })
+})

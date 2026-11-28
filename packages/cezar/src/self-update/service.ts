@@ -8,6 +8,7 @@
 import type { SelfUpdateDevelopment, SelfUpdateJob, SelfUpdateScheduled, SelfUpdateStatus, UpdateChannel } from '@open-mercato/cezar-contract';
 
 import { loadWorkspaceConfig, mergeWriteWorkspaceConfig } from '../workspace/config.ts';
+import { describeRestartBlocker, type RestartGate } from '../workspace/restart-gate.ts';
 import type { WorkspaceSemaphore } from '../workspace/semaphore.ts';
 import { installFromLocal, installFromRegistry } from './installer.ts';
 import { buildCheckout, discoverCheckouts } from './checkouts.ts';
@@ -15,6 +16,7 @@ import { activate, detectInstallKind, findInstalled, linkCheckout, listInstalled
 import { CEZAR_REPO, fetchOpenPulls, OpenPullsCache, type OpenPulls } from './pulls.ts';
 import { distTagFor, RegistryCache, type PackageDocument } from './registry.ts';
 import { classifyVersion, isNewer } from './semver.ts';
+import { autoPruneVersions, startVersionPruning } from './versions-prune.ts';
 
 const LOG_CAP = 200;
 /** How often a scheduled "update when idle" re-checks the workspace. */
@@ -29,9 +31,12 @@ export interface SelfUpdateDeps {
   entry: string;
   /** Exit-or-reexec policy; the service only decides WHEN. */
   restart: () => void;
-  /** The workspace's run counters — in production the `WorkspaceSemaphore` itself, so the dialog
+  /** The workspace's run counter — in production the `WorkspaceSemaphore` itself, so the dialog
    *  can never again read one project's store (#1524). Absent: nothing runs. */
-  runs?: Pick<WorkspaceSemaphore, 'activeRuns' | 'idle'>;
+  runs?: Pick<WorkspaceSemaphore, 'activeRuns'>;
+  /** What "when idle" waits for — tasks, manager turns, setup terminals — and the hold on new
+   *  work while it waits. In production the semaphore's gate. Absent: always idle. */
+  gate?: RestartGate;
   /** Test seam for the idle poll's interval. */
   idlePollMs?: number;
   /** Hosted mode trims the absolute entry path off the wire (#431). */
@@ -63,6 +68,10 @@ export class SelfUpdateService {
   /** Whether the "when idle" request came from a hosted caller, read then: the timer has no scope. */
   private scheduledTrim = false;
   private idleTimer: ReturnType<typeof setInterval> | null = null;
+  /** An activated "when idle" update whose restart waits for work that started during the install. */
+  private restartTimer: ReturnType<typeof setTimeout> | null = null;
+  /** "Restart now" arrived while the scheduled install was still running: skip the idle wait. */
+  private restartNowRequested = false;
   private readonly pulls: OpenPullsCache;
 
   constructor(private readonly deps: SelfUpdateDeps) {
@@ -75,6 +84,11 @@ export class SelfUpdateService {
   /** The raw running version — what update checks compare, never the shown `-dev` one. */
   get runningVersion(): string {
     return this.deps.version;
+  }
+
+  /** The running entry file — what decides which installed version is "running". */
+  get entry(): string {
+    return this.deps.entry;
   }
 
   /** The configured channel: workspace config wins, then `CEZ_UPDATE_CHANNEL`, then stable. */
@@ -153,6 +167,7 @@ export class SelfUpdateService {
       job: this.job,
       scheduled: this.scheduled,
       activeRuns: this.deps.runs?.activeRuns() ?? 0,
+      restartBlockers: (this.deps.gate?.blockers() ?? []).map(describeRestartBlocker),
     };
   }
 
@@ -262,13 +277,26 @@ export class SelfUpdateService {
    * Install `target` (a registry version, an already-installed id such as `0.11.1+local`, or the
    * id of a built cezar checkout `status()` lists — linked on the spot), activate it and restart.
    * Returns as soon as the job is started; progress is on `status()`.
+   *
+   * Applying the target a "when idle" update is already working on is its "Restart now": the
+   * restart no longer waits for the workspace.
    */
   apply(target: string, trimPaths: boolean = this.deps.trimPaths?.() ?? false): SelfUpdateJob {
-    if (this.job?.status === 'running' || this.job?.status === 'restarting') throw new SelfUpdateBusyError();
+    const job = this.job;
+    if (job && this.scheduled?.target === target && (job.status === 'running' || job.status === 'restarting')) {
+      this.restartNowRequested = true;
+      if (this.restartTimer) this.fireRestart(true);
+      return job;
+    }
+    if (job?.status === 'running' || job?.status === 'restarting') throw new SelfUpdateBusyError();
     const { canSelfUpdate, reason } = this.capability();
     if (!canSelfUpdate) throw new Error(reason ?? 'self-update is not available for this install');
     // An explicit apply supersedes whatever was waiting for idle.
     this.cancelScheduled();
+    return this.start(target, trimPaths, false);
+  }
+
+  private start(target: string, trimPaths: boolean, whenIdle: boolean): SelfUpdateJob {
     const job: SelfUpdateJob = { status: 'running', target, startedAt: new Date().toISOString(), finishedAt: null, log: [] };
     this.job = job;
     const log = (line: string) => {
@@ -282,27 +310,63 @@ export class SelfUpdateService {
         const linked = !installed || installed.source === 'link' ? await this.linkDiscovered(target, log, trimPaths) : null;
         const id = linked ?? installed?.id ?? (await installFromRegistry(target, { onLog: log, env: this.env })).id;
         if (installed && !linked) log(`${id} is already installed`);
+        // Cancelled while it installed: keep the install, leave the running version active.
+        if (whenIdle && this.scheduled?.target !== target) {
+          job.status = 'failed';
+          job.finishedAt = new Date().toISOString();
+          job.error = `cancelled — ${id} is installed but not active`;
+          log(job.error);
+          return;
+        }
         activate(id, this.env);
         log(`activated ${id}`);
+        // Keep this (still running) version and the new one; a restart that cuts the delete
+        // short leaves `.trash-*` for the next prune.
+        void autoPruneVersions({ entry: this.deps.entry, env: this.env, onLog: log });
         job.status = 'restarting';
         job.finishedAt = new Date().toISOString();
         log('restarting…');
         // Let the status poll that observes `restarting` get its answer before the listener goes.
-        setTimeout(() => this.deps.restart(), 750);
+        this.restartTimer = setTimeout(() => this.fireRestart(!whenIdle), 750);
       } catch (error) {
         job.status = 'failed';
         job.finishedAt = new Date().toISOString();
         job.error = error instanceof Error ? error.message : String(error);
         log(`failed: ${job.error}`);
+        if (whenIdle) this.cancelScheduled();
       }
     })();
     return job;
   }
 
   /**
-   * "Update when idle": apply `target` once no task is running or queued, so the user can close
-   * the dialog and keep working. Applies at once when the workspace is already idle; replaces an
-   * earlier schedule. The same refusals as `apply()` are raised up front.
+   * The last moment before the process goes. A "when idle" restart checks the gate once more
+   * here: anything that started during the install (a message the user sent into a waiting task,
+   * a chat with a manager) is waited for, not cut off.
+   */
+  private fireRestart(now: boolean): void {
+    if (this.restartTimer) clearTimeout(this.restartTimer);
+    this.restartTimer = null;
+    if (!now && !this.restartNowRequested && this.deps.gate && !this.deps.gate.idle()) {
+      if (this.job?.status === 'restarting' && !this.job.log.at(-1)?.startsWith('waiting for ')) {
+        this.job.log.push('waiting for work that started during the install to finish');
+      }
+      this.restartTimer = setTimeout(() => this.fireRestart(false), this.deps.idlePollMs ?? IDLE_POLL_MS);
+      this.restartTimer.unref?.();
+      return;
+    }
+    // The hold stays on: the process is leaving, and nothing new should start on the way out.
+    this.scheduled = null;
+    this.stopIdlePoll();
+    this.deps.restart();
+  }
+
+  /**
+   * "Update when idle": apply `target` once nothing is working — no task running, monitoring or
+   * starting, no manager mid-turn, no setup terminal (`RestartGate`) — so the user can close the
+   * dialog and keep working. New tasks and timed manager turns are held meanwhile, so the wait
+   * ends. Applies at once when the workspace is already idle; replaces an earlier schedule. The
+   * same refusals as `apply()` are raised up front.
    */
   scheduleWhenIdle(target: string): void {
     if (this.job?.status === 'running' || this.job?.status === 'restarting') throw new SelfUpdateBusyError();
@@ -310,6 +374,8 @@ export class SelfUpdateService {
     if (!canSelfUpdate) throw new Error(reason ?? 'self-update is not available for this install');
     this.scheduled = { target, requestedAt: new Date().toISOString() };
     this.scheduledTrim = this.deps.trimPaths?.() ?? false;
+    this.restartNowRequested = false;
+    this.deps.gate?.hold();
     if (!this.idleTimer) {
       this.idleTimer = setInterval(() => this.applyIfIdle(), this.deps.idlePollMs ?? IDLE_POLL_MS);
       this.idleTimer.unref?.();
@@ -317,25 +383,46 @@ export class SelfUpdateService {
     this.applyIfIdle();
   }
 
+  /** Stops a pending "when idle" update, and lets held work start again. An update already
+   *  activated and waiting to restart stays active: it runs from the next restart. */
   cancelScheduled(): void {
+    // Only a "when idle" restart can be called off; an explicit one keeps `scheduled` null.
+    const waiting = this.restartTimer !== null && this.scheduled !== null && this.job?.status === 'restarting';
+    if (waiting && this.job) {
+      if (this.restartTimer) clearTimeout(this.restartTimer);
+      this.restartTimer = null;
+      this.job.status = 'failed';
+      this.job.error = `restart cancelled — ${this.job.target} is active and starts with the next restart`;
+      this.job.log.push(this.job.error);
+    }
+    const had = this.scheduled !== null;
     this.scheduled = null;
+    this.restartNowRequested = false;
+    this.stopIdlePoll();
+    if (had) this.deps.gate?.release();
+  }
+
+  private stopIdlePoll(): void {
     if (this.idleTimer) clearInterval(this.idleTimer);
     this.idleTimer = null;
   }
 
   private applyIfIdle(): void {
     const scheduled = this.scheduled;
-    if (!scheduled) return;
-    if (this.deps.runs && !this.deps.runs.idle()) return;
-    try {
-      this.apply(scheduled.target, this.scheduledTrim);
-    } catch (error) {
+    if (!scheduled || this.job?.status === 'running' || this.job?.status === 'restarting') return;
+    if (this.deps.gate && !this.deps.gate.idle()) return;
+    this.stopIdlePoll();
+    const { canSelfUpdate, reason } = this.capability();
+    if (!canSelfUpdate) {
       // Nobody is watching a deferred apply — leave the refusal where the dialog shows a failure.
       this.cancelScheduled();
       const now = new Date().toISOString();
-      const message = error instanceof Error ? error.message : String(error);
+      const message = reason ?? 'self-update is not available for this install';
       this.job = { status: 'failed', target: scheduled.target, startedAt: now, finishedAt: now, log: [`failed: ${message}`], error: message };
+      return;
     }
+    // `scheduled` stays set until the restart fires: the cockpit keeps showing it as pending.
+    this.start(scheduled.target, this.scheduledTrim, true);
   }
 
   /** A checkout `status()` offers under `target`: build it when it is unbuilt or older than its
@@ -353,6 +440,12 @@ export class SelfUpdateService {
     }
     log(`linking ${checkout.packageRoot} (${checkout.branch})`);
     return linkCheckout(checkout.packageRoot, checkout.branch, this.env, checkout.id).id;
+  }
+
+  /** At boot: lease the running version and prune old installs in the background. */
+  startVersionPruning(onLog?: (line: string) => void): void {
+    if (this.deps.readOnly) return;
+    startVersionPruning({ entry: this.deps.entry, env: this.env, onLog });
   }
 
   /** `cezar install` from a checkout or the npx cache: pack the running package into the managed

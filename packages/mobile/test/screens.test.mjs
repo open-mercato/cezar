@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { readFileSync } from 'node:fs';
-import { ACCOUNT_WHY, NO_HTTP, accountOpens, backTarget, confirmLead, linkLine, lockRow, pushSwitch, relayField, removingNote, screenFor, startLockRow, termsOutcome, timeLeft } from '../connect/screens.js';
+import { ACCOUNT_WHY, MAX_NAME, NO_HTTP, accountOpens, backTarget, cardFor, checkName, confirmLead, countLine, forgetLead, linkLine, lockRow, needWords, notificationsRow, orderServers, primaryFor, pushSwitch, relayField, removingNote, screenFor, startLockRow, termsOutcome, timeLeft, whereIs } from '../connect/screens.js';
 import { backAction, settle } from '../connect/nav.js';
 
 const saved = { id: 'a', url: 'https://cezar.example.com', username: 'me' };
@@ -132,11 +132,13 @@ test('the Android constant matches cezar, and the connect screens repeat neither
   for (const file of ['connect.js', 'screens.js', 'index.html']) assert.ok(!read(`../connect/${file}`).includes(new URL(android).host), file);
 });
 
-test('the Notifications switch exists only where native reports push for that server', () => {
+test('the Notify me switch exists only where native reports push for that cezar, and names it', () => {
   assert.equal(pushSwitch({ id: 'a', url: 'https://x' }), null);
   assert.equal(pushSwitch(null), null);
-  assert.deepEqual(pushSwitch({ id: 'r', relay: true, push: false }), { label: 'Notifications', checked: false, enable: true });
-  assert.deepEqual(pushSwitch({ id: 'r', relay: true, push: true }), { label: 'Notifications', checked: true, enable: false });
+  const off = pushSwitch({ id: 'r', label: 'Laptop', relay: true, push: false });
+  assert.deepEqual([off.label, off.checked, off.enable], ['Notify me', false, true]);
+  assert.match(off.note, /When Laptop needs you/);
+  assert.deepEqual([pushSwitch({ id: 'r', relay: true, push: true }).checked, pushSwitch({ id: 'r', relay: true, push: true }).enable], [true, false]);
 });
 
 test('a forgotten server with a revoke still owed says notifications can still arrive', () => {
@@ -202,4 +204,94 @@ test('a terms answer opens the server, asks again on newer terms, or says why', 
   assert.deepEqual(termsOutcome({ error: 'x', code: 'no-account' }), { open: true });
   assert.deepEqual(termsOutcome({ error: 'x', code: 'terms-outdated', current: 'v2' }).version, 'v2');
   assert.equal(termsOutcome({ error: 'Offline', code: 'unreachable' }).notice, 'Offline');
+});
+
+// Your cezars (spec 2026-11-19-mobile-devices-screen).
+const laptop = { id: 'l', label: 'Laptop', relay: true, url: 'https://relay.example.test', status: 'online', words: 'Online', need: 2 };
+const vps = { id: 'v', label: 'vps-fra1', url: 'https://cezar.example.com', status: 'offline', words: 'Offline since 09:41', need: 1 };
+const box = { id: 'b', label: 'build box', url: 'https://ci.example.com', status: 'other', reason: 'sign-in', words: 'Sign in needed' };
+
+test('a card says where a cezar is without the relay address', () => {
+  assert.equal(whereIs(laptop), 'Paired with this phone');
+  assert.equal(whereIs(vps), 'cezar.example.com');
+  assert.equal(whereIs({ url: 'not a url' }), 'not a url');
+});
+
+test('the current cezar is online and owes no count, whatever its probe said', () => {
+  const card = cardFor({ ...laptop, status: 'checking', words: 'Checking…' }, 'l');
+  assert.deepEqual([card.current, card.status, card.words, card.need], [true, 'online', 'Online', null]);
+  assert.equal(card.aria, 'Laptop, Online, current');
+  assert.equal(cardFor(laptop, null).need, '2 need you');
+  assert.equal(cardFor(laptop, null).aria, 'Laptop, Online, 2 need you');
+});
+
+test('a blocked cezar shows its reason in amber and the fix for it', () => {
+  const card = cardFor(box, null);
+  assert.deepEqual([card.dot, card.fix], ['attention', { label: 'Sign in', action: 'open' }]);
+  assert.deepEqual(cardFor({ ...box, reason: 'removed' }, null).fix, { label: 'Pair again', action: 'pair' });
+  // Nothing on the phone fixes a suspension or an update: the words say it, no button.
+  assert.equal(cardFor({ ...box, reason: 'suspended' }, null).fix, null);
+  assert.equal(cardFor({ ...box, reason: 'mystery' }, null).fix, null);
+});
+
+test('an older app sends no status, and the card simply has no status line', () => {
+  const card = cardFor({ id: 'a', label: 'Work', url: 'https://cezar.example.com' }, null);
+  assert.deepEqual([card.status, card.words, card.dot, card.fix], [null, null, null, null]);
+});
+
+test('the list orders like the native switcher: current, online, offline, the rest, then by need', () => {
+  const quiet = { ...vps, id: 'q', need: 0 };
+  assert.deepEqual(orderServers([box, quiet, vps, laptop], null).map((s) => s.id), ['l', 'v', 'q', 'b']);
+  assert.deepEqual(orderServers([box, quiet, vps, laptop], 'b').map((s) => s.id), ['b', 'l', 'v', 'q']);
+  assert.deepEqual(orderServers([{ id: 'x' }, { id: 'y' }], null).map((s) => s.id), ['x', 'y']);
+});
+
+test('the primary button does the one thing that helps', () => {
+  assert.deepEqual(primaryFor(cardFor(laptop, 'l')), { label: 'Back to Laptop', action: 'open' });
+  assert.deepEqual(primaryFor(cardFor(laptop, null)), { label: 'Open Manager', action: 'open' });
+  assert.deepEqual(primaryFor(cardFor(vps, null)), { label: 'Try again', action: 'open' });
+  assert.deepEqual(primaryFor(cardFor({ ...box, reason: 'removed' }, null)), { label: 'Pair again', action: 'pair' });
+});
+
+test('counts, needs and names read as sentences', () => {
+  assert.equal(countLine(1), 'The cezar this phone is connected to.');
+  assert.equal(countLine(3), '3 cezars connected to this phone.');
+  assert.equal(needWords(1), '1 needs you');
+  assert.equal(needWords(0), null);
+  assert.equal(needWords(null), null);
+});
+
+test('a new name is trimmed, and refused when empty or too long', () => {
+  assert.deepEqual(checkName('  Studio  '), { name: 'Studio' });
+  assert.match(checkName('   ').error, /Enter a name/);
+  assert.match(checkName(null).error, /Enter a name/);
+  assert.match(checkName('x'.repeat(MAX_NAME + 1)).error, /at most 60/);
+  assert.deepEqual(checkName('x'.repeat(MAX_NAME)), { name: 'x'.repeat(MAX_NAME) });
+});
+
+test('the App section always reports the phone-wide notification permission an app knows', () => {
+  assert.deepEqual([notificationsRow('allowed').value, notificationsRow('allowed').settings], ['On', true]);
+  assert.deepEqual([notificationsRow('denied').value, notificationsRow('denied').settings], ['Off', true]);
+  // Not asked yet (Android 13+, iOS): still shown, saying how to be asked; there is no setting to open yet.
+  const unasked = notificationsRow('unknown');
+  assert.deepEqual([unasked.value, unasked.settings], ['Not set', false]);
+  assert.match(unasked.note, /Notify me/);
+  // An older app sends nothing to report.
+  assert.equal(notificationsRow(undefined), null);
+});
+
+test('a current cezar reads online only until its probe answers', () => {
+  assert.equal(cardFor({ ...laptop, status: 'checking', words: 'Checking…' }, 'l').status, 'online');
+  const dead = cardFor({ ...laptop, status: 'offline', words: 'Offline since 09:41' }, 'l');
+  assert.deepEqual([dead.status, dead.words, dead.current], ['offline', 'Offline since 09:41', true]);
+});
+
+test('the app lock is one switch that says what it does', () => {
+  assert.deepEqual([lockRow({ enabled: true, available: true }).label, lockRow({ enabled: true, available: true }).checked], ['App lock', true]);
+  assert.equal(lockRow({ enabled: true, available: false }).checked, true);
+});
+
+test('Forget says what goes, for a paired cezar and a direct one', () => {
+  assert.match(forgetLead(laptop), /removed from Laptop.*pair with a new code/);
+  assert.match(forgetLead(vps), /saved password/);
 });

@@ -1,6 +1,7 @@
 import type { RunRecord } from '@open-mercato/cezar-api-client'
 
 import { automationIdOf, matchesOrigin, type TaskOrigin } from '@/lib/task-origin'
+import { NO_TASK_TAG } from '@/lib/task-tags'
 import { workflowLabel } from '@/lib/tasks-table'
 
 /**
@@ -15,7 +16,7 @@ import { workflowLabel } from '@/lib/tasks-table'
  * Session-local, like the search box: only the origin is remembered (`lib/task-origin.ts`).
  */
 
-export type TaskFacetId = 'statuses' | 'workflows' | 'automations'
+export type TaskFacetId = 'statuses' | 'workflows' | 'automations' | 'tags'
 
 export interface TaskTableFilters {
   /** `RunStatus` values as plain strings, so a newer server's status passes through. */
@@ -24,12 +25,21 @@ export interface TaskTableFilters {
   workflows: readonly string[]
   /** Automation ids. Only meaningful while the origin admits automation tasks. */
   automations: readonly string[]
+  /** Task tag ids, plus `NO_TASK_TAG` for untagged tasks (spec 2026-11-23-task-tags § 7.5). ORed. */
+  tags: readonly string[]
 }
 
-export const NO_TASK_FILTERS: TaskTableFilters = { statuses: [], workflows: [], automations: [] }
+export const NO_TASK_FILTERS: TaskTableFilters = { statuses: [], workflows: [], automations: [], tags: [] }
 
 export function activeTaskFacetCount(filters: TaskTableFilters): number {
-  return filters.statuses.length + filters.workflows.length + filters.automations.length
+  return filters.statuses.length + filters.workflows.length + filters.automations.length + filters.tags.length
+}
+
+/** A run's tag-facet values: its tag ids, or `NO_TASK_TAG`. Tombstoned ids are the caller's to
+ *  drop via `hidden`. */
+export function runTagValues(run: Pick<RunRecord, 'tags'>, hidden?: ReadonlySet<string>): string[] {
+  const ids = (run.tags ?? []).map((tag) => tag.id).filter((id) => !hidden?.has(id))
+  return ids.length > 0 ? ids : [NO_TASK_TAG]
 }
 
 /** Each run's automation, resolved once per list — a dispatched child answers with its root's. */
@@ -53,6 +63,8 @@ export function filterTaskTable(
   origin: TaskOrigin,
   filters: TaskTableFilters,
   automations: ReadonlyMap<string, string | undefined>,
+  /** Tombstoned tag ids — a deleted tag is not on the task as far as a filter can tell. */
+  hiddenTags?: ReadonlySet<string>,
 ): RunRecord[] {
   return runs.filter((run) => {
     const automationId = automations.get(run.id)
@@ -60,6 +72,7 @@ export function filterTaskTable(
     if (!matchesFacet(filters.statuses, run.status)) return false
     if (!matchesFacet(filters.workflows, workflowLabel(run))) return false
     if (origin !== 'regular' && !matchesFacet(filters.automations, automationId)) return false
+    if (filters.tags.length > 0 && !runTagValues(run, hiddenTags).some((id) => filters.tags.includes(id))) return false
     return true
   })
 }
@@ -78,9 +91,14 @@ export function taskFacetCounts(
   filters: TaskTableFilters,
   automations: ReadonlyMap<string, string | undefined>,
   facet: TaskFacetId,
+  hiddenTags?: ReadonlySet<string>,
 ): Map<string, number> {
   const counts = new Map<string, number>()
-  for (const run of filterTaskTable(runs, origin, { ...filters, [facet]: [] }, automations)) {
+  for (const run of filterTaskTable(runs, origin, { ...filters, [facet]: [] }, automations, hiddenTags)) {
+    if (facet === 'tags') {
+      for (const id of runTagValues(run, hiddenTags)) counts.set(id, (counts.get(id) ?? 0) + 1)
+      continue
+    }
     const value =
       facet === 'statuses' ? run.status : facet === 'workflows' ? workflowLabel(run) : automations.get(run.id)
     if (value !== undefined) counts.set(value, (counts.get(value) ?? 0) + 1)

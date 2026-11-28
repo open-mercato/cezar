@@ -304,6 +304,33 @@ describe('reduceThread — mixed v1+v2 files (the dedup rule)', () => {
     expect(turns.flatMap((turn) => turn.items)).toHaveLength(5)
   })
 
+  it('shows a refusal repeated by every step before any model turn once, run summary included (#2330)', () => {
+    const refusal = 'codex: tool-policy enforcement unavailable — the installed Codex protocol has not been verified. Refusing this restricted step; no model turn was started. Pick Claude Code or Pi for unsupported grants.'
+    const steps = ['correctness', 'security', 'tests', 'judge']
+    const { turns } = reduceThread([
+      line(1, 'lifecycle', { message: 'run started — workflow "review-pr" (runner: codex)' }),
+      ...steps.flatMap((stepId, n) => [
+        line(10 + n * 2, 'error', { message: refusal, stepId }),
+        line(11 + n * 2, 'step-end', { stepId, status: 'failed', error: refusal }),
+      ]),
+      line(30, 'lifecycle', { message: `run failed — step "judge" failed: ${refusal}` }),
+    ])
+    const items = turns.flatMap((turn) => turn.items)
+    expect(items.filter((item) => item.kind === 'note' && item.text.includes('tool-policy'))).toHaveLength(1)
+    expect(items).toHaveLength(2)
+  })
+
+  it('keeps the newest session.started model for runs recorded before RunRecord.actualModel', () => {
+    expect(reduceThread([line(1, 'session.started', { sessionId: 'a', backend: 'claude' })]).sessionModel).toBeUndefined()
+    const { sessionModel } = reduceThread([
+      line(1, 'session.started', { sessionId: 'a', backend: 'claude', model: 'claude-sonnet-5-5' }),
+      line(2, 'session.started', { sessionId: 'b', backend: 'claude', model: 'claude-opus-5-5' }),
+      line(3, 'session.started', { sessionId: 'c', backend: 'claude' }),
+      line(4, 'session.started', { sessionId: 'd', backend: 'claude', model: '  ' }),
+    ])
+    expect(sessionModel).toBe('claude-opus-5-5')
+  })
+
   it('does not pair identical errors across turns or sessions', () => {
     const { turns } = reduceThread([
       line(1, 'error', { message: 'quota' }),
@@ -708,6 +735,24 @@ describe('reduceThread — provider authorization recovery', () => {
     }])
   })
 
+  it('keeps one live card per account: older rejections collapse, a reconnect quiets them all', () => {
+    const items = reduceThread([
+      line(1, 'provider-auth-required', { provider: 'claude', authFailureId: 'a', profileId: 'work' }),
+      line(2, 'provider-auth-required', { provider: 'codex', authFailureId: 'b' }),
+      line(3, 'provider-auth-required', { provider: 'claude', authFailureId: 'c', profileId: 'work' }),
+    ]).turns.flatMap((turn) => turn.items)
+    expect(items.map((item) => item.kind === 'provider-auth-required' ? item.state : 'x')).toEqual(['older', undefined, undefined])
+
+    const after = reduceThread([
+      line(1, 'provider-auth-required', { provider: 'claude', authFailureId: 'a', profileId: 'work' }),
+      line(2, 'provider-auth-required', { provider: 'codex', authFailureId: 'b' }),
+      { ...line(3, 'account-reconnected', { provider: 'claude', profileId: 'work' }), ts: '2026-07-14T12:05:00.000Z' } as RunEvent,
+    ]).turns.flatMap((turn) => turn.items)
+    expect(after[0]).toMatchObject({ state: 'reconnected', reconnectedAt: '2026-07-14T12:05:00.000Z' })
+    // Another account's card stays live.
+    expect(after[1]).not.toHaveProperty('state')
+  })
+
   it.each(RUNNER_IDS)('persists an incident for the %s runner', (provider) => {
     expect(reduceThread([
       line(1, 'provider-auth-required', { provider, authFailureId: 'incident-1' }),
@@ -944,6 +989,18 @@ describe('the v1 vocabulary sweep (cezar-code-map §3.2) — every persisted typ
     ).toEqual([
       { kind: 'note', id: 'v1:1', text: 'structured question ignored', tone: 'danger' },
       { kind: 'note', id: 'v1:2', text: 'worktree ready', tone: 'dim' },
+    ])
+  })
+
+  it('keeps the install-skills action on notes and ignores unsupported actions', () => {
+    expect(allItems([
+      line(1, 'note', { message: 'Shared skill unavailable', tone: 'danger', action: 'install-skills', skillNames: ['om-review'] }),
+      line(2, 'note', { message: 'Unknown action', tone: 'danger', action: 'unknown' }),
+      line(3, 'lifecycle', { message: 'Run started', action: 'install-skills' }),
+    ])).toEqual([
+      { kind: 'note', id: 'v1:1', text: 'Shared skill unavailable', tone: 'danger', action: 'install-skills', skillNames: ['om-review'] },
+      { kind: 'note', id: 'v1:2', text: 'Unknown action', tone: 'danger' },
+      { kind: 'note', id: 'v1:3', text: 'Run started', tone: 'dim' },
     ])
   })
 

@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest'
 import { mergeMyMessages } from '@/components/my-messages/my-messages'
 
 import type { TranscriptSection } from './session-transcript'
-import { indexedThreadMessages, loadedThreadMessages, userRowKey, userRowOrder } from './use-thread-my-messages'
+import { indexedThreadMessages, loadedThreadMessages, nearestUserRowKey, userRowKey, userRowOrder } from './use-thread-my-messages'
 
 describe('thread "your messages" mapping', () => {
   it('keys an indexed message by the row its user-message line opens', () => {
@@ -39,5 +39,17 @@ describe('thread "your messages" mapping', () => {
     const merged = mergeMyMessages(indexedThreadMessages([{ seq: 0, text: 'Do', images: 0, files: 0 }, { seq: 5, text: 'older', images: 0, files: 0 }]), items)
     expect(merged.map((item) => item.id)).toEqual(['task', 'queued:q1', 'turn-seq-5:user', 'turn-seq-12:user'])
     expect(merged[0]!.text).toBe('Do it')
+  })
+})
+
+describe('nearestUserRowKey', () => {
+  const keys = ['task', 'turn-seq-4:user', 'turn-seq-9:user', 'turn-fallback-1:user']
+  it('prefers the closest row at or before the message', () => {
+    expect(nearestUserRowKey(keys, 6)).toBe('turn-seq-4:user')
+    expect(nearestUserRowKey(keys, 9)).toBe('turn-seq-9:user')
+  })
+  it('falls forward when nothing precedes it, and is undefined without user rows', () => {
+    expect(nearestUserRowKey(['turn-seq-4:user'], 2)).toBe('turn-seq-4:user')
+    expect(nearestUserRowKey(['turn-fallback-1:user'], 2)).toBeUndefined()
   })
 })

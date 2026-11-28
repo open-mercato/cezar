@@ -13,7 +13,7 @@ import { isCopilotAuthFailure } from './copilot-ui-mapper.ts';
 import { isRuntimeProviderAuthFailure } from './provider-auth.ts';
 import { isUsageLimitMessage } from './usage-limit.ts';
 
-export type AgentFailureClass = 'transient' | 'auth' | 'billing' | 'usage_limit' | 'context_too_large' | 'disk_full' | 'other';
+export type AgentFailureClass = 'transient' | 'auth' | 'billing' | 'usage_limit' | 'context_too_large' | 'disk_full' | 'content_flagged' | 'other';
 
 /** The prefixes `run.ts` puts in front of the agent's own error. */
 const RUN_ERROR_PREFIX_RE = /^(?:continue failed: |step "[^"]*" failed: )/;
@@ -27,6 +27,7 @@ const BILLING_RES = [
   /\binsufficient[_\s]quota\b/i, // OpenAI-backed codex/opencode
   /\bexceeded your current quota\b/i,
   /\bapi error:\s*402\b|\brequires more credits\b/i, // claude via a credit-billed gateway (cb147fae)
+  /\b(?:usage\s+)?credits\s+ran\s+out\b/i, // claude (0fa28a3b)
 ] as const;
 
 const CONTEXT_TOO_LARGE_RES = [
@@ -36,6 +37,9 @@ const CONTEXT_TOO_LARGE_RES = [
   /\bexceeds the context window\b/i,
 ] as const;
 
+/** Codex's cyber-safety refusal (83c98049): the prompt itself was flagged, so a retry refuses again. */
+const CONTENT_FLAGGED_RE = /\bflagged for possible cybersecurity risk\b|\[cyberPolicy\]/i;
+
 const TRANSIENT_RES = [
   /\b529\b[^\n]{0,20}\boverloaded\b/i, // claude (76aa46a9)
   /\boverloaded_error\b/i,
@@ -44,6 +48,8 @@ const TRANSIENT_RES = [
   /\bmodel is (?:currently )?at capacity\b/i, // codex (a1c2fcc2)
   /\bworkspace routing discovery failed\b/i, // codex remote compact (5919c71a)
   /\bstream disconnected before completion\b/i, // codex
+  /\brpm limit exceeded\b|\brequests per minute per account\b/i, // opencode provider throttle (96174abb)
+  /\bmodel [^\n]{0,120}?\bis temporarily unavailable\b/i, // opencode (0399e0f1)
   /\bapi error:\s*(?:500|502|503|504)\b(?!\s*auth_unavailable)/i, // claude's upstream 5xx
 ] as const;
 
@@ -55,6 +61,7 @@ export function classifyAgentFailure(error: string | undefined): AgentFailureCla
   if (isDiskFullError(message)) return 'disk_full';
   // Before auth: "Failed to refresh OAuth token" reads like a dead login and is not one.
   if (OAUTH_REFRESH_RACE_RE.test(message)) return 'transient';
+  if (CONTENT_FLAGGED_RE.test(message)) return 'content_flagged';
   // Before usage_limit: "out of credits" is in its phrase set, but a top-up is not a reset window.
   if (BILLING_RES.some((re) => re.test(message))) return 'billing';
   if (isUsageLimitMessage(message)) return 'usage_limit';
@@ -121,6 +128,8 @@ export function accountStateHint(
       return opts.resetKnown
         ? undefined
         : `the ${name ?? 'agent'} account reached its usage limit and did not say when it resets — Continue once the limit lifts, or switch this task to another account`;
+    case 'content_flagged':
+      return `${name ?? 'The agent'}'s safety filter flagged this request as a possible cybersecurity risk — rephrase the task, or for authorized security work request the provider's cyber-permissive access, then Continue`;
     case 'context_too_large':
       return `this conversation grew past what ${name ?? 'the agent'} accepts in one request (accumulated images and attachments count) — start a new task from this one's handoff instead of continuing it`;
     default:

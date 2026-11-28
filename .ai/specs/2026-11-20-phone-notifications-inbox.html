@@ -1,0 +1,258 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CezarBot notifications — stuck badge & Needs you inbox</title>
+<style>
+  :root { --bg:#0b0d12; --card:#151922; --line:#262b37; --fg:#e8ebf2; --mut:#8b93a7; --acc:#6aa8ff; --red:#ff4d4f; --ok:#3ccf8e; --warn:#f5b642; }
+  @media (prefers-color-scheme: light) { :root { --bg:#f6f7f9; --card:#fff; --line:#e3e6ec; --fg:#141821; --mut:#5d6578; } }
+  * { box-sizing:border-box }
+  body { margin:0; background:var(--bg); color:var(--fg); font:15px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Inter,sans-serif }
+  main { max-width:1180px; margin:0 auto; padding:32px 24px 80px }
+  h1 { font-size:28px; margin:0 0 4px } h2 { font-size:20px; margin:44px 0 10px; padding-top:16px; border-top:1px solid var(--line) } h3 { font-size:16px; margin:18px 0 6px }
+  p, li { color:var(--fg) } .mut { color:var(--mut) } code { font:12.5px ui-monospace,Menlo,monospace; background:rgba(127,127,127,.14); padding:1px 5px; border-radius:4px }
+  table { border-collapse:collapse; width:100%; font-size:14px; margin:8px 0 } th,td { text-align:left; padding:7px 9px; border-bottom:1px solid var(--line); vertical-align:top } th { color:var(--mut); font-weight:600 }
+  .tag { display:inline-block; font-size:11px; font-weight:700; padding:1px 7px; border-radius:99px; letter-spacing:.02em }
+  .bug { background:rgba(255,77,79,.16); color:var(--red) } .gap { background:rgba(245,182,66,.16); color:var(--warn) } .rec { background:rgba(60,207,142,.16); color:var(--ok) }
+  .callout { background:var(--card); border:1px solid var(--line); border-left:4px solid var(--red); border-radius:10px; padding:14px 16px; margin:14px 0 }
+  .callout.ok { border-left-color:var(--ok) }
+  .row { display:flex; gap:28px; flex-wrap:wrap; align-items:flex-start }
+  .flow { display:flex; gap:8px; flex-wrap:wrap; align-items:center; font-size:13px }
+  .flow span { background:var(--card); border:1px solid var(--line); border-radius:8px; padding:6px 10px } .flow b { color:var(--mut) }
+
+  /* phone */
+  .phone { width:300px; height:620px; border-radius:42px; background:#000; padding:12px; box-shadow:0 10px 40px rgba(0,0,0,.35); flex:none }
+  .screen { width:100%; height:100%; border-radius:32px; background:#0f1218; color:#e8ebf2; overflow:hidden; display:flex; flex-direction:column; position:relative; font-size:13px }
+  .sb { height:34px; display:flex; justify-content:space-between; padding:10px 22px 0; font-size:12px; font-weight:600 }
+  .hd { padding:6px 16px 8px; display:flex; justify-content:space-between; align-items:center } .hd h4 { margin:0; font-size:20px }
+  .seg { display:flex; gap:6px; padding:0 16px 8px; flex-wrap:wrap } .seg i { font-style:normal; font-size:11px; padding:3px 9px; border-radius:99px; background:#1d2230; color:#aab2c5 } .seg i.on { background:#e8ebf2; color:#0f1218; font-weight:700 }
+  .list { flex:1; overflow:hidden; padding:0 10px }
+  .grp { font-size:11px; font-weight:700; color:#8b93a7; text-transform:uppercase; letter-spacing:.06em; margin:10px 6px 4px }
+  .it { background:#171b25; border:1px solid #232938; border-radius:12px; padding:9px 11px; margin-bottom:7px }
+  .it .t { font-weight:600; font-size:13px } .it .m { color:#8b93a7; font-size:11px; margin:1px 0 6px } .it .q { color:#cfd5e2; font-size:12px; margin-bottom:6px }
+  .acts { display:flex; gap:6px } .acts u { text-decoration:none; font-size:11px; padding:3px 9px; border-radius:7px; background:#232a3a; color:#cfd5e2 } .acts u.p { background:#6aa8ff; color:#08111f; font-weight:700 } .acts u.d { background:transparent; color:#8b93a7 }
+  .inp { background:#0f1218; border:1px solid #2b3245; border-radius:8px; padding:5px 8px; color:#6b7387; font-size:11px; margin-bottom:6px }
+  .bb { height:62px; border-top:1px solid #232938; display:flex; background:#0f1218 }
+  .bb div { flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center; font-size:10px; color:#8b93a7; position:relative; gap:2px }
+  .bb div.on { color:#fff; font-weight:700 } .bb .ic { width:18px; height:18px; border-radius:5px; border:1.6px solid currentColor }
+  .bdg { position:absolute; top:7px; left:50%; margin-left:4px; background:var(--red); color:#fff; font-size:10px; font-weight:700; min-width:16px; height:16px; border-radius:99px; padding:0 4px; display:flex; align-items:center; justify-content:center }
+  .foot { padding:8px 16px; display:flex; justify-content:space-between; font-size:11px; color:#8b93a7 } .foot a { color:#6aa8ff; text-decoration:none }
+  .set .sec { margin:10px 12px 0; background:#171b25; border-radius:12px; overflow:hidden } .set .r { display:flex; justify-content:space-between; align-items:center; padding:9px 12px; border-bottom:1px solid #232938; font-size:12.5px } .set .r:last-child { border:none }
+  .sw { width:34px; height:20px; border-radius:99px; background:#3ccf8e; position:relative; flex:none } .sw::after { content:""; position:absolute; right:2px; top:2px; width:16px; height:16px; border-radius:50%; background:#fff } .sw.off { background:#394055 } .sw.off::after { right:auto; left:2px }
+  .set .cap { font-size:11px; color:#8b93a7; padding:6px 14px 0 }
+  .cz { background:#171b25; border-radius:12px; padding:10px 12px; margin:0 12px 8px; display:flex; justify-content:space-between; align-items:center }
+  .chip { background:var(--red); color:#fff; font-weight:700; font-size:11px; padding:2px 9px; border-radius:99px } .chip.z { background:#232a3a; color:#8b93a7 }
+
+  /* desktop */
+  .desk { width:100%; max-width:1060px; height:440px; border-radius:12px; border:1px solid var(--line); background:#0f1218; color:#e8ebf2; display:flex; overflow:hidden; font-size:13px }
+  .side { width:210px; border-right:1px solid #232938; padding:14px 10px; flex:none } .side .h { font-size:11px; color:#8b93a7; text-transform:uppercase; letter-spacing:.06em; margin:10px 8px 4px }
+  .side .n { display:flex; justify-content:space-between; padding:6px 8px; border-radius:7px; color:#cfd5e2 } .side .n.on { background:#1d2230; color:#fff; font-weight:600 } .side .n em { font-style:normal; background:#2a3142; border-radius:99px; padding:0 7px; font-size:11px } .side .n.on em, .side .n em.r { background:var(--red); color:#fff }
+  .dm { flex:1; padding:16px 22px; overflow:hidden } .dm h4 { margin:0 0 4px; font-size:18px } .dm .bar { display:flex; justify-content:space-between; align-items:center; margin-bottom:10px }
+  .dm .it { display:flex; justify-content:space-between; align-items:center } .dm .it .acts { flex:none }
+  .variant { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:14px 16px; flex:1; min-width:280px }
+  .variant.rec-b { border-color:var(--ok) }
+</style>
+</head>
+<body>
+<main>
+<h1>CezarBot notifications</h1>
+<p class="mut">Why the icon shows a "1" nobody can clear, the small fix, and a place to handle what the badge counts. Spec: <code>.ai/specs/2026-11-20-phone-notifications-inbox.md</code>. Nothing implemented yet — pick below.</p>
+
+<h2>1 · What the "1" is</h2>
+<div class="callout">
+  <b>The icon number is a stale snapshot kept on the phone.</b> It is the sum of each computer's <i>last-known</i> count, written only by a relay push or by the <i>Your cezars</i> screen's probe. cezar never sends a push when the count goes <i>down</i>, and the app never removes a delivered notification. Right now this computer's real count is <b>3</b> (3 live questions, 0 approvals, no unread important messages) while the phone shows <b>1</b> — whatever the last push left there.
+</div>
+<table>
+  <tr><th>#</th><th>Defect</th><th>Evidence</th><th></th></tr>
+  <tr><td>B1</td><td>Nothing lowers the count. Pushes go out only for a <i>new</i> attention; answering on the desktop sends nothing; app open re-sums the stale book; opening a cezar page directly never probes.</td><td><code>managers/engine.ts:2013-2039</code>, <code>PushNotifier.swift:104</code>, <code>CezarList.swift:107</code></td><td><span class="tag bug">bug</span></td></tr>
+  <tr><td>B2</td><td>A push can count nothing: <code>badgeCount</code> floors at 1, and an important manager message or a newly waiting task pushes with a count (approvals + live questions) that excludes it → "1" for an item no list shows.</td><td><code>push/relay-sink.ts:65</code>, <code>server.ts:9126</code></td><td><span class="tag bug">bug</span></td></tr>
+  <tr><td>B3</td><td>Delivered notifications are never removed on iOS or Android (no <code>removeDeliveredNotifications</code> / <code>cancel</code> anywhere in <code>packages/mobile</code>). Android's launcher badge follows the shade entry.</td><td>grep, <code>PushNotifier.java:64</code></td><td><span class="tag bug">bug</span></td></tr>
+  <tr><td>B4</td><td>In-session (Stage 1) signals carry no count, so a live phone keeps the old number.</td><td><code>ServerViewController.swift:332</code></td><td><span class="tag gap">gap</span></td></tr>
+  <tr><td>B5</td><td>Desktop Approvals counts every manager; the push skips <code>notify: false</code> ones; failed tasks are shown beside the count but never in it.</td><td><code>manager-index.tsx:52</code>, <code>server.ts:9126</code></td><td><span class="tag gap">gap</span></td></tr>
+</table>
+<div class="callout ok"><b>Fix first, small PR, no relay change:</b> count what pushes (and allow 0, never send a 0 push) · refresh every cezar's count on app foreground and while a cezar page is open · remove that cezar's delivered notification at 0 · the cockpit inside the app reports its live count to the shell. The badge is then right whenever the app has been opened. Lowering it while the app stays closed needs the relay's <code>kind: "count"</code> push (spec § Relay change).</div>
+
+<h2>2 · One list, every number a filter of it</h2>
+<div class="flow"><span>question</span><span>approval</span><span>task needs you / failed</span><span>important message</span><b>→</b><span>attention list (per cezar, server)</span><b>→</b><span>Questions badge = question</span><span>Approvals = approval</span><span>Needs you = all</span><span>push count = this phone's kinds</span><b>→</b><span>icon = Σ computers</span></div>
+<p>Handled anywhere — desktop, another phone, the agent, Older, expiry — the item leaves the list, counts republish, and a phone told a higher number gets a silent <code>count</code> push (relay change) that sets its badge and removes the delivered notification at 0.</p>
+
+<h2>3 · The Needs you inbox (phone)</h2>
+<div class="row">
+  <div class="phone"><div class="screen">
+    <div class="sb"><span>9:41</span><span>●●● 5G</span></div>
+    <div class="hd"><h4>Needs you</h4><span style="color:#6aa8ff;font-size:12px">Mark all read</span></div>
+    <div class="seg"><i class="on">All 5</i><i>Questions 3</i><i>Approvals 1</i><i>Tasks 1</i></div>
+    <div class="list">
+      <div class="grp">Questions</div>
+      <div class="it"><div class="t">Which store API should the sync use?</div><div class="m">Shopware Manager · cezar · 12 min</div><div class="inp">Answer…</div><div class="acts"><u class="p">Send</u><u>Open</u><u class="d">Dismiss</u></div></div>
+      <div class="it"><div class="t">Ship the Android build to internal?</div><div class="m">Mobile app creator · 1 h</div><div class="acts"><u class="p">Yes</u><u>No</u><u>Open</u></div></div>
+      <div class="grp">Approvals</div>
+      <div class="it"><div class="t">Merge PR #2353</div><div class="m">Notes Manager · cezar · 3 h</div><div class="acts"><u class="p">Approve</u><u>Reject</u><u>Open</u></div></div>
+      <div class="grp">Tasks</div>
+      <div class="it"><div class="t">Fix flaky relay test — failed</div><div class="m">cezar · 5 h</div><div class="acts"><u>Open</u><u class="d">Mark seen</u></div></div>
+    </div>
+    <div class="bb"><div><span class="ic"></span>Tasks</div><div class="on"><span class="ic"></span>Needs you<span class="bdg">5</span></div><div><span class="ic"></span>Manager</div><div><span class="ic"></span>More</div></div>
+  </div></div>
+  <div style="flex:1;min-width:280px">
+    <h3>What it does</h3>
+    <ul>
+      <li>Reached from a bottom-bar tab whose badge is the same number the icon gets from this computer; a push tap lands here.</li>
+      <li>Each row names its project or manager. <b>Open</b> goes to the task or chat; questions answer inline (chips for a <code>CEZ:ASK</code> card, a field for free text); approvals decide inline.</li>
+      <li><b>Mark all read</b> clears only task notices and important messages. Questions and approvals need a decision and are never bulk-dismissed — dismissing a question tells the agent.</li>
+      <li>An empty list says so: "Nothing needs you on <i>cezar</i>." and the icon has no number from this computer.</li>
+    </ul>
+  </div>
+</div>
+
+<h2>4 · Variants</h2>
+<div class="row">
+  <div class="variant"><h3>A · Web inbox per cezar</h3><p>The inbox above, in the cockpit. One implementation serves the phone, the desktop and the notch. Shows one computer at a time.</p><p class="mut">Cost: web + server. Low.</p></div>
+  <div class="variant"><h3>B · Native cross-cezar inbox</h3><p>An inbox in the app shell listing every computer's items together. Needs a new tunnel read per cezar on each open, written twice (Swift, Java), and every inline action re-implemented natively.</p><p class="mut">Cost: high; offline computers show stale rows.</p></div>
+  <div class="variant"><h3>C · A + native glue</h3><p>The web inbox of A, plus count chips on <i>Your cezars</i> that open each computer's inbox, and the push tap landing there. Cross-computer at a glance; one inbox.</p><p class="mut">Cost: A + small native change on both platforms.</p></div>
+  <div class="variant rec-b"><h3>D · Now is the list <span class="tag rec">recommended</span></h3><p>No new tab. Now's existing <i>Needs you</i> section becomes the server list, with a From-managers group and a This project · All switch. Keep C's native chips for several computers.</p><p class="mut">Cost: about A's, with less new UI. See § 4b.</p></div>
+</div>
+
+<h2>4b · Variant D — the Now tab as the one list</h2>
+<p><b>Today:</b> Now is the project home and the first bottom-bar tab. It has Sign-in needed, <b>Needs you</b>, Running and Finished today. Its Needs you is built in the browser from <i>this project's</i> tasks only (question, review, budget, waiting, lifecycle, failed — <code>now-model.ts</code>) and shows no manager items. The Now tab has no count.</p>
+<div class="row">
+  <div class="phone"><div class="screen">
+    <div class="sb"><span>9:41</span><span>●●● 5G</span></div>
+    <div class="hd"><h4>Now</h4><span style="color:#6aa8ff;font-size:12px">Mark all read</span></div>
+    <div class="seg"><i>This project 2</i><i class="on">All 5</i></div>
+    <div class="list">
+      <div class="grp">Needs you · From managers</div>
+      <div class="it"><div class="t">Which store API should the sync use?</div><div class="m">Shopware Manager · 12 min</div><div class="inp">Answer…</div><div class="acts"><u class="p">Send</u><u>Open chat</u><u class="d">Dismiss</u></div></div>
+      <div class="it"><div class="t">Merge PR #2353</div><div class="m">Notes Manager · approval · 3 h</div><div class="acts"><u class="p">Approve</u><u>Reject</u></div></div>
+      <div class="grp">Needs you · cezar</div>
+      <div class="it"><div class="t">Fix flaky relay test</div><div class="m">Failed · 5 h</div><div class="acts"><u class="p">Retry</u><u>Open</u><u class="d">Mark seen</u></div></div>
+      <div class="grp">Needs you · homebrew-tap</div>
+      <div class="it"><div class="t">Bump formula to 0.21</div><div class="m">Ready for review · 1 h</div><div class="acts"><u class="p">Review changes</u></div></div>
+      <div class="grp">Running · 2</div>
+    </div>
+    <div class="bb"><div class="on"><span class="ic"></span>Now<span class="bdg">5</span></div><div><span class="ic"></span>Tasks</div><div><span class="ic"></span>Manager</div><div><span class="ic"></span>More</div></div>
+  </div></div>
+  <div style="flex:1;min-width:300px">
+    <h3>How it fits</h3>
+    <ul>
+      <li><b>Same page, same tab.</b> Needs you stays on top of Now; Running and Finished today stay below. The Now tab (and Now in the desktop sidebar) gets the badge. No new navigation.</li>
+      <li><b>Task rows keep today's reasons and one action</b> (Answer, Review changes, Resume, Reply, Retry), now read from the server list, so a row on Now is exactly a unit of the badge.</li>
+      <li><b>Manager items</b> (questions, approvals, important messages) get a <i>From managers</i> group with inline Answer, Approve/Reject, Open chat and Mark read. It collapses after 3 rows.</li>
+    </ul>
+    <h3>Project scope vs managers</h3>
+    <ul>
+      <li><b>This project</b>: this project's tasks, plus items from managers connected to it (<code>connectedProjectIds</code>).</li>
+      <li><b>All</b>: every project's tasks grouped by project, plus every manager item, including managers with no project. Its count equals the icon's number for this cezar.</li>
+      <li>A push tap and the badge land on <b>All</b>; the switch remembers the last choice.</li>
+    </ul>
+    <h3>Several cezars</h3>
+    <p>Each computer serves its own Now. The cross-computer view stays native: <i>Your cezars</i> count chips (from C) open that computer's Now on All. The icon is still the sum.</p>
+    <h3>New tab?</h3>
+    <p><b>Not needed.</b> D drops the Needs-you tab and the desktop third entry. Questions and Approvals keep their pages as filtered views of the same list.</p>
+  </div>
+</div>
+<div class="desk" style="margin-top:18px">
+  <div class="side">
+    <div class="h">cezar</div>
+    <div class="n on">Now <em>5</em></div>
+    <div class="n">Tasks</div>
+    <div class="h">Workspace</div>
+    <div class="n">Questions <em class="r">3</em></div>
+    <div class="n">Approvals <em class="r">1</em></div>
+  </div>
+  <div class="dm">
+    <div class="bar"><div><h4>Now</h4><span style="color:#8b93a7">This project · <b style="color:#fff">All</b></span></div><span style="color:#6aa8ff">Mark all read</span></div>
+    <div class="grp" style="margin-left:0">Needs you · From managers · 3</div>
+    <div class="it"><div><div class="t">Which store API should the sync use?</div><div class="m">Shopware Manager · question · 12 min</div></div><div class="acts"><u class="p">Answer</u><u>Open chat</u></div></div>
+    <div class="it"><div><div class="t">Merge PR #2353</div><div class="m">Notes Manager · approval · 3 h</div></div><div class="acts"><u class="p">Approve</u><u>Reject</u></div></div>
+    <div class="grp" style="margin-left:0">Needs you · cezar · 1</div>
+    <div class="it"><div><div class="t">Fix flaky relay test</div><div class="m">Failed · 5 h</div></div><div class="acts"><u class="p">Retry</u><u class="d">Mark seen</u></div></div>
+    <div class="grp" style="margin-left:0">Running · 2 &nbsp;·&nbsp; Finished today · 4</div>
+  </div>
+</div>
+<p class="mut">Risks: the server list replaces Now's browser-side derivation, so <code>deriveAttention</code> moves server-side or is kept in sync by a parity test. Review-gate tasks join the counted kinds, as their own switch ("Tasks ready for review").</p>
+<div class="row" style="margin-top:20px">
+  <div class="phone"><div class="screen">
+    <div class="sb"><span>9:41</span><span>●●● 5G</span></div>
+    <div class="hd"><h4>Your cezars</h4><span style="color:#6aa8ff;font-size:12px">Add</span></div>
+    <div class="cz"><div><b>Laptop</b><div class="m" style="color:#8b93a7;font-size:11px">online · 3 questions, 1 approval</div></div><span class="chip">4 ›</span></div>
+    <div class="cz"><div><b>Studio Mac</b><div style="color:#8b93a7;font-size:11px">online · 1 task failed</div></div><span class="chip">1 ›</span></div>
+    <div class="cz"><div><b>CI box</b><div style="color:#8b93a7;font-size:11px">last seen 2 d ago</div></div><span class="chip z">—</span></div>
+    <div class="foot" style="margin-top:auto"><span>Icon badge: 5</span><a>Notifications…</a></div>
+  </div></div>
+  <div style="flex:1;min-width:280px"><h3>C's native part</h3><p>The chip is the computer's count; a tap opens that cezar's <b>Now</b> on <b>All</b> (variant D). An offline computer shows "—" and is left out of the icon rather than kept at an old number (a probe that fails twice drops its last count).</p></div>
+</div>
+
+<h2>5 · Desktop</h2>
+<div class="desk">
+  <div class="side">
+    <div class="h">Workspace</div>
+    <div class="n on">Needs you <em>5</em></div>
+    <div class="n">Questions <em class="r">3</em></div>
+    <div class="n">Approvals <em class="r">1</em></div>
+    <div class="h">Managers</div>
+    <div class="n">Shopware Manager <em>1</em></div>
+    <div class="n">Mobile app creator <em>1</em></div>
+    <div class="n">Notes Manager <em>1</em></div>
+  </div>
+  <div class="dm">
+    <div class="bar"><div><h4>Needs you</h4><span style="color:#8b93a7">Everything waiting on you on this computer — the same list your phone counts.</span></div><span style="color:#6aa8ff">Mark all read</span></div>
+    <div class="grp" style="margin-left:0">Questions · 3</div>
+    <div class="it"><div><div class="t">Which store API should the sync use?</div><div class="m">Shopware Manager · cezar · 12 min</div></div><div class="acts"><u class="p">Answer</u><u>Open</u><u class="d">Dismiss</u></div></div>
+    <div class="it"><div><div class="t">Ship the Android build to internal?</div><div class="m">Mobile app creator · 1 h</div></div><div class="acts"><u class="p">Yes</u><u>No</u></div></div>
+    <div class="grp" style="margin-left:0">Approvals · 1</div>
+    <div class="it"><div><div class="t">Merge PR #2353</div><div class="m">Notes Manager · cezar · 3 h</div></div><div class="acts"><u class="p">Approve</u><u>Reject</u></div></div>
+    <div class="grp" style="margin-left:0">Tasks · 1</div>
+    <div class="it"><div><div class="t">Fix flaky relay test — failed</div><div class="m">cezar · 5 h</div></div><div class="acts"><u>Open</u><u class="d">Mark seen</u></div></div>
+  </div>
+</div>
+<p class="mut">Questions and Approvals keep their pages and badges; Needs you is their union plus task notices and important messages. The three numbers are filters of one list, so they can no longer disagree.</p>
+
+<h2>6 · Settings, where "Notify me" lives</h2>
+<div class="row">
+  <div class="phone"><div class="screen set">
+    <div class="sb"><span>9:41</span><span>●●● 5G</span></div>
+    <div class="hd"><h4 style="font-size:17px">‹ Laptop · Notifications</h4></div>
+    <div class="sec"><div class="r"><span><b>Notify me</b></span><span class="sw"></span></div></div>
+    <div class="cap">PUSH ME FOR</div>
+    <div class="sec">
+      <div class="r">Questions<span class="sw"></span></div>
+      <div class="r">Approvals<span class="sw"></span></div>
+      <div class="r">Tasks that need me<span class="sw"></span></div>
+      <div class="r">Failed tasks<span class="sw off"></span></div>
+      <div class="r">Important manager messages<span class="sw"></span></div>
+    </div>
+    <div class="cap">COUNT ON THE ICON</div>
+    <div class="sec"><div class="r">Same as above<span class="sw"></span></div></div>
+    <div class="cap">QUIET HOURS</div>
+    <div class="sec"><div class="r">22:00 – 07:00<span class="sw off"></span></div></div>
+    <div class="cap">Kept on the computer: the relay never learns what a push is about.</div>
+  </div></div>
+  <div style="flex:1;min-width:280px">
+    <ul>
+      <li>The existing per-cezar <b>Notify me</b> row becomes a page; its switch stays at the top and still owns the push grant.</li>
+      <li>The relay carries no kind, so the choice is stored on the computer, per phone: its own route, <code>GET</code>/<code>PUT /api/v1/workspace/phone/push/prefs</code>, kept in <code>devices.json</code>: push kinds, icon kinds, quiet hours with the phone's IANA <code>timeZone</code>, and <code>understands</code>, the push kinds the app can read (only a phone that declares <code>count</code> gets silent count pushes). Not on <code>PUT /workspace/phone/push</code>: that body is strict, so an older cezar would reject it and the phone would lose its grant. An older cezar answers the new route with 404, and the page then shows the defaults read-only.</li>
+      <li>"Count on the icon" defaults to the push kinds; turning it off shows the full list.</li>
+      <li>Quiet hours are server-side and cheap: <code>attention</code> pushes are held, one is sent at the end if anything still waits, and silent <code>count</code> pushes still go out.</li>
+      <li>Per-manager "Notify me when important" on the desktop stays and still gates important messages.</li>
+    </ul>
+  </div>
+</div>
+
+<h2>7 · Relay change (rome)</h2>
+<table>
+  <tr><th></th><th>attention (today)</th><th>count (new)</th></tr>
+  <tr><td>Purpose</td><td>Alert + badge</td><td>Silent: badge down, clear delivered notification</td></tr>
+  <tr><td>APNs</td><td><code>push-type alert</code>, priority 10, <code>aps.alert + badge</code></td><td><code>push-type background</code>, priority 5, <code>{aps:{content-available:1}, s, c}</code></td></tr>
+  <tr><td>FCM</td><td>data, high</td><td>data <code>{s, count, t:"count"}</code>, normal</td></tr>
+  <tr><td>Collapse / TTL</td><td><code>cezarId</code> / 1 h</td><td><code>cezarId</code> / 1 h</td></tr>
+  <tr><td>Limit</td><td>existing</td><td>6 per grant per hour, separate; cezar sends at most one per 10 min, newest value wins, so the final 0 always goes out</td></tr>
+  <tr><td>Who gets it</td><td>every grant</td><td>only a phone that declared <code>count</code> in its prefs: released Android builds post a notification for every data push</td></tr>
+  <tr><td>Direction</td><td>an alert carries at least 1</td><td>up as well as down, once the phone knows a number (an alert or its app opening)</td></tr>
+</table>
+
+<h2>Decided (owner, 2026-11-20)</h2>
+<ol><li><b>Variant D</b>, with C's native chips on <i>Your cezars</i>.</li><li><i>Fix first</i> (B1–B3) ships separately; D builds on it.</li><li>Failed tasks push but do not count on the icon by default. Every other kind does both.</li><li>Quiet hours are in the first cut, on the settings page, stored on the computer with the phone's time zone.</li></ol>
+</main>
+</body>
+</html>

@@ -1,4 +1,9 @@
 import { unwrapJsonErrorEnvelope } from './agent-errors.ts';
+import { CodexToolPolicyError } from './codex-tool-policy.ts';
+import { compileCodexRestrictedPolicy, type CodexRestrictedPolicy } from './codex-restricted-policy.ts';
+import { prepareRestrictedCodexHome, type RestrictedCodexHome } from './codex-restricted-home.ts';
+import { CodexReadBroker, codexReadTool } from './codex-restricted-tools.ts';
+import { codexFeaturesToDisable, parseCodexFeaturePage, verifyRestrictedCodexFeatures, verifyRestrictedCodexIdentity, verifyRestrictedCodexConfig, verifyRestrictedCodexRequirements, verifyRestrictedCodexServices, verifyRestrictedCodexThread, type CodexFeature } from './codex-restricted-preflight.ts';
 import { emitUsageWindows, normalizeCodexUsageWindows } from './usage-windows.ts';
 import type { ChildProcessWithoutNullStreams } from 'node:child_process';
 import type {
@@ -53,6 +58,9 @@ export interface CodexRunnerOptions {
 
 /** ~16s: outlasts a previous session's own EOF→TERM→KILL teardown (12s) before forking. */
 const RESUME_LOCK_RETRY_MS: readonly number[] = [250, 500, 1_000, 2_000, 4_000, 4_000, 4_000];
+/** After a hard-stopped app-server exits, how long its stdout may stay open before we stop reading.
+ *  A normal exit closes it well within this; only a pipe a descendant inherited outlives it (#1929). */
+const EXITED_STDOUT_GRACE_MS = 1_000;
 
 /**
  * `AgentRunner` over `codex app-server` — the same JSONL transport the VS Code
@@ -65,8 +73,8 @@ const RESUME_LOCK_RETRY_MS: readonly number[] = [250, 500, 1_000, 2_000, 4_000, 
  * Auth = the host's logged-in ChatGPT/Codex session (or CODEX_API_KEY). The
  * agent runs autonomously via `sandbox: danger-full-access` +
  * `approvalPolicy: never`, matching cezar's default auto permission mode
- * (spec 2026-07-17-permission-modes). Codex has no per-tool allowlist, so
- * `spec.allowedTools` is ignored. `CEZ_CODEX_NETWORK=0` retains the previous
+ * (spec 2026-07-17-permission-modes). Supported read grants use an isolated home,
+ * no native execution environment, and cezar's read broker; unsupported grants refuse. `CEZ_CODEX_NETWORK=0` retains the previous
  * network-blocked `workspace-write` sandbox as an explicit restriction.
  */
 /**
@@ -111,7 +119,7 @@ export class CodexAppServerRunner implements AgentRunner {
     this.resumeLockRetryMs = opts.resumeLockRetryMs ?? RESUME_LOCK_RETRY_MS;
   }
 
-  run(spec: AgentRunSpec, onEvent?: (event: AgentEvent) => void): Promise<AgentRunResult> {
+  async run(spec: AgentRunSpec, onEvent?: (event: AgentEvent) => void): Promise<AgentRunResult> {
     return this.startSession(spec, onEvent, { autoEndAfterFirstTurn: true }).result;
   }
 
@@ -124,7 +132,8 @@ export class CodexAppServerRunner implements AgentRunner {
     onEvent?: (event: AgentEvent) => void,
     opts: SessionOptions = {},
   ): AgentSession {
-    const session = new CodexSession(this.bin, this.timeoutMs, this.resumeLockRetryMs, spec, onEvent, opts);
+    const policy = compileCodexRestrictedPolicy(spec);
+    const session = new CodexSession(this.bin, this.timeoutMs, this.resumeLockRetryMs, spec, onEvent, opts, policy);
     this.lastSession = session;
     return session;
   }
@@ -138,8 +147,12 @@ interface PendingUserInput {
 /** One live `codex app-server` process driving a single thread. */
 class CodexSession implements AgentSession {
   readonly result: Promise<AgentRunResult>;
+  readonly processExited!: Promise<void>;
 
   private readonly child!: ChildProcessWithoutNullStreams;
+  private readonly restrictedHome?: RestrictedCodexHome;
+  private readonly readBroker?: CodexReadBroker;
+  private enforcementActive = false;
   private readonly rpc!: CodexAppServerRpc;
   private stdinOpen = true;
   /** Teardown rejects follow-up RPCs after the owning run may have gone away.
@@ -179,6 +192,9 @@ class CodexSession implements AgentSession {
   private eofTermTimer: NodeJS.Timeout | undefined;
   private eofKillTimer: NodeJS.Timeout | undefined;
   private hardKillTimer: NodeJS.Timeout | undefined;
+  private stdoutReleaseTimer: NodeJS.Timeout | undefined;
+  /** Set when a hard stop stopped reading stdout itself, so the read loop's end is teardown, not an error. */
+  private stdoutReleased = false;
   private spawnFailed: Error | null = null;
   private timedOut = false;
   /** Set the moment WE signal the child (EOF watchdog, cancel, kill switch).
@@ -203,17 +219,28 @@ class CodexSession implements AgentSession {
     private readonly spec: AgentRunSpec,
     private readonly onEvent: ((event: AgentEvent) => void) | undefined,
     private readonly opts: SessionOptions,
+    private readonly policy?: CodexRestrictedPolicy,
   ) {
+    if (policy) {
+      if (process.platform !== 'darwin' && process.platform !== 'linux') throw new CodexToolPolicyError('restricted execution is unavailable on this platform');
+      this.restrictedHome = prepareRestrictedCodexHome(spec);
+      this.readBroker = new CodexReadBroker(policy, spec, this.restrictedHome.toolEnv, this.restrictedHome.githubReadsAllowed);
+    }
     watchOwnSignals();
     try {
-      this.child = spawnCodexAppServer(bin, spec.cwd, spec.env);
+      this.child = spawnCodexAppServer(bin, spec.cwd, spec.env, this.restrictedHome?.env);
       this.rpc = new CodexAppServerRpc(this.child);
     } catch (err) {
       throw codexSpawnError(err, bin);
     }
 
     this.hasExited = trackChildExit(this.child);
+    this.processExited = new Promise<void>((resolve) => {
+      if (this.hasExited()) resolve();
+      else this.child.once('exit', () => resolve());
+    });
     this.child.once('exit', () => {
+      this.readBroker?.close();
       this.stdinOpen = false;
     });
     this.child.on('error', (err: NodeJS.ErrnoException) => {
@@ -265,7 +292,9 @@ class CodexSession implements AgentSession {
             // plan/reasoning state and resetting the current turn id. Child ITEM events still
             // flow, so nested sub-agent activity keeps rendering.
             if (this.isForeignTurnLifecycle(msg)) continue;
-            this.emitUi((state) => mapCodexNotification(msg, state));
+            // The thread RPC result supplies the model and identifies the main thread.
+            // Its notification can arrive first, so bootstrap alone publishes the session.
+            if (msg.method !== 'thread/started') this.emitUi((state) => mapCodexNotification(msg, state));
             this.dispatch(msg);
           }
         };
@@ -274,7 +303,7 @@ class CodexSession implements AgentSession {
         // promises makes every bootstrap rejection part of session.result.
         await Promise.all([this.ready, readLoop()]);
       } catch (err) {
-        if (!this.timedOut) {
+        if (!this.timedOut && !this.stdoutReleased) {
           sessionError = err;
           // Bootstrap failed before a usable turn exists. Closing stdin lets
           // app-server exit normally; end() also owns the TERM/KILL watchdog
@@ -282,6 +311,7 @@ class CodexSession implements AgentSession {
           this.end();
         }
       } finally {
+        this.readBroker?.close();
         deadline.clear();
         if (killTimer) clearTimeout(killTimer);
         if (this.autoEndTimer) clearTimeout(this.autoEndTimer);
@@ -292,6 +322,7 @@ class CodexSession implements AgentSession {
       if (this.eofTermTimer) clearTimeout(this.eofTermTimer);
         if (this.eofKillTimer) clearTimeout(this.eofKillTimer);
         if (this.hardKillTimer) clearTimeout(this.hardKillTimer);
+        if (this.stdoutReleaseTimer) clearTimeout(this.stdoutReleaseTimer);
       this.rpc.rejectPending();
 
       if (this.spawnFailed) throw this.spawnFailed;
@@ -335,7 +366,7 @@ class CodexSession implements AgentSession {
 
       if (exitCode !== 0 && exitCode !== null) {
         const stderr = stderrChunks.join('').trim();
-        const detail = stderr ? ` — ${stderr.split('\n').slice(-3).join(' | ')}` : '';
+        const detail = this.restrictedHome ? ' — isolated startup or account/provider configuration failed' : stderr ? ` — ${stderr.split('\n').slice(-3).join(' | ')}` : '';
         const message = `codex app-server exited with code ${exitCode}${detail}`;
         this.emit({ type: 'error', message });
         throw new Error(message);
@@ -418,6 +449,7 @@ class CodexSession implements AgentSession {
   }
 
   end(): void {
+    this.readBroker?.close();
     if (!this.stdinOpen) return;
     this.rejectPendingUserInput('session ended');
     this.stdinOpen = false;
@@ -439,6 +471,7 @@ class CodexSession implements AgentSession {
   }
 
   interrupt(): void {
+    this.readBroker?.close();
     this.stdinOpen = false;
     this.followUpDeliveryOpen = false;
     this.rejectPendingUserInput('turn interrupted');
@@ -456,6 +489,11 @@ class CodexSession implements AgentSession {
 
   hardStop(): void {
     this.interrupt();
+    void this.processExited.then(() => {
+      if (this.stdoutReleaseTimer) return;
+      this.stdoutReleaseTimer = setTimeout(() => this.releaseStdout(), EXITED_STDOUT_GRACE_MS);
+      this.stdoutReleaseTimer.unref?.();
+    });
     if (this.hardKillTimer || this.hasExited()) return;
     this.hardKillTimer = setTimeout(() => {
       if (!this.hasExited()) {
@@ -466,29 +504,104 @@ class CodexSession implements AgentSession {
     this.hardKillTimer.unref?.();
   }
 
+  /** End the read loop on a stdout a surviving descendant still holds open (#1929). */
+  private releaseStdout(): void {
+    const stdout = this.child.stdout;
+    if (stdout.readableEnded || stdout.destroyed) return;
+    this.stdoutReleased = true;
+    stdout.destroy();
+    // No reply can arrive any more; a handshake still in flight must not keep `ready` pending.
+    this.rpc.rejectPending();
+  }
+
   // ---- protocol -----------------------------------------------------------
 
   private async bootstrap(): Promise<void> {
-    await this.rpc.initialize();
+    const identity = this.rpc.initialize();
 
-    const overrides = codexThreadOverrides(this.spec, this.privateMcpConfig());
-    if (this.spec.resume && this.spec.sessionId) {
-      this.threadId = await this.resumeThread(this.spec.sessionId, clean(overrides));
+    // The thread/* results name the model the thread actually runs on — what "auto" resolved to.
+    let model: string | undefined;
+    if (this.restrictedHome) {
+      let timer: NodeJS.Timeout | undefined;
+      // Preserve the writer-lock recovery window inside the bounded preflight.
+      const startupMs = 15_000 + (this.spec.resume ? this.resumeLockRetryMs.reduce((sum, delay) => sum + delay, 0) : 0);
+      try {
+        model = await Promise.race([identity.then(value => this.bootstrapRestricted(value)).catch(err => {
+          if (err instanceof CodexToolPolicyError) throw err;
+          if (err instanceof Error && /no rollout found/i.test(err.message)) throw new Error(`no rollout found for thread id ${this.spec.sessionId ?? ''}`);
+          throw new CodexToolPolicyError('isolated startup could not be verified; check the selected account and model provider');
+        }), new Promise<never>((_, reject) => {
+          timer = setTimeout(() => reject(new CodexToolPolicyError('isolated startup verification timed out; check the selected account and model provider')), startupMs);
+        })]);
+      } finally { if (timer) clearTimeout(timer); }
     } else {
-      const res = await this.rpc.request('thread/start', clean(overrides));
-      this.threadId = threadIdOf(res) ?? this.spec.sessionId;
+      await identity;
+      const overrides = codexThreadOverrides(this.spec, this.privateMcpConfig());
+      if (this.spec.resume && this.spec.sessionId) {
+        ({ threadId: this.threadId, model } = await this.resumeThread(this.spec.sessionId, clean(overrides)));
+      } else {
+        const res = await this.rpc.request('thread/start', clean(overrides));
+        this.threadId = threadIdOf(res) ?? this.spec.sessionId;
+        model = threadModelOf(res);
+      }
     }
+    if (!this.stdinOpen) throw new Error('codex: startup was interrupted');
     if (this.threadId) {
       this.emit({ type: 'session', sessionId: this.threadId });
-      // The result path (thread/start response, or thread/resume which sends
-      // no thread/started notification) — deduplicated inside the mapper.
       const threadId = this.threadId;
-      this.emitUi((state) => codexSessionStarted(threadId, state));
+      this.emitUi((state) => codexSessionStarted(threadId, state, model));
     }
 
     // Native developerInstructions replaces config guidance and stays stale on resume/fork.
     // Keep each invocation's current guidance in its opening turn instead.
+    this.enforcementActive = !!this.restrictedHome;
+    if (this.restrictedHome) this.emit({ type: 'note', message: 'codex: isolated read-only enforcement active; native execution disabled, reads handled by cezar' });
     await this.startOrSteerTurn(prependSystemPrompt(this.spec.systemPrompt, this.spec.userPrompt));
+  }
+
+  private async bootstrapRestricted(identity: Record<string, unknown>): Promise<string | undefined> {
+    const home = this.restrictedHome!;
+    const { baseline } = verifyRestrictedCodexIdentity(identity, home);
+    verifyRestrictedCodexConfig(await this.rpc.request('config/read', { cwd: this.spec.cwd, includeLayers: true }), home);
+    verifyRestrictedCodexRequirements(await this.rpc.request('configRequirements/read', {}));
+    const absentServices = async (threadId?: string) => verifyRestrictedCodexServices(
+      await this.rpc.request('hooks/list', threadId ? { threadId } : { cwds: [this.spec.cwd] }),
+      await this.rpc.request('mcpServerStatus/list', threadId ? { threadId } : {}),
+    );
+    await absentServices();
+    // Past the 0.169.0 baseline, a feature this isolation has never heard of may be a native tool.
+    const unknownOn = baseline ? [] : codexFeaturesToDisable(await this.codexFeatures());
+    if (!this.stdinOpen) throw new Error('codex: isolated startup was interrupted');
+    const overrides = clean({ model: this.spec.model, cwd: this.spec.cwd, sandbox: 'read-only', approvalPolicy: 'never', config: {
+      ...Object.fromEntries(unknownOn.map(key => [`features.${key}`, false])),
+      ...Object.fromEntries(Object.entries(this.restrictedHome!.config.features as Record<string, boolean>).map(([key, value]) => [`features.${key}`, value])),
+      web_search: 'disabled',
+    } });
+    let model: string | undefined;
+    if (this.spec.resume && this.spec.sessionId) ({ threadId: this.threadId, model } = await this.resumeThread(this.spec.sessionId, overrides));
+    else {
+      const res = await this.rpc.request('thread/start', { ...overrides, environments: [], dynamicTools: [codexReadTool(this.policy!)] });
+      verifyRestrictedCodexThread(res, this.spec.cwd);
+      this.threadId = threadIdOf(res);
+      model = threadModelOf(res);
+    }
+    if (!this.threadId) throw new Error('codex: isolated thread did not return an id');
+    if (!baseline) verifyRestrictedCodexFeatures(await this.codexFeatures(this.threadId));
+    await absentServices(this.threadId);
+    return model;
+  }
+
+  /** Every page of `experimentalFeature/list`, for the thread's effective config when given. */
+  private async codexFeatures(threadId?: string): Promise<CodexFeature[]> {
+    const features: CodexFeature[] = [];
+    let cursor: string | null | undefined;
+    for (let page = 0; page < 20; page++) {
+      const result = parseCodexFeaturePage(await this.rpc.request('experimentalFeature/list', { limit: 500, ...(cursor ? { cursor } : {}), ...(threadId ? { threadId } : {}) }));
+      features.push(...result.data);
+      cursor = result.nextCursor;
+      if (!cursor) return features;
+    }
+    throw new CodexToolPolicyError('Codex reported too many native features to verify');
   }
 
   /**
@@ -497,11 +610,12 @@ class CodexSession implements AgentSession {
    * for it to let go; if it never does, fork the stored thread (forking takes no writer lock)
    * so the run keeps its history instead of failing on a lock it cannot break.
    */
-  private async resumeThread(threadId: string, overrides: Record<string, unknown>): Promise<string> {
+  private async resumeThread(threadId: string, overrides: Record<string, unknown>): Promise<{ threadId: string; model?: string }> {
     for (let attempt = 0; ; attempt++) {
       try {
-        await this.rpc.request('thread/resume', { threadId, ...overrides });
-        return threadId;
+        const res = await this.rpc.request('thread/resume', { threadId, ...overrides });
+        if (this.restrictedHome) verifyRestrictedCodexThread(res, this.spec.cwd);
+        return { threadId, model: threadModelOf(res) };
       } catch (err) {
         if (!isActiveWriterError(err) || !this.stdinOpen) throw err;
         const delay = this.resumeLockRetryMs[attempt];
@@ -511,13 +625,14 @@ class CodexSession implements AgentSession {
       }
     }
     const res = await this.rpc.request('thread/fork', { threadId, ...overrides });
+    if (this.restrictedHome) verifyRestrictedCodexThread(res, this.spec.cwd);
     const forkedId = threadIdOf(res);
     if (!forkedId) throw new Error(`codex: thread ${threadId} is open in another Codex process and could not be forked`);
     this.emit({
       type: 'note',
       message: `codex: thread ${threadId} is still open in another Codex process — continuing in a fork of it (${forkedId})`,
     });
-    return forkedId;
+    return { threadId: forkedId, model: threadModelOf(res) };
   }
 
   private async startOrSteerTurn(text: string): Promise<void> {
@@ -550,6 +665,7 @@ class CodexSession implements AgentSession {
       threadId: this.threadId,
       input,
       summary: reasoningSummary(),
+      ...(this.restrictedHome ? { approvalPolicy: 'never', sandboxPolicy: { type: 'readOnly', networkAccess: false }, environments: [] } : {}),
       ...(this.spec.reasoningEffort ? { effort: this.spec.reasoningEffort } : {}),
     });
     this.activeTurnId = turnIdOf(res) ?? this.activeTurnId;
@@ -559,6 +675,22 @@ class CodexSession implements AgentSession {
     if (this.rpc.dispatchResponse(msg)) return;
     if (msg.method === 'item/tool/requestUserInput' && (typeof msg.id === 'number' || typeof msg.id === 'string')) {
       this.handleUserInputRequest(msg.id, msg.params ?? {});
+      return;
+    }
+    if (this.restrictedHome && typeof msg.method === 'string' && (typeof msg.id === 'string' || typeof msg.id === 'number')) {
+      const params = msg.params ?? {};
+      if (msg.method === 'item/tool/call' && this.enforcementActive && params.threadId === this.threadId && (!this.activeTurnId || params.turnId === this.activeTurnId)) {
+        void this.readBroker!.call(params).then(result => this.rpc.respond({ id: msg.id, result }));
+      } else {
+        // Includes command/file/permission approvals, MCP elicitations, foreign threads and unknown requests.
+        const denial = msg.method === 'item/commandExecution/requestApproval' || msg.method === 'item/fileChange/requestApproval'
+          ? { decision: 'decline' }
+          : msg.method === 'item/permissions/requestApproval' ? { permissions: {}, scope: 'turn' }
+          : msg.method === 'mcpServer/elicitation/request' ? { action: 'decline' }
+          : msg.method === 'execCommandApproval' || msg.method === 'applyPatchApproval' ? { decision: 'denied' }
+          : undefined;
+        this.rpc.respond(denial ? { id: msg.id, result: denial } : { id: msg.id, error: { code: -32601, message: 'cezar: native or ungranted tools are disabled for this restricted step' } });
+      }
       return;
     }
     if (typeof msg.method === 'string') this.handleNotification(msg.method, msg.params ?? {});
@@ -863,6 +995,12 @@ function isActiveWriterError(err: unknown): boolean {
 function threadIdOf(res: Record<string, unknown>): string | undefined {
   const thread = res.thread as { id?: unknown } | undefined;
   return typeof thread?.id === 'string' ? thread.id : stringField(res, 'threadId');
+}
+
+/** `thread/start`/`thread/resume`/`thread/fork` results carry the thread's resolved `model`. */
+function threadModelOf(res: Record<string, unknown>): string | undefined {
+  const model = stringField(res, 'model');
+  return model === '' ? undefined : model;
 }
 
 function turnIdOf(obj: Record<string, unknown>): string | undefined {

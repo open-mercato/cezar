@@ -5,6 +5,7 @@ import { classifyManagerFailure, failureCause, managerFailureMessage, retryPlan,
 const OBSERVED: Array<[string, ManagerFailureKind]> = [
   ['Failed to authenticate: OAuth session expired and could not be refreshed', 'auth'],
   ['You’ve hit your session limit · resets 6:10am (Europe/Warsaw)', 'usage-limit'],
+  ["You're out of usage credits · resets Dec 1 at 1am (Europe/Warsaw)", 'usage-limit'],
   ["API Error: Can't reach the API server — check your internet or DNS (ENOTFOUND)", 'network'],
   ["Prompt is too long · automatic compaction failed: API Error: Can't reach the API server (ENOTFOUND)", 'session'],
   ['No conversation found with session ID: 0d35a1be', 'session'],

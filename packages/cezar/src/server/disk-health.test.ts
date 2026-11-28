@@ -47,4 +47,21 @@ describe('diskHealth', () => {
     expect(health.disk?.level).toBe('critical');
     expect(healthResponseSchema.shape.disk.parse(health.disk)).toEqual(health.disk);
   });
+
+  it('carries the disk guard warning and its every-project total, even while the level is ok', () => {
+    const sizer = vi.fn(async () => GIB);
+    const health = diskHealth('/repo', () => ({ freeBytes: 40 * GIB, totalBytes: 500 * GIB }), sizer, {
+      warning: 'Disk almost full — 21.0 GB in task worktrees',
+      worktreesBytes: 2100 * 100 * MIB + 1234,
+    });
+    expect(health.disk).toEqual({
+      freeBytes: 40 * GIB,
+      totalBytes: 500 * GIB,
+      level: 'ok',
+      worktreesBytes: 2100 * 100 * MIB,
+      guardWarning: 'Disk almost full — 21.0 GB in task worktrees',
+    });
+    expect(sizer).not.toHaveBeenCalled();
+    expect(healthResponseSchema.shape.disk.parse(health.disk)).toEqual(health.disk);
+  });
 });

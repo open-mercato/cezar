@@ -14,12 +14,14 @@ import {
   NotebookTextIcon,
   PanelBottomIcon,
   PencilIcon,
+  TagIcon,
   PinIcon,
   SquareTerminalIcon,
   TerminalIcon,
   TextCursorInputIcon,
   Trash2Icon,
 } from 'lucide-react'
+import { hasWorkflowGraph } from '@/lib/has-workflow-graph'
 import type { ReactNode } from 'react'
 
 import type { ApiRun } from '@open-mercato/cezar-api-client'
@@ -31,6 +33,7 @@ import { GIT_ACTION_ICONS, GIT_ACTION_PENDING_LABELS } from '@/routes/task-git/g
 import { FIXED_VIEW_ORDER, VIEW_PATHS, viewAliases, viewLabel, type ViewId } from '@/routes/task-workspace/layout-state'
 import { stripEntries, stripTabs, type StripEntry } from '@/routes/task-workspace/strip'
 import { VIEW_ICONS } from '@/routes/task-workspace/view-picker'
+import { archiveDetail } from '@/lib/archive-copy'
 
 /**
  * Everything ⌘P can do to one task (spec 2026-10-17-task-palette), as a pure function of the run
@@ -122,6 +125,8 @@ export interface TaskCommandHandlers {
   pin: (source?: CommandSource) => void
   archive: (source?: CommandSource) => void
   rename: () => void
+  /** Opens the task's tag picker (spec 2026-11-23-task-tags § 7.3); absent where none is mounted. */
+  tags?: () => void
   finish: () => void
   confirmStop: () => void
   confirmDelete: () => void
@@ -151,6 +156,8 @@ export interface TaskCommandInput {
   prUrl?: string
   /** An absolute link to this task, for Copy link. */
   taskUrl: string
+  /** The project's archived-task lifetime in days (0 = never), when known: Archive mentions it. */
+  archivedDeleteDays?: number
 }
 
 const icon = (Icon: typeof PinIcon) => <Icon aria-hidden="true" />
@@ -168,7 +175,7 @@ export function buildTaskCommands(input: TaskCommandInput, on: TaskCommandHandle
   return [...commands, ...tabCommands(strip, commands)]
 }
 
-function actionCommands({ run, workspace }: TaskCommandInput, on: TaskCommandHandlers): TaskCommand[] {
+function actionCommands({ run, workspace, archivedDeleteDays }: TaskCommandInput, on: TaskCommandHandlers): TaskCommand[] {
   const flags = runActionFlags(run)
   const live = isRunActive(run.status) ? 'Stop the task first' : undefined
   const gated = run.worktreeLifecycle?.activeOperationId ? 'Resolve the worktree operation first' : undefined
@@ -211,6 +218,7 @@ function actionCommands({ run, workspace }: TaskCommandInput, on: TaskCommandHan
       label: run.archived ? 'Unarchive' : 'Archive',
       icon: icon(ArchiveIcon),
       pressed: Boolean(run.archived),
+      ...(run.archived ? {} : { detail: { text: archiveDetail(archivedDeleteDays) } }),
       ...(live ? { unavailable: live } : {}),
       perform: on.archive,
     },
@@ -223,6 +231,16 @@ function actionCommands({ run, workspace }: TaskCommandInput, on: TaskCommandHan
       perform: on.rename,
     },
   )
+  if (on.tags) {
+    commands.push({
+      id: 'tags',
+      group: 'actions',
+      label: 'Tags…',
+      icon: icon(TagIcon),
+      keywords: ['tag', 'label', 'batch'],
+      perform: on.tags,
+    })
+  }
   if (flags.finish && run.status === 'waiting') {
     commands.push({
       id: 'end-session',
@@ -352,7 +370,7 @@ function viewCommands({ run, workspace, terminalAvailable }: TaskCommandInput, o
 function stripViews(run: ApiRun, workspace: TaskWorkspaceBridge | null, terminalAvailable: boolean): readonly ViewId[] {
   return (
     workspace?.views ??
-    FIXED_VIEW_ORDER.filter((view) => (view !== 'graph' || Boolean(run.workflowDef)) && (view !== 'terminal' || terminalAvailable))
+    FIXED_VIEW_ORDER.filter((view) => (view !== 'graph' || hasWorkflowGraph(run)) && (view !== 'terminal' || terminalAvailable))
   )
 }
 

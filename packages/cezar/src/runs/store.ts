@@ -1,7 +1,8 @@
-import { deferredBindingSchema, queueWaitReasonSchema, taskAskRecordSchema, trackerAccessSchema, type QuestionClosed, type QuestionStale, type TaskAskRecord } from '@open-mercato/cezar-contract';
+import { RUN_PR_REF_RANK, stepToolPolicySchema, deferredBindingSchema, modelUsageSchema, queueWaitReasonSchema, runAgentSwitchSchema, taskAskRecordSchema, trackerAccessSchema, type QuestionClosed, type QuestionStale, type TaskAskRecord } from '@open-mercato/cezar-contract';
 import { EventEmitter } from 'node:events';
 import { runLifecycleSnapshot, type RunLifecycleObserver, type RunLifecycleSnapshot } from './lifecycle.ts';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
+import { cezarHomeDir } from '../paths.ts';
 import { threadId } from 'node:worker_threads';
 import { hostname, uptime } from 'node:os';
 import {
@@ -19,13 +20,14 @@ import {
   statSync,
   writeFileSync,
 } from 'node:fs';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { z } from 'zod';
 import { StreamRedaction } from './stream-redaction.ts';
 import { renameSyncWithRetry } from '../fs-rename.ts';
 import { collectSecretValues, redactDeep, redactSecrets } from '../core/secret-redaction.ts';
 import type { AgentUsageStatus } from '../core/agent-runner.ts';
 // Sibling module, files only — a draft belongs to a run and is deleted with it (#939).
+import { sweepOrphanTaskFiles } from './task-files.ts';
 import { deleteRunDrafts } from './drafts.ts';
 import { deleteRunLayouts, pruneOrphanLayouts } from './layouts.ts';
 import { failureKind, taskFailedLabel } from './failure-kind.ts';
@@ -40,8 +42,10 @@ import { workflowDefSchema } from '../workflows/types.ts';
 // A contract VALUE, like `workspaceUiStateSchema` in `workspace/migrations.ts`: the persisted
 // `dispatch` object and its wire half are literally the same schema, so they cannot drift.
 import type { RunArtifact, RunArtifactVersion } from '@open-mercato/cezar-contract';
-import { dispatchSchema, runSubjectSchema, trackerAssociationSchema, trackerAutomationEventSchema, webhookAttentionRequestSchema, webhookCompletionReasonSchema, worktreeLifecycleProjectionSchema } from '@open-mercato/cezar-contract';
+import { RUN_TAGS_MAX, runTagSchema } from '@open-mercato/cezar-contract';
+import { dispatchSchema, runParkedSchema, runSubjectSchema, trackerAssociationSchema, trackerAutomationEventSchema, webhookAttentionRequestSchema, webhookCompletionReasonSchema, worktreeLifecycleProjectionSchema } from '@open-mercato/cezar-contract';
 
+import { foldReportedModel, foldRunModels } from './reported-model.ts';
 import { RUNNER_IDS } from '../core/agent-runner.ts';
 
 import type { RunnerId } from '../core/agent-runner.ts';
@@ -93,6 +97,9 @@ const storedRunnerSchema = z
   .enum([...RUNNER_IDS, 'claude-cli'])
   .transform((id) => (id === 'claude-cli' ? ('claude' as const) : id));
 
+/** The longest `freshPrompt` a step keeps: the Continue route's own bound on its text. */
+export const FRESH_PROMPT_MAX = 100_000;
+
 const stepStateSchema = z.object({
   id: z.string(),
   name: z.string(),
@@ -125,12 +132,24 @@ const stepStateSchema = z.object({
    *  a PAIR. Without it, changing the project's account would silently make Continue resume
    *  against the wrong account's session store. Absent = the discovered default. */
   profileId: z.string().optional(),
+  /** A Continue opened with `freshContext` (#2513): a restart while it is queued must not resume. */
+  freshContext: z.literal(true).optional().catch(undefined),
+  /** A queued fresh Continue's instruction, so a restart opens it with that text; cleared on open
+   *  and on cancel. Redacted on write like `error` (`redactStepPatch`), so no secret reaches
+   *  `runs.json` or the SSE stream: a fresh Continue revived after a restart sees [REDACTED] where
+   *  the instruction held a secret. A longer one is never written (`FRESH_PROMPT_MAX`). */
+  freshPrompt: z.string().max(FRESH_PROMPT_MAX).optional().catch(undefined),
+  toolPolicy: stepToolPolicySchema.optional(),
   /** Canonical provider/model identity resolved for this step. Optional so older runs.json files
    *  remain readable and auto-model steps can retain an absent identity. */
   modelIdentity: z.string().optional(),
   /** Raw model this turn was spawned with ('' = deliberately auto), so a continued turn keeps
    *  the model of the step that owns its session (#1488). Absent on older records. */
   model: z.string().optional(),
+  /** The model the agent reported actually running (latest main one) and every model the
+   *  step's turns used — see `recordReportedModel`. Unreadable values drop, never the record. */
+  actualModel: z.string().optional().catch(undefined),
+  modelsUsed: z.array(modelUsageSchema).optional().catch(undefined),
   /** Dollar cost reported by the claude CLI for this step's turns. */
   costUsd: z.number().optional(),
 });
@@ -213,6 +232,10 @@ export const runRecordSchema = z.object({
    *  whenever it says something `model` does not — so this is no longer a
    *  write-only field whose next reader has to guess whether it is load-bearing. */
   modelIdentity: z.string().optional(),
+  /** Run-level summary of the steps' `actualModel`/`modelsUsed`: the latest main model reported,
+   *  and every model seen, first-seen order. Absent until an agent reports one. */
+  actualModel: z.string().optional().catch(undefined),
+  modelsUsed: z.array(z.string()).optional().catch(undefined),
   /** Agent backend this run used — drives "open in CLI" resume command. `storedRunnerSchema`
    *  so a legacy `claude-cli` record folds to `claude` instead of failing the whole index (#547). */
   runner: storedRunnerSchema.optional(),
@@ -221,10 +244,17 @@ export const runRecordSchema = z.object({
    *  own selection — an override for Claude says nothing about which Codex account a mixed
    *  workflow's codex step should use. Absent = follow the project. */
   agentProfile: z.string().optional(),
+  /** Task tags, id plus a display snapshot (spec 2026-11-23-task-tags). `.catch` so a hand-edited
+   *  value drops only the tags, never the run. Omitted, never `[]`, when the run has none. */
+  tags: z.array(runTagSchema).max(RUN_TAGS_MAX).optional().catch(undefined),
   fallbackPolicy: z.object({
     enabled: z.boolean(),
     candidates: z.array(z.object({ provider: z.string(), profileId: z.string(), model: z.string().optional() })).max(10),
     revision: z.number().int().nonnegative(), incarnation: z.string().nullable(), revocation: z.string().nullable(),
+    source: z.literal('manager').optional().catch(undefined),
+    managerId: z.string().optional().catch(undefined),
+    /** Placed by the manager's roles, not an explicit account (spec 2026-11-25-manager-task-routing). */
+    routed: z.boolean().optional().catch(undefined),
   }).optional().catch(undefined),
   /** Echo of the extra system prompt this run actually used (R2): the
    *  `POST /api/runs` override, or the `config.json` default it fell back to.
@@ -352,6 +382,7 @@ export const runRecordSchema = z.object({
   /** Why a `cancelled` run was stopped and who stopped it, when the canceller said (`POST /runs/:id/cancel`). */
   cancelReason: z.string().optional(),
   cancelledBy: z.string().optional(),
+  agentSwitch: runAgentSwitchSchema.optional(),
   /**
    * When the current wait on the user began: stamped by `updateRun` on entering `waiting` or on a
    * new question while there, so a wait has an identity even without a question. It outlives the
@@ -407,6 +438,11 @@ export const runRecordSchema = z.object({
   /** Which automatic resume `autoResumeAt`/`autoResumeAttempts` belong to: a usage limit's reset
    *  window, or a retry after a transient provider failure — which holds no account. Absent = limit. */
   autoResumeReason: z.enum(['usage_limit', 'transient']).optional().catch(undefined),
+  /** The resumed session observed the usage window open; its account hold is released (#2525). */
+  autoResumeWindowOpen: z.boolean().optional().catch(undefined),
+  /** Why a `waiting` run with no process waits: an agent login was rejected and a reconnect resumes
+   *  it (spec 2026-11-18-inline-account-reconnect). Only a `waiting` run carries it. */
+  parked: runParkedSchema.optional().catch(undefined),
   createdAt: z.string(),
   startedAt: z.string().optional(),
   finishedAt: z.string().optional(),
@@ -651,6 +687,20 @@ export function artifactsDir(dataDir: string, runId: string): string {
   return join(dataDir, 'artifacts', runId);
 }
 
+/** Where an agent records the command that runs the tests related to its change, for the built-in
+ *  `Run tests` check (`workflows/templates.ts`). A dotfile, so the Assets listing never shows it, in
+ *  a directory every backend's sandbox already grants. */
+export function testCommandFile(dataDir: string, runId: string): string {
+  return join(artifactsDir(dataDir, runId), '.test-command');
+}
+
+/** A `github.pr-checkout` node's PR head, diff and metadata (`workflows/pr-checkout.ts`). Under
+ *  `~/.cezar`, outside every working directory — an in-place run's included — so Claude never
+ *  picks up the PR's nested CLAUDE.md or skills; read-only to the run's agents. */
+export function prCheckoutDir(dataDir: string, runId: string): string {
+  return join(cezarHomeDir(), 'pr-checkouts', createHash('sha256').update(resolve(dataDir)).digest('hex').slice(0, 16), runId);
+}
+
 /** `https://github.com/open-mercato/cezar/pull/402` → `open-mercato/cezar`, lowercased.
  *  Undefined for anything that is not a `<host>/<owner>/<repo>/<kind>/<n>` forge URL. */
 function refUrlRepo(url: string): string | undefined {
@@ -711,6 +761,7 @@ function clearPendingAutoResume(run: RunRecord): void {
   run.autoResumeAt = undefined;
   run.autoResumeAttempts = undefined;
   run.autoResumeReason = undefined;
+  run.autoResumeWindowOpen = undefined;
 }
 
 /** The OS refused the write (EPERM/EACCES/EROFS) — the file is there, cezar may not touch it. */
@@ -883,12 +934,8 @@ function refUrlNumber(url: string | undefined): number | undefined {
 }
 
 const PR_REF_CAP = 8;
-const PR_REF_RANK: Record<RunPrRef['origin'], number> = {
-  created: 0,
-  marker: 1,
-  legacy: 2,
-  derived: 3,
-};
+/** Which association speaks for the task; shared with the attention list (`currentTaskPr`). */
+const PR_REF_RANK = RUN_PR_REF_RANK;
 
 function legacyPrRefs(run: RunRecord): RunPrRef[] {
   const at = run.createdAt;
@@ -937,6 +984,12 @@ function appendPrRefToRun(run: RunRecord, ref: Omit<RunPrRef, 'at'> & { at?: str
     }
     if (!existing.url && ref.url) {
       existing.url = ref.url;
+      changed = true;
+    }
+    // Declared again (`CEZ:PR`): it is the task's current PR from now on (spec 2026-11-23-needs-you-triage).
+    // Only a declaration: a patch re-sending `pullRequestUrl` is not news.
+    if (ref.origin === 'marker' && Date.parse(at) > Date.parse(existing.at)) {
+      existing.at = at;
       changed = true;
     }
   } else {
@@ -1001,10 +1054,17 @@ function createdPrUrl(haystack: string): string | undefined {
 
 /**
  * A `waiting` run whose session the inactivity timer closed: no process and no slot, but the same
- * state to the user, and a message reopens it (spec 2026-11-04-idle-closed-attention-state).
+ * state to the user, and a message reopens it (spec 2026-11-04-idle-closed-attention-state). An
+ * auth park (`parked`, spec 2026-11-18-inline-account-reconnect) is this rest state too.
  */
 export function isIdleParked(run: Pick<RunRecord, 'status' | 'idleClosedAt'>): boolean {
   return run.status === 'waiting' && run.idleClosedAt !== undefined;
+}
+
+export function authParkForAccount(run: Pick<RunRecord, 'status' | 'archived' | 'parked'>, provider: string, profileId: string) {
+  const { parked } = run;
+  return run.status === 'waiting' && !run.archived && parked?.kind === 'auth'
+    && parked.provider === provider && parked.profileId === profileId ? parked : undefined;
 }
 
 /**
@@ -1059,6 +1119,7 @@ export function reconcileLoadedRun(run: RunRecord, opts?: { keepLive?: boolean }
   // Likewise an unanswered question only means anything on the `failed` run it stopped.
   if (run.status !== 'failed') run.awaitingAnswerSince = undefined;
   if (run.status !== 'failed' && run.status !== 'waiting') run.idleClosedAt = undefined;
+  if (run.status !== 'waiting') run.parked = undefined;
   if (run.status !== 'waiting' && run.awaitingAnswerSince === undefined) run.waitingSince = undefined;
   // The wake counter is intentionally process-local, so a restarted process
   // starts a fresh epoch instead of displaying a stale cap.
@@ -1490,6 +1551,8 @@ export class RunStore extends EventEmitter {
     runner?: RunnerId;
     /** Composer's per-task agent account (spec 2026-07-29-agent-profiles). */
     agentProfile?: string;
+    /** Resolved task tags (spec 2026-11-23-task-tags); empty or absent stores nothing. */
+    tags?: RunRecord['tags'];
     fallbackPolicy?: RunRecord['fallbackPolicy'];
     generateFollowups?: boolean;
     autonomous?: boolean;
@@ -1513,6 +1576,7 @@ export class RunStore extends EventEmitter {
       reasoningEffort: input.reasoningEffort,
       runner: input.runner,
       agentProfile: input.agentProfile,
+      ...(input.tags && input.tags.length > 0 ? { tags: input.tags.map((tag) => ({ ...tag })) } : {}),
       fallbackPolicy: input.fallbackPolicy,
       generateFollowups: input.generateFollowups,
       autonomous: input.autonomous,
@@ -1580,9 +1644,15 @@ export class RunStore extends EventEmitter {
     // Continue that answers it (`running`/`queued`), and every settlement, retire it.
     if (normalized.status && normalized.status !== 'failed') {
       normalized.awaitingAnswerSince = undefined;
-      // An idle park keeps its marker through its own `waiting` writes; a reopen retires it.
-      if (normalized.status !== 'waiting' || run.status !== 'waiting') normalized.idleClosedAt = undefined;
+      // An idle park keeps its marker through its own `waiting` writes; a reopen retires it. An auth
+      // park closes its session as it parks, so it stamps the marker in its own transition.
+      if ((normalized.status !== 'waiting' || run.status !== 'waiting') && !(normalized.status === 'waiting' && normalized.parked)) {
+        normalized.idleClosedAt = undefined;
+      }
     }
+    // An auth park (spec 2026-11-18-inline-account-reconnect) lasts exactly as long as its wait:
+    // a Continue, a cancel or a resume retires it without the caller's help.
+    if (normalized.status && normalized.status !== 'waiting') normalized.parked = undefined;
     // Stamped here so no park site can forget it; every wait reaches the record through this line.
     if (resultingStatus === 'waiting') {
       const requestId = 'attentionRequest' in normalized ? normalized.attentionRequest?.requestId : run.attentionRequest?.requestId;
@@ -1634,7 +1704,8 @@ export class RunStore extends EventEmitter {
    * `StepState.error` is the step-level counterpart and is scrubbed the same
    * way in `updateStep` — `run.ts` feeds the SAME `err.message` string to both
    * calls, so redacting only the run-level copy left the token verbatim one
-   * field away (#456 review).
+   * field away (#456 review). An agent switch's saved `continuationInput.prompt`
+   * is scrubbed too, like a step's `freshPrompt` (#2526).
    */
   private redactPatch(
     patch: Partial<Omit<RunRecord, 'id' | 'steps'>>,
@@ -1646,25 +1717,31 @@ export class RunStore extends EventEmitter {
       const value = out[field];
       if (typeof value === 'string') out[field] = this.redactText(value, runId);
     }
+    // Read back only to revive a switch after a restart; the live switch keeps its own copy.
+    const input = out.agentSwitch?.continuationInput;
+    if (input) out.agentSwitch = { ...out.agentSwitch!, continuationInput: { ...input, prompt: this.redactText(input.prompt, runId) } };
     if (out.attentionRequest) out.attentionRequest = { ...out.attentionRequest, questions: out.attentionRequest.questions.map(q => ({ ...q, question: this.redactText(q.question, runId), ...(q.options ? { options: q.options.map(o => ({ ...o, label: this.redactText(o.label, runId), ...(o.description ? { description: this.redactText(o.description, runId) } : {}) })) } : {}) })) };
     return out;
   }
 
   /**
-   * Step-level counterpart of `redactPatch` (#456 review). `error` is the only
-   * free-text `StepState` field — it is set from raw `err.message` /process
+   * Step-level counterpart of `redactPatch` (#456 review). `error` and `freshPrompt` are the
+   * free-text `StepState` fields — `error` is set from raw `err.message` /process
    * output (`run.ts` `finishStep`), and `touch()` fans the whole record out
    * over SSE, so an unscrubbed copy leaked to `runs.json` AND to the browser.
    * The remaining fields are ids, enums, counters and timestamps.
    */
   private redactStepPatch(patch: Partial<Omit<StepState, 'id'>>, runId: string): Partial<Omit<StepState, 'id'>> {
     if (process.env.CEZ_REDACT_SECRETS === '0') return patch;
-    if (typeof patch.error !== 'string') return patch;
-    return { ...patch, error: this.redactText(patch.error, runId) };
+    return {
+      ...patch,
+      ...(typeof patch.error === 'string' ? { error: this.redactText(patch.error, runId) } : {}),
+      ...(typeof patch.freshPrompt === 'string' ? { freshPrompt: this.redactText(patch.freshPrompt, runId) } : {}),
+    };
   }
 
   /** Append a step to an existing run (used by "Continue" — spec 003). */
-  addStep(runId: string, step: Pick<StepState, 'id' | 'name' | 'kind'> & Partial<Pick<StepState, 'model'>>): void {
+  addStep(runId: string, step: Pick<StepState, 'id' | 'name' | 'kind'> & Partial<Pick<StepState, 'model' | 'freshContext'>>): void {
     const run = this.runs.get(runId);
     if (!run || run.steps.some((s) => s.id === step.id)) return;
     run.steps.push({ ...step, status: 'pending', iterations: 0, tokensUsed: 0 });
@@ -1719,11 +1796,25 @@ export class RunStore extends EventEmitter {
     this.touch(run);
   }
 
+  /** The model the agent reports running, onto its step and the run summary (`reported-model.ts`). */
+  private recordReportedModel(run: RunRecord, event: RunEvent): void {
+    const step = typeof event.stepId === 'string' ? run.steps.find((s) => s.id === event.stepId) : undefined;
+    if (!step) return;
+    const next = foldReportedModel(step, event);
+    if (!next) return;
+    Object.assign(step, next);
+    Object.assign(run, foldRunModels(run, step));
+    this.touch(run);
+  }
+
   /** Merge a live gauge reading (`usage-status`) onto the record; each field is the latest. */
   setLiveUsage(runId: string, status: AgentUsageStatus): void {
     const run = this.runs.get(runId);
     if (!run) return;
-    run.liveUsage = { ...run.liveUsage, ...status, at: new Date().toISOString() };
+    // Per-request and per-turn token splits feed manager turn stats, not a task's header gauges.
+    const { cacheWriteTokens: _write, turnTokens: _turn, ...gauges } = status;
+    if (Object.keys(gauges).length === 0) return;
+    run.liveUsage = { ...run.liveUsage, ...gauges, at: new Date().toISOString() };
     this.touch(run);
   }
 
@@ -2018,6 +2109,7 @@ export class RunStore extends EventEmitter {
     this.persistEvent(runId, full);
     this.emit('event', { runId, event: full });
     if (full.type === 'session.started' && typeof full.backend === 'string') this.sessionBackends.set(runId, full.backend);
+    if (full.type === 'session.started' || full.type === 'turn.completed') this.recordReportedModel(run, full);
     // A new step or Continue may run another backend: the last session's no longer names it.
     if (full.type === 'step-start') this.sessionBackends.delete(runId);
     if ((full.type === 'error' || full.type === 'session.error') && typeof full.message === 'string') {
@@ -2317,9 +2409,10 @@ export class RunStore extends EventEmitter {
 
   deleteRun(id: string): boolean {
     // A record this version cannot read is still the user's to delete, prompt text included.
+    const root = this.runs.get(id)?.dispatch?.rootRunId;
     const existed = this.forget(id) || this.salvaged.delete(id);
     if (existed) {
-      this.deleteRunFiles(id);
+      this.deleteRunFiles(id, root);
       this.seqs.delete(id);
       this.scheduleSave();
     }
@@ -2419,6 +2512,21 @@ export class RunStore extends EventEmitter {
     }
   }
 
+  /** Where a run's PR review export lives (`prCheckoutDir`). */
+  prCheckoutDir(runId: string): string {
+    return prCheckoutDir(this.dataDir, runId);
+  }
+
+  /** A run's artifacts directory (`artifactsDir`). */
+  artifactsDir(runId: string): string {
+    return artifactsDir(this.dataDir, runId);
+  }
+
+  /** The event log's mtime in ms, or undefined when it has none — age retention's activity clock. */
+  eventsMtimeMs(runId: string): number | undefined {
+    try { return statSync(this.eventsPath(runId)).mtimeMs; } catch { return undefined; }
+  }
+
   private eventsPath(runId: string): string {
     return join(this.dataDir, 'runs', `${runId}.ndjson`);
   }
@@ -2488,19 +2596,39 @@ export class RunStore extends EventEmitter {
       ...all.filter((r) => r.archived).slice(keepLimit('CEZ_ARCHIVED_RUNS_KEEP', DEFAULT_ARCHIVED_KEPT)),
     ].filter((r) => !pinned.has(r.id));
     for (const stale of stalePool) {
+      const root = this.runs.get(stale.id)?.dispatch?.rootRunId;
       this.forget(stale.id);
       this.salvaged.delete(stale.id);
-      this.deleteRunFiles(stale.id);
+      this.deleteRunFiles(stale.id, root);
     }
   }
 
+  /** Startup sweep: artifacts and dispatch trees whose task is gone (spec
+   *  2026-11-19-worktree-disk-usage). Never throws. */
+  sweepOrphanTaskFiles(): ReturnType<typeof sweepOrphanTaskFiles> {
+    // Behind an index that did not load in full (or is empty), every task looks gone: sweep nothing,
+    // the same guard as the layout prune.
+    const health = this.getIndexReadHealth();
+    if (health.state !== 'complete' || health.omittedRuns > 0 || this.runs.size === 0) return { artifacts: [], dispatch: [] };
+    const known = new Set([...this.runs.keys(), ...this.salvaged.keys()]);
+    const roots = new Set<string>();
+    for (const run of this.runs.values()) if (run.dispatch?.rootRunId) roots.add(run.dispatch.rootRunId);
+    return sweepOrphanTaskFiles(this.dataDir, known, roots);
+  }
+
   /** Per-run files die on EVERY path a task leaves the store by: deletion and retention. */
-  private deleteRunFiles(id: string): void {
+  private deleteRunFiles(id: string, root?: string): void {
     try {
+      // A dispatch tree outlives its root while a member remains (they share CEZ_TREE_DIR).
+      const tree = root ?? id;
+      if (![...this.runs.values()].some((run) => run.id === tree || run.dispatch?.rootRunId === tree)) {
+        rmSync(join(this.dataDir, 'dispatch', tree), { recursive: true, force: true });
+      }
       rmSync(this.eventsPath(id), { force: true });
       rmSync(this.handoffPath(id), { force: true }); // spec 007: the journal goes with the task
       rmSync(this.imagesDir(id), { recursive: true, force: true }); // agent screenshots
       rmSync(artifactsDir(this.dataDir, id), { recursive: true, force: true });
+      rmSync(prCheckoutDir(this.dataDir, id), { recursive: true, force: true });
       // Unsent drafts go with the task (#939): a draft for a run that no longer exists is
       // unreachable by definition, and it may be holding megabytes of pasted screenshots.
       deleteRunDrafts(this.dataDir, id);

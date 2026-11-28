@@ -4,8 +4,9 @@ import { threadId } from 'node:worker_threads';
 import { hostname, tmpdir, uptime } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { currentTaskPr } from '../attention/list.ts';
 import { readRunIndexFromDisk } from './run-index.ts';
-import { reconcileLoadedRun, RunStore } from './store.ts';
+import { prCheckoutDir, reconcileLoadedRun, RunStore } from './store.ts';
 
 import type { RunRecord } from './store.ts';
 
@@ -122,6 +123,22 @@ describe('RunStore — directional usage persistence', () => {
     rmSync(dataDir, { recursive: true, force: true });
   });
 
+  it('round-trips a fresh Continue step through runs.json, and drops an unreadable marker', () => {
+    const store = RunStore.open(dataDir);
+    const run = store.createRun({ title: 't', workflow: 'quick-task', task: 't', steps: [{ id: 'task', name: 'Task', kind: 'agent' }] });
+    store.addStep(run.id, { id: 'continue-1', name: 'Continue', kind: 'agent', freshContext: true });
+    store.updateStep(run.id, 'continue-1', { freshPrompt: 'Re-review PR 7' });
+    store.flush();
+
+    expect(RunStore.open(dataDir).getRun(run.id)?.steps[1]).toMatchObject({ freshContext: true, freshPrompt: 'Re-review PR 7' });
+
+    const file = join(dataDir, 'runs.json');
+    writeFileSync(file, readFileSync(file, 'utf8').replace('"freshContext":true', '"freshContext":"yes"'));
+    const salvaged = RunStore.open(dataDir).getRun(run.id);
+    expect(salvaged?.steps[1]?.freshContext).toBeUndefined();
+    expect(salvaged?.steps[1]?.freshPrompt).toBe('Re-review PR 7');
+  });
+
   it('round-trips step checkpoints and complete run aggregates through runs.json', () => {
     const store = RunStore.open(dataDir);
     const run = store.createRun({
@@ -169,6 +186,14 @@ describe('RunStore — directional usage persistence', () => {
     expect(store.getRun(run.id)?.liveUsage).toMatchObject({ limits, contextTokens: 5000, contextWindow: 200000 });
     store.flush();
     expect(RunStore.open(dataDir).getRun(run.id)?.liveUsage).toMatchObject({ limits, contextTokens: 5000 });
+  });
+
+  it('keeps per-request and per-turn token splits off the record (they are manager turn stats)', () => {
+    const store = RunStore.open(dataDir);
+    const run = store.createRun({ title: 'live', workflow: 'quick-task', task: 'live', steps: [] });
+    store.setLiveUsage(run.id, { contextTokens: 5000, cacheWriteTokens: 4000 });
+    store.setLiveUsage(run.id, { turnTokens: { cacheReadTokens: 1, cacheWriteTokens: 2, outputTokens: 3 } });
+    expect(store.getRun(run.id)?.liveUsage).toEqual({ contextTokens: 5000, at: expect.any(String) });
   });
 
   it('keeps aggregates absent for old records and incomplete invocation or turn checkpoints', () => {
@@ -809,6 +834,38 @@ describe('RunStore — secret redaction before persistence (#427)', () => {
     expect(store.getRun(run.id)?.task).toBe('deploy the thing');
   });
 
+  /** A queued fresh Continue's `freshPrompt` is scrubbed on write like `error` (#2513 follow-up). */
+  it('redacts a secret in a fresh Continue step\'s freshPrompt, in memory, in runs.json and after a reopen', () => {
+    process.env.GITHUB_TOKEN = 'gho_thisisarealsecrettoken123456';
+    delete process.env.CEZ_REDACT_SECRETS;
+    const store = RunStore.open(dataDir);
+    const run = store.createRun({ title: 't', workflow: 'w', task: 't', steps: [] });
+    store.addStep(run.id, { id: 'continue-1', name: 'Continue', kind: 'agent', freshContext: true });
+    store.updateStep(run.id, 'continue-1', { freshPrompt: 'use gho_thisisarealsecrettoken123456 to re-review' });
+    expect(store.getRun(run.id)?.steps[0]?.freshPrompt).toBe('use [REDACTED] to re-review');
+    store.flush();
+    expect(readFileSync(join(dataDir, 'runs.json'), 'utf8')).not.toContain('gho_thisisarealsecrettoken123456');
+    expect(RunStore.open(dataDir).getRun(run.id)?.steps[0]?.freshPrompt).toBe('use [REDACTED] to re-review');
+  });
+
+  it('redacts a secret in an agent switch\'s saved continuation prompt, in runs.json and after a reopen', () => {
+    process.env.GITHUB_TOKEN = 'gho_thisisarealsecrettoken123456';
+    delete process.env.CEZ_REDACT_SECRETS;
+    const store = RunStore.open(dataDir);
+    const run = store.createRun({ title: 't', workflow: 'w', task: 'deploy with gho_thisisarealsecrettoken123456', steps: [] });
+    store.updateRun(run.id, { agentSwitch: {
+      summary: 'Switched to Codex', continuationStepId: 'continue-1',
+      continuationInput: { prompt: 'use gho_thisisarealsecrettoken123456 next', attachmentUrls: ['/images/a.png'] },
+    } });
+    expect(store.getRun(run.id)?.agentSwitch?.continuationInput).toEqual({ prompt: 'use [REDACTED] next', attachmentUrls: ['/images/a.png'] });
+    store.flush();
+    expect(readFileSync(join(dataDir, 'runs.json'), 'utf8')).not.toContain('use gho_thisisarealsecrettoken123456');
+    const reopened = RunStore.open(dataDir).getRun(run.id);
+    expect(reopened?.agentSwitch).toMatchObject({ summary: 'Switched to Codex', continuationStepId: 'continue-1', continuationInput: { prompt: 'use [REDACTED] next' } });
+    // `task` stays verbatim: it is replayed into every dequeue, not only a restart.
+    expect(reopened?.task).toBe('deploy with gho_thisisarealsecrettoken123456');
+  });
+
   it('CEZ_REDACT_SECRETS=0 opts runs.json out as well', () => {
     process.env.GITHUB_TOKEN = 'gho_thisisarealsecrettoken123456';
     process.env.CEZ_REDACT_SECRETS = '0';
@@ -1014,6 +1071,28 @@ describe('RunStore — agent-declared marker refs (spec 2026-07-18-task-ref-mark
     });
     expect(store.getRun(run.id)?.prRefs).toHaveLength(1);
     expect(store.getRun(run.id)?.prRefs?.[0]?.url).toBe('https://github.com/open-mercato/cezar/pull/42');
+  });
+
+  it('declaring a PR again (CEZ:PR) makes it the task’s current PR (spec 2026-11-23-needs-you-triage)', () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      vi.setSystemTime(new Date('2026-11-20T10:00:00.000Z'));
+      const { store, run } = freshRun();
+      store.applyMarkerRefs(run.id, { pr: 10 });
+      vi.setSystemTime(new Date('2026-11-21T10:00:00.000Z'));
+      store.recordPrRef(run.id, { number: 11, url: 'https://github.com/o/r/pull/11', origin: 'created' });
+      expect(currentTaskPr(store.getRun(run.id)!)).toBe(11);
+      vi.setSystemTime(new Date('2026-11-22T10:00:00.000Z'));
+      store.applyMarkerRefs(run.id, { pr: 10 });
+      expect(store.getRun(run.id)?.prRefs?.find((ref) => ref.number === 10)?.at).toBe('2026-11-22T10:00:00.000Z');
+      expect(currentTaskPr(store.getRun(run.id)!)).toBe(10);
+      // A patch re-sending the created URL is not a new declaration.
+      vi.setSystemTime(new Date('2026-11-23T10:00:00.000Z'));
+      store.updateRun(run.id, { pullRequestUrl: 'https://github.com/o/r/pull/11' });
+      expect(currentTaskPr(store.getRun(run.id)!)).toBe(10);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('preserves legacy scalar associations before a replacement patch is applied', () => {
@@ -2380,8 +2459,11 @@ describe('RunStore — per-record salvage of records this version cannot read (P
     write([unreadable, readable]);
     const store = RunStore.open(dataDir); // creates <dataDir>/runs
     writeFileSync(join(dataDir, 'runs', 'future-1.ndjson'), '{"type":"note"}\n', 'utf8');
+    mkdirSync(join(prCheckoutDir(dataDir, 'future-1'), 'tree'), { recursive: true });
     expect(store.deleteRun('future-1')).toBe(true);
     expect(existsSync(join(dataDir, 'runs', 'future-1.ndjson'))).toBe(false);
+    // A review's exported PR goes with the task.
+    expect(existsSync(prCheckoutDir(dataDir, 'future-1'))).toBe(false);
     store.flush();
     expect(onDisk().map((r) => r.id)).toEqual(['good-1']);
     expect(store.deleteRun('future-1')).toBe(false);
@@ -3175,5 +3257,32 @@ describe('RunStore — index lock failures', () => {
     const run = store.createRun({ title: 'after container restart', workflow: 'test', task: 'test', steps: [] });
     expect(() => store.flushCreatedRun(run)).not.toThrow();
     expect(existsSync(leftover)).toBe(false);
+  });
+});
+
+describe('step tool-policy persistence', () => {
+  it('round-trips effective grants while keeping older steps without a policy readable', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'cez-step-policy-'));
+    try {
+      const store = RunStore.open(dir);
+      const record = store.createRun({ title: 'restricted', workflow: 'nested', task: 'read', steps: [{ id: 'nested::read', name: 'Read', kind: 'agent' }] });
+      const policy = { allowedTools: ['Read', 'Bash'], bashAllowlist: ['gh pr diff'], enforceReadOnly: true };
+      store.updateStep(record.id, 'nested::read', { toolPolicy: policy });
+      store.flush();
+      const reopened = RunStore.open(dir);
+      expect(reopened.getRun(record.id)?.steps[0]?.toolPolicy).toEqual(policy);
+      reopened.flush();
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  it('keeps a run whose stored policy carries a key from a newer cezar, dropping only that key', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'cez-step-policy-'));
+    try {
+      const step = { id: 'read', name: 'Read', kind: 'agent', status: 'done', iterations: 1, tokensUsed: 0, toolPolicy: { allowedTools: ['Read'], futureKey: true } };
+      writeFileSync(join(dir, 'runs.json'), JSON.stringify([{ ...LEGACY_RUN, steps: [step] }]), 'utf8');
+      const store = RunStore.open(dir);
+      expect(store.getRun(LEGACY_RUN.id)?.steps[0]?.toolPolicy).toEqual({ allowedTools: ['Read'] });
+      store.flush();
+    } finally { rmSync(dir, { recursive: true, force: true }); }
   });
 });

@@ -23,8 +23,9 @@ actions yet. Push is for relay-paired servers. Without a `google-services.json`
 Capacitor is not finally accepted (spec Q2), so everything that matters would survive dropping it.
 Server pages get their **own** webview. Capacitor's webview shows only the connect page, because
 Capacitor 8 on iOS injects its bridge into every main frame and its message handler checks no
-origin. Page script reaches native code only by navigating to `cezar://servers`, which opens the native
-device switcher (`DeviceSwitcherSheet`, `DeviceSheetController`); the page never learns the list. While
+origin. Page script reaches native code only by navigating to a `cezar://` URL: `cezar://servers` opens the native
+device switcher (`DeviceSwitcherSheet`, `DeviceSheetController`), `cezar://reconnect` restarts the relay link and
+`cezar://haptic` plays one tap of haptic feedback; the page never learns the list. While
 the switcher is up, `RelayConnections` holds warm links beside the one on screen and the switch adopts one.
 
 ## App lock (Android)
@@ -241,7 +242,7 @@ carries it; `check-release.mjs` proves both on the built APK.
 
 ## Build for iOS, on a Mac with Xcode
 
-This path has not been run yet. Expect to fix compile errors the first time. Xcode 26 or later, an
+This path has not been run yet. Expect to fix compile errors the first time. Xcode 27 or later (App Store uploads need the iOS 27 SDK), an
 iOS 17 or later simulator or iPhone.
 
 ```bash

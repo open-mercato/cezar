@@ -62,8 +62,9 @@ final class DeviceProbes {
         return statuses
     }
 
-    /// The sheet closed. `keep` is the switch's target: its link is about to be the current one.
-    func stop(keep: String? = nil) {
+    /// The sheet closed. `keep` is the switch's target: its link is about to be the current one. `release: false`
+    /// leaves every warm link to whoever else holds it.
+    func stop(keep: String? = nil, release releasing: Bool = true) {
         lock.lock()
         guard !stopped else {
             lock.unlock()
@@ -72,6 +73,7 @@ final class DeviceProbes {
         stopped = true
         let servers = probed
         lock.unlock()
+        guard releasing else { return }
         for server in servers where server.id != keep { release(server) }
     }
 
@@ -114,12 +116,12 @@ extension DeviceProbes {
                 }
                 let counted = Once()
                 let seen: (RelayStatus) -> Void = { status in
-                    let reading = DeviceSwitch.Reading(DeviceSwitch.status(status.kind))
+                    let reading = relayReading(status.kind)
                     report(reading)
-                    guard reading.status == .online, counted.claim() else { return }
+                    guard status.kind == .ready, counted.claim() else { return }
                     Task {
                         let health = await HealthProbe(http: TunnelHttpGet(sessions: { link.session() }), userAgent: userAgent).probePath()
-                        if let attention = health.attention { report(DeviceSwitch.Reading(.online, attention: attention)) }
+                        report(healthReading(health))
                     }
                 }
                 // The page on screen keeps its own listener on the current link.
@@ -128,6 +130,16 @@ extension DeviceProbes {
                 seen(link.status())
             }
         }
+    }
+
+    /// Ready means only that the relay took the phone: the cezar's own answer makes it online (PR #2340 smoke).
+    static func relayReading(_ kind: RelayStatus.Kind) -> DeviceSwitch.Reading {
+        kind == .ready ? DeviceSwitch.Reading(.checking) : DeviceSwitch.Reading(DeviceSwitch.status(kind))
+    }
+
+    /// A ready link's health, through the tunnel: a cezar that stopped answering reads offline, not online.
+    static func healthReading(_ health: HealthAnswer) -> DeviceSwitch.Reading {
+        DeviceSwitch.Reading(DeviceSwitch.status(health.kind), attention: health.kind == .cezar ? health.attention : nil)
     }
 
     /// A direct server's health, with its saved password and the cookies `cookies` reads.

@@ -3,10 +3,13 @@ package com.openmercato.cezar.mobile.shell;
 import android.content.Context;
 import android.content.pm.PackageManager;
 import android.os.Build;
+import android.webkit.CookieManager;
 import com.openmercato.cezar.mobile.BuildConfig;
+import com.openmercato.cezar.mobile.shell.push.BadgeRefresh;
 import com.openmercato.cezar.mobile.shell.push.CezarPush;
 import com.openmercato.cezar.mobile.shell.push.GrantClient;
 import com.openmercato.cezar.mobile.shell.push.OkHttpPushRelay;
+import com.openmercato.cezar.mobile.shell.push.ProbeRounds;
 import com.openmercato.cezar.mobile.shell.push.PushCoordinator;
 import com.openmercato.cezar.mobile.shell.push.PushStore;
 import com.openmercato.cezar.mobile.shell.push.SignalStream;
@@ -24,8 +27,16 @@ import com.openmercato.cezar.mobile.shell.relay.TunnelSession;
 import java.io.File;
 import java.io.IOException;
 import java.security.SecureRandom;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
+import java.util.function.Consumer;
 import java.util.function.Supplier;
 
 /** One connector per process, kept where Android backup never looks. */
@@ -40,6 +51,12 @@ public final class ShellServices {
     private static TokenSource tokens = TokenSource.NONE;
     private static PushCoordinator push;
     private static StartupLog startupLog;
+    private static BadgeRefresh badges;
+    private static final ExecutorService PROBE_WORK = Executors.newCachedThreadPool();
+    private static final ScheduledExecutorService PROBE_BOUNDS = Executors.newSingleThreadScheduledExecutor();
+    private static final Map<String, DeviceProbes.Reading> PROBE_READINGS = new ConcurrentHashMap<>();
+    private static ProbeRounds rounds;
+    private static Runnable roundEnded;
 
     private ShellServices() {}
 
@@ -72,10 +89,84 @@ public final class ShellServices {
         thread.start();
     }
 
+    /** Set by the application, which owns the notifications the rounds clear. */
+    public static synchronized void setBadges(BadgeRefresh refresh) {
+        badges = refresh;
+    }
+
+    /** Null before the application set it. */
+    public static synchronized BadgeRefresh badges() {
+        return badges;
+    }
+
+    /** The last probe round's readings, by server id: what Your cezars draws. */
+    public static Map<String, DeviceProbes.Reading> probeReadings() {
+        return PROBE_READINGS;
+    }
+
+    /** Run once at the end of every probe round, before its callers: the application clears what reached 0 (B3). */
+    public static synchronized void setOnRoundEnd(Runnable ended) {
+        roundEnded = ended;
+    }
+
+    /**
+     * One probe round over every saved cezar at a time, shared by Your cezars and the badge rounds (B1, `ProbeRounds`).
+     * `done` gets null, or the error that stopped the round.
+     */
+    public static void probeRound(Context context, Consumer<RuntimeException> done) {
+        rounds(context.getApplicationContext()).join(done);
+    }
+
+    private static synchronized ProbeRounds rounds(Context app) {
+        if (rounds == null) {
+            rounds = new ProbeRounds(settled -> PROBE_WORK.execute(() -> runRound(app, settled)), () -> {
+                Set<String> ids = new HashSet<>();
+                for (ServerRecord server : connector(app).list()) ids.add(server.id);
+                return ids;
+            }, () -> {
+                Runnable ended;
+                synchronized (ShellServices.class) {
+                    ended = roundEnded;
+                }
+                if (ended != null) ended.run();
+            });
+        }
+        return rounds;
+    }
+
+    private static void runRound(Context app, Consumer<RuntimeException> settled) {
+        try {
+            ShellConnector shell = connector(app);
+            RelayConnections relay = relay(app);
+            // While the device sheet is open its own close lets the warm links go; cooling them here would cut its probes.
+            DeviceProbes probes = new DeviceProbes(DeviceProbes.relayProbe(relay, PROBE_WORK),
+                    DeviceProbes.directProbe(shell, server -> server.url == null ? null : CookieManager.getInstance().getCookie(server.url), PROBE_WORK),
+                    keep -> {
+                        BadgeRefresh held = badges();
+                        if (held == null || !held.held()) relay.cool(keep);
+                    }, (ms, work) -> PROBE_BOUNDS.schedule(work, ms, TimeUnit.MILLISECONDS),
+                    (id, answer) -> shell.sawHealth(id, answer, System.currentTimeMillis()), PROBE_READINGS::put);
+            probes.whenSettled(() -> {
+                probes.stop(null);
+                settled.accept(null);
+            });
+            probes.start(shell.list());
+        } catch (RuntimeException e) {
+            settled.accept(e);
+        }
+    }
+
     public static synchronized RelayConnections relay(Context context) {
         if (relay == null) relay = new RelayConnections(transport(), deviceKeys(context), userAgentToken(context),
                 new File(context.getApplicationContext().getNoBackupFilesDir(), "bundles"), installStamp(context));
         return relay;
+    }
+
+    /** The phone's clock and formats, for "Offline since …". */
+    public static DeviceSwitch.Clock clock(Context context) {
+        java.text.DateFormat time = android.text.format.DateFormat.getTimeFormat(context);
+        java.text.DateFormat day = new java.text.SimpleDateFormat(android.text.format.DateFormat.getBestDateTimePattern(java.util.Locale.getDefault(), "d MMM"), java.util.Locale.getDefault());
+        return new DeviceSwitch.Clock(System.currentTimeMillis(), java.util.TimeZone.getDefault(), time, day);
     }
 
     public static synchronized StartupLog startupLog(Context context) {

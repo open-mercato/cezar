@@ -36,11 +36,14 @@ export function DesignNotePopup({
   note,
   notes,
   onClose,
+  noun = 'note',
 }: {
   note: DesignNote
   notes: Pick<DesignNotes, 'setText' | 'markAdded' | 'discard'>
   /** Hide the popup. For a draft the host has already been told to discard it. */
   onClose: () => void
+  /** What the popup calls the text — the Assets tab's comment mode says `comment`. */
+  noun?: 'note' | 'comment'
 }) {
   const isDraft = note.phase === 'draft'
   const empty = note.text.trim() === ''
@@ -73,7 +76,7 @@ export function DesignNotePopup({
           // The twin of the badge on the element's frame in the page: comment glyph, number.
           <span
             data-slot="design-note-number"
-            aria-label={`Note ${note.number}`}
+            aria-label={`${noun === 'note' ? 'Note' : 'Comment'} ${note.number}`}
             className="flex h-[21px] shrink-0 items-center gap-1 rounded-md bg-primary pr-[7px] pl-1.5 text-xs leading-none font-bold text-primary-foreground"
           >
             <MessageSquareIcon aria-hidden="true" className="size-3" strokeWidth={2.5} />
@@ -85,13 +88,13 @@ export function DesignNotePopup({
             {pickLabel(note.pick)}
           </span>
         </IconTooltip>
-        <IconTooltip label={throwaway ? 'Discard this note and deselect the element (Esc)' : 'Close (Esc)'}>
+        <IconTooltip label={throwaway ? `Discard this ${noun} and deselect the element (Esc)` : 'Close (Esc)'}>
           <Button
             type="button"
             variant="ghost"
             size="icon-sm"
             className="size-6"
-            aria-label={throwaway ? 'Discard note' : 'Close'}
+            aria-label={throwaway ? `Discard ${noun}` : 'Close'}
             onClick={dismiss}
           >
             <XIcon aria-hidden="true" />
@@ -122,7 +125,7 @@ export function DesignNotePopup({
           placeholder="What should change here?"
           // A batch on its way carries this text; an edit now would be lost to it.
           readOnly={note.sending === true}
-          aria-label="Note for the agent"
+          aria-label={noun === 'note' ? 'Note for the agent' : 'Comment for the agent'}
           // The window appears because the user just pointed at something to talk about.
           autoFocus
           rows={3}
@@ -144,9 +147,9 @@ export function DesignNotePopup({
           ) : (
             <span />
           )}
-          <IconTooltip label={note.added ? 'Done (Ctrl/⌘+Enter)' : 'Add note (Ctrl/⌘+Enter)'}>
+          <IconTooltip label={note.added ? 'Done (Ctrl/⌘+Enter)' : `Add ${noun} (Ctrl/⌘+Enter)`}>
             <Button type="button" size="sm" disabled={!note.added && empty} onClick={add}>
-              {note.added ? 'Done' : 'Add note'}
+              {note.added ? 'Done' : `Add ${noun}`}
             </Button>
           </IconTooltip>
         </div>

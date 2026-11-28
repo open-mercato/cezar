@@ -2,9 +2,21 @@ name: CodeQL
 
 on:
   pull_request:
+    # `ready_for_review` starts the scan for a PR that was opened as a draft.
+    types: [opened, synchronize, reopened, ready_for_review]
     branches:
       - main
       - develop
+    # The docs-only set of scripts/ci-scope.mjs (ci-scope.test.ts keeps them equal). Safe at the
+    # trigger: no required check here.
+    paths-ignore:
+      - '.ai/specs/**'
+      - '.ai/plans/**'
+      - '.ai/analysis/**'
+      - '.ai/runs/**'
+      - 'docs/adr/**'
+      - 'docs/mockups/**'
+      - 'docs/screenshots/**'
   push:
     branches:
       - main
@@ -24,6 +36,7 @@ concurrency:
 jobs:
   analyze:
     name: Analyze (${{ matrix.language }})
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:

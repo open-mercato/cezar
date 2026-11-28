@@ -1,4 +1,4 @@
-import { BellRingIcon, CheckIcon, ChevronRightIcon, CircleAlertIcon, MessageCircleQuestionIcon, PaperclipIcon } from 'lucide-react'
+import { BellRingIcon, CheckIcon, ChevronRightIcon, CircleAlertIcon, ClockIcon, MessageCircleQuestionIcon, PaperclipIcon, PlayIcon, PowerIcon } from 'lucide-react'
 import { memo, useContext, createContext, useEffect, useRef, useState, useMemo, type ComponentProps, type ReactNode } from 'react'
 import { Link } from 'react-router'
 
@@ -10,6 +10,7 @@ import { StatusDot } from '@/components/status-dot'
 import { Button } from '@/components/ui/button'
 import { toast } from '@/components/ui/toaster'
 import { ZoomableImage } from '@/components/zoomable-image'
+import { ReconnectCard, ReconnectedLine } from '@/components/reconnect/reconnect-card'
 import { ReferenceStatusProvider } from '@/components/reference-status'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import { StaticChip } from '@/components/chip'
@@ -38,6 +39,7 @@ import {
   type QuestionClosed,
   type QuestionStale,
   type ManagerAsk,
+  type ManagerActivityNotice,
   type ManagerAttachment,
   type ManagerCommand,
   type ManagerMessage,
@@ -48,6 +50,8 @@ import { DecisionSources } from './decision-sources'
 import { ManagerCard } from './manager-card'
 import { ForgeReference, ManagerAskText, ManagerProjectsContext, TaskReference } from './manager-reference'
 import { SessionCard, taskPath } from './manager-session-card'
+import { ReplyUsageNote, type ReplyUsage } from './manager-plan-usage'
+import { AgentSwitchNotice, ReplyAgentLabel } from './manager-agent-chain'
 
 const NO_PROJECTS: readonly ManagerReferenceProject[] = []
 
@@ -164,6 +168,7 @@ function ManagerQuestions({
   superseded?: boolean
 }) {
   const managerId = origin.id
+  const chatActions = useContext(ManagerChatActionsContext)
   const closed = closedOnServer ?? (superseded ? { reason: 'replaced' as const, at: '' } : undefined)
   const [isPending, setPending] = useState(false)
   const [error, setError] = useState<string>()
@@ -243,11 +248,17 @@ function ManagerQuestions({
     )
   }
   const send = async (text: string) => {
+    const reactivate = chatActions.confirmReactivate
+    if (reactivate && !(await reactivate(text))) {
+      const message = `Not sent: ${origin.name} is still inactive. Dismiss closes the question without waking it.`
+      setError(message)
+      return message
+    }
     sentHere.current = true
     setPending(true)
     setError(undefined)
     try {
-      await sendManagerMessage(managerId, text, undefined, messageId)
+      await sendManagerMessage(managerId, text, undefined, messageId, reactivate ? { reactivate: true } : undefined)
       setLocalAnswer(text)
       trackManagerMessageSent('question_card', false)
       trackManagerQuestionAnswered('card')
@@ -311,14 +322,20 @@ function AssistantMessage({
   projects,
   answerOnCard,
   superseded = false,
+  authLive = true,
   onRetry,
+  planUsage,
 }: {
   message: Extract<ManagerMessage, { kind: 'assistant' }>
   origin: ManagerOrigin
   projects: readonly ManagerReferenceProject[]
   answerOnCard: boolean
   superseded?: boolean
+  /** The newest failure on its account: the live card. Older ones collapse to a quiet line. */
+  authLive?: boolean
   onRetry?: (() => void) | undefined
+  /** This reply's plan-limit estimate; absent when the ledger has none (never shown as 0). */
+  planUsage?: ReplyUsage | undefined
 }) {
   const segments = useMemo(
     () => parseManagerText(message.text, message.commands, projects),
@@ -331,6 +348,7 @@ function AssistantMessage({
         {message.turn === 'job' && message.jobName ? <span className="font-medium">{message.automationReport ? 'Automation' : 'Job'}: {message.jobName}</span> : null}
         {message.taskReport ? <span className="font-medium">Task update</span> : message.turn === 'watch' ? <span className="font-medium">Watch check</span> : null}
         <time dateTime={message.at} title={new Date(message.at).toLocaleString()}>{managerMessageTime(message.at)}</time>
+        <ReplyAgentLabel message={message} />
       </p>
       {message.important ? (
         <p data-slot="manager-important" className="mb-1 flex items-center gap-1.5 text-xs font-semibold text-foreground">
@@ -360,7 +378,16 @@ function AssistantMessage({
       ) : null}
       {message.stopped ? <p className="mt-1 text-sm text-muted-foreground italic">Response stopped.</p> : null}
       {message.resumeAt ? <ResumeHint managerId={origin.id} at={message.resumeAt} /> : null}
-      {message.error && message.turn !== 'chat' ? (
+      {message.authFailure && message.turn === 'chat' ? (
+        // The reconnect card replaces the red line (spec 2026-11-18-inline-account-reconnect).
+        authLive ? (
+          <ReconnectCard provider={message.authFailure.provider} profileId={message.authFailure.profileId} place="manager" />
+        ) : (
+          <ReconnectedLine provider={message.authFailure.provider} profileId={message.authFailure.profileId} signedOutHere />
+        )
+      ) : message.reconnectedAt ? (
+        <ReconnectedLine provider={message.reconnectedFrom?.provider} profileId={message.reconnectedFrom?.profileId} at={message.reconnectedAt} />
+      ) : message.error && message.turn !== 'chat' ? (
         <CheckFailedCard managerId={origin.id} turn={message.turn} jobName={message.jobName} error={message.error} at={message.at} />
       ) : message.error ? (
         // No `role="alert"`: a chat opened on old failures must not shout them all; the announcer says new ones.
@@ -379,6 +406,7 @@ function AssistantMessage({
           </span>
         </p>
       ) : null}
+      {planUsage && !message.streaming ? <ReplyUsageNote usage={planUsage} /> : null}
     </article>
   )
 }
@@ -387,6 +415,8 @@ function AssistantMessage({
  *  bare render, where the button that needs it stays away. */
 export interface ManagerChatActions {
   switchAccount?: () => void
+  /** Set while the manager is inactive: confirm reactivating it for this answer (spec 2026-11-19-manager-deactivate). */
+  confirmReactivate?: (answer: string) => Promise<boolean>
 }
 
 export const ManagerChatActionsContext = createContext<ManagerChatActions>({})
@@ -501,10 +531,14 @@ export const ManagerMessageRow = memo(function ManagerMessageRow({
   projects = NO_PROJECTS,
   answerOnCard = false,
   superseded = false,
+  authLive = true,
   onRetry,
+  planUsage,
 }: {
   message: ManagerMessage
   origin: ManagerOrigin
+  /** False for an older failure on an account whose newest failure draws the live card. */
+  authLive?: boolean
   /** Sends the question again; only the newest failed chat reply has one. */
   onRetry?: (() => void) | undefined
   /** An answered card whose answer, the next message, is drawn here and not as its own row. */
@@ -513,11 +547,13 @@ export const ManagerMessageRow = memo(function ManagerMessageRow({
   projects?: readonly ManagerReferenceProject[]
   /** Whether this question card is superseded by a newer card with the same header. */
   superseded?: boolean
+  /** This reply's plan-limit estimate (spec 2026-11-20-manager-plan-usage-popover, restored 2026-11-22). */
+  planUsage?: ReplyUsage | undefined
   onDecide: DecideAction
 }) {
   return (
     <ManagerProjectsContext.Provider value={projects}>
-      <MessageBody message={message} origin={origin} onDecide={onDecide} projects={projects} answerOnCard={answerOnCard} superseded={superseded} onRetry={onRetry} />
+      <MessageBody message={message} origin={origin} onDecide={onDecide} projects={projects} answerOnCard={answerOnCard} superseded={superseded} authLive={authLive} onRetry={onRetry} planUsage={planUsage} />
     </ManagerProjectsContext.Provider>
   )
 })
@@ -529,13 +565,17 @@ function MessageBody({
   projects,
   answerOnCard,
   superseded,
+  authLive,
   onRetry,
+  planUsage,
 }: {
   message: ManagerMessage
   origin: ManagerOrigin
   onRetry: (() => void) | undefined
+  planUsage: ReplyUsage | undefined
   answerOnCard: boolean
   superseded: boolean
+  authLive: boolean
   projects: readonly ManagerReferenceProject[]
   onDecide: DecideAction
 }) {
@@ -550,10 +590,43 @@ function MessageBody({
         </div>
       )
     case 'assistant':
-      return <AssistantMessage message={message} origin={origin} projects={projects} answerOnCard={answerOnCard} superseded={superseded} onRetry={onRetry} />
+      return <AssistantMessage message={message} origin={origin} projects={projects} answerOnCard={answerOnCard} superseded={superseded} authLive={authLive} onRetry={onRetry} planUsage={planUsage} />
     case 'action':
       return <ActionCard origin={origin} message={message} onDecide={onDecide} />
     case 'notice':
+      if (message.activity) return <ActivityNotice at={message.at} activity={message.activity} />
+      if (message.agentSwitch) return <AgentSwitchNotice message={message} managerId={origin.id} />
       return <p data-slot="manager-notice" className="text-center text-xs text-muted-foreground">{message.text}</p>
   }
+}
+
+const count = (value: number | undefined, noun: string) => (value === undefined ? null : <span><b className="font-semibold text-foreground">{value}</b> {noun}{value === 1 ? '' : 's'}</span>)
+
+/** The deactivate and reactivate lines (spec 2026-11-19-manager-deactivate, design § 02): a divider,
+ *  and after a reactivation the "While inactive" counts the server posted. */
+function ActivityNotice({ at, activity }: { at: string; activity: ManagerActivityNotice }) {
+  const reactivated = activity.change === 'reactivated'
+  const Icon = reactivated ? PlayIcon : PowerIcon
+  const time = managerMessageTime(at)
+  const counted = [activity.taskUpdates, activity.automationReports, activity.checksSkipped, activity.jobRunsSkipped].some((value) => value !== undefined)
+  return (
+    <div data-slot="manager-activity-notice" data-change={activity.change} className="flex flex-col gap-2.5">
+      <p role="separator" className="flex items-center gap-2.5 text-meta text-muted-foreground before:h-px before:flex-1 before:bg-border after:h-px after:flex-1 after:bg-border">
+        <Icon aria-hidden="true" className="size-3.5 shrink-0" />
+        {reactivated ? 'Reactivated' : 'Deactivated'} by you · {time}
+      </p>
+      {reactivated && counted ? (
+        <div data-slot="manager-activity-summary" className="flex flex-wrap items-center gap-x-3.5 gap-y-1.5 rounded-xl border border-dashed border-border px-3 py-2.5 text-label text-muted-foreground">
+          <ClockIcon aria-hidden="true" className="size-3.5 shrink-0" />
+          <b className="font-semibold text-foreground">While inactive{activity.since ? ` (${managerMessageTime(activity.since)} → ${time})` : ''}</b>
+          {count(activity.taskUpdates, 'task update')}
+          {count(activity.automationReports, 'automation report')}
+          {count(activity.checksSkipped, 'check')}{activity.checksSkipped !== undefined ? ' skipped' : null}
+          {count(activity.jobRunsSkipped, 'job run')}{activity.jobRunsSkipped !== undefined ? ' skipped' : null}
+          {activity.catchUp ? <span>catching up now</span> : null}
+          <span className="text-muted-foreground">{activity.catchUp ? 'summary posted by cezar · the catch-up check is one model call' : 'posted by cezar · no model call'}</span>
+        </div>
+      ) : null}
+    </div>
+  )
 }
