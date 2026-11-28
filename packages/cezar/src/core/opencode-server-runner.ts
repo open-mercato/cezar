@@ -101,10 +101,9 @@ const QUOTA_REASON_RE = /limit|quota/i;
  * the opencode TUI talks to) with an SSE event stream. One server per session,
  * bound to the run's `cwd` (worktree), gives OpenCode the same multi-turn shape
  * as the Claude runner: each `sendMessage` posts another prompt to the same
- * session (history is kept server-side) and `session/abort` cancels. "Continue"
- * starts a fresh server and a fresh session — `bootstrap()` always `POST
- * /session` and does not read `spec.sessionId`; resuming a server-side session
- * id is not implemented.
+ * session (history is kept server-side) and `session/abort` cancels. A resume
+ * (Continue, graph `session.continue`) starts a fresh server and reopens
+ * `spec.sessionId` there (`reopenSession`).
  *
  * Auth = the host's opencode config/logins. A permission prompt for this run's
  * own state is granted by the runner (`opencodePermissionReply`); any other one
@@ -699,27 +698,32 @@ class OpencodeSession implements AgentSession {
     else if (!/^1\./.test(info.version)) throw new Error('Unsupported OpenCode server API version');
   }
 
-  /** Reopens the 1.x session a Continue resumes (#1193); a 404 is the one "it is gone" answer. */
+  /**
+   * Reopens the session a resume names (#1193, #2543). A 404, another id, or a 2.x session bound to
+   * another directory all mean "it is gone": a 2.x session runs its tools in `location.directory`.
+   */
   private async reopenSession(sessionId: string): Promise<Record<string, unknown>> {
+    const id = encodeURIComponent(sessionId);
     let reopened: Record<string, unknown>;
     try {
-      reopened = await this.http('GET', `/session/${encodeURIComponent(sessionId)}`, undefined);
+      reopened = await this.http('GET', this.apiVersion === 2 ? `/api/session/${id}` : `/session/${id}`, undefined);
     } catch (err) {
       if (err instanceof OpencodeStatusError && err.status === 404) throw new Error(OPENCODE_MISSING_SESSION);
       throw err;
     }
     if (stringField(reopened, 'id') !== sessionId) throw new Error(OPENCODE_MISSING_SESSION);
+    if (this.apiVersion === 2) {
+      const dir = isRecord(reopened.location) ? stringField(reopened.location, 'directory') : undefined;
+      if (!dir || canonicalPath(dir) !== canonicalPath(this.spec.cwd ?? process.cwd())) throw new Error(OPENCODE_MISSING_SESSION);
+    }
     return reopened;
   }
 
   private async bootstrap(): Promise<void> {
-    // Only 1.x is reopened: a 2.x resume still starts a new session, as before.
-    const resumeId = this.spec.resume && this.apiVersion === 1 ? this.spec.sessionId : undefined;
-    if (resumeId) await this.openSession(await this.reopenSession(resumeId));
-    else {
-      await this.settlePriorSessions();
-      await this.openSession(await this.createSession());
-    }
+    const resumeId = this.spec.resume ? this.spec.sessionId : undefined;
+    // A 2.x server may restart a claimed session on its own (#2468), the reopened one included.
+    await this.settlePriorSessions();
+    await this.openSession(resumeId ? await this.reopenSession(resumeId) : await this.createSession());
     // A reopened session re-hears the current guidance too, as Codex does (#2257): global
     // instructions edited in Settings must reach a Continue.
     await this.prompt(prependSystemPrompt(this.spec.systemPrompt, this.spec.userPrompt));
