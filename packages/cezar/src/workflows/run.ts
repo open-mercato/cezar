@@ -10183,7 +10183,12 @@ export class RunManager {
         execution = { runner, env: profile.env, onUsageWindows: profile.onUsageWindows, ...(profile.planUsageAccount ? { planUsageAccount: profile.planUsageAccount } : {}) };
       }
       const result = await generateRunName(this.repoRoot, { task, skillName, skillDescription, ...live, nameBranch: !live }, execution,
-        (reason) => this.store.appendEvent(runId, { type: 'note', message: `model naming unavailable — ${reason}` }));
+        (reason, runner) => this.store.appendEvent(runId, {
+          type: 'note',
+          message: `model naming unavailable — ${reason}`,
+          // Additive: lets the cockpit render a readable fallback row; `message` stays for old readers.
+          fallback: { kind: 'title', runner, reason: this.store.redactRunText(runId, reason) },
+        }));
       if (!result) return undefined;
       const run = this.store.getRun(runId);
       // Marker-owned state outranks the namer (spec 2026-07-18-task-ref-markers):
@@ -10566,9 +10571,11 @@ export class RunManager {
       describe: async (staged) => {
         const written = await generateCommitMessage(this.repoRoot, staged, this.latestRequest(runId));
         if (written.subject === undefined && staged.files.length > 0) {
+          const reason = this.store.redactRunText(runId, written.reason);
           this.store.appendEvent(runId, {
             type: 'note',
-            message: `commit message named from the files — ${this.store.redactRunText(runId, written.reason)}`,
+            message: `commit message named from the files — ${reason}`,
+            fallback: { kind: 'commit-message', ...(written.runner ? { runner: written.runner } : {}), reason },
           });
         }
         return written.subject;

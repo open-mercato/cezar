@@ -83,7 +83,7 @@ describe('generateRunName / generateCommitMessage model choice (#2012)', () => {
   it('never calls the default (premium) model on a runner without a cheap one', async () => {
     projectWith('copilot');
     expect(await generateRunName(root, { task: 'fix login' })).toBeNull();
-    expect(await generateCommitMessage(root, staged)).toEqual({ reason: 'no cheap model known for copilot' });
+    expect(await generateCommitMessage(root, staged)).toEqual({ reason: 'no cheap model known for copilot', runner: 'copilot' });
     expect(specs).toEqual([]);
   });
 

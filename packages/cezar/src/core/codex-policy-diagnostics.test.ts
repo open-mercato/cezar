@@ -25,9 +25,12 @@ it('explains tool-policy refusal when planning and naming fall back', async () =
   expect(plan.fallback).toBe(true);
   expect(plan.rationale).toContain('tool-policy enforcement unavailable');
   const reasons: string[] = [];
+  const runners: string[] = [];
   expect(await generateRunName(root, { task: 'check diff', nameBranch: true, branchNaming: 'feat/' },
-    { runner: 'codex', env: {} }, (reason) => reasons.push(reason))).toBeNull();
+    { runner: 'codex', env: {} }, (reason, runner) => { reasons.push(reason); runners.push(runner); })).toBeNull();
   expect(reasons).toEqual([expect.stringContaining('tool-policy enforcement unavailable')]);
+  // The runner rides along so the cockpit can say which agent it tried.
+  expect(runners).toEqual(['codex']);
   expect(await generateCommitMessage(root, { files: [{ status: 'A', path: 'a.ts' }], patch: '+a' }))
-    .toEqual({ reason: expect.stringContaining('tool-policy enforcement unavailable') });
+    .toEqual({ reason: expect.stringContaining('tool-policy enforcement unavailable'), runner: 'codex' });
 }, 15_000);
