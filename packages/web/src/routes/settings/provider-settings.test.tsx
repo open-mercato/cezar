@@ -47,6 +47,7 @@ function serve({
   enabledResponses = [],
   retry = status,
   retryCode = 200,
+  setup,
 }: {
   status?: unknown
   refreshStatus?: unknown
@@ -57,6 +58,7 @@ function serve({
   enabledResponses?: Array<Response | Promise<Response>>
   retry?: unknown
   retryCode?: number
+  setup?: unknown
 } = {}) {
   requests = []
   vi.stubGlobal(
@@ -72,6 +74,9 @@ function serve({
           refreshing && refreshStatus !== undefined ? refreshStatus : status,
           refreshing ? (refreshStatusCode ?? statusCode) : statusCode,
         )
+      }
+      if (url === '/api/v1/providers/setup' && method === 'GET' && setup !== undefined) {
+        return json(setup)
       }
       if (url === '/api/v1/providers/connect' && method === 'POST') {
         return json(connect, connectCode)
@@ -635,5 +640,119 @@ describe('ProviderSettings', () => {
     expect(await within(card('codex')).findByText('Not connected')).toBeTruthy()
     expect(within(card('codex')).getByRole('button', { name: 'Try again' })).toBeTruthy()
     expect(await screen.findByText('That incident is no longer current.')).toBeTruthy()
+  })
+
+  it('shows versions, version chips, setup actions without duplicating Connect, and opens the setup sheet (#2474)', async () => {
+    const setup = {
+      available: true,
+      reason: null,
+      interactive: true,
+      session: null,
+      agents: [
+        {
+          provider: 'claude',
+          loginCommand: 'claude auth login',
+          install: { command: 'curl -fsSL https://claude.ai/install.sh | bash', runnable: true, sudo: false },
+          update: { command: "'claude' update", runnable: true, sudo: false },
+          docsUrl: 'https://docs.anthropic.com',
+          installed: true,
+          version: '2.0.14',
+          method: 'native',
+          minVersion: null,
+          latestVersion: '2.1.3',
+          activeRuns: 0,
+        },
+        {
+          provider: 'codex',
+          loginCommand: 'codex login',
+          install: { command: 'npm install -g @openai/codex', runnable: true, sudo: false },
+          update: { command: 'npm install -g @openai/codex@latest', runnable: true, sudo: false },
+          docsUrl: 'https://developers.openai.com',
+          installed: true,
+          version: '0.170.0',
+          method: 'npm',
+          minVersion: null,
+          latestVersion: '0.170.0',
+          activeRuns: 0,
+        },
+        {
+          provider: 'opencode',
+          loginCommand: 'opencode auth login',
+          install: { command: 'npm install -g opencode-ai@1', runnable: true, sudo: false },
+          update: { command: "'opencode' upgrade", runnable: true, sudo: false },
+          docsUrl: 'https://opencode.ai',
+          installed: true,
+          version: '1.17.0',
+          method: 'npm',
+          minVersion: '1.18.0',
+          latestVersion: '1.21.0',
+          activeRuns: 0,
+        },
+        {
+          provider: 'cursor',
+          loginCommand: 'agent login',
+          install: { command: 'curl https://cursor.com/install -fsS | bash', runnable: true, sudo: false },
+          update: null,
+          docsUrl: 'https://cursor.com',
+          installed: false,
+          version: null,
+          method: null,
+          minVersion: null,
+          latestVersion: null,
+          activeRuns: 0,
+        },
+        {
+          provider: 'pi',
+          loginCommand: 'pi',
+          install: { command: 'npm install -g @mariozechner/pi-coding-agent', runnable: false, sudo: false },
+          update: null,
+          docsUrl: 'https://pi.dev',
+          installed: false,
+          version: null,
+          method: null,
+          minVersion: null,
+          latestVersion: null,
+          activeRuns: 0,
+        },
+      ],
+    }
+    serve({
+      status: {
+        providers: [
+          { provider: 'claude', status: 'connected', enabled: true },
+          { provider: 'codex', status: 'disconnected', enabled: true },
+          { provider: 'opencode', status: 'connected', enabled: true },
+          { provider: 'cursor', status: 'not-installed', enabled: true },
+          { provider: 'pi', status: 'not-installed', enabled: true },
+        ],
+      },
+      setup,
+    })
+    renderSettings()
+
+    // Version + available chip + Update action on Claude Code.
+    await waitFor(() => expect(card('claude').querySelector('[data-slot="provider-version"]')?.textContent).toBe('2.0.14'))
+    const claudeChip = card('claude').querySelector('[data-slot="provider-version-chip"]')
+    expect(claudeChip?.textContent).toBe('2.1.3 available')
+    expect(claudeChip?.getAttribute('data-tone')).toBe('warn')
+    expect(card('claude').querySelector('[data-slot="provider-setup-action"]')?.textContent).toBe('Update')
+
+    // Below minimum: required chip with danger tone on OpenCode.
+    const openChip = card('opencode').querySelector('[data-slot="provider-version-chip"]')
+    expect(openChip?.textContent).toBe('1.18.0 required')
+    expect(openChip?.getAttribute('data-tone')).toBe('danger')
+
+    // Disconnected installed agent keeps Connect and suppresses duplicate Sign in setup action.
+    expect(within(card('codex')).getByRole('button', { name: 'Connect' })).toBeTruthy()
+    expect(card('codex').querySelector('[data-slot="provider-setup-action"]')).toBeNull()
+
+    // Missing agents show Install vs How to install depending on runnability.
+    expect(card('cursor').querySelector('[data-slot="provider-setup-action"]')?.textContent).toBe('Install')
+    expect(card('pi').querySelector('[data-slot="provider-setup-action"]')?.textContent).toBe('How to install')
+
+    // Clicking a setup action opens AgentSetupSheet for that provider/action.
+    fireEvent.click(card('cursor').querySelector('[data-slot="provider-setup-action"]')!)
+    expect(await screen.findByRole('heading', { name: 'Install Cursor' })).toBeTruthy()
+    expect(document.querySelector('[data-slot="agent-setup-sheet"]')).toBeTruthy()
   })
 })

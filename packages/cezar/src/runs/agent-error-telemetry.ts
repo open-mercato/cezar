@@ -6,6 +6,7 @@ import {
   unwrapJsonErrorEnvelope,
 } from '../core/agent-errors.ts';
 import { RUNNER_IDS } from '../core/agent-runner.ts';
+import { noteAgentErrorVersion } from '../core/agent-cli-versions.ts';
 import { parseUsageLimit } from '../core/usage-limit.ts';
 import { reportError, telemetryEnabled } from '../telemetry.ts';
 
@@ -72,10 +73,13 @@ export function reportAgentError(
   event: { type: string; message: string; fatal?: unknown },
   opts: { transientOutcome?: 'not_retried' | 'retries_exhausted' | 'resume_refused' } = {},
 ): void {
+  // Every agent error passes here, so this is where a vendor's "X or newer is required" is learned
+  // for the setup sheet's minimum-version flag — consent or not, nothing leaves the machine.
+  noteAgentErrorVersion(backend, event.message);
   // Without consent there is nothing to send, so skip the masking work on the event path too.
   if (!telemetryEnabled() || INTERRUPTED_RE.test(event.message)) return;
   const failure = classifyAgentFailure(event.message);
-  if (failure === 'auth' || failure === 'billing' || failure === 'context_too_large' || failure === 'disk_full') return;
+  if (failure === 'auth' || failure === 'billing' || failure === 'context_too_large' || failure === 'disk_full' || failure === 'content_flagged') return;
   // A model the login cannot use: the thread already says which knob to turn (81bdc692).
   if (isCodexChatGptModelError(event.message)) return;
   // A limit auto-resume can schedule is the account's state (#1438), and so is one whose provider

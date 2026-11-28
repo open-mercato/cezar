@@ -153,6 +153,14 @@ describe('agent profiles API', () => {
       expect(hosted.status).toBe(409);
       expect(await hosted.json()).toEqual({ error: 'agent fallback is local-only' });
     });
+
+    it.each(['GET', 'PUT'] as const)('lets an opted-in hosted cockpit (CEZ_REMOTE_AGENT_ACCOUNTS=1) past the gate for %s (#2332)', async (method) => {
+      process.env.CEZ_REMOTE = '1';
+      process.env.CEZ_REMOTE_AGENT_ACCOUNTS = '1';
+      const res = await request(makeApp(), method, 'unknown-project');
+      expect(res.status).toBe(404);
+      expect(await res.json()).toEqual({ error: 'unknown project: unknown-project' });
+    });
   });
 
   describe('GET', () => {

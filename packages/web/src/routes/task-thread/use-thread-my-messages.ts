@@ -61,6 +61,19 @@ export function loadedThreadMessages(sections: readonly TranscriptSection[]): My
   return out
 }
 
+/** The loaded user row closest to `order`, preferring the one at or before it. */
+export function nearestUserRowKey(keys: readonly string[], order: number): string | undefined {
+  let before: { key: string; order: number } | undefined
+  let after: { key: string; order: number } | undefined
+  for (const key of keys) {
+    const o = userRowOrder(key)
+    if (o === undefined) continue
+    if (o <= order) { if (!before || o > before.order) before = { key, order: o } }
+    else if (!after || o < after.order) after = { key, order: o }
+  }
+  return (before ?? after)?.key
+}
+
 const rowSelector = (key: string) => {
   const escaped = typeof CSS !== 'undefined' && typeof CSS.escape === 'function' ? CSS.escape(key) : key.replace(/["\\]/g, '\\$&')
   return `[data-slot="thread-row"][data-row-key="${escaped}"]`
@@ -132,31 +145,40 @@ export function useThreadMyMessages({
   }, [scrollElRef])
 
   const reveal = useCallback(async (item: MyMessage): Promise<HTMLElement | undefined> => {
-    const loaded = () => rowKeysRef.current.includes(item.id)
+    let key = item.id
+    let loadFailed = false
+    const loaded = () => rowKeysRef.current.includes(key)
     while (!loaded() && historyRef.current?.hasOlder) {
       const before = rowKeysRef.current
       try {
         await historyRef.current.loadOlder()
       } catch {
+        loadFailed = true
         break
       }
       // The page resolves before its rows render.
       await untilFrame(() => rowKeysRef.current !== before)
     }
     if (!loaded() && !(await untilFrame(loaded))) {
-      toast('Could not load that message', { tone: 'danger' })
-      return undefined
+      // Whole history paged in and the message still has no row of its own (it folded into
+      // another turn): land on the nearest user row instead of an error. Only a failed page is one.
+      const near = loadFailed ? undefined : nearestUserRowKey(rowKeysRef.current, item.order)
+      if (!near) {
+        toast('Could not load that message', { tone: 'danger' })
+        return undefined
+      }
+      key = near
     }
     const box = scrollElRef.current
     if (!box) return undefined
     const inset = viewport().top - box.getBoundingClientRect().top + JUMP_OFFSET_PX
-    if (!revealRow(item.id, inset)) {
+    if (!revealRow(key, inset)) {
       // Virtualized: the row exists only once virtua renders it.
-      await untilFrame(() => box.querySelector(rowSelector(item.id)) !== null)
-      revealRow(item.id, inset)
+      await untilFrame(() => box.querySelector(rowSelector(key)) !== null)
+      revealRow(key, inset)
     }
-    await untilFrame(() => box.querySelector(rowSelector(item.id)) !== null)
-    const row = box.querySelector<HTMLElement>(rowSelector(item.id))
+    await untilFrame(() => box.querySelector(rowSelector(key)) !== null)
+    const row = box.querySelector<HTMLElement>(rowSelector(key))
     return row?.querySelector<HTMLElement>('[data-slot="user-bubble"]') ?? row ?? undefined
   }, [revealRow, scrollElRef, viewport])
 
