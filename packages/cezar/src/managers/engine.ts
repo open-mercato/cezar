@@ -75,6 +75,14 @@ import { buildSnapshot, gateAttention, taskDetailRows, taskEventOf, type Manager
 import { finalAssistantText, resumeLabel } from './automation-reports.ts';
 import type { RunRecord } from '../runs/store.ts';
 import type { ManagerState, ManagerStore } from './store.ts';
+<<<<<<< HEAD
+=======
+import { outsideRelayScope } from '../relay/scope.ts';
+import { PlanUsageTracker, recordUsageObservation, type LedgerAccountRef } from '../usage-ledger/recorder.ts';
+import { ledgerAccountRef } from '../usage-ledger/identity.ts';
+import { managerConsumerId } from '../usage-ledger/report.ts';
+import type { RestartGate } from '../workspace/restart-gate.ts';
+>>>>>>> 4ce90da (fix(self-update): restart when idle waits for tasks, managers and setup terminals (#2478))
 
 /**
  * The manager turn engine (spec 2026-10-31-managers § Turns, § Watching, § Safety). One turn per
@@ -107,6 +115,18 @@ export interface ManagerEngineDeps {
   now?: () => number;
   /** Test seam for `TURN_LIMIT_MS`. */
   turnLimitMs?: number;
+<<<<<<< HEAD
+=======
+  /** Test seam for `RETRY_BACKOFF_MS`. */
+  retryDelayMs?: number;
+  /** A manager was deactivated or reactivated: the Questions count leaves its cards out while inactive. */
+  onActivityChange?: (managerId: string) => void;
+  /** "Restart when idle": a turn in flight blocks it, and while it is pending only the user's own
+   *  chat starts a turn — watches, jobs and follow-ups wait (the restart re-arms them). */
+  restartGate?: RestartGate;
+  /** A chain row's usage limit was recorded or released: the task queues re-read `accountHolds()`. */
+  onAccountHoldsChanged?: () => void;
+>>>>>>> 4ce90da (fix(self-update): restart when idle waits for tasks, managers and setup terminals (#2478))
 }
 
 /** One finished run of an automation linked to a manager (`reportAutomationRun`). */
@@ -410,7 +430,28 @@ export class ManagerEngine {
   /** Per manager, the newest `manager-change` asked for: summaries resolve out of order. */
   private readonly changes = new Map<string, number>();
 
-  constructor(private readonly deps: ManagerEngineDeps) {}
+  private readonly offRestartGate: Array<() => void> = [];
+
+  constructor(private readonly deps: ManagerEngineDeps) {
+    const gate = deps.restartGate;
+    if (gate) {
+      this.offRestartGate.push(
+        gate.addSource(() => [{ kind: 'manager', names: this.turnsInFlight() }]),
+        gate.onRelease(() => {
+          for (const id of this.runtimes.keys()) this.pump(id);
+        }),
+      );
+    }
+  }
+
+  /** Names of the managers mid-turn, for the restart gate. */
+  private turnsInFlight(): string[] {
+    const names: string[] = [];
+    for (const [id, runtime] of this.runtimes) {
+      if (runtime.active) names.push(this.deps.store.get(id)?.name ?? id);
+    }
+    return names;
+  }
 
   private now(): number {
     return this.deps.now?.() ?? Date.now();
@@ -489,6 +530,7 @@ export class ManagerEngine {
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
+    for (const off of this.offRestartGate.splice(0)) off();
     if (this.timer) clearTimeout(this.timer);
     if (this.recoveryTimer) clearTimeout(this.recoveryTimer);
     for (const timer of this.alerts) clearTimeout(timer);
@@ -931,6 +973,16 @@ export class ManagerEngine {
   private pump(id: string): void {
     const runtime = this.runtime(id);
     if (this.disposed || runtime.deleted || runtime.active || runtime.queue.length === 0) return;
+<<<<<<< HEAD
+=======
+    // A pending restart: only what the user just typed starts a turn (and the restart waits for it).
+    if (this.deps.restartGate?.holding && !runtime.queue.some((item) => item.kind === 'chat')) return;
+    // Queued before it was deactivated, by a path that skipped the gate's sweep (a lease retry).
+    if (this.inactive(id)) {
+      runtime.queue = [];
+      return;
+    }
+>>>>>>> 4ce90da (fix(self-update): restart when idle waits for tasks, managers and setup terminals (#2478))
     const release = this.tryLease(id);
     if (!release) {
       // A timed watch is the other cockpit's to fire; a message or a Check now the user asked for here waits.
