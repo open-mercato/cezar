@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 const control = vi.hoisted(() => ({
-  path: '', replacement: '', replaceOnOpen: 0, deleteOnOpen: 0, opens: 0, closes: 0, failStat: false, failStatOnOpen: 0, failReadOnOpen: 0,
+  path: '', replacement: '', replaceOnOpen: 0, deleteOnOpen: 0, opens: 0, closes: 0, failOpenOn: 0, failStat: false, failStatOnOpen: 0, failReadOnOpen: 0,
 }));
 vi.mock('node:fs/promises', async (importOriginal) => {
   const fs = await importOriginal<typeof import('node:fs/promises')>();
@@ -13,6 +13,9 @@ vi.mock('node:fs/promises', async (importOriginal) => {
     open: async (...args: Parameters<typeof fs.open>) => {
       if (args[0] !== control.path) return fs.open(...args);
       control.opens++;
+      if (control.opens === control.failOpenOn) {
+        throw Object.assign(new Error('too many open files'), { code: 'EMFILE' });
+      }
       if (control.opens === control.replaceOnOpen) await fs.rename(control.replacement, control.path);
       if (control.opens === control.deleteOnOpen) await fs.rm(control.path);
       const handle = await fs.open(...args);
@@ -39,7 +42,7 @@ import { readRunHistoryPage } from './event-history.ts';
 let dir = '';
 afterEach(async () => {
   if (dir) await rm(dir, { recursive: true, force: true });
-  Object.assign(control, { path: '', replacement: '', replaceOnOpen: 0, deleteOnOpen: 0, opens: 0, closes: 0, failStat: false, failStatOnOpen: 0, failReadOnOpen: 0 });
+  Object.assign(control, { path: '', replacement: '', replaceOnOpen: 0, deleteOnOpen: 0, opens: 0, closes: 0, failOpenOn: 0, failStat: false, failStatOnOpen: 0, failReadOnOpen: 0 });
 });
 
 async function setup() {
@@ -69,6 +72,13 @@ describe('event history file identity', () => {
       expect(control.closes).toBe(openIndex - 1);
     });
   }
+
+  it.each([1, 2])('surfaces an unexpected open error from reader %s', async opening => {
+    await setup();
+    control.failOpenOn = opening;
+    await expect(readRunHistoryPage(control.path)).rejects.toMatchObject({ code: 'EMFILE' });
+    expect(control.closes).toBe(opening - 1);
+  });
 
   it('closes both descriptors for empty histories', async () => {
     await setup();

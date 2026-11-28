@@ -235,6 +235,16 @@ export function canonicalSessionItems(events: readonly RunEvent[]): CanonicalIte
   return [...items.values()].sort((a, b) => a.firstSeq - b.firstSeq);
 }
 
+async function openHistoryFile(filePath: string) {
+  try {
+    return await open(filePath, 'r');
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === 'ENOENT' || code === 'ENOTDIR') return undefined;
+    throw error;
+  }
+}
+
 async function reverseEventsUntil(
   filePath: string,
   beforeSeq: number,
@@ -248,10 +258,8 @@ async function reverseEventsUntil(
   endOffsets: Map<number, number>;
   canonical?: CanonicalItem[];
 }> {
-  let handle;
-  try {
-    handle = await open(filePath, 'r');
-  } catch {
+  const handle = await openHistoryFile(filePath);
+  if (handle === undefined) {
     return { events: [], fileSize: 0, fileHighWater: 0, reachedStart: true, bytesRead: 0, endOffsets: new Map() };
   }
   let suffix: Buffer<ArrayBufferLike> = Buffer.alloc(0);
@@ -322,10 +330,8 @@ async function reverseEventsUntil(
 }
 
 async function readFileTail(filePath: string): Promise<{ fileSize: number; fileHighWater: number; bytesRead: number }> {
-  let handle;
-  try {
-    handle = await open(filePath, 'r');
-  } catch {
+  const handle = await openHistoryFile(filePath);
+  if (handle === undefined) {
     return { fileSize: 0, fileHighWater: 0, bytesRead: 0 };
   }
   let suffix: Buffer<ArrayBufferLike> = Buffer.alloc(0);
