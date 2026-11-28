@@ -3782,6 +3782,9 @@ export class RunManager {
       /** Live read of the automation store (#1980): an agent's own dispatch under a tree its
        *  automation launched is refused while that automation is paused. Graph nodes are exempt. */
       automationPaused?: (automationId: string) => boolean;
+      /** A graph node's dispatch runs between agent turns, so it must not mark the next turn as
+       *  "dispatched" and park it as a monitor (#2289). */
+      fromNode?: boolean;
       /** The child's task tags, resolved by the route from `input.tags` (spec 2026-11-23-task-tags).
        *  Never the parent's: a child gets tags only through `--tag` (D13). */
       tags?: RunRecord['tags'];
@@ -3922,7 +3925,7 @@ export class RunManager {
     note(`dispatched "${title}" (${input.kind ?? 'implement'}, ${record.id})${budget.budgetUsd !== undefined ? ` with ${usd(budget.budgetUsd)}` : ''}`);
     // This turn parks as a monitor for the child when it ends (see `handleDispatchTurn`).
     const state = this.active.get(parentId);
-    if (state) state.dispatchedThisTurn = true;
+    if (state && !opts.fromNode) state.dispatchedThisTurn = true;
     return { id: child.id, ...(child.branch ? { branch: child.branch } : {}) };
   }
 
@@ -8419,6 +8422,7 @@ export class RunManager {
             ...(a.review ? { kind: 'review' as const, review_of: [reviewOf] } : {}),
           },
           {
+            fromNode: true,
             // The branch's own skill and tool limits ride on the child's single step.
             workflow: {
               name: '(fork branch)',
@@ -8572,7 +8576,7 @@ export class RunManager {
           ...(node.runner ? { runner: node.runner } : {}),
           ...(node.model ? { model: node.model } : {}),
           ...(node.budgetUsd ? { max_cost: node.budgetUsd } : {}),
-        });
+        }, { fromNode: true });
         if ('refused' in spawned) {
           note(`dispatch refused — ${spawned.refused}`, 'danger');
           return 'failed';
@@ -8705,7 +8709,7 @@ export class RunManager {
               ...(node.runner ? { runner: node.runner } : {}),
               ...(node.budgetUsd ? { max_cost: node.budgetUsd } : {}),
             },
-            { workflow: def },
+            { workflow: def, fromNode: true },
           );
           if ('refused' in spawned) {
             note(`sub-workflow refused — ${spawned.refused}`, 'danger');
