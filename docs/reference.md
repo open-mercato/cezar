@@ -849,6 +849,15 @@ write to whatever cockpit owns the port. So a command run without it exits `2`
 and explains how to set it (inside a task, it tells the agent to stop and
 report instead).
 
+An automation's **Dispatch off** setting denies cezar child creation for each run it launches,
+including variants, Continue and restart recovery. `cez task create` exits `1` with the reason,
+and the dispatch HTTP endpoint answers `409 { error }`, even with a known cockpit address.
+Tracker commands, automations, handoff and reports from existing children keep their transport.
+Backend-native subagents and graph-workflow fan-out are separate from this setting.
+Ordinary tasks still have dispatch on by default. Older automation runs without a saved grant
+need a saved dispatch intent to create children; otherwise launch a new run with Dispatch on.
+Editing the automation later does not change an existing run's authorization.
+
 `cez runs` is read-only. Cancel, relaunch and archive from the cockpit, or call
 the API below.
 

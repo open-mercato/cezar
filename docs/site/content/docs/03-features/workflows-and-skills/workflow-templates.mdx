@@ -22,7 +22,7 @@ This is one result of the rule that [global instructions](../agents-and-models/s
 
 cezar empties the file at the start of every agent round (the fixer, review follow-ups, Continue), so an old narrow command never outlives its round. In implement-review-pr, the gate before the PR shows the command the agent recorded. It is blank when the whole suite ran.
 
-> **Good to know**: The record lives in the task's artifacts folder as a hidden file, so it never reaches the diff or the Assets view. An agent could narrow the command or make it a no-op, just as it could edit the tests, which is why the step and the gate show it. To always run one fixed command, edit the Run tests step's command in your own copy of the workflow.
+> **Good to know**: The record lives in the task's artifacts folder as a hidden file, so it never reaches the diff or the Assets view. An agent could narrow the command or make it a no-op, and it could also edit the tests. The step and the gate show the command for that reason. To always run one fixed command, edit the Run tests step's command in your own copy of the workflow.
 
 ## Where to find it
 

@@ -122,7 +122,7 @@ import { backstopRender } from '../impact/publish.ts';
 // takes byte-for-byte the path it took before this feature existed.
 import type { DispatchInput, DispatchIntent, DispatchReport, RunDispatch } from '@open-mercato/cezar-contract';
 import { resolveCapabilities } from '../server/capabilities.ts';
-import { composeDispatchPrompt } from '../dispatch/prompts.ts';
+import { composeDispatchPrompt, DISPATCH_PROMPT, REVIEW_PROMPT } from '../dispatch/prompts.ts';
 import {
   appendLedger,
   inboxDigest,
@@ -1228,6 +1228,8 @@ export interface StartRunInput {
    *  dispatch tree with the user's limits. Persisted as `dispatch.intent`; a worktree opt-out is
    *  overridden, because children fork the root's commits and an in-place run has no branch. */
   dispatchIntent?: DispatchIntent;
+  /** Launch-time child-creation authorization, independent of the optional fan-out intent. */
+  dispatchAuthorized?: boolean;
   /** Attachments from the queued prompt stack (#472), re-encoded from disk by
    *  `hydrateQueuedInput` at dequeue. Kept separate from `images` because those
    *  are persisted into `taskImages` by `startRun()` — folding
@@ -2081,9 +2083,11 @@ export class RunManager {
    *  turning into empty command output inside a running agent. */
   private agentEnv(runId: string, generateFollowups = true): Record<string, string> {
     const dispatch = this.dispatchOf(runId);
-    // The same ONE gate the dispatch prompt uses, so an agent is never told about a CLI whose
-    // address it was not given (and never given an address it was not told about).
-    const apiUrl = this.dispatchReachable() ? process.env.CEZ_API_URL : undefined;
+    // Dispatch authorization controls child creation; transport may serve other capabilities.
+    const authorized = this.dispatchAuthorized(runId);
+    // Shared transport still serves automations, tracker mediation (restored below), and reports.
+    const needsDispatchTransport = this.dispatchReachable() && (authorized || Boolean(dispatch?.parentRunId));
+    const apiUrl = needsDispatchTransport || automationsReachable() ? process.env.CEZ_API_URL : undefined;
     return {
       CEZ_HANDOFF_FILE: handoffPath(this.dataDir, runId),
       CEZ_TASK_ID: runId,
@@ -2093,9 +2097,9 @@ export class RunManager {
       CEZ_TEST_COMMAND_FILE: testCommandFile(this.dataDir, runId),
       ...agentTmpEnv(this.dataDir, runId),
       // Task dispatch (spec 2026-09-10-dispatch): where the `cez task` CLI reaches this server and
-      // which project the run belongs to. Absent (not empty) while the feature is off, so the env
-      // is byte-for-byte as before.
-      ...(apiUrl ? { CEZ_API_URL: apiUrl } : {}),
+      // which project the run belongs to. A denied run shadows inherited transport when no
+      // shared capability needs it; the engine remains the authorization boundary.
+      ...(apiUrl ? { CEZ_API_URL: apiUrl } : !authorized ? { CEZ_API_URL: '' } : {}),
       ...(apiUrl && this.projectId ? { CEZ_PROJECT_ID: this.projectId } : {}),
       // The cockpit's OWN entrypoint, so an agent runs `node "$CEZ_BIN" task …` and never an older
       // `cez` that happens to be on its PATH without the command (observed on the first live run).
@@ -2343,6 +2347,7 @@ export class RunManager {
       // auto-nudge reads `input.autonomous` (`execute`), but the record is the
       // only source those after-the-fact consumers have.
       autonomous: input.autonomous === true,
+      dispatchAuthorized: input.dispatchAuthorized,
       // Persist the explicit opt-out so queued-run restart recovery and the
       // session Git routes can distinguish it from a removed isolated worktree.
       worktree: !group && !input.dispatchIntent && !input.forkRef && input.worktree === false ? false : undefined,
@@ -2416,10 +2421,9 @@ export class RunManager {
         ...(input.scheduledLaunch ? { automationTrigger: input.scheduledLaunch.provenance } : {}),
         deferredBinding: binding,
       });
-      // Children need the same durable guard before naming or queue admission, but retain
-      // their own fresh id and never masquerade as the scheduler's idempotent launch.
-      this.store.flushCreatedRun(run);
     }
+    // Commit both the launch binding and Dispatch decision before admitting the run to the queue.
+    if (binding || input.dispatchAuthorized !== undefined) this.store.flushCreatedRun(run);
     // Fire-and-forget LLM naming (task auto-naming spec): the heuristic title
     // above shows instantly; the namer's short title replaces it when (and if)
     // the model answers. Never awaited here, never fails the run. The same call
@@ -3407,6 +3411,23 @@ export class RunManager {
     this.store.updateRun(runId, { dispatch: patch(dispatch) });
   }
 
+  /** #2382: saved launch decisions fence descendants too. Legacy automation roots with no intent
+   * fail closed: today's editable automation definition cannot prove yesterday's permission. */
+  private dispatchAuthorized(runId: string): boolean {
+    const run = this.store.getRun(runId);
+    if (!run) return false;
+    const root = run.dispatch?.rootRunId ? this.store.getRun(run.dispatch.rootRunId) : undefined;
+    // A retained legacy child cannot prove its grant after its root disappeared. Reports survive.
+    if (run.dispatch?.parentRunId && !root && run.dispatchAuthorized === undefined) return false;
+    return [run, ...(root && root.id !== run.id ? [root] : [])].every((record) =>
+      record.dispatchAuthorized ?? (!(record.automation || record.automationTrigger || record.automationTracker) || record.dispatch?.intent !== undefined));
+  }
+
+  private dispatchExtraPrompt(runId: string, prompt: string | undefined): string | undefined {
+    // Old children stored the standard dispatch instructions inside their extra prompt.
+    return this.dispatchAuthorized(runId) ? prompt : prompt?.replace(DISPATCH_PROMPT, '');
+  }
+
   /**
    * Resolve what a session needs before it opens: the dispatch prompt (with the review addendum
    * for a review child). Called from BOTH `ActiveRun` construction sites.
@@ -3416,6 +3437,17 @@ export class RunManager {
    */
   private prepareDispatchSession(runId: string, state: ActiveRun): void {
     const dispatch = this.store.getRun(runId)?.dispatch;
+    if (!this.dispatchAuthorized(runId)) {
+      // An existing child still owes its report, even when child creation is denied.
+      if (dispatch?.parentRunId) {
+        state.dispatchPrompt = [
+          'Report your assignment before finishing with node "$CEZ_BIN" task report --status done|partial|failed|blocked --result "<result>" --evidence "<evidence>".',
+          'Read brief.md and your order in "$CEZ_TREE_DIR".',
+          ...(dispatch.kind === 'review' ? [REVIEW_PROMPT] : []),
+        ].join('\n\n');
+      }
+      return;
+    }
     // A child keeps its reporting instructions even if transport disappears before it starts.
     if (!dispatch?.parentRunId && !this.dispatchReachable()) return;
     // The intent block belongs to the ROOT the user started; a child reads its order instead.
@@ -3779,6 +3811,8 @@ export class RunManager {
      *  the single synthetic step an agent's order gets. */
     opts: {
       workflow?: WorkflowDef;
+      /** Internal graph dispatch node, with the same fan-out exemption as workflow/fork nodes. */
+      graphNode?: true;
       /** Live read of the automation store (#1980): an agent's own dispatch under a tree its
        *  automation launched is refused while that automation is paused. Graph nodes are exempt. */
       automationPaused?: (automationId: string) => boolean;
@@ -3790,6 +3824,7 @@ export class RunManager {
     if (!this.dispatchEnabled()) return { refused: 'dispatch is disabled on this cockpit (CEZ_DISPATCH=0) — the operator turned it off. Do not substitute sub-agents or do the delegated work yourself: stop and report that dispatch is disabled.' };
     const parent = this.store.getRun(parentId);
     if (!parent) return { refused: `no such run: ${parentId}` };
+    if (!opts.workflow && !opts.graphNode && !this.dispatchAuthorized(parentId)) return { refused: 'dispatch is disabled for this automation run — its launch did not authorize cezar child creation.' };
     if (isTerminalStatus(parent.status)) return { refused: `run ${parentId} has already settled (${parent.status})` };
     const note = (message: string, tone?: 'danger') =>
       this.store.appendEvent(parentId, { type: 'note', stepId: this.active.get(parentId)?.currentStepId, message, ...(tone ? { tone } : {}) });
@@ -3878,6 +3913,7 @@ export class RunManager {
       ...(childAccount ? { agentProfile: childAccount } : {}),
       ...(opts.tags && opts.tags.length > 0 ? { tags: opts.tags } : {}),
       autonomous: true,
+      dispatchAuthorized: this.dispatchAuthorized(parentId),
       dispatch: {
         rootRunId,
         parentRunId: parentId,
@@ -4664,6 +4700,7 @@ export class RunManager {
       // (#489, spec 2026-09-10-dispatch A11, #1597), as well as the task's account.
       autonomous: run.autonomous,
       dispatch: run.dispatch,
+      dispatchAuthorized: run.dispatchAuthorized,
       worktree: run.worktree,
       ...(run.readOnly ? { readOnly: true } : {}),
       ...(run.readOnly && run.enforceReadOnly ? { enforceReadOnly: true } : {}),
@@ -7226,7 +7263,7 @@ export class RunManager {
       ? `${context}\n\n---\n\n## New user instruction\n${openingPrompt}`
       : openingPrompt;
     state.grantedAttachmentLibrary = this.prepareAttachmentLibrary();
-    const recordedPrompt = await this.refreshedExtraPrompt(runId, record?.systemPrompt);
+    const recordedPrompt = this.dispatchExtraPrompt(runId, await this.refreshedExtraPrompt(runId, record?.systemPrompt));
     this.clearTestCommandRecord(runId);
     const planUsage = this.planUsageTracker(runId, continueProfile.planUsageAccount);
     const launch = (launchSessionId: string, resume: boolean, context: string | undefined): AgentSession => {
@@ -8572,7 +8609,7 @@ export class RunManager {
           ...(node.runner ? { runner: node.runner } : {}),
           ...(node.model ? { model: node.model } : {}),
           ...(node.budgetUsd ? { max_cost: node.budgetUsd } : {}),
-        });
+        }, { graphNode: true });
         if ('refused' in spawned) {
           note(`dispatch refused — ${spawned.refused}`, 'danger');
           return 'failed';
@@ -9862,7 +9899,7 @@ export class RunManager {
     const stepPrivateMcp = !stepDef || !isReadOnlyWorkflow(stepDef);
     const runner = createRunner(stepBackend);
     const stepMcp = stepPrivateMcp ? await this.privateMcpForLaunch(stepBackend, onEvent) : [];
-    const stepExtraPrompt = await this.refreshedExtraPrompt(runId, extraSystemPrompt);
+    const stepExtraPrompt = this.dispatchExtraPrompt(runId, await this.refreshedExtraPrompt(runId, extraSystemPrompt));
     this.clearTestCommandRecord(runId);
     let session: AgentSession;
     state.currentStepId = step.id;

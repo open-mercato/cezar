@@ -169,6 +169,7 @@ function startInput(definition: AutomationDefinition, task: string, dispatchEnab
     ...(definition.deferredStart ? composerRunMode(definition.task) : {}),
     autonomous: definition.task.autonomous,
     generateFollowups: definition.task.generateFollowups,
+    dispatchAuthorized: intent !== undefined,
     ...(intent ? { dispatchIntent: intent } : {}),
     origin: automationTaskOrigin(definition),
   };

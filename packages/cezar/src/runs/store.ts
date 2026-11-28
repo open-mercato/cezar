@@ -331,6 +331,8 @@ export const runRecordSchema = z.object({
    *  a `dispatch` that no longer fits must drop the FIELD, never the whole index. The run then reads
    *  as an ordinary flat task — degraded, but running. */
   dispatch: dispatchSchema.optional().catch(undefined),
+  /** Optional launch-time grant; malformed authorization fails closed without dropping the run. */
+  dispatchAuthorized: z.boolean().optional().catch(false),
   /** What this run assessed (spec 2026-10-22-html-artifacts-and-impact, Q10); a bad one drops the field. */
   subject: runSubjectSchema.optional().catch(undefined),
   status: z.enum(['queued', 'running', 'waiting', 'review', 'done', 'failed', 'cancelled']),
@@ -1556,6 +1558,7 @@ export class RunStore extends EventEmitter {
     fallbackPolicy?: RunRecord['fallbackPolicy'];
     generateFollowups?: boolean;
     autonomous?: boolean;
+    dispatchAuthorized?: boolean;
     worktree?: false;
     groupId?: string;
     variant?: string;
@@ -1580,6 +1583,7 @@ export class RunStore extends EventEmitter {
       fallbackPolicy: input.fallbackPolicy,
       generateFollowups: input.generateFollowups,
       autonomous: input.autonomous,
+      ...(input.dispatchAuthorized !== undefined ? { dispatchAuthorized: input.dispatchAuthorized } : {}),
       worktree: input.worktree,
       groupId: input.groupId,
       variant: input.variant,
