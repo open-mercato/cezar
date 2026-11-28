@@ -115,6 +115,14 @@ describe('ProjectContexts', () => {
     expect(existsSync(join(rootA, '.ai/cezar'))).toBe(false);
   });
 
+  it('dispose does not recreate a project folder deleted on disk (#2531)', async () => {
+    const contexts = makeContexts([{ id: 'a', root: rootA, status: 'not-git' }]);
+    await contexts.context('a');
+    rmSync(rootA, { recursive: true, force: true });
+    contexts.dispose('a');
+    expect(existsSync(rootA)).toBe(false);
+  });
+
   it('throws unknown-project for an id the registry does not hold', async () => {
     const contexts = makeContexts([{ id: 'a', root: rootA, status: 'not-git' }]);
     await expect(contexts.context('nope')).rejects.toMatchObject({
