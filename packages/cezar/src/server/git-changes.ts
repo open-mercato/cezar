@@ -1,6 +1,7 @@
 import { execFile } from 'node:child_process';
-import { rmSync } from 'node:fs';
+import { constants, rmSync } from 'node:fs';
 import { lstat, open, readFile, readdir, realpath, stat } from 'node:fs/promises';
+import type { FileHandle } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve, sep } from 'node:path';
 import { CEZAR_DATA_EXCLUDE } from '../data-gitignore.ts';
@@ -575,7 +576,7 @@ export interface DirEntry {
 
 export type FilesResult =
   | { kind: 'dir'; path: string; entries: DirEntry[] }
-  | { kind: 'file'; path: string; size: number; binary: boolean; tooLarge: boolean; content?: string }
+  | { kind: 'file'; path: string; size: number; binary: boolean; tooLarge: boolean; content?: string; bytes?: Buffer }
   | { kind: 'invalid'; error: string }
   | { kind: 'missing'; error: string };
 
@@ -668,17 +669,12 @@ export function isOsOpenableImage(path: string): boolean {
 }
 
 /** True when the first 8 KB contain a NUL byte — good enough for a viewer flag. */
-async function sniffBinary(path: string, size: number): Promise<boolean> {
-  const handle = await open(path, 'r');
-  try {
-    const len = Math.min(size, 8192);
-    if (len === 0) return false;
-    const buf = Buffer.alloc(len);
-    await handle.read(buf, 0, len, 0);
-    return buf.includes(0);
-  } finally {
-    await handle.close();
-  }
+async function sniffBinary(handle: FileHandle, size: number): Promise<boolean> {
+  const len = Math.min(size, 8192);
+  if (len === 0) return false;
+  const buf = Buffer.alloc(len);
+  await handle.read(buf, 0, len, 0);
+  return buf.includes(0);
 }
 
 /**
@@ -691,6 +687,7 @@ export async function readWorktreePath(
   root: string,
   relPath: string,
   contentCap = FILE_CONTENT_CAP,
+  includeImageBytes = false,
 ): Promise<FilesResult> {
   if (relPath.includes('\0')) return { kind: 'invalid', error: 'invalid path' };
   const rootAbs = resolve(root);
@@ -750,13 +747,35 @@ export async function readWorktreePath(
 
   if (!info.isFile()) return { kind: 'invalid', error: `not a regular file: ${display}` };
 
-  const binary = await sniffBinary(target, info.size).catch(() => true);
-  const tooLarge = info.size > contentCap;
-  if (binary || tooLarge) {
-    return { kind: 'file', path: display, size: info.size, binary, tooLarge };
+  let handle: FileHandle;
+  try {
+    // No-follow guards the leaf; nonblocking avoids hanging on a replacement FIFO.
+    // Neither guards ancestor replacements, so bind the descriptor to the lstat
+    // identity as well. Flags absent on a platform contribute zero.
+    handle = await open(realTarget, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0));
+  } catch {
+    return { kind: 'invalid', error: `file changed or is unreadable: ${display}` };
   }
-  const content = await readFile(target, 'utf8');
-  return { kind: 'file', path: display, size: info.size, binary: false, tooLarge: false, content };
+  try {
+    const opened = await handle.stat();
+    if (!opened.isFile() || opened.dev !== info.dev || opened.ino !== info.ino) {
+      return { kind: 'invalid', error: `file changed while opening: ${display}` };
+    }
+    const binary = await sniffBinary(handle, opened.size).catch(() => true);
+    const tooLarge = opened.size > contentCap;
+    // The raw-image routes must not reopen the pathname after this handle closes (#2006).
+    // Keep the internal bytes out of JSON responses and allocate them only for eligible images.
+    const bytes = includeImageBytes && !tooLarge && imageMimeType(display) !== null
+      ? await handle.readFile()
+      : undefined;
+    if (binary || tooLarge) {
+      return { kind: 'file', path: display, size: opened.size, binary, tooLarge, ...(bytes !== undefined ? { bytes } : {}) };
+    }
+    const content = bytes !== undefined ? bytes.toString('utf8') : await handle.readFile('utf8');
+    return { kind: 'file', path: display, size: opened.size, binary: false, tooLarge: false, content, ...(bytes !== undefined ? { bytes } : {}) };
+  } finally {
+    await handle.close();
+  }
 }
 
 // ---- branches -------------------------------------------------------------

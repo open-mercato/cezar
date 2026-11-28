@@ -6527,7 +6527,7 @@ export function createAppParts(deps: ServerDeps) {
           return c.json({ error: `path is not in the repository index: ${query.path}` }, 409);
         }
       }
-      const result = await readWorktreePath(workingDirectory, query.path ?? '');
+      const result = await readWorktreePath(workingDirectory, query.path ?? '', undefined, wantsRaw);
       if (result.kind === 'invalid' || result.kind === 'missing') {
         return c.json({ error: result.error }, 409);
       }
@@ -6565,7 +6565,8 @@ export function createAppParts(deps: ServerDeps) {
             return c.json({ error }, 409);
           }
         } else {
-          const bytes = await readFile(join(workingDirectory, result.path));
+          const bytes = result.bytes;
+          if (bytes === undefined) return c.json({ error: `file changed while reading: ${result.path}` }, 409);
           return c.body(new Uint8Array(bytes).buffer as ArrayBuffer, 200, {
             'content-type': mime,
             'x-content-type-options': 'nosniff',
@@ -8277,7 +8278,7 @@ export function createAppParts(deps: ServerDeps) {
         // on disk, which is the very thing this guard exists to keep quiet about.
         return c.json({ error: `path is not in the repository index: ${query.path}` }, 409);
       }
-      const result = await readWorktreePath(info.root, query.path);
+      const result = await readWorktreePath(info.root, query.path, undefined, wantsRaw);
       if (result.kind === 'invalid' || result.kind === 'missing') {
         return c.json({ error: result.error }, 409);
       }
@@ -8300,7 +8301,8 @@ export function createAppParts(deps: ServerDeps) {
             return c.json({ error }, 409);
           }
         } else {
-          const bytes = await readFile(join(info.root, result.path));
+          const bytes = result.bytes;
+          if (bytes === undefined) return c.json({ error: `file changed while reading: ${result.path}` }, 409);
           return c.body(new Uint8Array(bytes).buffer as ArrayBuffer, 200, {
             'content-type': mime,
             'x-content-type-options': 'nosniff',
