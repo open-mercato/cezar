@@ -2419,6 +2419,15 @@ export class RunStore extends EventEmitter {
     return existed;
   }
 
+  /** Drop a pending debounced save without writing: the caller knows the data dir is gone and a
+   *  late save would recreate it (#2531). */
+  discardPendingSave(): void {
+    if (this.saveTimer) {
+      clearTimeout(this.saveTimer);
+      this.saveTimer = null;
+    }
+  }
+
   /** Write the index out now. `flush()` is also a mid-run checkpoint (usage, automation launches),
    *  so indentation is opt-in: only a real shutdown passes `pretty`, leaving the hand-editable file
    *  the README promises behind a clean exit while every in-run save stays compact. */

@@ -123,6 +123,17 @@ describe('ProjectContexts', () => {
     expect(existsSync(rootA)).toBe(false);
   });
 
+  it('dispose cancels a pending save so it cannot recreate a deleted project folder (#2531)', async () => {
+    const contexts = makeContexts([{ id: 'a', root: rootA, status: 'not-git' }]);
+    const ctx = await contexts.context('a');
+    const run = ctx.store.createRun({ title: 't', workflow: 'quick-task', task: 't', steps: [] });
+    ctx.store.deleteRun(run.id); // schedules the 1 s debounced index save
+    rmSync(rootA, { recursive: true, force: true });
+    contexts.dispose('a');
+    await new Promise((resolve) => setTimeout(resolve, 1300));
+    expect(existsSync(rootA)).toBe(false);
+  });
+
   it('throws unknown-project for an id the registry does not hold', async () => {
     const contexts = makeContexts([{ id: 'a', root: rootA, status: 'not-git' }]);
     await expect(contexts.context('nope')).rejects.toMatchObject({
