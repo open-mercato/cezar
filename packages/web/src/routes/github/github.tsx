@@ -25,7 +25,7 @@ import { Virtualizer } from 'virtua'
 import { Link, Navigate } from '@/lib/project-router'
 
 import { getGithub, getGithubComments, getGithubPrChanges, getGithubPrMergeState, mergeGithubPr, putUiState } from '@/api/client'
-import { queryKeys, useGithubInfinite, useGithubChecks, useGithubComments, useGithubPrChanges, useGithubSearch, useHealth, useSkills, useUiState, useWorkflows } from '@/api/queries'
+import { githubRowsAreStale, queryKeys, useGithubFingerprint, useGithubInfinite, useGithubChecks, useGithubComments, useGithubPrChanges, useGithubSearch, useHealth, useSkills, useUiState, useWorkflows } from '@/api/queries'
 import type {
   GithubComment,
   GithubItem,
@@ -195,6 +195,9 @@ export function GithubRoute({
   // `capabilities?.` because this tab renders against minimal health payloads too; absent is
   // fail-closed, which is the honest answer while the server has not spoken.
   const automationsAvailable = useHealth().data?.capabilities?.automations === true
+  // #1870: the rows are never swapped under the user; a probe that disagrees with the first
+  // page's fingerprint only lights the "new data" chip.
+  const probe = useGithubFingerprint(list.data !== undefined)
   const gh = useMemo<GithubData | undefined>(() => {
     const pages = list.data?.pages
     if (!pages || pages.length === 0) return undefined
@@ -287,8 +290,15 @@ export function GithubRoute({
   // defined before `selected` exists and reads it at click time, not render time.
   const openThreadRef = useRef<{ kind: 'issue' | 'pr'; number: number } | null>(null)
 
+  // The thread shown on a bare route when a refresh was pressed: new rows may land above it, and
+  // the pane must not hop to another thread (#1870).
+  const [pinnedUrl, setPinnedUrl] = useState<string | null>(null)
+  const renderedUrlRef = useRef<string | null>(null)
   const refresh = useMutation({
-    mutationFn: () => getGithub({ refresh: true, limit: LIST_LIMIT }),
+    mutationFn: () => {
+      setPinnedUrl(renderedUrlRef.current)
+      return getGithub({ refresh: true, limit: LIST_LIMIT })
+    },
     onSuccess: () => {
       // Replace the paged cache from the first page; the next page cursor is intentionally
       // discarded because a refresh may have inserted or removed rows before it.
@@ -515,13 +525,14 @@ export function GithubRoute({
   // resort so a found-on-GitHub row is openable in the detail pane like any other.
   const selected =
     number === null
-      ? (items[0] ?? searchHits[0] ?? null)
+      ? ((pinnedUrl ? items.find((item) => item.url === pinnedUrl) : undefined) ?? items[0] ?? searchHits[0] ?? null)
       : (allItems.find((item) => item.number === number) ??
         searchHits.find((item) => item.number === number) ??
         null)
   // Feed the refresh mutation the thread that is genuinely rendered — including the no-`:n`
   // fallback to items[0], which is what the bare /github and /github/prs routes show.
   openThreadRef.current = selected ? { kind: selected.kind, number: selected.number } : null
+  renderedUrlRef.current = selected?.url ?? null
 
   const listPath = view === 'issues' ? '/github' : '/github/prs'
 
@@ -606,6 +617,17 @@ export function GithubRoute({
                 {gh.syncedAt ? `synced ${shortAge(gh.syncedAt)} ago` : 'refresh'}
               </Chip>
             </IconTooltip>
+              {githubRowsAreStale(gh.fingerprint, probe.data) ? (
+                <Chip
+                  data-slot="gh-new-data"
+                  aria-label="New data on GitHub — refresh"
+                  disabled={refresh.isPending}
+                  onClick={() => refresh.mutate()}
+                  className="shrink-0"
+                >
+                  New data — Refresh
+                </Chip>
+              ) : null}
           </div>
           <div data-slot="gh-tabs" className="mt-2.5 flex items-end gap-1">
             <TabLink to="/github" active={view === 'issues'} onClick={() => saveGithubView('issues')}>

@@ -6,6 +6,7 @@
  */
 export {
   fetchGithub,
+  fetchGithubFingerprint,
   forgetGithubListCache,
   fetchGithubChecks,
   fetchGithubComments,

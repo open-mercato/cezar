@@ -7,6 +7,7 @@ import type {
   githubSearchDataSchema,
   githubCommentsDataSchema,
   githubDataSchema,
+  githubFingerprintDataSchema,
   githubMergeResponseSchema,
   githubPrChangesDataSchema,
   githubPrMergeStateResponseSchema,
@@ -109,6 +110,7 @@ describe('src/contract github + repo schemas match the routes exactly', () => {
     ArrayBuffer
   >;
 
+  type GithubFingerprint200 = InferResponseType<typeof client.api.v1.github.fingerprint.$get, 200>;
   type Worktrees200 = InferResponseType<typeof client.api.v1.worktrees.$get, 200>;
   type ReclaimWorktrees200 = InferResponseType<typeof client.api.v1.worktrees.reclaim.$post, 200>;
   type PruneWorktrees200 = InferResponseType<typeof client.api.v1.worktrees.prune.$post, 200>;
@@ -118,6 +120,7 @@ describe('src/contract github + repo schemas match the routes exactly', () => {
     Assert<Exact<z.infer<typeof githubDataSchema>, Github200>>,
     Assert<Exact<z.infer<typeof githubCommentsDataSchema>, GithubComments200>>,
     Assert<Exact<z.infer<typeof githubChecksDataSchema>, GithubChecks200>>,
+    Assert<Exact<z.infer<typeof githubFingerprintDataSchema>, GithubFingerprint200>>,
     Assert<Exact<z.infer<typeof githubSearchDataSchema>, GithubSearch200>>,
     Assert<Exact<z.infer<typeof githubRefStatusDataSchema>, GithubRefStatus200>>,
     Assert<Exact<z.infer<typeof githubPrMergeStateResponseSchema>, GithubMergeState200>>,

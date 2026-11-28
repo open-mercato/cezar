@@ -443,7 +443,7 @@ import { parseRemote, resolveForge, type ForgeAvailability } from './forge/index
 import { isGithubHost } from '../github-hosts.ts';
 import { createGithubDriver } from './forge/github.ts';
 import { onPrClosed, reportPrClosed } from './forge/pr-closed.ts';
-import { fetchGithub, fetchGithubChecks, fetchGithubComments, fetchGithubPrDiff, fetchGithubRefStatus, forgetRefStatus, readCachedPrEnds, readCachedRefStatuses, refNumberFromUrl, searchGithubItems, GithubPrNotFoundError, GH_CHECKS_MAX, GH_SEARCH_MAX, GH_REF_STATUS_MAX, forgetGithubListCache } from './github.ts';
+import { fetchGithub, fetchGithubFingerprint, fetchGithubChecks, fetchGithubComments, fetchGithubPrDiff, fetchGithubRefStatus, forgetRefStatus, readCachedPrEnds, readCachedRefStatuses, refNumberFromUrl, searchGithubItems, GithubPrNotFoundError, GH_CHECKS_MAX, GH_SEARCH_MAX, GH_REF_STATUS_MAX, forgetGithubListCache } from './github.ts';
 import { ensureLaunchKey } from './launch-key.ts';
 import { openInTerminal } from './open-in-terminal.ts';
 import { AGENT_SETUP_OWNER, agentSetupRoutes, withoutHostPaths } from './agent-setup-routes.ts';
@@ -7965,6 +7965,9 @@ export function createAppParts(deps: ServerDeps) {
         }));
       },
     )
+
+    // #1870: one GraphQL point; the cockpit polls it to learn the open set changed.
+    .get('/github/fingerprint', async (c) => c.json(await fetchGithubFingerprint(c.get('project').root)))
 
     .get('/github/comments/:kind/:number', queryZodValidator(refreshQuery), async (c) => {
       const { root: repoRoot } = c.get('project');

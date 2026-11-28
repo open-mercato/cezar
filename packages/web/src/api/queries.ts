@@ -1,5 +1,5 @@
 import { hashKey, useInfiniteQuery, useMutation, useQueries, useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query'
-import { useCallback, useEffect, useMemo, useRef } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useSyncExternalStore } from 'react'
 
 import { mergeProviderStatusResponse } from '@/lib/provider-status'
 import { mergeRun } from './events'
@@ -35,6 +35,7 @@ import {
   getConfig,
   getGithub,
   getGithubChecks,
+  getGithubFingerprint,
   getGithubSearch,
   getGithubComments,
   getGithubPrChanges,
@@ -130,6 +131,7 @@ import { githubRepoBase } from '@/lib/tasks-table'
 import { normalizeTagsForDisplay } from '@/lib/project-tags'
 import type { ContinueOptions, RepoSyncAction } from './client'
 import type {
+  GithubData,
   RunsIndexResponse,
   CheckoutProjectInput,
   ImpactSubjectInput,
@@ -314,6 +316,7 @@ export const queryKeys = {
     return [queryScope(), 'worktrees'] as const
   },
   github: (params: { limit?: number } = {}) => [queryScope(), 'github', params.limit ?? null] as const,
+  githubFingerprint: () => [queryScope(), 'github', 'fingerprint'] as const,
   githubPages: (limit = 50) => [queryScope(), 'github', 'pages', limit] as const,
   /** Lazy PR checks glyphs (`GET /api/github/checks`, #664), keyed by the sorted PR numbers so the
    *  same visible window de-dupes to one cache entry. */
@@ -2462,8 +2465,52 @@ export function useGithubInfinite(limit = 50, enabled = true) {
         : undefined
     },
     enabled,
-    staleTime: 60_000,
+    // The server's change probe, not the clock, decides when this is stale (#1870).
+    staleTime: GITHUB_LIST_STALE_MS,
+    gcTime: 10 * 60_000,
   })
+}
+
+export const GITHUB_LIST_STALE_MS = 120_000
+const GITHUB_PROBE_MS = 60_000
+
+/** The open-set change probe (#1870). Polls only while enabled; react-query pauses it while the
+ *  document is hidden. Shared by the tab (chip) and the shell watcher (off-tab removal). */
+export function useGithubFingerprint(enabled: boolean) {
+  return useQuery({
+    queryKey: queryKeys.githubFingerprint(),
+    queryFn: ({ signal }) => getGithubFingerprint({ signal }),
+    enabled,
+    refetchInterval: GITHUB_PROBE_MS,
+    staleTime: GITHUB_PROBE_MS / 2,
+  })
+}
+
+/** What the probe says versus the first page's fingerprint; `undefined` when unknown. */
+export function githubRowsAreStale(rowsFingerprint: string | undefined, probe: { available: boolean; fingerprint?: string } | undefined): boolean {
+  return rowsFingerprint !== undefined && probe?.available === true && probe.fingerprint !== undefined && probe.fingerprint !== rowsFingerprint
+}
+
+/** Mounted for the project shell: while list pages are cached it probes, and when the open set
+ *  changed with no GitHub tab on screen it removes them so the next visit loads fresh. A mounted
+ *  tab keeps its rows and shows the chip instead — never swapped under the user. */
+export function useGithubOffTabInvalidation() {
+  const queryClient = useQueryClient()
+  const cache = queryClient.getQueryCache()
+  const hasPages = useSyncExternalStore(
+    (notify) => cache.subscribe(notify),
+    () => cache.findAll({ queryKey: [queryScope(), 'github', 'pages'] }).length > 0,
+  )
+  const probe = useGithubFingerprint(hasPages)
+  const data = probe.data
+  useEffect(() => {
+    if (data?.available !== true) return
+    for (const query of cache.findAll({ queryKey: [queryScope(), 'github', 'pages'] })) {
+      if (query.getObserversCount() > 0) continue
+      const first = (query.state.data as { pages?: GithubData[] } | undefined)?.pages?.[0]
+      if (githubRowsAreStale(first?.fingerprint, data)) queryClient.removeQueries({ queryKey: query.queryKey, exact: true })
+    }
+  }, [data, cache, queryClient])
 }
 
 /** Lazy PR checks glyphs (`/api/github/checks`, #664). The list call no longer ships

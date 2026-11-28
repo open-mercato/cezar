@@ -71,8 +71,17 @@ export const githubDataSchema = z.object({
   prsTotal: z.number().int().nonnegative().optional(),
   issuesNextCursor: z.string().nullable().optional(),
   prsNextCursor: z.string().nullable().optional(),
+  /** Opaque change fingerprint the first page was built from (#1870); additive, first page only. */
+  fingerprint: z.string().optional(),
 });
 export type GithubData = z.infer<typeof githubDataSchema>;
+
+/** `GET /api/v1/github/fingerprint` (#1870) — one cheap probe: has the open issue/PR set changed? */
+export const githubFingerprintDataSchema = z.discriminatedUnion('available', [
+  z.object({ available: z.literal(true), fingerprint: z.string() }),
+  z.object({ available: z.literal(false), reason: z.string() }),
+]);
+export type GithubFingerprintData = z.infer<typeof githubFingerprintDataSchema>;
 
 /** Query for the cursor-paged open GitHub list. Cursor values are opaque to clients. */
 export const githubListQuerySchema = z.object({
