@@ -1,8 +1,9 @@
 import { createHash } from 'node:crypto';
-import { constants, openSync, closeSync, fstatSync, ftruncateSync, fchmodSync, existsSync, lstatSync, mkdirSync, readFileSync, readlinkSync, realpathSync, readdirSync, symlinkSync, writeFileSync } from 'node:fs';
+import { constants, openSync, closeSync, fstatSync, ftruncateSync, fchmodSync, existsSync, lstatSync, mkdirSync, readFileSync, readlinkSync, realpathSync, readdirSync, symlinkSync, writeFileSync, rmSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { parse, stringify } from 'smol-toml';
+import { z } from 'zod';
 import { assertCezarHomeWriteIsSandboxed, cezarHomeDir } from '../paths.ts';
 import type { AgentRunSpec } from './agent-runner.ts';
 import { CODEX_DISABLED_FEATURES } from './codex-restricted-policy.ts';
@@ -12,6 +13,8 @@ import { CodexToolPolicyError } from './codex-tool-policy.ts';
 const SEALED_PATH = ['/usr/bin', '/bin', '/usr/sbin', '/sbin', '/opt/homebrew/bin', '/usr/local/bin', '/home/linuxbrew/.linuxbrew/bin', '/nix/var/nix/profiles/default/bin', '/run/current-system/sw/bin'].join(':');
 
 const PROVIDER_KEYS = new Set(['name', 'base_url', 'wire_api', 'env_key', 'requires_openai_auth', 'http_headers', 'env_http_headers', 'query_params', 'request_max_retries', 'stream_max_retries', 'stream_idle_timeout_ms', 'supports_websockets']);
+const homeOwnerSchema = z.object({ version: z.literal(1), cwd: z.string().min(1).max(32768), nativeHome: z.string().min(1).max(32768) });
+
 const AUTH_ENV = ['OPENAI_API_KEY', 'CODEX_API_KEY', 'OPENAI_ORG_ID', 'OPENAI_PROJECT_ID'];
 const CONTROL_ENV = /^(PATH|HOME|SHELL|ENV|BASH_ENV|ZDOTDIR|USERPROFILE|APPDATA|SYSTEMROOT|CODEX_.*|NODE_.*|LD_.*|DYLD_.*|PYTHON.*|GIT_.*|GH_.*)$/i;
 
@@ -121,6 +124,14 @@ export function prepareRestrictedCodexHome(
       RIPGREP_CONFIG_PATH: '',
     } },
   };
+  const ownerFd = openSync(join(path, 'owner.json'), constants.O_WRONLY | constants.O_CREAT | constants.O_NOFOLLOW, 0o600);
+  try {
+    const info = fstatSync(ownerFd);
+    if (!info.isFile() || info.nlink !== 1) throw new Error('codex: isolated owner must be a private regular file');
+    fchmodSync(ownerFd, 0o600);
+    ftruncateSync(ownerFd, 0);
+    writeFileSync(ownerFd, JSON.stringify({ version: 1, cwd, nativeHome }), 'utf8');
+  } finally { closeSync(ownerFd); }
   const configPath = join(path, 'config.toml');
   const configFd = openSync(configPath, constants.O_WRONLY | constants.O_CREAT | constants.O_NOFOLLOW, 0o600);
   try {
@@ -155,4 +166,64 @@ export function prepareRestrictedCodexHome(
     if (inherited[name] !== undefined) toolEnv[name] = inherited[name];
   }
   return { path, env, config, toolEnv, githubReadsAllowed: hostEnv.CEZ_CODEX_NETWORK !== '0' };
+}
+
+/** Remove only homes of gone tasks in this project. Missing trees of retained tasks can resume. */
+export function pruneRestrictedCodexHomes(
+  repoRoot: string,
+  retainedIds: ReadonlySet<string>,
+  env: NodeJS.ProcessEnv = process.env,
+  deletedId?: string,
+): string[] {
+  const removed: string[] = [];
+  try {
+    const root = join(cezarHomeDir(env), 'codex-restricted');
+    assertCezarHomeWriteIsSandboxed(root, env);
+    if (!lstatSync(root).isDirectory()) return removed; // lstat rejects a symlinked store
+    const canonical = realpathSync(root);
+    const worktrees = join(realpathSync(repoRoot), '.ai', 'cezar', 'worktrees');
+    for (const entry of readdirSync(root, { withFileTypes: true })) {
+      if (!entry.isDirectory() || !/^[a-f0-9]{32}$/.test(entry.name)) continue;
+      const directory = join(canonical, entry.name);
+      try {
+        let cwd: unknown;
+        try {
+          const owner = homeOwnerSchema.parse(JSON.parse(readHomeMetadata(join(directory, 'owner.json'))));
+          if (createHash('sha256').update(`${owner.nativeHome}\0${owner.cwd}`).digest('hex').slice(0, 32) !== entry.name) continue;
+          cwd = owner.cwd;
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== 'ENOENT') continue;
+          // Homes created before owner.json already recorded exactly one canonical cwd.
+          const projects = Object.keys(record(parse(readHomeMetadata(join(directory, 'config.toml'))).projects));
+          if (projects.length !== 1) continue;
+          cwd = projects[0];
+        }
+        if (typeof cwd !== 'string' || !isAbsolute(cwd) || resolve(cwd) !== cwd) continue;
+        const path = relative(worktrees, cwd);
+        if (!path || path === '..' || path.startsWith(`..${sep}`) || isAbsolute(path)) continue;
+        const taskId = path.split(sep)[0];
+        if (!taskId || retainedIds.has(taskId) || (deletedId !== undefined && taskId !== deletedId)) continue;
+        // Only ENOENT establishes absence; EACCES and dangling symlinks are not orphan proof.
+        try { lstatSync(join(worktrees, taskId)); continue; } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== 'ENOENT') continue;
+        }
+        // Recheck the managed parent/entry before destructive work; never follow a link.
+        if (realpathSync(root) !== canonical || !lstatSync(root).isDirectory() || !lstatSync(directory).isDirectory()) continue;
+        rmSync(directory, { recursive: true, force: true });
+        removed.push(entry.name);
+      } catch { /* Uncertain ownership or unreadable metadata: keep the home. */ }
+    }
+  } catch { /* Optional cleanup must never block the cockpit. */ }
+  return removed;
+}
+
+function readHomeMetadata(path: string): string {
+  const fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+  try {
+    const info = fstatSync(fd);
+    // Validate the opened file, then bind the current non-symlink leaf to that identity.
+    const leaf = lstatSync(path);
+    if (!info.isFile() || !leaf.isFile() || info.nlink !== 1 || info.dev !== leaf.dev || info.ino !== leaf.ino || info.size > 64 * 1024) throw new Error('invalid isolated home metadata');
+    return readFileSync(fd, 'utf8');
+  } finally { closeSync(fd); }
 }
