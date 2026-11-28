@@ -10,7 +10,7 @@
     "start": "serve out --listen 4322",
     "check": "node scripts/check.mjs",
     "typecheck": "next typegen && tsc --noEmit",
-    "test:security": "node --test scripts/compression-security.test.mjs"
+    "test:security": "node --test scripts/compression-security.test.mjs scripts/next-security.test.mjs"
   },
   "dependencies": {
     "cn": "^0.5.0",
@@ -19,7 +19,7 @@
     "fumadocs-ui": "npm:@fumadocs/base-ui@16.17.8",
     "lucide-react": "^1.61.0",
     "mermaid": "^12.2.0",
-    "next": "16.4.2",
+    "next": "16.4.5",
     "next-themes": "^0.4.6",
     "react": "^19.3.1",
     "react-dom": "^19.3.1",
