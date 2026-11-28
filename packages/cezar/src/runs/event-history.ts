@@ -235,6 +235,16 @@ export function canonicalSessionItems(events: readonly RunEvent[]): CanonicalIte
   return [...items.values()].sort((a, b) => a.firstSeq - b.firstSeq);
 }
 
+async function openHistoryFile(filePath: string) {
+  try {
+    return await open(filePath, 'r');
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === 'ENOENT' || code === 'ENOTDIR') return undefined;
+    throw error;
+  }
+}
+
 async function reverseEventsUntil(
   filePath: string,
   beforeSeq: number,
@@ -248,18 +258,10 @@ async function reverseEventsUntil(
   endOffsets: Map<number, number>;
   canonical?: CanonicalItem[];
 }> {
-  let fileSize = 0;
-  try {
-    fileSize = (await stat(filePath)).size;
-  } catch {
+  const handle = await openHistoryFile(filePath);
+  if (handle === undefined) {
     return { events: [], fileSize: 0, fileHighWater: 0, reachedStart: true, bytesRead: 0, endOffsets: new Map() };
   }
-  if (fileSize === 0) {
-    return { events: [], fileSize, fileHighWater: 0, reachedStart: true, bytesRead: 0, endOffsets: new Map() };
-  }
-
-  const handle = await open(filePath, 'r');
-  let position = fileSize;
   let suffix: Buffer<ArrayBufferLike> = Buffer.alloc(0);
   const reversed: RunHistoryEvent[] = [];
   const endOffsets = new Map<number, number>();
@@ -268,6 +270,9 @@ async function reverseEventsUntil(
   let fileHighWater = 0;
   let canonical: CanonicalItem[] | undefined;
   try {
+    // Size and reads must describe the same file, even if the pathname is replaced.
+    const fileSize = (await handle.stat()).size;
+    let position = fileSize;
     while (position > 0) {
       const length = Math.min(READ_CHUNK_BYTES, position);
       position -= length;
@@ -310,33 +315,31 @@ async function reverseEventsUntil(
         }
       }
     }
+    return {
+      events: reversed.reverse(),
+      fileSize,
+      fileHighWater,
+      reachedStart,
+      bytesRead: totalBytesRead,
+      endOffsets,
+      ...(canonical === undefined ? {} : { canonical }),
+    };
   } finally {
     await handle.close();
   }
-  return {
-    events: reversed.reverse(),
-    fileSize,
-    fileHighWater,
-    reachedStart,
-    bytesRead: totalBytesRead,
-    endOffsets,
-    ...(canonical === undefined ? {} : { canonical }),
-  };
 }
 
 async function readFileTail(filePath: string): Promise<{ fileSize: number; fileHighWater: number; bytesRead: number }> {
-  let fileSize = 0;
-  try {
-    fileSize = (await stat(filePath)).size;
-  } catch {
+  const handle = await openHistoryFile(filePath);
+  if (handle === undefined) {
     return { fileSize: 0, fileHighWater: 0, bytesRead: 0 };
   }
-  if (fileSize === 0) return { fileSize, fileHighWater: 0, bytesRead: 0 };
-  const handle = await open(filePath, 'r');
-  let position = fileSize;
   let suffix: Buffer<ArrayBufferLike> = Buffer.alloc(0);
   let totalBytesRead = 0;
   try {
+    // Size and reads must describe the same file, even if the pathname is replaced.
+    const fileSize = (await handle.stat()).size;
+    let position = fileSize;
     while (position > 0) {
       const length = Math.min(READ_CHUNK_BYTES, position);
       position -= length;
