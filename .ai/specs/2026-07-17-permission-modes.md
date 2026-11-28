@@ -418,3 +418,13 @@ step group is `npm run typecheck && npm test && npm run test:unit`.
   `CEZ_DRY_RUN=1`; e2e spec driving prompt → answer → run continues.
 - 2.7 Full gate (`npm run build`, `npm run test:package`, `npm run test:e2e`)
   and spec/docs sync.
+
+## Revision 2026-11-27 — Claude prompts from the cockpit
+
+- **Scope.** Claude only, one per-project key: `claudePermissionMode` (`manual` | `acceptEdits`) in `.ai/cezar/config.json`, Settings → Agents → Permissions → "Claude permission prompts". Presets and the other backends are not in this change; #1027 is the broader open attempt. Absent keeps `dontAsk` (`CEZ_APPROVAL_GATE=1` still selects `acceptEdits` without a prompt channel).
+- **Card, not the reserved events.** A `can_use_tool` request is shown as an `ask.requested` card (Allow once / Always allow / Reject), following the #2042 precedent, instead of the RESERVED `permission.requested` / `permission.resolved` events: the card already parks the run, shows Needs you and persists in the Questions inbox, so no new event type or consumer is needed.
+- **Answer.** `AgentSession.respondPermission(requestId, text)` is the spec's out-of-band answer: a `control_response` on stdin keyed by the card's `askRequestId`, never a user turn (verified live: a user message sent while a prompt is pending is held by the CLI, the prompt stays pending, and the message is folded into the turn after the answer). `hasPendingPermission()` keeps the run parked while a prompt waits. Both are optional; OpenCode still answers via the next message.
+- **Cancellation.** The card closes through `ask.closed`: `retracted` when the CLI withdraws the prompt (`control_cancel_request`), `expired` when the session ends unanswered. Autonomous runs and headless `cezar run` deny at once; `AskUserQuestion` / `ExitPlanMode` prompts are always denied.
+- **Fence.** `acceptEdits` applies only to steps that already allow Edit, Write and unrestricted Bash, else `manual`, so a repo-tracked config never widens a step's tools. Read-only/strict and `bypassPermissions` win; managers never use it; the key is excluded from the config transfer bundle.
+- **Verified protocol facts (Claude Code 2.1.332 / Agent SDK 0.3.332).** `--permission-prompt-tool stdio` is required, or a prompting mode silently denies. The CLI sends `control_request` with subtype `can_use_tool` (`tool_name`, `input`, `tool_use_id`, `permission_suggestions`); the reply is a `control_response` with `PermissionResult` (`allow` + `updatedInput` [+ `updatedPermissions`] or `deny` + `message`). "Always allow" sends only the suggested `addRules`, re-targeted to `destination: 'session'`, never a settings file.
+- **`auto` excluded.** Verified live: it auto-approved `curl -X POST` without asking, so it is not offered.

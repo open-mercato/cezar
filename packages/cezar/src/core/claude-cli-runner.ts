@@ -31,6 +31,20 @@ import { ClaudeSessionCost } from './claude-session-cost.ts';
 import { armInactivityDeadline, inactivityTimeoutMessage } from './inactivity-deadline.ts';
 import { claudeMcpAllowRules, toClaudeMcpConfig, type PrivateMcpServer } from './private-mcp.ts';
 import {
+  CLAUDE_PERMISSION_ASK_PREFIX,
+  claudeAutoDeny,
+  claudeControlError,
+  claudeControlSuccess,
+  claudeNobodyAnswersDeny,
+  claudePermissionAnswer,
+  claudePermissionCard,
+  parseClaudeControlLine,
+  type ClaudeControlMessage,
+  type ClaudePermissionRequest,
+  type ClaudePermissionResult,
+} from './claude-permission-prompt.ts';
+import { askClosedEvent } from './ui-events.ts';
+import {
   claudeTurnStarted,
   createClaudeUiState,
   mapClaudeMessage,
@@ -58,11 +72,47 @@ export const AUTO_END_DELAY_MS = 250;
  */
 export const CLAUDE_HEADLESS_GUIDANCE = `You are running Claude Code through cezar's headless integration. Permission prompts cannot be answered in the cezar cockpit. If a tool call is denied, do not suggest Shift+Tab, /permissions, changing Claude permission settings, or replying Continue to retry it. Report the exact blocked tool and path or command, stop retrying that operation, and explain that the task's actual Open in… action is the workaround: continue in an interactive claude --resume <session id> shell in the task worktree and approve the prompt there. Do not use filesystem workarounds or claim that cezar can approve the request.`;
 
-/** Keep caller-owned instructions intact while adding guidance owned by this backend. */
-export function appendClaudeSystemPrompt(systemPrompt?: string): string {
-  return systemPrompt
-    ? `${systemPrompt}\n\n---\n\n${CLAUDE_HEADLESS_GUIDANCE}`
-    : CLAUDE_HEADLESS_GUIDANCE;
+/**
+ * The variant for a run whose permission prompts reach the cezar cockpit (`--permission-prompt-tool
+ * stdio` plus a user who can answer): a denial now means the user refused, not that nobody could ask.
+ */
+export const CLAUDE_COCKPIT_PERMISSION_GUIDANCE = `You are running Claude Code through cezar. A tool call outside the allow list is shown to the user in the cezar cockpit for approval. If the user denies one, respect it: do not retry the same call, do not suggest Shift+Tab, /permissions, or changing Claude permission settings, and do not use filesystem workarounds. Say exactly what was blocked and continue with what you can still do.`;
+
+/** Keep caller-owned instructions intact while adding guidance owned by this backend. The cockpit
+ *  variant only when the user can answer a prompt (`promptsAnswerable`); otherwise the headless one. */
+export function appendClaudeSystemPrompt(systemPrompt?: string, promptsAnswerable = false): string {
+  const guidance = promptsAnswerable ? CLAUDE_COCKPIT_PERMISSION_GUIDANCE : CLAUDE_HEADLESS_GUIDANCE;
+  return systemPrompt ? `${systemPrompt}\n\n---\n\n${guidance}` : guidance;
+}
+
+export interface ClaudePromptMode {
+  /** The `--permission-mode` value. */
+  permissionMode: 'dontAsk' | 'bypassPermissions' | 'acceptEdits' | 'manual';
+  /** Whether `--permission-prompt-tool stdio` is on, so `can_use_tool` reaches the host. */
+  promptTool: boolean;
+}
+
+/**
+ * The permission mode a spawn gets, and whether Claude may ask on the control channel. One place,
+ * so `startSession` (guidance, queue) and `buildClaudeArgs` (flags) cannot disagree.
+ *
+ * Read-only/strict win, then `bypassPermissions`, then the project's `claudePermissionMode`, then
+ * `CEZ_APPROVAL_GATE` (acceptEdits, no prompt channel), then `dontAsk`. `acceptEdits` is honoured
+ * only for a step that already allows Edit, Write and unrestricted Bash; else `manual`, so a
+ * repo-tracked config never widens a step's tool fence (spec 2026-07-17-permission-modes).
+ */
+export function claudePromptMode(spec: AgentRunSpec, env: NodeJS.ProcessEnv = process.env): ClaudePromptMode {
+  if (spec.strictPermissions || spec.enforceReadOnly) return { permissionMode: 'dontAsk', promptTool: false };
+  if (spec.bypassPermissions) return { permissionMode: 'bypassPermissions', promptTool: false };
+  if (spec.claudePermissionMode) {
+    const allowed = buildAllowedTools(spec.allowedTools ?? [], spec.bashAllowlist);
+    const fenceAllowsEdits = ['Edit', 'Write', 'Bash'].every((tool) => allowed.includes(tool));
+    return {
+      permissionMode: spec.claudePermissionMode === 'acceptEdits' && fenceAllowsEdits ? 'acceptEdits' : 'manual',
+      promptTool: true,
+    };
+  }
+  return { permissionMode: env.CEZ_APPROVAL_GATE === '1' ? 'acceptEdits' : 'dontAsk', promptTool: false };
 }
 
 export interface ClaudeCliRunnerOptions {
@@ -128,7 +178,10 @@ export class ClaudeCliRunner implements AgentRunner {
     opts: SessionOptions = {},
   ): AgentSession {
     const mcpConfig = writeClaudeMcpConfig(spec.mcpServers);
-    const promptFile = writeClaudeSystemPromptFile(appendClaudeSystemPrompt(spec.systemPrompt));
+    // Read once at spawn: the guidance a session starts with cannot change later.
+    const { promptTool } = claudePromptMode(spec, process.env);
+    const promptsAnswerable = promptTool && !!opts.onUiEvent && opts.canAskPermission?.() === true;
+    const promptFile = writeClaudeSystemPromptFile(appendClaudeSystemPrompt(spec.systemPrompt, promptsAnswerable));
     const settingsFile = writeClaudeSettingsFile(spec.claudeSettings);
     // A fence that could not be written must not run unfenced.
     if (spec.claudeSettings && !settingsFile) {
@@ -136,7 +189,7 @@ export class ClaudeCliRunner implements AgentRunner {
       promptFile?.cleanup();
       throw new Error('claude: could not write the --settings file');
     }
-    const args = buildClaudeArgs(spec, process.env, mcpConfig?.path, promptFile?.path, settingsFile?.path);
+    const args = buildClaudeArgs(spec, process.env, mcpConfig?.path, promptFile?.path, settingsFile?.path, promptsAnswerable);
     watchOwnSignals();
     const startedAt = Date.now();
 
@@ -258,6 +311,91 @@ export class ClaudeCliRunner implements AgentRunner {
       hardKillTimer.unref?.();
     };
 
+    // Permission prompts (`can_use_tool`): the CLI blocks on each until it gets a control_response,
+    // so the queue is answered out of band, never as a user turn. A user line written meanwhile does
+    // NOT cancel or answer the prompt: claude 2.1.332 holds it and folds it into the same turn once
+    // the control_response arrives (live probe), so `sendMessage` stays write-through and the run
+    // stays parked while a prompt is pending. Only a prompt that has the prompt tool on is queued.
+    // `shown` makes raising a card idempotent (a cancel and the post-answer raise can both fire).
+    const pendingPermissions: Array<{ request: ClaudePermissionRequest; shown: boolean }> = [];
+    const cardId = (request: ClaudePermissionRequest): string => `${CLAUDE_PERMISSION_ASK_PREFIX}${request.requestId}`;
+    // A write racing the child's exit fails asynchronously on the stream (swallowed above), so only a
+    // still-open, still-writable stdin counts as delivered.
+    const writeControl = (frame: Record<string, unknown>): boolean => {
+      if (!stdinOpen || !child.stdin.writable) return false;
+      try {
+        child.stdin.write(`${JSON.stringify(frame)}\n`);
+        return true;
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        onEvent?.({ type: 'note', message: `claude: stdin write failed: ${message}` });
+        return false;
+      }
+    };
+    const raiseHeadPermission = (): void => {
+      const head = pendingPermissions[0];
+      if (!head || head.shown) return;
+      head.shown = true;
+      try {
+        opts.onUiEvent?.(claudePermissionCard(head.request));
+      } catch {
+        // a cockpit-side defect must not stop the stream
+      }
+    };
+    const denyNow = (request: ClaudePermissionRequest, result: ClaudePermissionResult, note: string): void => {
+      onEvent?.({ type: 'note', message: note });
+      writeControl(claudeControlSuccess(request.requestId, result));
+    };
+    const closePermission = (request: ClaudePermissionRequest, reason: 'expired' | 'retracted', detail: string): void => {
+      try {
+        opts.onUiEvent?.(askClosedEvent(cardId(request), { reason, detail }));
+      } catch {
+        // as above
+      }
+    };
+    const handleControl = (control: ClaudeControlMessage): void => {
+      if (control.kind === 'unsupported') {
+        writeControl(claudeControlError(control.requestId, `cezar does not support the ${control.subtype} control request`));
+        return;
+      }
+      if (control.kind === 'cancel') {
+        const at = pendingPermissions.findIndex((p) => p.request.requestId === control.requestId);
+        if (at < 0) return;
+        const [gone] = pendingPermissions.splice(at, 1);
+        closePermission(gone!.request, 'retracted', 'Claude withdrew the permission prompt');
+        if (at === 0) raiseHeadPermission();
+        return;
+      }
+      const { request } = control;
+      const autoDeny = claudeAutoDeny(request);
+      if (autoDeny) {
+        denyNow(request, autoDeny, `claude: denied ${request.toolName} (cezar cannot show it; Claude was told to ask in its reply)`);
+      } else if (promptTool && opts.onUiEvent && opts.canAskPermission?.() === true) {
+        pendingPermissions.push({ request, shown: false });
+        raiseHeadPermission();
+      } else {
+        // An autonomous or headless run keeps the refusal: a park only a human could end is worse.
+        denyNow(request, claudeNobodyAnswersDeny(request), `claude: refused ${request.toolName} (nobody can answer permission prompts in this run)`);
+      }
+    };
+    const respondPermission = (requestId: string, text: string): boolean => {
+      const at = pendingPermissions.findIndex((p) => requestId === cardId(p.request));
+      if (at < 0) return false;
+      const { request } = pendingPermissions[at]!;
+      // A failed write keeps the prompt, so the card stays answerable or expires with the session.
+      if (!writeControl(claudeControlSuccess(request.requestId, claudePermissionAnswer(request, text)))) return false;
+      pendingPermissions.splice(at, 1);
+      // Deferred: the caller's own "resumed" bookkeeping runs right after this returns and must not
+      // overwrite the park the next card sets.
+      if (at === 0 && pendingPermissions.length > 0) setImmediate(raiseHeadPermission);
+      return true;
+    };
+    const expirePermissions = (): void => {
+      for (const { request } of pendingPermissions.splice(0)) {
+        closePermission(request, 'expired', 'the Claude session ended before this permission prompt was answered');
+      }
+    };
+
     // Seed the first user message — the same path every follow-up takes.
     // Pasted task screenshots (spec.images) ride along as leading blocks.
     sendMessage([...(spec.images ?? []), { type: 'text', text: spec.userPrompt }]);
@@ -284,6 +422,9 @@ export class ClaudeCliRunner implements AgentRunner {
     let killTimer: NodeJS.Timeout | undefined;
     const deadline = armInactivityDeadline(limitMs, () => {
       timedOut = true;
+      if (pendingPermissions.length > 0) {
+        onEvent?.({ type: 'note', message: 'claude: stopped by the inactivity timeout while a permission prompt was still unanswered' });
+      }
       interrupt();
       child.stdout.destroy();
       killTimer = setTimeout(() => {
@@ -302,6 +443,13 @@ export class ClaudeCliRunner implements AgentRunner {
             msg = JSON.parse(line) as ClaudeStreamMessage;
           } catch {
             onEvent?.({ type: 'note', message: `claude: skipped unparseable stream line: ${truncate(line)}` });
+            continue;
+          }
+
+          // Control frames are a request/response channel, not conversation: never mapped.
+          const control = parseClaudeControlLine(msg);
+          if (control) {
+            handleControl(control);
             continue;
           }
 
@@ -369,6 +517,7 @@ export class ClaudeCliRunner implements AgentRunner {
         if (hardKillTimer) clearTimeout(hardKillTimer);
         if (autoEndTimer) clearTimeout(autoEndTimer);
         stdinOpen = false;
+        expirePermissions();
         // stdout closed: the CLI read `--mcp-config` at startup long ago, so the file can go.
         mcpConfig?.cleanup();
         promptFile?.cleanup();
@@ -435,6 +584,9 @@ export class ClaudeCliRunner implements AgentRunner {
       get open() {
         return stdinOpen;
       },
+      respondPermission,
+      hasPendingPermission: (requestId?: string) =>
+        requestId === undefined ? pendingPermissions.length > 0 : pendingPermissions.some((p) => cardId(p.request) === requestId),
     };
     this.lastSession = session;
     return session;
@@ -452,8 +604,9 @@ export const CLAUDE_WRITE_TOOLS = ['Bash', 'Edit', 'Write', 'MultiEdit', 'Notebo
  * `stream_event` token deltas the cockpit renders as live text;
  * `--permission-mode dontAsk` keeps headless runs non-interactive: tools in
  * `--allowedTools` proceed and everything else is denied instead of prompting.
- * `CEZ_APPROVAL_GATE=1` selects Claude's `acceptEdits` mode, but cezar still
- * has no cockpit permission response channel.
+ * `CEZ_APPROVAL_GATE=1` selects Claude's `acceptEdits` mode without a prompt
+ * channel; a project's `claudePermissionMode` adds `--permission-prompt-tool
+ * stdio`, so Claude asks and the cockpit answers (`claudePromptMode`).
  */
 export function buildClaudeArgs(
   spec: AgentRunSpec,
@@ -461,7 +614,9 @@ export function buildClaudeArgs(
   mcpConfigPath?: string,
   systemPromptFilePath?: string,
   settingsPath?: string,
+  promptsAnswerable = false,
 ): string[] {
+  const { permissionMode, promptTool } = claudePromptMode(spec, env);
   const args: string[] = [
     '--print',
     '--input-format',
@@ -471,13 +626,12 @@ export function buildClaudeArgs(
     '--verbose',
     '--include-partial-messages',
     '--permission-mode',
-    spec.strictPermissions || spec.enforceReadOnly ? 'dontAsk'
-      : spec.bypassPermissions
-        ? 'bypassPermissions'
-        : env.CEZ_APPROVAL_GATE === '1' ? 'acceptEdits' : 'dontAsk',
+    permissionMode,
   ];
+  // Without it a prompting mode silently denies; with it the CLI sends `can_use_tool` on stdout.
+  if (promptTool) args.push('--permission-prompt-tool', 'stdio');
   if (systemPromptFilePath) args.push('--append-system-prompt-file', systemPromptFilePath);
-  else args.push('--append-system-prompt', appendClaudeSystemPrompt(spec.systemPrompt));
+  else args.push('--append-system-prompt', appendClaudeSystemPrompt(spec.systemPrompt, promptsAnswerable && promptTool));
   // Pin the session so the user can `claude --resume <sessionId>` in the repo
   // to take over interactively after a run. With `resume` we reopen the
   // existing on-disk conversation instead.

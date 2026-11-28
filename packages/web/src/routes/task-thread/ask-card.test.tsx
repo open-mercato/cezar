@@ -167,6 +167,24 @@ describe('AskCard', () => {
     expect(mutateAsync).toHaveBeenCalledWith({ text: 'Library: date-fns', askRequestId: 'ask_1' })
   })
 
+  it('a Claude permission prompt renders Allow once / Always allow / Reject and answers with its request id', () => {
+    renderAsk({
+      kind: 'ask',
+      id: 'claude-permission-req_7',
+      resolved: false,
+      questions: [
+        {
+          header: 'Permission',
+          question: 'Claude wants to run Bash: npm test',
+          options: [{ label: 'Allow once' }, { label: 'Always allow' }, { label: 'Reject' }],
+        },
+      ],
+    })
+    for (const name of ['Allow once', 'Always allow', 'Reject']) expect(screen.getByRole('button', { name })).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Always allow' }))
+    expect(mutateAsync).toHaveBeenCalledWith({ text: 'Permission: Always allow', askRequestId: 'claude-permission-req_7' })
+  })
+
   it('gives Other… and Need more info a 44 px target on a touch screen', () => {
     renderAsk(singleAsk)
     for (const name of ['Other…', 'Need more info']) {

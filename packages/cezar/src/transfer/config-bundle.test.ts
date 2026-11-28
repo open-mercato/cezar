@@ -56,6 +56,11 @@ describe('allowlists', () => {
     classify(Object.keys(configSchema.shape), PROJECT_CONFIG_KEYS, PROJECT_EXCLUDED);
   });
 
+  it('never exports claudePermissionMode: a permission posture belongs to the machine that runs the agent', () => {
+    expect(PROJECT_CONFIG_KEYS).not.toContain('claudePermissionMode');
+    expect(PROJECT_EXCLUDED.claudePermissionMode).toMatch(/machine that runs the agent/);
+  });
+
   it('keeps skills repos portable: credentials stripped, local paths dropped', () => {
     expect(portableSkillsRepo('https://bob:ghp_SECRET123@github.com/org/skills.git')).toBe('https://github.com/org/skills.git');
     expect(portableSkillsRepo('ssh://git@github.com/org/skills.git')).toBe('ssh://git@github.com/org/skills.git');

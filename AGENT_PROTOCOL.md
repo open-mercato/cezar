@@ -85,8 +85,12 @@ interface AgentSession {
   end(): void;                       // graceful: end input, SIGTERM→SIGKILL watchdog
   interrupt(): void;                 // hard stop (cancel)
   readonly open: boolean;
+  respondPermission?(requestId: string, text: string): boolean;  // optional: answer a permission card out of band
+  hasPendingPermission?(): boolean;  // optional: a permission prompt still waits on the user
 }
 ```
+
+`respondPermission` / `hasPendingPermission` are optional. Claude implements them: a `can_use_tool` `control_request` (needs `--permission-prompt-tool stdio`, set by the project's `claudePermissionMode`) maps to `ask.requested` with id `claude-permission-<request_id>`, and the answer is written back as a `control_response` on stdin, never as a user turn. `respondPermission` is false when the prompt is no longer pending. `control_cancel_request` closes the card as `retracted`, and session end closes it as `expired` (`ask.closed`). `AskUserQuestion` / `ExitPlanMode` prompts are always denied. A backend without them (OpenCode) still answers a permission card through the next message.
 
 A termination the runner itself caused is **not** an agent failure (#703).
 `end()` arms a SIGTERM→SIGKILL watchdog for CLIs that ignore EOF, and

@@ -489,6 +489,8 @@ export const configResponseSchema = z.object({
   bypassPermissions: z.boolean(),
   /** Why `bypassPermissions` is not honored here (a git-tracked config.json), or null. */
   bypassPermissionsBlocked: z.string().nullable(),
+  /** Claude Code asks the cockpit before a tool outside the step's allow list; null = the default (denied without asking). */
+  claudePermissionMode: z.enum(['manual', 'acceptEdits']).nullable(),
 });
 export type ConfigResponse = z.infer<typeof configResponseSchema>;
 
@@ -551,6 +553,8 @@ export const setConfigInputSchema = z.object({
   teamSkills: z.boolean().optional(),
   /** `true` turns permission prompts off for Claude Code tasks; `false`/`null` turns them back on. */
   bypassPermissions: z.boolean().nullable().optional(),
+  /** How Claude Code asks for a tool outside the step's allow list; `null` clears it back to the default (denied without asking). */
+  claudePermissionMode: z.enum(['manual', 'acceptEdits']).nullable().optional(),
 });
 export type SetConfigInput = z.infer<typeof setConfigInputSchema>;
 

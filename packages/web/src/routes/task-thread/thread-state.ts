@@ -418,6 +418,9 @@ function planFromTodos(input: unknown): PlanEntry[] | undefined {
 }
 
 const NO_ASKS: ReadonlyArray<{ requestId: string }> = []
+/** Request-id prefix of a Claude permission prompt card (mirrors the server's `CLAUDE_PERMISSION_ASK_PREFIX`). */
+const CLAUDE_PERMISSION_ASK_PREFIX = 'claude-permission-'
+
 /** `trackedAsks` for `reduceThread`: undefined until the record loads, then its `asks` (or none). */
 export const trackedAsks = (run: { asks?: ReadonlyArray<{ requestId: string }> | undefined } | undefined) =>
   run === undefined ? undefined : run.asks ?? NO_ASKS
@@ -848,7 +851,8 @@ export function reduceThread(events: RunEvent[], options: ThreadReduceOptions = 
         currentTurn().entries.push({ origin: 'meta', entry: ask })
         pendingAsk = ask
         asksById.set(requestId, ask)
-        if (tracked !== undefined && !tracked.has(requestId) && !serverClosed.has(requestId)) legacyAsks.add(ask)
+        // Permission cards postdate `ask.closed` and the server always closes them, so a reply never does.
+        if (tracked !== undefined && !tracked.has(requestId) && !serverClosed.has(requestId) && !requestId.startsWith(CLAUDE_PERMISSION_ASK_PREFIX)) legacyAsks.add(ask)
         break
       }
       case 'ask.closed': {

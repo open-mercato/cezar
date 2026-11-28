@@ -43,6 +43,7 @@ import { diskFullAgentErrorText } from '../disk-space.ts';
 import { accountStateHint, classifyAgentFailure, isOauthRefreshRace, transientRetryCap, transientRetryDelayMs } from '../core/agent-failure-class.ts';
 import { reportAgentError } from '../runs/agent-error-telemetry.ts';
 import { createRunner } from '../core/runner-factory.ts';
+import { CLAUDE_PERMISSION_ASK_PREFIX } from '../core/claude-permission-prompt.ts';
 import { isRunnerId, REASONING_EFFORT_UNSUPPORTED_ERROR, runnerSupportsReasoningEffort, type RunnerId } from '../core/agent-runner.ts';
 import { modelConflictsWithRunner, pinSurvivesRunnerSwitch } from '../core/model-presets.ts';
 import { AGENT_MODELS_LOCKED_ERROR, agentModelsLocked } from '../core/agent-model-policy.ts';
@@ -591,6 +592,11 @@ interface SendMessageOptions {
   userReply?: boolean;
 }
 
+/** Whether `requestId` names a Claude permission card (answered out of band, never as a message). */
+function isClaudePermissionAsk(requestId: string | undefined): requestId is string {
+  return requestId !== undefined && requestId.startsWith(CLAUDE_PERMISSION_ASK_PREFIX);
+}
+
 interface ContinueRunOptions {
   /** The user's own Continue (the route): it answers `askRequestId`, or flags open cards as replied-in-chat. */
   reply?: { askRequestId?: string };
@@ -780,6 +786,9 @@ interface ActiveRun {
   /** The project's opt-in `bypassPermissions` (Claude skips every prompt). Set at BOTH
    *  construction sites through `bypassPolicy`. */
   bypassPermissions?: boolean;
+  /** The project's `claudePermissionMode` (Claude asks the cockpit instead of denying). Set at BOTH
+   *  construction sites from the loaded config; never for a read-only task. */
+  claudePermissionMode?: 'manual' | 'acceptEdits';
   /** A read-only Ask task: read-only tools, no repo-root lease. */
   readOnly?: boolean;
   /** A manager's read-only task: the backend enforces it too (`AgentRunSpec.enforceReadOnly`). */
@@ -3668,7 +3677,7 @@ export class RunManager {
       this.store.closeTaskAsks(runId, (ask) => named.has(ask.requestId), { reason: 'retracted', at, ...(marker.reason ? { detail: marker.reason } : {}) });
     }
     if (compacted) return;
-    const pending = openTaskAsks(this.store.getRun(runId)?.asks).filter((ask) => !ask.stale);
+    const pending = openTaskAsks(this.store.getRun(runId)?.asks).filter((ask) => !ask.stale && !isClaudePermissionAsk(ask.requestId));
     for (const ask of pending) {
       void hasCommitsSince(state.cwd, ask.askedAt).then((moved) => {
         this.store.flagTaskAsks(runId, (open) => open.requestId === ask.requestId, moved
@@ -3690,7 +3699,8 @@ export class RunManager {
       this.store.closeTaskAsks(runId, (ask) => ask.requestId === askRequestId, { reason: 'answered', at, ...(answer ? { answer } : {}) });
       return;
     }
-    this.store.flagTaskAsks(runId, () => true, { why: 'replied-in-chat', detail: 'you replied in the chat after it was asked', since: at });
+    // A permission card is the CLI's own prompt: a chat message is not a reply to it.
+    this.store.flagTaskAsks(runId, (ask) => !isClaudePermissionAsk(ask.requestId), { why: 'replied-in-chat', detail: 'you replied in the chat after it was asked', since: at });
   }
 
   /**
@@ -3704,6 +3714,20 @@ export class RunManager {
     const ask = run?.asks?.find((candidate) => candidate.requestId === requestId);
     if (!run || !ask) return { ok: false, status: 404, error: 'question not found' };
     if (ask.closed) return { ok: false, status: 409, error: QUESTION_ALREADY_CLOSED };
+    if (isClaudePermissionAsk(requestId)) {
+      // The CLI is blocked on this prompt: dismissing it rejects it. Telling the agent in chat would leave it hanging.
+      const state = this.active.get(runId);
+      const rejected = state?.session?.open === true && state.session.respondPermission?.(requestId, 'Permission: Reject') === true;
+      // A live prompt that refused the rejection is still pending: closing the card would strand it.
+      if (!rejected && state?.session?.open === true && state.session.hasPendingPermission?.(requestId) === true) {
+        return { ok: false, status: 409, error: 'the permission prompt could not be rejected, try again' };
+      }
+      this.store.closeTaskAsks(runId, (candidate) => candidate.requestId === requestId, { reason: 'dismissed', at: new Date().toISOString() });
+      if (!state) return { ok: true, delivered: 'none' };
+      // Rejected: the agent works again. Stale: nothing was written, but another prompt may now be the one parking the run.
+      this.afterPermissionSettled(runId, state, !rejected);
+      return { ok: true, delivered: rejected ? 'session' : 'none' };
+    }
     const parkedOnIt = run.status === 'waiting' && run.attentionRequest?.requestId === requestId;
     const sessionClosed = isIdleParked(run) || run.awaitingAnswerSince !== undefined;
     this.store.closeTaskAsks(runId, (candidate) => candidate.requestId === requestId, { reason: 'dismissed', at: new Date().toISOString() });
@@ -5695,8 +5719,9 @@ export class RunManager {
    * entry, or null when the run has already started — the caller then falls
    * through to `deferMessage`.
    */
-  enqueueMessage(runId: string, content: PastedContent[]): QueuedMessage | null {
-    if (!this.isQueued(runId)) return null;
+  enqueueMessage(runId: string, content: PastedContent[], options: Pick<SendMessageOptions, 'askRequestId'> = {}): QueuedMessage | null {
+    // A permission answer belongs to a live prompt only; stacked, it would become part of the task prompt.
+    if (isClaudePermissionAsk(options.askRequestId) || !this.isQueued(runId)) return null;
     const run = this.store.getRun(runId);
     if (!run) return null;
     const message = this.toQueuedMessage(runId, content);
@@ -5810,6 +5835,9 @@ export class RunManager {
    * `ActiveRun` does not exist yet for part of this window.
    */
   deferMessage(runId: string, content: PastedContent[], options: SendMessageOptions = {}): boolean {
+    // A permission answer is only meaningful to the live prompt it names; buffered, it would later
+    // reach the agent as an ordinary message.
+    if (isClaudePermissionAsk(options.askRequestId)) return false;
     // The window spans two sub-states: `starting` (no `ActiveRun` yet) and the
     // longer stretch where the `ActiveRun` exists but the backend is still being
     // spawned. `execute()` deletes the run from `starting` as soon as it builds
@@ -5852,9 +5880,14 @@ export class RunManager {
    * then offers "Continue" instead.
    */
   sendMessage(runId: string, content: PastedContent[], options: SendMessageOptions = {}): boolean {
-    const delivered = this.deliverMessage(runId, content, true, undefined, options.askRequestId) || this.reopenIdleParked(runId, content, options.askRequestId);
+    // A Claude permission card is answered out of band, on the CLI's control channel — never as a
+    // user turn, and never by a session reopened for a prompt that no longer exists.
+    const permissionAsk = isClaudePermissionAsk(options.askRequestId);
+    const delivered = permissionAsk
+      ? this.answerClaudePermission(runId, messageText(content), options.askRequestId!)
+      : this.deliverMessage(runId, content, true, undefined, options.askRequestId) || this.reopenIdleParked(runId, content, options.askRequestId);
     if (delivered) {
-      if (!options.replyNoted) this.noteAskReply(runId, messageText(content), options.askRequestId);
+      if (!options.replyNoted && !permissionAsk) this.noteAskReply(runId, messageText(content), options.askRequestId);
       const state = this.active.get(runId);
       if (state) {
         state.monitoringWakeups = 0;
@@ -5866,6 +5899,61 @@ export class RunManager {
       this.store.updateRun(runId, { monitoringWakeCapReached: undefined });
     }
     return delivered;
+  }
+
+  /**
+   * Answer a Claude permission card: the raw text goes to the session's `respondPermission` (the
+   * runner reads which option it names), never through `deliverMessage`, so no open-questions block
+   * or composed text can be taken for the answer. A prompt that is no longer pending (answered
+   * elsewhere, withdrawn, session gone) closes its card as expired and answers false: a stale
+   * "Allow once" must not become a prompt for the agent or reopen a session.
+   */
+  private answerClaudePermission(runId: string, text: string, askRequestId: string): boolean {
+    if (this.lifecycle.isBlocked(runId)) return false;
+    const state = this.active.get(runId);
+    const session = state?.session;
+    const answered = state !== undefined && !state.cancelled && session?.open === true && session.respondPermission?.(askRequestId, text) === true;
+    if (!answered) {
+      this.closeStalePermissionAsk(runId, askRequestId);
+      return false;
+    }
+    this.noteAskReply(runId, text, askRequestId);
+    this.afterPermissionSettled(runId, state);
+    return true;
+  }
+
+  /** Only a card whose prompt is really gone closes: a live session with a prompt pending keeps it. */
+  private closeStalePermissionAsk(runId: string, askRequestId: string): void {
+    const session = this.active.get(runId)?.session;
+    if (session?.open === true && session.hasPendingPermission?.(askRequestId) === true) return;
+    this.store.closeTaskAsks(runId, (ask) => ask.requestId === askRequestId, {
+      reason: 'expired', at: new Date().toISOString(), detail: 'the permission prompt is no longer pending',
+    });
+    const state = this.active.get(runId);
+    if (state) this.afterPermissionSettled(runId, state, true);
+  }
+
+  /**
+   * A permission prompt was answered or withdrawn. With none left the agent is working again, as
+   * after any delivered answer; with another still waiting the run stays parked, on that one.
+   * `refocusOnly`: nothing reached the CLI (a stale card closed), so the run is never resumed here.
+   */
+  private afterPermissionSettled(runId: string, state: ActiveRun, refocusOnly = false): void {
+    if (state.cancelled || !state.session?.open) return;
+    if (state.session.hasPendingPermission?.() === true) {
+      const open = openTaskAsks(this.store.getRun(runId)?.asks).filter((ask) => isClaudePermissionAsk(ask.requestId));
+      // Only a card whose prompt is really pending may hold the run's attention.
+      const next = open.find((ask) => state.session?.hasPendingPermission?.(ask.requestId) === true);
+      const current = this.store.getRun(runId)?.attentionRequest?.requestId;
+      if (next && current !== next.requestId) {
+        this.store.updateRun(runId, { attentionRequest: this.recordAttention(next.requestId, next.questions) });
+      } else if (!next && isClaudePermissionAsk(current) && state.session.hasPendingPermission?.(current) !== true) {
+        // The pending one has no card yet (the runner raises it next); never point at a dead one.
+        this.store.updateRun(runId, { attentionRequest: undefined });
+      }
+      return;
+    }
+    if (!refocusOnly) this.resumeParkedRun(runId, state);
   }
 
   /**
@@ -6016,7 +6104,7 @@ export class RunManager {
           (imageLibraryWrites.length ? this.usableAttachmentLibrary(state.grantedAttachmentLibrary) : undefined))]
       : withSkills;
     // Every turn names the run's open questions so the agent can close stale ones (Questions inbox spec).
-    const asksBlock = openAsksBlock(this.store.getRun(runId)?.asks, answering);
+    const asksBlock = openAsksBlock(this.agentVisibleAsks(runId), answering);
     const deliverable = asksBlock ? [...withAttachments, { type: 'text' as const, text: asksBlock }] : withAttachments;
     const delivered = state.session.sendMessage(deliverable);
     if (delivered) {
@@ -6024,28 +6112,40 @@ export class RunManager {
         this.store.appendEvent(runId, missingSharedSkillsEvent(state.currentStepId, prepared.skills.missingShared));
       }
       for (const write of imageLibraryWrites) write();
-      this.clearPendingAsk(runId);
-      this.clearIdleTimer(state);
-      this.clearMonitoringWakeTimer(state, runId);
-      this.waiting.delete(runId); // resumed — the run counts against slots again
-      state.idleClosed = undefined;
       // A message into the session is a fresh start for the compaction bound (#955): whoever
       // sent it — the user, a child's report, the monitoring wake-up — is asking for work
       // that has not been tried yet, so it must not inherit a spent anti-spin budget.
       state.compactionContinues = 0;
-      this.leaveMonitoring(runId);
-      // The answer landed, so a mid-workflow ask park (#917) is over and the
-      // workflow may advance past this step again. The durable twin
-      // (`RunRecord.askParked`) is retired by the status write below.
-      state.askPark = undefined;
-      // Clear any `monitoring` activity — the agent is actively working again
-      // (spec 2026-07-18-subagent-monitoring-status, #490).
-      this.store.updateRun(runId, { status: 'running', activity: undefined, askParked: undefined });
-      if (state.currentStepId) {
-        this.store.updateStep(runId, state.currentStepId, { status: 'running' });
-      }
+      // A permission card still waiting on the user keeps the run parked: this message (a child's
+      // report, the inbox, the composer) is not the answer, and the CLI is blocked on it.
+      if (state.session.hasPendingPermission?.() !== true) this.resumeParkedRun(runId, state);
     }
     return delivered;
+  }
+
+  /** The run's asks the agent can act on: a permission card is the CLI's own prompt, it cannot `CEZ:ASK-CLOSE` one. */
+  private agentVisibleAsks(runId: string) {
+    return this.store.getRun(runId)?.asks?.filter((ask) => !isClaudePermissionAsk(ask.requestId));
+  }
+
+  /** A message or answer reached the session: the run is no longer parked on a question. */
+  private resumeParkedRun(runId: string, state: ActiveRun): void {
+    this.clearPendingAsk(runId);
+    this.clearIdleTimer(state);
+    this.clearMonitoringWakeTimer(state, runId);
+    this.waiting.delete(runId); // resumed — the run counts against slots again
+    state.idleClosed = undefined;
+    this.leaveMonitoring(runId);
+    // The answer landed, so a mid-workflow ask park (#917) is over and the
+    // workflow may advance past this step again. The durable twin
+    // (`RunRecord.askParked`) is retired by the status write below.
+    state.askPark = undefined;
+    // Clear any `monitoring` activity — the agent is actively working again
+    // (spec 2026-07-18-subagent-monitoring-status, #490).
+    this.store.updateRun(runId, { status: 'running', activity: undefined, askParked: undefined });
+    if (state.currentStepId) {
+      this.store.updateStep(runId, state.currentStepId, { status: 'running' });
+    }
   }
 
   /** Close the open session gracefully — the run then completes as `done`
@@ -6295,6 +6395,18 @@ export class RunManager {
     deferForCapacity = false,
     internal: { freshSessionAllowed?: boolean } = {},
   ): { ok: boolean; error?: string } {
+    // A permission card answers its live prompt only (`sendMessage`). A Continue would feed
+    // "Permission: Allow once" to the agent as the opening prompt of a new session.
+    if (isClaudePermissionAsk(opts.reply?.askRequestId)) {
+      const askRequestId = opts.reply!.askRequestId!;
+      // Still live (the answer was refused only because the run is briefly blocked): keep the card.
+      const session = this.active.get(runId)?.session;
+      if (session?.open === true && session.hasPendingPermission?.(askRequestId) === true) {
+        return { ok: false, error: 'the permission prompt is still waiting; try again in a moment' };
+      }
+      this.closeStalePermissionAsk(runId, askRequestId);
+      return { ok: false, error: 'the permission prompt is no longer pending' };
+    }
     const result = this.startContinuation(runId, opts, deferForCapacity, internal);
     // Recorded only once accepted (a refused Continue answers nothing), and still before the
     // continuation's opening prompt lists the open cards: that prompt is built after its awaits.
@@ -6697,6 +6809,7 @@ export class RunManager {
     state.bypassPermissions = await this.bypassPolicy(state.readOnly, continueConfig, (message) =>
       this.store.appendEvent(runId, { type: 'note', message }),
     );
+    state.claudePermissionMode = state.readOnly ? undefined : continueConfig.claudePermissionMode;
     if (state.cwd === this.repoRoot) {
       state.autoLand = await this.landingPolicy(record, continueConfig);
     }
@@ -7215,7 +7328,7 @@ export class RunManager {
     const treeInbox = this.flushInbox(runId);
     // Questions the user skipped while the session was closed, then the ones still open (Questions inbox spec).
     const askNotes = this.store.takeAskNotes(runId);
-    const asksBlock = openAsksBlock(this.store.getRun(runId)?.asks);
+    const asksBlock = openAsksBlock(this.agentVisibleAsks(runId));
     const treeBlocks = [treeReports, treeInbox, ...askNotes, asksBlock].filter((block): block is string => Boolean(block));
     // A fresh read must not be anchored on earlier verdicts, the handoff's included (#2513).
     const freshPrompt = freshContext ? `${FRESH_CONTEXT_NOTE}\n\n${expandedPrompt}` : expandedPrompt;
@@ -7251,6 +7364,7 @@ export class RunManager {
           cwd: state.cwd,
           ...continuationTools,
           ...(state.bypassPermissions && !continuationTools.enforceReadOnly && !continueLaunch.readOnlyWorkflow ? { bypassPermissions: true } : {}),
+          ...(state.claudePermissionMode && !continuationTools.enforceReadOnly && !continueLaunch.readOnlyWorkflow ? { claudePermissionMode: state.claudePermissionMode } : {}),
           ...(continueLaunch.artifactsWriteDir ? { artifactsWriteDir: continueLaunch.artifactsWriteDir } : {}),
           ...(continueLaunch.readOnlyWorkflow ? { strictPermissions: true } : {}),
           ...(continueLaunch.readOnlyPaths.length ? { readOnlyPaths: continueLaunch.readOnlyPaths } : {}),
@@ -7473,6 +7587,7 @@ export class RunManager {
     state.bypassPermissions = await this.bypassPolicy(state.readOnly, config, (message) =>
       this.store.appendEvent(runId, { type: 'note', message }),
     );
+    state.claudePermissionMode = state.readOnly ? undefined : config.claudePermissionMode;
     // Extra system prompt (R2 2.3): POST override > config default; echoed on
     // the record so the UI/API can show what the run actually used. The landing permission or the
     // read-only rule rides along, so a Continue (which reads the record) keeps it.
@@ -9454,7 +9569,7 @@ export class RunManager {
     const treeInbox = this.flushInbox(runId);
     // Questions the user skipped while the session was closed, then the ones still open (Questions inbox spec).
     const askNotes = this.store.takeAskNotes(runId);
-    const asksBlock = openAsksBlock(this.store.getRun(runId)?.asks);
+    const asksBlock = openAsksBlock(this.agentVisibleAsks(runId));
     const treeBlocks = [treeReports, treeInbox, ...askNotes, asksBlock].filter((block): block is string => Boolean(block));
     if (treeBlocks.length) userPrompt = `${treeBlocks.join('\n\n')}\n\n---\n\n${userPrompt}`;
     if (checkFailure) {
@@ -9892,6 +10007,7 @@ export class RunManager {
           cwd: state.cwd,
           ...stepTools,
           ...(state.bypassPermissions && !stepTools.enforceReadOnly && !stepLaunch.readOnlyWorkflow ? { bypassPermissions: true } : {}),
+          ...(state.claudePermissionMode && !stepTools.enforceReadOnly && !stepLaunch.readOnlyWorkflow ? { claudePermissionMode: state.claudePermissionMode } : {}),
           ...(stepLaunch.artifactsWriteDir ? { artifactsWriteDir: stepLaunch.artifactsWriteDir } : {}),
           ...(stepLaunch.readOnlyWorkflow ? { strictPermissions: true } : {}),
           ...(stepLaunch.readOnlyPaths.length ? { readOnlyPaths: stepLaunch.readOnlyPaths } : {}),
@@ -10039,6 +10155,33 @@ export class RunManager {
     if (!state.skillMissingReported && isUnknownSkillFailure(event)) {
       state.skillMissingReported = true;
       track('skill_missing_in_session', { label: state.sessionBackend ?? 'unknown' });
+    }
+    if (event.type === 'ask.closed' && isClaudePermissionAsk(event.requestId)) {
+      // The runner's prompt ended unanswered (withdrawn by the CLI, or the session exited). The task
+      // card carries the close — `closeTaskAsks` writes the one `ask.closed` event.
+      const settled = this.store.closeTaskAsks(runId, (ask) => ask.requestId === event.requestId, {
+        reason: event.reason, at: new Date().toISOString(), ...(event.detail ? { detail: event.detail } : {}),
+      });
+      const attention = this.store.getRun(runId)?.attentionRequest;
+      if (settled.length > 0 && attention?.requestId === event.requestId) this.afterPermissionSettled(runId, state);
+      return;
+    }
+    if (event.type === 'ask.requested' && isClaudePermissionAsk(event.requestId)) {
+      // The Questions inbox's copy, so the card closes by an `ask.closed` and a stale answer is refused.
+      // Recorded BEFORE the event reaches clients, so they always see the card tracked.
+      // Independent: several prompts may be open at once and none replaces another.
+      this.store.recordTaskAsk(runId, {
+        requestId: event.requestId,
+        cardId: event.requestId,
+        askedAt: new Date().toISOString(),
+        questions: event.questions.map((question) => ({
+          ...(question.id ? { id: question.id } : {}),
+          header: question.header,
+          question: question.question,
+          ...(question.multiSelect ? { multiSelect: true } : {}),
+          options: question.options.map((option) => ({ label: option.label, ...(option.description ? { description: option.description } : {}) })),
+        })),
+      }, { independent: true });
     }
     sink.handle(event);
     if (event.type !== 'ask.requested' || state.cancelled) return;
