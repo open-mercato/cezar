@@ -16,6 +16,9 @@ const MAX_CONCURRENT = 4;
 /** null = the account answered without a bindable identity; UNAVAILABLE = no answer (timeout, saturation, crash). */
 const UNAVAILABLE = 'unavailable';
 type ProbeOutcome = CodexUsageProbeResult | null | typeof UNAVAILABLE;
+/** Why the last read of a profile gave no answer; fixed words only, never provider text (#1745). */
+export type CodexProbeFailure = 'login-expired' | 'forbidden' | 'rate-limited' | 'unreachable' | 'unavailable';
+const failures = new Map<string, CodexProbeFailure>();
 const flights = new Map<string, Promise<ProbeOutcome>>();
 const cache = new Map<string, { until: number; value: ProbeOutcome }>();
 
@@ -25,6 +28,29 @@ const cache = new Map<string, { until: number; value: ProbeOutcome }>();
  */
 export function probeCodexUsageWindows(profile: ResolvedAgentProfile, options: { force?: boolean; identityOnly?: boolean } = {}): Promise<CodexUsageProbeResult | null> {
   return probe(profile, options).then((value) => value === UNAVAILABLE ? null : value);
+}
+
+/** Maps an RPC/spawn failure to one of five words. The message text is read, never kept or returned. */
+export function classifyCodexProbeError(error: unknown): CodexProbeFailure {
+  const text = error instanceof Error ? error.message : typeof error === 'string' ? error : '';
+  if (/\b429\b|rate.?limit|too many requests/i.test(text)) return 'rate-limited';
+  if (/\b40[13]\b|forbidden|unauthori[sz]ed/i.test(text)) return 'forbidden';
+  if (/expired|log ?in again|sign ?in|not logged in|refresh token|re-?authenticat/i.test(text)) return 'login-expired';
+  if (/ECONN|ENOTFOUND|EAI_AGAIN|ETIMEDOUT|network|fetch failed|offline|connect/i.test(text)) return 'unreachable';
+  return 'unavailable';
+}
+
+export type CodexUsageDetail =
+  | { kind: 'ok'; result: CodexUsageProbeResult }
+  | { kind: 'failed'; reason: CodexProbeFailure | 'no-identity' };
+
+/** Like {@link probeCodexUsageWindows}, but says why there was no answer. Same cache and limits. */
+export async function probeCodexUsageDetailed(profile: ResolvedAgentProfile): Promise<CodexUsageDetail> {
+  const key = JSON.stringify([profile.id, profile.path, false]);
+  failures.delete(key);
+  const value = await probe(profile, {});
+  if (value === UNAVAILABLE) return { kind: 'failed', reason: failures.get(key) ?? 'unavailable' };
+  return value ? { kind: 'ok', result: value } : { kind: 'failed', reason: 'no-identity' };
 }
 
 /** Launch revalidation (#1340): tells a definitive identity answer from a read that never answered,
@@ -42,9 +68,14 @@ function probe(profile: ResolvedAgentProfile, options: { force?: boolean; identi
   const cached = cache.get(key);
   if (!options.force && cached && cached.until > Date.now()) return Promise.resolve(structuredClone(cached.value));
   if (flights.size >= MAX_CONCURRENT) return Promise.resolve(UNAVAILABLE);
-  const work = readMetadata(profile, options.identityOnly).catch((): ProbeOutcome => UNAVAILABLE).then((value) => {
+  const work = readMetadata(profile, options.identityOnly).catch((error): ProbeOutcome => {
+    if (failures.size >= 64) failures.delete(failures.keys().next().value!);
+    failures.set(key, classifyCodexProbeError(error));
+    return UNAVAILABLE;
+  }).then((value) => {
     // No answer is not an answer: the next caller must be free to ask again.
     if (value === UNAVAILABLE) return value;
+    failures.delete(key);
     if (cache.size >= 64) cache.delete(cache.keys().next().value!);
     cache.set(key, { until: Date.now() + CACHE_MS, value });
     return value;

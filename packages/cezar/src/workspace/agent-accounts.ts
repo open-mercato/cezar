@@ -157,6 +157,9 @@ const storeSchema = z
      * rather than an override.
      */
     defaults: selectionSchema.default(() => ({})).catch(() => ({})),
+    /** `provider:accountId` → agents may ask for this account's usage (#1745). Absent = off, and
+     *  keyed by string so the never-stored default account has a place for its switch too. */
+    usageCheck: z.record(z.string(), z.boolean()).default(() => ({})).catch(() => ({})),
     /** Repo root → per-provider choice. Per-entry salvage: a bad row is dropped, the rest stay. */
     selections: z
       .record(z.string(), z.unknown())
@@ -319,4 +322,9 @@ function normalizeRootSync(root: string): string {
   } catch {
     return resolve(root);
   }
+}
+
+/** Is `key` (`codex:work`) switched on for agent usage checks? Off unless the user turned it on. */
+export function usageCheckAllowed(store: Pick<AgentAccountStore, 'usageCheck'>, key: string): boolean {
+  return store.usageCheck[key] === true;
 }
